@@ -74,7 +74,15 @@
       "Bash(scp app/bot/storage.py app/logic/reply.py app/db/repository.py hetzner-root:/var/www/tgbot/app/bot/)",
       "Bash(scp app/logic/reply.py hetzner-root:/var/www/tgbot/app/logic/)",
       "Bash(scp app/db/repository.py hetzner-root:/var/www/tgbot/app/db/)",
-      "Bash(scp D:/Projects/myAI/app/db/repository.py hetzner-root:/var/www/tgbot/app/db/repository.py)"
+      "Bash(scp D:/Projects/myAI/app/db/repository.py hetzner-root:/var/www/tgbot/app/db/repository.py)",
+      "Bash(scp D:/Projects/myAI/docker-compose.yml hetzner-root:/var/www/tgbot/docker-compose.yml)",
+      "Bash(scp D:/Projects/myAI/requirements.txt hetzner-root:/var/www/tgbot/requirements.txt)",
+      "Bash(scp D:/Projects/myAI/app/db/database.py hetzner-root:/var/www/tgbot/app/db/database.py)",
+      "Bash(scp D:/Projects/myAI/app/db/models.py hetzner-root:/var/www/tgbot/app/db/models.py)",
+      "Bash(scp D:/Projects/myAI/app/llm/embedding.py hetzner-root:/var/www/tgbot/app/llm/embedding.py)",
+      "Bash(git commit *)",
+      "Bash(scp D:/Projects/myAI/app/llm/embedding.py D:/Projects/myAI/app/services/embedder.py D:/Projects/myAI/app/db/repository.py hetzner-root:/var/www/tgbot/app/llm/)",
+      "Bash(scp D:/Projects/myAI/app/services/embedder.py hetzner-root:/var/www/tgbot/app/services/embedder.py)"
     ]
   }
 }

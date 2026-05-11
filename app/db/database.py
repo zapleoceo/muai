@@ -1,4 +1,3 @@
-from sqlalchemy import event
 from sqlalchemy.ext.asyncio import AsyncSession, async_sessionmaker, create_async_engine
 
 from app.config import get_settings
@@ -11,13 +10,6 @@ engine = create_async_engine(
     pool_size=10,
     max_overflow=20,
 )
-
-
-@event.listens_for(engine.sync_engine, "connect")
-def _on_connect(dbapi_conn, _):
-    from pgvector.asyncpg import register_vector
-    dbapi_conn.run_async(register_vector)
-
 
 AsyncSessionLocal = async_sessionmaker(
     engine,

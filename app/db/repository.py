@@ -167,12 +167,33 @@ class MessageRepo:
 
     # ── chunks / vector search ────────────────────────────────────────────────
 
-    async def get_embedded_date_range(self, chat_id: int) -> datetime | None:
-        """Return the latest msg_date_to already embedded for this chat, or None."""
-        q = select(MessageChunk.msg_date_to).where(
-            MessageChunk.chat_id == chat_id
-        ).order_by(MessageChunk.msg_date_to.desc()).limit(1)
-        return (await self.session.execute(q)).scalar_one_or_none()
+    async def get_last_embedded_msg_id(self, chat_id: int) -> int | None:
+        """Return the highest message.id already covered by chunks for this chat."""
+        q = (
+            select(MessageChunk.msg_date_to)
+            .where(MessageChunk.chat_id == chat_id)
+            .order_by(MessageChunk.msg_date_to.desc())
+            .limit(1)
+        )
+        last_date = (await self.session.execute(q)).scalar_one_or_none()
+        if last_date is None:
+            return None
+        # Find the highest message id with date <= last embedded date
+        q2 = (
+            select(Message.id)
+            .where(Message.chat_id == chat_id, Message.date_utc <= last_date)
+            .order_by(Message.id.desc())
+            .limit(1)
+        )
+        return (await self.session.execute(q2)).scalar_one_or_none()
+
+    async def get_messages_after(self, chat_id: int, after_id: int | None) -> list[Message]:
+        """Return messages for chat newer than after_id (or all if after_id is None)."""
+        q = select(Message).where(Message.chat_id == chat_id)
+        if after_id is not None:
+            q = q.where(Message.id > after_id)
+        q = q.order_by(Message.id.asc())
+        return list((await self.session.execute(q)).scalars().all())
 
     async def search_chunks(
         self, embedding: list[float], limit: int = 12
@@ -184,7 +205,7 @@ class MessageRepo:
                 "SELECT id, chat_id, chat_title, chunk_text, msg_date_from, msg_date_to "
                 "FROM message_chunks "
                 "WHERE embedding IS NOT NULL "
-                "ORDER BY embedding <=> :vec "
+                "ORDER BY embedding <=> CAST(:vec AS vector) "
                 "LIMIT :lim"
             ),
             {"vec": vec_str, "lim": limit},

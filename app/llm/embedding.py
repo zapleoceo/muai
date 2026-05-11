@@ -6,7 +6,7 @@ import urllib.request
 
 logger = logging.getLogger(__name__)
 
-_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/text-embedding-004:embedContent"
+_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"
 _DIMS = 768
 
 
@@ -18,9 +18,10 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> list[f
         raise RuntimeError("No Gemini tokens available for embedding")
 
     payload = json.dumps({
-        "model": "models/text-embedding-004",
+        "model": "models/gemini-embedding-001",
         "content": {"parts": [{"text": text}]},
         "taskType": task_type,
+        "outputDimensionality": 768,
     }).encode()
 
     req = urllib.request.Request(
