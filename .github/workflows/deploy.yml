@@ -8,8 +8,9 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger server deploy
+      - name: Deploy via SSH
         run: |
-          curl -sf -X POST https://dima.veranda.my/api/admin/deploy \
-            -H "Authorization: Bearer ${{ secrets.DEPLOY_SECRET }}" \
-            --max-time 10 || echo "Deploy triggered (server may restart)"
+          echo "${{ secrets.DEPLOY_SSH_KEY }}" > /tmp/deploy_key
+          chmod 600 /tmp/deploy_key
+          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no root@195.201.31.49 \
+            "cd /var/www/tgbot && git pull && docker compose build bot && docker compose up -d bot"
