@@ -103,7 +103,8 @@ async def embed_chat(chat_id: int, chat_title: str, chat_type: str) -> int:
             vector = await embed_text(chunk_text)
         except RuntimeError as exc:
             logger.warning("Embed failed chat=%d chunk=%d: %s", chat_id, i, exc)
-            _status.errors.append(f"{chat_title}: {exc}")
+            ts = datetime.now().strftime("%H:%M:%S")
+            _status.errors.append(f"[{ts}] {chat_title}: {exc}")
             await asyncio.sleep(5)
             continue
 
@@ -148,7 +149,8 @@ async def embed_all_chats() -> None:
             raise
         except Exception as exc:
             logger.exception("Embedder: failed for chat %s", chat.title)
-            _status.errors.append(f"{chat.title}: {exc}")
+            ts = datetime.now().strftime("%H:%M:%S")
+            _status.errors.append(f"[{ts}] {chat.title}: {exc}")
         _status.chats_done += 1
 
     async with AsyncSessionLocal() as session:

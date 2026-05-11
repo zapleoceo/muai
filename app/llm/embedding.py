@@ -40,4 +40,9 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> list[f
         return await asyncio.get_event_loop().run_in_executor(None, _call)
     except urllib.error.HTTPError as exc:
         body = exc.read().decode(errors="replace") if hasattr(exc, "read") else ""
+        mgr = get_token_manager()
+        if exc.code == 429:
+            await mgr.on_rate_limit(token)
+        else:
+            await mgr.on_error(token)
         raise RuntimeError(f"Embedding API error {exc.code}: {body[:200]}") from exc
