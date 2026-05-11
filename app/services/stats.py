@@ -46,6 +46,14 @@ async def get_dashboard_stats() -> dict:
                  "       pg_size_pretty(pg_total_relation_size('messages')) AS messages_tbl")
         )).one()
 
+        total_chunks = (await session.execute(
+            text("SELECT COUNT(*) FROM message_chunks")
+        )).scalar()
+
+        embedded_chats = (await session.execute(
+            text("SELECT COUNT(DISTINCT chat_id) FROM message_chunks")
+        )).scalar()
+
     return {
         "totals": {
             "messages": total_messages,
@@ -55,6 +63,8 @@ async def get_dashboard_stats() -> dict:
             "outgoing": out_count,
             "db_size": db_size_row.total,
             "messages_size": db_size_row.messages_tbl,
+            "chunks": total_chunks,
+            "embedded_chats": embedded_chats,
         },
         "daily":     [{"day": str(r.day)[:10], "count": r.cnt} for r in daily_rows],
         "top_chats": [{"title": r.title or r.type, "type": r.type, "count": r.cnt} for r in top_chat_rows],

@@ -168,32 +168,49 @@ class MessageRepo:
     # ── chunks / vector search ────────────────────────────────────────────────
 
     async def get_last_embedded_msg_id(self, chat_id: int) -> int | None:
-        """Return the highest message.id already covered by chunks for this chat."""
+        """Return the highest message.id already covered by any chunk for this chat."""
         q = (
-            select(MessageChunk.msg_date_to)
-            .where(MessageChunk.chat_id == chat_id)
-            .order_by(MessageChunk.msg_date_to.desc())
+            select(MessageChunk.max_msg_id)
+            .where(MessageChunk.chat_id == chat_id, MessageChunk.max_msg_id.isnot(None))
+            .order_by(MessageChunk.max_msg_id.desc())
             .limit(1)
         )
-        last_date = (await self.session.execute(q)).scalar_one_or_none()
-        if last_date is None:
-            return None
-        # Find the highest message id with date <= last embedded date
-        q2 = (
-            select(Message.id)
-            .where(Message.chat_id == chat_id, Message.date_utc <= last_date)
-            .order_by(Message.id.desc())
-            .limit(1)
-        )
-        return (await self.session.execute(q2)).scalar_one_or_none()
+        return (await self.session.execute(q)).scalar_one_or_none()
 
-    async def get_messages_after(self, chat_id: int, after_id: int | None) -> list[Message]:
-        """Return messages for chat newer than after_id (or all if after_id is None)."""
-        q = select(Message).where(Message.chat_id == chat_id)
+    async def get_messages_after_with_users(
+        self, chat_id: int, after_id: int | None
+    ) -> list[tuple[Message, TgUser | None]]:
+        """Return messages (with sender) for a chat, optionally only those after after_id."""
+        q = (
+            select(Message, TgUser)
+            .outerjoin(TgUser, Message.user_id == TgUser.id)
+            .where(Message.chat_id == chat_id)
+        )
         if after_id is not None:
             q = q.where(Message.id > after_id)
         q = q.order_by(Message.id.asc())
-        return list((await self.session.execute(q)).scalars().all())
+        return list((await self.session.execute(q)).all())
+
+    async def chunk_stats(self) -> dict:
+        """Return total chunks and per-chat chunk counts."""
+        total = (await self.session.execute(
+            text("SELECT COUNT(*) FROM message_chunks")
+        )).scalar()
+        per_chat = (await self.session.execute(
+            text("""
+                SELECT mc.chat_id, c.title, COUNT(*) AS cnt,
+                       MAX(mc.max_msg_id) AS last_msg_id
+                FROM message_chunks mc
+                LEFT JOIN chats c ON c.id = mc.chat_id
+                GROUP BY mc.chat_id, c.title
+                ORDER BY cnt DESC
+                LIMIT 20
+            """)
+        )).fetchall()
+        return {
+            "total_chunks": total,
+            "per_chat": [{"chat_id": r.chat_id, "title": r.title, "chunks": r.cnt, "last_msg_id": r.last_msg_id} for r in per_chat],
+        }
 
     async def search_chunks(
         self, embedding: list[float], limit: int = 12

@@ -44,6 +44,18 @@ async def trigger_deploy(_: None = Depends(_require_deploy_auth)) -> dict:
     return {"status": "deploy triggered"}
 
 
+# ── embedder status ───────────────────────────────────────────────────────────
+
+@router.get("/admin/embedder/status")
+async def embedder_status(_uid: int = Depends(require_owner)) -> dict:
+    from app.services.embedder import get_embedder_status
+    from app.db.database import AsyncSessionLocal
+    from app.db.repository import MessageRepo
+    async with AsyncSessionLocal() as session:
+        stats = await MessageRepo(session).chunk_stats()
+    return {**get_embedder_status(), **stats}
+
+
 # ── token management ──────────────────────────────────────────────────────────
 
 class TokenIn(BaseModel):

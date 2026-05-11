@@ -13,14 +13,16 @@ logger = logging.getLogger(__name__)
 SYSTEM_PROMPT = (
     "Ты личный ассистент владельца этого Telegram-аккаунта. "
     "У тебя есть доступ к истории переписки из всех Telegram-чатов владельца. "
-    "Когда в контексте есть фрагменты переписки — используй их для ответа. "
-    "Отвечай лаконично, по делу, на том же языке, на котором написано последнее сообщение. "
+    "Когда в начале диалога есть блок «[Релевантные фрагменты]» — это реальные сообщения "
+    "из чатов, используй их как основу для ответа. "
+    "Отвечай лаконично, по делу, на том же языке, на котором написан вопрос. "
     "Не раскрывай, что ты AI, если тебя напрямую не спросят."
 )
 
+_SIMILARITY_THRESHOLD = 12   # return up to N chunks; pgvector already ranks by cosine
+
 
 async def _retrieve_context(question: str) -> str | None:
-    """Vector search across all chats. Returns formatted excerpts or None."""
     try:
         q_vec = await embed_text(question, task_type="RETRIEVAL_QUERY")
     except RuntimeError as exc:
@@ -28,16 +30,15 @@ async def _retrieve_context(question: str) -> str | None:
         return None
 
     async with AsyncSessionLocal() as session:
-        chunks = await MessageRepo(session).search_chunks(q_vec, limit=12)
+        chunks = await MessageRepo(session).search_chunks(q_vec, limit=_SIMILARITY_THRESHOLD)
 
     if not chunks:
         return None
 
-    parts: list[str] = ["[Релевантные фрагменты из Telegram-истории]"]
+    parts = ["[Релевантные фрагменты из Telegram-истории владельца]"]
     for row in chunks:
         parts.append(row.chunk_text)
-        parts.append("")  # blank line separator
-    return "\n".join(parts)
+    return "\n\n".join(parts)
 
 
 async def run_ai_reply(chat_id: int, question: str | None = None) -> str:
@@ -46,14 +47,20 @@ async def run_ai_reply(chat_id: int, question: str | None = None) -> str:
         return "История диалога пуста — нечего анализировать."
 
     provider = get_llm_provider()
-    messages: list[LLMMessage] = list(context)
+    messages: list[LLMMessage] = []
 
+    # Inject retrieved RAG context as the very first user turn so the LLM
+    # sees it before the chat history. The system prompt explains what it is.
     if question:
         retrieved = await _retrieve_context(question)
         if retrieved:
-            logger.info("Vector search returned context for chat=%d", chat_id)
-            messages.insert(0, LLMMessage(role="user", content=retrieved))
-            messages.insert(1, LLMMessage(role="assistant", content="Понял, изучил фрагменты переписки."))
+            logger.info("RAG: injecting %d chars of context for chat=%d", len(retrieved), chat_id)
+            messages.append(LLMMessage(role="user", content=retrieved))
+            messages.append(LLMMessage(role="assistant", content="Принял. Готов отвечать с учётом этой информации."))
+
+    messages.extend(context)
+
+    if question:
         messages.append(LLMMessage(role="user", content=question))
 
     try:

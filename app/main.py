@@ -69,6 +69,10 @@ async def lifespan(app: FastAPI):
     yield
 
     embedder_task.cancel()
+    try:
+        await embedder_task
+    except asyncio.CancelledError:
+        pass
     from app.userbot.client import stop_userbot
     await stop_userbot()
     await bot.session.close()

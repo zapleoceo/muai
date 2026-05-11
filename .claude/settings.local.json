@@ -82,7 +82,9 @@
       "Bash(scp D:/Projects/myAI/app/llm/embedding.py hetzner-root:/var/www/tgbot/app/llm/embedding.py)",
       "Bash(git commit *)",
       "Bash(scp D:/Projects/myAI/app/llm/embedding.py D:/Projects/myAI/app/services/embedder.py D:/Projects/myAI/app/db/repository.py hetzner-root:/var/www/tgbot/app/llm/)",
-      "Bash(scp D:/Projects/myAI/app/services/embedder.py hetzner-root:/var/www/tgbot/app/services/embedder.py)"
+      "Bash(scp D:/Projects/myAI/app/services/embedder.py hetzner-root:/var/www/tgbot/app/services/embedder.py)",
+      "Bash(Get-ChildItem -Path \"D:\\\\Projects\\\\myAI\" -Recurse -File)",
+      "Bash(Select-Object FullName)"
     ]
   }
 }
