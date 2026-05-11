@@ -12,6 +12,15 @@ _BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models"
 _MAX_RETRIES = 3
 
 
+class GeminiContentError(RuntimeError):
+    """Response received but content is absent or blocked. Token is not at fault."""
+    def __init__(self, reason: str, finish_reason: str = "", safety_ratings: list | None = None):
+        self.reason = reason
+        self.finish_reason = finish_reason
+        self.safety_ratings = safety_ratings or []
+        super().__init__(reason)
+
+
 class GeminiProvider(LLMProvider):
     def __init__(self, model: str = "gemini-2.5-flash"):
         self._model = model
@@ -20,15 +29,7 @@ class GeminiProvider(LLMProvider):
         from app.services.tokens import get_token_manager
         manager = get_token_manager()
 
-        contents = [
-            {"role": "model" if m.role == "assistant" else "user",
-             "parts": [{"text": m.content}]}
-            for m in messages
-        ]
-        payload: dict = {"contents": contents}
-        if system_prompt:
-            payload["system_instruction"] = {"parts": [{"text": system_prompt}]}
-        body = json.dumps(payload).encode()
+        body = self._build_body(messages, system_prompt)
 
         for attempt in range(_MAX_RETRIES):
             token = await manager.next_token()
@@ -42,8 +43,7 @@ class GeminiProvider(LLMProvider):
                 method="POST",
             )
             try:
-                text = await asyncio.get_event_loop().run_in_executor(None, self._call, req)
-                return text
+                return await asyncio.get_event_loop().run_in_executor(None, self._call, req)
             except urllib.error.HTTPError as exc:
                 if exc.code == 429:
                     await manager.on_rate_limit(token)
@@ -51,47 +51,67 @@ class GeminiProvider(LLMProvider):
                     if attempt == _MAX_RETRIES - 1:
                         raise RuntimeError("All Gemini tokens rate-limited") from exc
                 else:
+                    body_text = exc.read().decode(errors="replace") if hasattr(exc, "read") else ""
                     await manager.on_error(token)
-                    raise RuntimeError(f"Gemini HTTP {exc.code}") from exc
+                    raise RuntimeError(f"Gemini HTTP {exc.code}: {body_text[:200]}") from exc
             except urllib.error.URLError as exc:
-                # Network error — penalise token
                 await manager.on_error(token)
                 raise RuntimeError(f"Gemini network error: {exc.reason}") from exc
-            except _GeminiContentError:
-                # Response arrived but content was blocked or empty — token is fine
+            except GeminiContentError:
                 raise
             except Exception as exc:
-                # Unexpected error — penalise token
                 await manager.on_error(token)
-                raise RuntimeError(f"Gemini unexpected error: {exc}") from exc
+                raise RuntimeError(f"Gemini error: {exc}") from exc
 
         raise RuntimeError("Gemini: exhausted retries")
+
+    def _build_body(self, messages: list[LLMMessage], system_prompt: str) -> bytes:
+        contents = [
+            {"role": "model" if m.role == "assistant" else "user",
+             "parts": [{"text": m.content}]}
+            for m in messages
+        ]
+        payload: dict = {"contents": contents}
+        if system_prompt:
+            payload["system_instruction"] = {"parts": [{"text": system_prompt}]}
+        return json.dumps(payload).encode()
 
     @staticmethod
     def _call(req: urllib.request.Request) -> str:
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read())
 
-        # Prompt-level block (e.g. SAFETY before any candidate generated)
+        # Prompt-level block
         feedback = data.get("promptFeedback", {})
-        if feedback.get("blockReason"):
-            raise _GeminiContentError(f"prompt blocked: {feedback['blockReason']}")
+        block_reason = feedback.get("blockReason")
+        if block_reason:
+            raise GeminiContentError(
+                reason=f"prompt blocked by Gemini: {block_reason}",
+                finish_reason="PROMPT_BLOCKED",
+            )
 
         candidates = data.get("candidates", [])
         if not candidates:
-            raise _GeminiContentError("no candidates in response")
+            raise GeminiContentError(reason="Gemini returned no candidates")
 
         candidate = candidates[0]
         finish = candidate.get("finishReason", "STOP")
+        safety = candidate.get("safetyRatings", [])
         content = candidate.get("content", {})
         parts = content.get("parts", [])
 
-        if not parts:
-            # Safety block or other non-content finish
-            raise _GeminiContentError(f"empty response (finishReason={finish})")
+        if finish not in ("STOP", "MAX_TOKENS") or not parts:
+            blocked = [
+                f"{r['category'].replace('HARM_CATEGORY_', '')}: {r['probability']}"
+                for r in safety
+                if r.get("probability") not in ("NEGLIGIBLE", "LOW")
+            ]
+            detail = ", ".join(blocked) if blocked else finish
+            logger.warning("Gemini blocked: finishReason=%s safety=%s", finish, safety)
+            raise GeminiContentError(
+                reason=f"response blocked: {detail}" if blocked else f"no content (finishReason={finish})",
+                finish_reason=finish,
+                safety_ratings=safety,
+            )
 
         return parts[0].get("text", "")
-
-
-class _GeminiContentError(RuntimeError):
-    """Response received but content is absent or blocked. Token is not at fault."""
