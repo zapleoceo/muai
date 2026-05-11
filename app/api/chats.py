@@ -54,6 +54,20 @@ async def cancel_sync(chat_id: int, _uid: int = Depends(require_owner)) -> dict:
     return {"ok": True, "chat_id": chat_id, "action": "cancel-requested"}
 
 
+class ChatPatch(BaseModel):
+    depth_days: int | None = None
+
+
+@router.patch("/admin/chats/{chat_id}")
+async def patch_chat(
+    chat_id: int,
+    body: ChatPatch,
+    _uid: int = Depends(require_owner),
+) -> dict:
+    await cs.update_chat_depth(chat_id, body.depth_days)
+    return {"ok": True, "chat_id": chat_id, "depth_days": body.depth_days}
+
+
 @router.delete("/admin/chats/{chat_id}/messages")
 async def delete_messages(chat_id: int, _uid: int = Depends(require_owner)) -> dict:
     deleted = await cs.delete_chat_messages(chat_id)

@@ -186,6 +186,11 @@
     .depth-row { display: flex; align-items: center; gap: 12px; }
     .depth-row label { font-size: 0.85rem; color: #94a3b8; }
     .inp-number { width: 90px; text-align: center; }
+    .depth-cell { cursor: pointer; border-bottom: 1px dashed #475569; }
+    .depth-cell:hover { color: #93c5fd; border-color: #93c5fd; }
+    .depth-input { width: 60px; font-size: 0.78rem; background: #0f172a; color: #e2e8f0;
+                   border: 1px solid #3b82f6; border-radius: 4px; padding: 1px 4px;
+                   text-align: center; outline: none; }
   </style>
 </head>
 <body>
@@ -558,7 +563,9 @@ function renderChats() {
         <td class="chat-name-cell"><span class="chat-title-text" title="${esc(c.title)}">${esc(c.title)}</span>${uname}</td>
         <td><span class="chat-status-badge ${SC[c.status]||'cs-unknown'}">${STATUS[c.status]||c.status}</span></td>
         <td style="text-align:right;color:#94a3b8">${fmt(c.message_count)}</td>
-        <td style="color:#475569;font-size:0.78rem">${depth}</td>
+        <td style="color:#475569;font-size:0.78rem">
+          <span class="depth-cell" data-id="${c.id}" data-depth="${c.depth_days ?? ''}" title="Нажмите для изменения глубины">${depth}</span>
+        </td>
         <td><div class="chat-actions">${approveBtn}${disableBtn}${cancelBtn}${deleteBtn}</div></td>
       </tr>`;
     }).join('');
@@ -616,6 +623,52 @@ document.addEventListener('click', async e => {
     }
     await loadChats();
   }
+});
+
+// Inline depth editing
+document.addEventListener('click', async e => {
+  const cell = e.target.closest('.depth-cell');
+  if (!cell || cell.querySelector('input')) return;
+
+  const chatId = parseInt(cell.dataset.id);
+  const curDepth = cell.dataset.depth;
+
+  const input = document.createElement('input');
+  input.type = 'number';
+  input.min = '1';
+  input.max = '3650';
+  input.className = 'depth-input';
+  input.value = curDepth || '';
+  input.placeholder = 'глоб.';
+  cell.textContent = '';
+  cell.appendChild(input);
+  input.focus();
+  input.select();
+
+  async function saveDepth() {
+    const val = input.value.trim();
+    const depth = val ? parseInt(val) : null;
+    const r = await fetch(`/api/admin/chats/${chatId}`, {
+      method: 'PATCH',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({depth_days: depth}),
+    });
+    if (r.ok) {
+      cell.dataset.depth = depth ?? '';
+      cell.textContent = depth ? `${depth}д` : 'глоб.';
+    } else {
+      cell.textContent = curDepth ? `${curDepth}д` : 'глоб.';
+    }
+  }
+
+  input.addEventListener('blur', saveDepth);
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { input.blur(); }
+    if (e.key === 'Escape') {
+      input.removeEventListener('blur', saveDepth);
+      cell.textContent = curDepth ? `${curDepth}д` : 'глоб.';
+    }
+  });
 });
 
 async function stopSync() {

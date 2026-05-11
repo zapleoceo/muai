@@ -167,6 +167,17 @@ async def list_chats_with_config() -> list[dict]:
     return result
 
 
+async def update_chat_depth(chat_id: int, depth_days: int | None) -> None:
+    async with AsyncSessionLocal() as session:
+        stmt = (
+            insert(ChatSyncConfig)
+            .values(chat_id=chat_id, depth_days=depth_days)
+            .on_conflict_do_update(index_elements=["chat_id"], set_={"depth_days": depth_days})
+        )
+        await session.execute(stmt)
+        await session.commit()
+
+
 async def delete_chat_messages(chat_id: int) -> int:
     async with AsyncSessionLocal() as session:
         result = await session.execute(
