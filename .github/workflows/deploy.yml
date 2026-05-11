@@ -12,5 +12,5 @@ jobs:
         run: |
           echo "${{ secrets.DEPLOY_SSH_KEY }}" > /tmp/deploy_key
           chmod 600 /tmp/deploy_key
-          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no root@195.201.31.49 \
-            "cd /var/www/tgbot && git pull && docker compose build bot && docker compose up -d bot"
+          ssh -i /tmp/deploy_key -o StrictHostKeyChecking=no -p 9617 root@195.201.31.49 \
+            "cd /var/www/tgbot && GIT_SSH_COMMAND='ssh -i /root/.ssh/github_deploy -o StrictHostKeyChecking=no' git pull origin master && docker compose build bot && docker compose up -d bot"
