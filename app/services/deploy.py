@@ -33,7 +33,7 @@ async def run_migration() -> None:
 
 async def run_deploy() -> None:
     prep_cmds = [
-        ["git", "-C", "/var/www/tgbot", "pull"],
+        ["git", "-C", "/var/www/tgbot", "pull", "origin", "master"],
         ["docker", "compose", "-f", _COMPOSE_FILE, "build", "bot"],
     ]
     for cmd in prep_cmds:
