@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(ssh hetzner-root *)",
+      "Bash(scp -P 9617 -i \"D:\\\\Projects\\\\hetzner\\\\hetzner_195.201.31.49_ed25519\" .env root@195.201.31.49:/var/www/tgbot/.env)",
+      "Bash(scp -P 9617 -i \"D:\\\\Projects\\\\hetzner\\\\hetzner_195.201.31.49_ed25519\" requirements.txt docker-compose.yml app/config.py app/main.py app/db/repository.py root@195.201.31.49:/var/www/tgbot/)",
+      "Bash(scp -P 9617 -i \"D:\\\\Projects\\\\hetzner\\\\hetzner_195.201.31.49_ed25519\" -r app/userbot scripts root@195.201.31.49:/var/www/tgbot/app/)",
+      "Bash(scp -P 9617 -i \"D:\\\\Projects\\\\hetzner\\\\hetzner_195.201.31.49_ed25519\" scripts/auth_step1.py scripts/auth_step2.py root@195.201.31.49:/var/www/tgbot/scripts/)",
+      "Bash(scp -P 9617 -i \"D:\\\\Projects\\\\hetzner\\\\hetzner_195.201.31.49_ed25519\" app/config.py app/main.py app/db/repository.py root@195.201.31.49:/var/www/tgbot/app/)",
+      "Bash(scp -P 9617 -i \"D:\\\\Projects\\\\hetzner\\\\hetzner_195.201.31.49_ed25519\" app/db/repository.py root@195.201.31.49:/var/www/tgbot/app/db/repository.py)",
+      "Bash(scp -P 9617 -i \"D:\\\\Projects\\\\hetzner\\\\hetzner_195.201.31.49_ed25519\" app/userbot/sync.py root@195.201.31.49:/var/www/tgbot/app/userbot/sync.py)",
+      "Bash(curl -s \"https://api.telegram.org/bot8583101764:AAEFp1W9gsLt8YzKspYW953lkASsm27Rx2E/getMe\")",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\)['result']; print\\(d['username'], d['id']\\)\")",
+      "Bash(git init *)",
+      "Bash(git remote *)",
+      "PowerShell(git add .)"
+    ]
+  }
+}

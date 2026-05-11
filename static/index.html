@@ -1,0 +1,165 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>My AI — Dashboard</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+           background: #0f1117; color: #e2e8f0; min-height: 100vh; }
+    .login-screen { display: flex; flex-direction: column; align-items: center;
+                    justify-content: center; min-height: 100vh; gap: 24px; }
+    .login-screen h1 { font-size: 2rem; font-weight: 700; color: #7dd3fc; }
+    .login-screen p  { color: #94a3b8; font-size: 0.95rem; }
+    .dashboard { display: none; padding: 24px; max-width: 1100px; margin: 0 auto; }
+    .header { display: flex; align-items: center; justify-content: space-between;
+              margin-bottom: 28px; }
+    .header h1 { font-size: 1.5rem; color: #7dd3fc; }
+    .header a  { color: #64748b; font-size: 0.85rem; text-decoration: none; }
+    .header a:hover { color: #94a3b8; }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 16px; margin-bottom: 28px; }
+    .card { background: #1e2533; border-radius: 12px; padding: 20px; }
+    .card .label { font-size: 0.75rem; color: #64748b; text-transform: uppercase;
+                   letter-spacing: .05em; margin-bottom: 8px; }
+    .card .value { font-size: 2rem; font-weight: 700; color: #f8fafc; }
+    .card .sub   { font-size: 0.8rem; color: #94a3b8; margin-top: 4px; }
+    .section { background: #1e2533; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
+    .section h2 { font-size: 1rem; color: #94a3b8; margin-bottom: 16px; }
+    .bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 0.85rem; }
+    .bar-row .name { width: 200px; white-space: nowrap; overflow: hidden;
+                     text-overflow: ellipsis; color: #cbd5e1; }
+    .bar-wrap { flex: 1; background: #0f1117; border-radius: 4px; height: 18px; }
+    .bar { background: #3b82f6; height: 18px; border-radius: 4px; min-width: 4px; transition: width .4s; }
+    .bar-count { width: 50px; text-align: right; color: #64748b; }
+    .day-chart { display: flex; align-items: flex-end; gap: 6px; height: 80px; }
+    .day-col { display: flex; flex-direction: column; align-items: center; flex: 1; }
+    .day-bar { width: 100%; background: #3b82f6; border-radius: 3px 3px 0 0; min-height: 2px; }
+    .day-label { font-size: 0.65rem; color: #475569; margin-top: 4px; }
+    #logs-box { background: #0f1117; border-radius: 8px; padding: 12px;
+                font-family: monospace; font-size: 0.75rem; color: #94a3b8;
+                max-height: 400px; overflow-y: auto; white-space: pre-wrap; word-break: break-all; }
+    .btn { padding: 8px 16px; background: #3b82f6; color: white; border: none;
+           border-radius: 8px; cursor: pointer; font-size: 0.85rem; }
+    .btn:hover { background: #2563eb; }
+    .btn-sm { padding: 5px 12px; font-size: 0.78rem; }
+  </style>
+</head>
+<body>
+
+<!-- Login screen -->
+<div class="login-screen" id="login">
+  <h1>My AI</h1>
+  <p>Войдите через Telegram чтобы продолжить</p>
+  <script async src="https://telegram.org/js/telegram-widget.js?22"
+          data-telegram-login="Dimondra_Ai_Bot"
+          data-size="large"
+          data-radius="8"
+          data-onauth="onTelegramAuth(user)"
+          data-request-access="write"></script>
+</div>
+
+<!-- Dashboard -->
+<div class="dashboard" id="dash">
+  <div class="header">
+    <h1>📊 My AI Dashboard</h1>
+    <a href="/auth/logout">Выйти</a>
+  </div>
+
+  <div class="grid" id="totals"></div>
+
+  <div class="section">
+    <h2>Сообщений за 7 дней</h2>
+    <div class="day-chart" id="daily-chart"></div>
+  </div>
+
+  <div class="section">
+    <h2>Топ чатов (7 дней)</h2>
+    <div id="top-chats"></div>
+  </div>
+
+  <div class="section">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">
+      <h2 style="margin:0">Логи бота</h2>
+      <button class="btn btn-sm" onclick="loadLogs()">Обновить</button>
+    </div>
+    <div id="logs-box">Загрузка…</div>
+  </div>
+</div>
+
+<script>
+async function onTelegramAuth(user) {
+  const r = await fetch('/auth/telegram', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify(user),
+  });
+  if (r.ok) {
+    document.getElementById('login').style.display = 'none';
+    document.getElementById('dash').style.display = 'block';
+    loadStats();
+    loadLogs();
+  } else {
+    alert('Доступ запрещён');
+  }
+}
+
+async function loadStats() {
+  const r = await fetch('/api/admin/stats');
+  if (r.status === 401) { document.getElementById('login').style.display='flex'; document.getElementById('dash').style.display='none'; return; }
+  const d = await r.json();
+
+  const t = d.totals;
+  document.getElementById('totals').innerHTML = `
+    <div class="card"><div class="label">Сообщений</div><div class="value">${fmt(t.messages)}</div></div>
+    <div class="card"><div class="label">Чатов</div><div class="value">${fmt(t.chats)}</div></div>
+    <div class="card"><div class="label">Пользователей</div><div class="value">${fmt(t.users)}</div></div>
+    <div class="card"><div class="label">Входящих</div><div class="value">${fmt(t.incoming)}</div><div class="sub">${pct(t.incoming, t.messages)}% от всех</div></div>
+    <div class="card"><div class="label">Исходящих</div><div class="value">${fmt(t.outgoing)}</div><div class="sub">${pct(t.outgoing, t.messages)}% от всех</div></div>
+  `;
+
+  const daily = d.daily;
+  const maxD = Math.max(...daily.map(x => x.count), 1);
+  document.getElementById('daily-chart').innerHTML = daily.map(x => `
+    <div class="day-col">
+      <div class="day-bar" style="height:${Math.round(x.count/maxD*70)+2}px" title="${x.count}"></div>
+      <div class="day-label">${x.day.slice(5)}</div>
+    </div>
+  `).join('');
+
+  const maxC = Math.max(...d.top_chats.map(x => x.count), 1);
+  document.getElementById('top-chats').innerHTML = d.top_chats.map(x => `
+    <div class="bar-row">
+      <div class="name" title="${x.title}">${x.title}</div>
+      <div class="bar-wrap"><div class="bar" style="width:${Math.round(x.count/maxC*100)}%"></div></div>
+      <div class="bar-count">${x.count}</div>
+    </div>
+  `).join('');
+}
+
+async function loadLogs() {
+  const box = document.getElementById('logs-box');
+  box.textContent = 'Загрузка…';
+  const r = await fetch('/api/admin/logs?lines=150');
+  if (!r.ok) { box.textContent = 'Ошибка загрузки логов'; return; }
+  const d = await r.json();
+  box.textContent = d.logs;
+  box.scrollTop = box.scrollHeight;
+}
+
+function fmt(n) { return n?.toLocaleString('ru') ?? '—'; }
+function pct(a, b) { return b ? Math.round(a/b*100) : 0; }
+
+// Check if already logged in
+fetch('/api/admin/stats').then(r => {
+  if (r.ok) {
+    document.getElementById('login').style.display = 'none';
+    document.getElementById('dash').style.display = 'block';
+    r.json().then(d => { /* re-render */ });
+    loadStats();
+    loadLogs();
+  }
+});
+</script>
+</body>
+</html>

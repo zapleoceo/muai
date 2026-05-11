@@ -1,0 +1,15 @@
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger server deploy
+        run: |
+          curl -sf -X POST https://dima.veranda.my/api/admin/deploy \
+            -H "Authorization: Bearer ${{ secrets.DEPLOY_SECRET }}" \
+            --max-time 10 || echo "Deploy triggered (server may restart)"
