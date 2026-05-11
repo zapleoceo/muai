@@ -56,6 +56,14 @@ async def embedder_status(_uid: int = Depends(require_owner)) -> dict:
     return {**get_embedder_status(), **stats}
 
 
+@router.post("/admin/embedder/restart")
+async def embedder_restart(_uid: int = Depends(require_owner)) -> dict:
+    import asyncio
+    from app.services.embedder import embed_all_chats
+    asyncio.create_task(embed_all_chats())
+    return {"status": "restarted"}
+
+
 # ── token management ──────────────────────────────────────────────────────────
 
 class TokenIn(BaseModel):

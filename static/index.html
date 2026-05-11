@@ -237,6 +237,7 @@
       <div class="section-header">
         <h2>🧠 Мозг (векторные чанки)</h2>
         <button class="btn btn-sm btn-ghost" onclick="loadEmbedder()">Обновить</button>
+        <button class="btn btn-sm btn-success" onclick="restartEmbedder()" title="Запустить новый проход прямо сейчас">▶ Запустить</button>
       </div>
       <div id="embedder-status">Загрузка…</div>
     </div>
@@ -418,6 +419,11 @@ async function loadStats() {
       <div class="bar-count">${x.count}</div>
     </div>
   `).join('');
+}
+
+async function restartEmbedder() {
+  await fetch('/api/admin/embedder/restart', {method: 'POST'});
+  await loadEmbedder();
 }
 
 async function loadEmbedder() {
