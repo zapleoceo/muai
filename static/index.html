@@ -248,7 +248,7 @@
       <div class="section-header">
         <h2>🧠 Мозг (векторные чанки)</h2>
         <button class="btn-icon" onclick="loadEmbedder()" title="Обновить">↻</button>
-        <button class="btn-icon btn-icon-green" onclick="restartEmbedder()" title="Запустить чанкование">▶</button>
+        <button class="btn-icon btn-icon-green" id="embedder-toggle-btn" onclick="toggleEmbedder()" title="Запустить чанкование">▶</button>
       </div>
       <div id="embedder-status">Загрузка…</div>
     </div>
@@ -445,9 +445,27 @@ async function loadStats() {
   `).join('');
 }
 
-async function restartEmbedder() {
-  await fetch('/api/admin/embedder/restart', {method: 'POST'});
+async function toggleEmbedder() {
+  const btn = document.getElementById('embedder-toggle-btn');
+  const running = btn.dataset.running === '1';
+  await fetch(`/api/admin/embedder/${running ? 'stop' : 'restart'}`, {method: 'POST'});
   await loadEmbedder();
+}
+
+function _updateEmbedderBtn(running) {
+  const btn = document.getElementById('embedder-toggle-btn');
+  if (!btn) return;
+  if (running) {
+    btn.textContent = '■';
+    btn.title = 'Остановить чанкование';
+    btn.dataset.running = '1';
+    btn.style.color = '#ef4444';
+  } else {
+    btn.textContent = '▶';
+    btn.title = 'Запустить чанкование';
+    btn.dataset.running = '0';
+    btn.style.color = '';
+  }
 }
 
 async function loadEmbedder() {
@@ -455,6 +473,7 @@ async function loadEmbedder() {
   const r = await fetch('/api/admin/embedder/status');
   if (!r.ok) { box.innerHTML = '<span style="color:var(--danger)">Ошибка загрузки</span>'; return; }
   const d = await r.json();
+  _updateEmbedderBtn(d.running);
   const runBadge = d.running
     ? `<span class="badge badge-active">⚙️ работает</span> чат: <b>${esc(d.current_chat)}</b>`
     : `<span class="badge badge-disabled">⏸ ожидание</span>`;

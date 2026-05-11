@@ -16,6 +16,22 @@ _CHUNK_STEP = 3      # step (overlap = 2)
 _MIN_CHARS = 30
 _BATCH_DELAY = 0.5   # seconds between API calls
 
+_embed_task: asyncio.Task | None = None
+
+
+def start_embedder() -> None:
+    global _embed_task
+    if _embed_task and not _embed_task.done():
+        return
+    _embed_task = asyncio.create_task(embed_all_chats())
+
+
+def stop_embedder() -> None:
+    global _embed_task
+    if _embed_task and not _embed_task.done():
+        _embed_task.cancel()
+
+
 # ── status singleton ──────────────────────────────────────────────────────────
 
 @dataclass
