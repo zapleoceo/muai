@@ -428,7 +428,7 @@ async function loadEmbedder() {
   const runBadge = d.running
     ? `<span class="badge badge-active">⚙️ работает</span> чат: <b>${esc(d.current_chat)}</b>`
     : `<span class="badge badge-disabled">⏸ ожидание</span>`;
-  const lastRun = d.last_run ? new Date(d.last_run).toLocaleString('ru') : 'ещё не запускался';
+  const lastRun = d.last_run ? new Date(d.last_run).toLocaleString('ru') : (d.running ? 'в процессе (первый запуск)' : 'ещё не запускался');
   const errHtml = d.last_errors?.length
     ? `<div style="margin-top:8px;color:var(--danger);font-size:.85rem">Последние ошибки:<br>${d.last_errors.map(e=>`• ${esc(e)}`).join('<br>')}</div>`
     : '';
