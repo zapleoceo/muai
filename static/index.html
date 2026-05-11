@@ -191,6 +191,10 @@
     .depth-row { display: flex; align-items: center; gap: 12px; }
     .depth-row label { font-size: 0.85rem; color: #94a3b8; }
     .inp-number { width: 90px; text-align: center; }
+    .chat-folder-filter { width: auto; min-width: 120px; padding: 4px 8px; font-size: 0.78rem;
+                          background: #1e293b; color: #94a3b8; border: 1px solid #334155;
+                          border-radius: 6px; cursor: pointer; }
+    .chat-folder-filter:focus { outline: none; border-color: #3b82f6; }
     .depth-cell { cursor: pointer; border-bottom: 1px dashed #475569; }
     .depth-cell:hover { color: #93c5fd; border-color: #93c5fd; }
     .depth-input { width: 60px; font-size: 0.78rem; background: #0f172a; color: #e2e8f0;
@@ -263,6 +267,7 @@
         <h2>Управление синхронизацией</h2>
         <div style="display:flex;gap:8px">
           <button class="btn btn-sm btn-ghost" onclick="loadChats()">Обновить</button>
+          <button class="btn btn-sm btn-ghost" onclick="syncFolders()" title="Синхронизировать папки Telegram">↻ Папки</button>
           <button class="btn btn-sm btn-danger" onclick="stopSync()">Стоп синхр.</button>
         </div>
       </div>
@@ -275,6 +280,9 @@
 
       <div class="chat-toolbar">
         <input class="inp chat-search" id="chat-search" type="search" placeholder="Поиск по названию или @username…" oninput="onSearch(this.value)">
+        <select class="inp chat-folder-filter" id="folder-filter" onchange="onFolderFilter(this.value)">
+          <option value="">Все папки</option>
+        </select>
         <button class="filter-btn active" data-filter="all"      onclick="setFilter('all',this)">Все</button>
         <button class="filter-btn"        data-filter="pending"  onclick="setFilter('pending',this)">Ожидают</button>
         <button class="filter-btn"        data-filter="active"   onclick="setFilter('active',this)">Активные</button>
@@ -287,6 +295,7 @@
             <tr>
               <th onclick="sortBy('type')"   id="th-type">Тип <span class="sort-arrow">↕</span></th>
               <th onclick="sortBy('title')"  id="th-title" class="sorted">Название <span class="sort-arrow">↑</span></th>
+              <th onclick="sortBy('folder')" id="th-folder">Папка <span class="sort-arrow">↕</span></th>
               <th onclick="sortBy('status')" id="th-status">Статус <span class="sort-arrow">↕</span></th>
               <th onclick="sortBy('message_count')" id="th-msgs" style="text-align:right">Сообщений <span class="sort-arrow">↕</span></th>
               <th onclick="sortBy('depth_days')" id="th-depth">Глубина <span class="sort-arrow">↕</span></th>
@@ -476,6 +485,7 @@ const PAGE_SIZE = 50;
 let _allChats = [];
 let _filter = 'all';
 let _search = '';
+let _folderFilter = '';
 let _sortCol = 'title';
 let _sortDir = 1;   // 1=asc -1=desc
 let _page = 0;
@@ -486,7 +496,28 @@ async function loadChats() {
   if (!r.ok) return;
   _allChats = await r.json();
   _page = 0;
+  updateFolderDropdown();
   renderChats();
+}
+
+function updateFolderDropdown() {
+  const sel = document.getElementById('folder-filter');
+  const cur = sel.value;
+  const folders = [...new Set(_allChats.map(c => c.folder).filter(Boolean))].sort();
+  sel.innerHTML = '<option value="">Все папки</option>' +
+    folders.map(f => `<option value="${esc(f)}" ${f===cur?'selected':''}>${esc(f)}</option>`).join('');
+}
+
+async function syncFolders() {
+  const btn = document.querySelector('[onclick="syncFolders()"]');
+  if (btn) btn.textContent = '⏳ Папки';
+  const r = await fetch('/api/admin/chats/sync-folders', {method: 'POST'});
+  if (btn) btn.textContent = '↻ Папки';
+  if (r.ok) {
+    const d = await r.json();
+    await loadChats();
+    alert(`Обновлено ${d.updated} чатов`);
+  }
 }
 
 function onSearch(val) {
@@ -511,11 +542,17 @@ function sortBy(col) {
   renderChats();
 }
 
+function onFolderFilter(val) {
+  _folderFilter = val;
+  _page = 0;
+  renderChats();
+}
+
 function updateSortHeaders() {
-  const cols = ['type','title','status','message_count','depth_days'];
+  const cols = ['type','title','folder','status','message_count','depth_days'];
   const arrows = {1:'↑', '-1':'↓'};
   cols.forEach(c => {
-    const th = document.getElementById('th-' + (c === 'message_count' ? 'msgs' : c === 'depth_days' ? 'depth' : c));
+    const th = document.getElementById('th-' + (c === 'message_count' ? 'msgs' : c === 'depth_days' ? 'depth' : c === 'folder' ? 'folder' : c));
     if (!th) return;
     th.classList.toggle('sorted', _sortCol === c);
     th.querySelector('.sort-arrow').textContent = _sortCol === c ? arrows[String(_sortDir)] : '↕';
@@ -525,9 +562,11 @@ function updateSortHeaders() {
 function getVisible() {
   let chats = _allChats;
   if (_filter !== 'all') chats = chats.filter(c => c.status === _filter);
+  if (_folderFilter) chats = chats.filter(c => (c.folder || '') === _folderFilter);
   if (_search) chats = chats.filter(c =>
     (c.title || '').toLowerCase().includes(_search) ||
     (c.username || '').toLowerCase().includes(_search) ||
+    (c.folder || '').toLowerCase().includes(_search) ||
     String(c.id).includes(_search)
   );
   chats = [...chats].sort((a, b) => {
@@ -557,7 +596,7 @@ function renderChats() {
   const SC = {active:'cs-active', pending:'cs-pending', disabled:'cs-disabled', unknown:'cs-unknown'};
 
   if (!slice.length) {
-    tbody.innerHTML = `<tr><td colspan="6" style="color:#475569;padding:20px;text-align:center">Нет чатов</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="7" style="color:#475569;padding:20px;text-align:center">Нет чатов</td></tr>`;
   } else {
     tbody.innerHTML = slice.map(c => {
       const depth = c.depth_days ? `${c.depth_days}д` : 'глоб.';
@@ -572,6 +611,7 @@ function renderChats() {
       return `<tr>
         <td><span class="chat-type-badge">${esc(c.type)}</span></td>
         <td class="chat-name-cell"><span class="chat-title-text" title="${esc(c.title)}">${esc(c.title)}</span>${uname}</td>
+        <td style="color:#64748b;font-size:0.78rem">${c.folder ? esc(c.folder) : '<span style="color:#334155">—</span>'}</td>
         <td><span class="chat-status-badge ${SC[c.status]||'cs-unknown'}">${STATUS[c.status]||c.status}</span></td>
         <td style="text-align:right;color:#94a3b8">${fmt(c.message_count)}</td>
         <td style="color:#475569;font-size:0.78rem">

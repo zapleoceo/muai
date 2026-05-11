@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from app.api.auth import require_owner
 from app.services import chat_settings as cs
 from app.services.sync_manager import get_sync_manager
+from app.userbot import folders as folders_svc
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -72,6 +73,17 @@ async def patch_chat(
 async def delete_messages(chat_id: int, _uid: int = Depends(require_owner)) -> dict:
     deleted = await cs.delete_chat_messages(chat_id)
     return {"deleted": deleted, "chat_id": chat_id}
+
+
+# ── Folder sync ──────────────────────────────────────────────────────────────
+
+@router.post("/admin/chats/sync-folders")
+async def sync_folders(_uid: int = Depends(require_owner)) -> dict:
+    try:
+        updated = await folders_svc.sync_folders()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"updated": updated}
 
 
 # ── Global sync control ───────────────────────────────────────────────────────

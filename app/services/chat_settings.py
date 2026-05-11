@@ -157,6 +157,7 @@ async def list_chats_with_config() -> list[dict]:
             "type": chat.type,
             "title": chat.title or str(chat.id),
             "username": chat.username,
+            "folder": chat.folder,
             "status": status,
             "enabled": cfg.enabled if cfg else False,
             "depth_days": cfg.depth_days if cfg else None,

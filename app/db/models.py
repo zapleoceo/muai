@@ -16,6 +16,7 @@ class Chat(Base):
     type = Column(Text, nullable=False)
     title = Column(Text)
     username = Column(Text)
+    folder = Column(Text, nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
