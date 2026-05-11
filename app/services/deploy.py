@@ -32,12 +32,11 @@ async def run_migration() -> None:
 
 
 async def run_deploy() -> None:
-    cmds = [
+    prep_cmds = [
         ["git", "-C", "/var/www/tgbot", "pull"],
         ["docker", "compose", "-f", _COMPOSE_FILE, "build", "bot"],
-        ["docker", "compose", "-f", _COMPOSE_FILE, "up", "-d", "bot"],
     ]
-    for cmd in cmds:
+    for cmd in prep_cmds:
         proc = await asyncio.create_subprocess_exec(
             *cmd,
             stdout=asyncio.subprocess.PIPE,
@@ -45,3 +44,13 @@ async def run_deploy() -> None:
         )
         out, _ = await proc.communicate()
         logger.info("Deploy [%s]:\n%s", " ".join(cmd), out.decode(errors="replace"))
+
+    # Run `up -d` in a new session so it survives when this container is stopped.
+    up_cmd = ["docker", "compose", "-f", _COMPOSE_FILE, "up", "-d", "bot"]
+    await asyncio.create_subprocess_exec(
+        *up_cmd,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    logger.info("Deploy [%s]: launched in new session", " ".join(up_cmd))
