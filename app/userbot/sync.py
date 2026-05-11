@@ -1,3 +1,4 @@
+import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
@@ -5,45 +6,120 @@ from telethon import TelegramClient
 
 from app.db.database import AsyncSessionLocal
 from app.db.repository import MessageRepo
+from app.services.chat_settings import (
+    auto_approve_existing_chats,
+    create_pending,
+    get_chat_config,
+    get_global_settings,
+    is_blacklisted,
+    type_allowed,
+)
+from app.services.sync_manager import get_sync_manager
 from app.userbot.media import chat_title, chat_type
 from app.userbot.storage import save_history_message
 
 logger = logging.getLogger(__name__)
 
+_CHECK_CANCEL_EVERY = 50   # check cancellation flag every N messages
+
 
 async def sync_history(client: TelegramClient, days: int = 2) -> None:
-    since = datetime.now(tz=timezone.utc) - timedelta(days=days)
-    logger.info("Userbot: syncing history since %s (%d days)", since.date(), days)
+    mgr = get_sync_manager()
+    mgr.mark_started()
+    settings = await get_global_settings()
+    default_depth = settings.get("default_depth_days", days)
 
-    total = 0
-    async for dialog in client.iter_dialogs():
-        saved = await _sync_dialog(client, dialog, since)
-        if saved:
-            logger.info("  %s: +%d messages", dialog.name or dialog.id, saved)
-        total += saved
+    logger.info("Userbot: history sync started (default depth=%d days)", default_depth)
 
-    logger.info("Userbot: history sync done, %d messages saved", total)
+    chats_done = 0
+    messages_total = 0
+
+    try:
+        async for dialog in client.iter_dialogs():
+            ctype = chat_type(dialog.entity)
+            ctitle = chat_title(dialog.entity) or str(dialog.id)
+            chat_id = dialog.id
+
+            # refresh settings each dialog so live changes take effect
+            settings = await get_global_settings()
+
+            if not await type_allowed(ctype, settings):
+                logger.debug("Sync: skip %s (type=%s not allowed)", ctitle, ctype)
+                continue
+
+            if await is_blacklisted(chat_id, getattr(dialog.entity, "username", None), settings):
+                logger.info("Sync: skip %s (blacklisted)", ctitle)
+                continue
+
+            cfg = await get_chat_config(chat_id)
+            if cfg is None:
+                # new chat — register as pending, skip sync
+                await create_pending(chat_id)
+                logger.info("Sync: new chat queued as pending: %s", ctitle)
+                continue
+
+            if not cfg.enabled:
+                logger.debug("Sync: skip %s (not enabled)", ctitle)
+                continue
+
+            if mgr.is_cancelled(chat_id):
+                mgr.clear_cancel(chat_id)
+                logger.info("Sync: skip %s (cancelled)", ctitle)
+                continue
+
+            chat_depth = cfg.depth_days if cfg.depth_days is not None else default_depth
+            saved = await _sync_dialog(client, dialog, chat_depth, chat_id, ctitle)
+            chats_done += 1
+            messages_total += saved
+            mgr.update_progress(ctitle, chats_done, messages_total)
+
+            if saved:
+                logger.info("  %s: +%d messages", ctitle, saved)
+
+    except asyncio.CancelledError:
+        logger.info("Userbot: sync task was cancelled")
+    except Exception:
+        logger.exception("Userbot: unexpected error during sync")
+    finally:
+        mgr.mark_done()
+        logger.info("Userbot: history sync done — %d chats, %d messages", chats_done, messages_total)
 
 
-async def _sync_dialog(client: TelegramClient, dialog, since: datetime) -> int:
+async def _sync_dialog(
+    client: TelegramClient,
+    dialog,
+    depth_days: int,
+    chat_id: int,
+    ctitle: str,
+) -> int:
+    mgr = get_sync_manager()
+    since = datetime.now(tz=timezone.utc) - timedelta(days=depth_days)
     saved = 0
     user_cache: dict[int, bool] = {}
 
     try:
         chat = dialog.entity
-        chat_id = dialog.id
 
         async with AsyncSessionLocal() as session:
             await MessageRepo(session).upsert_chat_raw(
                 id=chat_id,
                 type=chat_type(chat),
-                title=chat_title(chat),
+                title=ctitle,
             )
             await session.commit()
 
+        counter = 0
         async for msg in client.iter_messages(chat, reverse=True, offset_date=since, limit=None):
             if not msg.text and not msg.media:
                 continue
+
+            counter += 1
+            if counter % _CHECK_CANCEL_EVERY == 0:
+                if mgr.is_cancelled(chat_id):
+                    mgr.clear_cancel(chat_id)
+                    logger.info("Sync: mid-loop cancel for %s at msg %d", ctitle, counter)
+                    break
+
             if await save_history_message(
                 chat_id=chat_id,
                 chat_entity=chat,
@@ -52,7 +128,9 @@ async def _sync_dialog(client: TelegramClient, dialog, since: datetime) -> int:
             ):
                 saved += 1
 
+    except asyncio.CancelledError:
+        raise
     except Exception:
-        logger.exception("Userbot: failed to sync dialog %s", getattr(dialog, "name", dialog.id))
+        logger.exception("Userbot: failed to sync dialog %s", ctitle)
 
     return saved

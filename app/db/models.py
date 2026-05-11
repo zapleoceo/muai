@@ -77,3 +77,14 @@ class ApiToken(Base):
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     last_used_at = Column(TIMESTAMP(timezone=True))
     error_count = Column(BigInteger, default=0)
+
+
+class ChatSyncConfig(Base):
+    __tablename__ = "chat_sync_config"
+
+    chat_id = Column(BigInteger, ForeignKey("chats.id"), primary_key=True)
+    enabled = Column(Boolean, nullable=False, default=False)
+    depth_days = Column(BigInteger, nullable=True)   # None = use global default
+    approved_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    skip_reason = Column(Text, nullable=True)        # why it was skipped/disabled
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
