@@ -1,30 +1,40 @@
 from datetime import datetime
 from typing import Any
 
-from aiogram.types import Chat as TgChat
-from aiogram.types import User as TgUser
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Chat, Message, Setting, TgUser as UserModel
+from app.db.models import Chat, Message, Setting, TgUser
 
 
 class MessageRepo:
     def __init__(self, session: AsyncSession):
         self.session = session
 
-    # ── aiogram helpers ──────────────────────────────────────────────────────
+    # ── chats ─────────────────────────────────────────────────────────────────
 
-    async def upsert_chat(self, chat: TgChat) -> None:
+    async def upsert_chat(self, chat) -> None:
+        """Accept an aiogram Chat object."""
         await self.upsert_chat_raw(
             id=chat.id,
-            type=chat.type,
+            type=str(chat.type.value) if hasattr(chat.type, "value") else str(chat.type),
             title=getattr(chat, "title", None) or getattr(chat, "first_name", None),
         )
 
-    async def upsert_user(self, user: TgUser) -> None:
+    async def upsert_chat_raw(self, *, id: int, type: str, title: str | None = None) -> None:
+        stmt = (
+            insert(Chat)
+            .values(id=id, type=type, title=title)
+            .on_conflict_do_update(index_elements=["id"], set_={"type": type, "title": title})
+        )
+        await self.session.execute(stmt)
+
+    # ── users ─────────────────────────────────────────────────────────────────
+
+    async def upsert_user(self, user) -> None:
+        """Accept an aiogram User object."""
         await self.upsert_user_raw(
             id=user.id,
             username=user.username,
@@ -33,17 +43,6 @@ class MessageRepo:
             language_code=getattr(user, "language_code", None),
             is_bot=user.is_bot,
         )
-
-    # ── generic helpers (used by Telethon too) ───────────────────────────────
-
-    async def upsert_chat_raw(
-        self, *, id: int, type: str, title: str | None = None
-    ) -> None:
-        stmt = insert(Chat).values(id=id, type=type, title=title).on_conflict_do_update(
-            index_elements=["id"],
-            set_={"type": type, "title": title},
-        )
-        await self.session.execute(stmt)
 
     async def upsert_user_raw(
         self,
@@ -55,20 +54,24 @@ class MessageRepo:
         language_code: str | None = None,
         is_bot: bool = False,
     ) -> None:
-        stmt = insert(UserModel).values(
-            id=id,
-            username=username,
-            first_name=first_name,
-            last_name=last_name,
-            language_code=language_code,
-            is_bot=is_bot,
-        ).on_conflict_do_update(
-            index_elements=["id"],
-            set_={"username": username, "first_name": first_name, "last_name": last_name},
+        stmt = (
+            insert(TgUser)
+            .values(
+                id=id,
+                username=username,
+                first_name=first_name,
+                last_name=last_name,
+                language_code=language_code,
+                is_bot=is_bot,
+            )
+            .on_conflict_do_update(
+                index_elements=["id"],
+                set_={"username": username, "first_name": first_name, "last_name": last_name},
+            )
         )
         await self.session.execute(stmt)
 
-    # ── messages ─────────────────────────────────────────────────────────────
+    # ── messages ──────────────────────────────────────────────────────────────
 
     async def save_message(
         self,
@@ -111,7 +114,7 @@ class MessageRepo:
             await self.session.flush()
         except IntegrityError:
             await self.session.rollback()
-            return None  # duplicate (same chat_id + telegram_msg_id)
+            return None
         return msg
 
     async def get_messages(
@@ -131,16 +134,20 @@ class MessageRepo:
         if to_date:
             q = q.where(Message.date_utc <= to_date)
         q = q.order_by(Message.date_utc.asc()).limit(limit).offset(offset)
-        result = await self.session.execute(q)
-        return list(result.scalars().all())
+        return list((await self.session.execute(q)).scalars().all())
+
+    # ── settings ──────────────────────────────────────────────────────────────
 
     async def get_setting(self, key: str, default: str | None = None) -> str | None:
-        result = await self.session.execute(select(Setting).where(Setting.key == key))
-        row = result.scalar_one_or_none()
+        row = (await self.session.execute(
+            select(Setting).where(Setting.key == key)
+        )).scalar_one_or_none()
         return row.value if row else default
 
     async def set_setting(self, key: str, value: str) -> None:
-        stmt = insert(Setting).values(key=key, value=value).on_conflict_do_update(
-            index_elements=["key"], set_={"value": value}
+        stmt = (
+            insert(Setting)
+            .values(key=key, value=value)
+            .on_conflict_do_update(index_elements=["key"], set_={"value": value})
         )
         await self.session.execute(stmt)

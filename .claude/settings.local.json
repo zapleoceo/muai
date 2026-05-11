@@ -13,7 +13,23 @@
       "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\)['result']; print\\(d['username'], d['id']\\)\")",
       "Bash(git init *)",
       "Bash(git remote *)",
-      "PowerShell(git add .)"
+      "PowerShell(git add .)",
+      "Bash(python3 -c ' *)",
+      "Bash(python3 -c \"import nacl; print\\('nacl available'\\)\")",
+      "Bash(scp -P 9617 -i D:/Projects/hetzner/hetzner_195.201.31.49_ed25519 D:/Projects/myAI/app/main.py root@195.201.31.49:/var/www/tgbot/app/main.py)",
+      "Bash(scp -P 9617 -i D:/Projects/hetzner/hetzner_195.201.31.49_ed25519 D:/Projects/myAI/app/config.py root@195.201.31.49:/var/www/tgbot/app/config.py)",
+      "Bash(scp -P 9617 -i D:/Projects/hetzner/hetzner_195.201.31.49_ed25519 D:/Projects/myAI/Dockerfile root@195.201.31.49:/var/www/tgbot/Dockerfile)",
+      "Bash(scp -P 9617 -i D:/Projects/hetzner/hetzner_195.201.31.49_ed25519 D:/Projects/myAI/docker-compose.yml root@195.201.31.49:/var/www/tgbot/docker-compose.yml)",
+      "Bash(scp -P 9617 -i D:/Projects/hetzner/hetzner_195.201.31.49_ed25519 D:/Projects/myAI/app/api/auth.py D:/Projects/myAI/app/api/admin.py D:/Projects/myAI/app/api/routes.py root@195.201.31.49:/var/www/tgbot/app/api/)",
+      "Bash(scp -P 9617 -i D:/Projects/hetzner/hetzner_195.201.31.49_ed25519 D:/Projects/myAI/app/llm/factory.py D:/Projects/myAI/app/llm/gemini_provider.py root@195.201.31.49:/var/www/tgbot/app/llm/)",
+      "Bash(scp -P 9617 -i D:/Projects/hetzner/hetzner_195.201.31.49_ed25519 D:/Projects/myAI/static/index.html root@195.201.31.49:/var/www/tgbot/static/index.html)",
+      "Bash(ssh -p 9617 -i D:/Projects/hetzner/hetzner_195.201.31.49_ed25519 root@195.201.31.49 'cd /var/www/tgbot && docker compose logs bot --tail=30 2>&1')",
+      "Bash(curl -sf https://dima.veranda.my/health)",
+      "Bash(curl -sf -o /dev/null -w \"%{http_code}\" https://dima.veranda.my/)",
+      "Bash(curl -sf 'https://api.cloudflare.com/client/v4/zones?name=veranda.my' -H 'Authorization: Bearer cfat_rcOv71CDcIPBavXrnzbJefjyU43mhYe8HhpDrW0Ybc1a7184' -H 'Content-Type: application/json')",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(d['result'][0]['id'], d['result'][0]['name']\\)\")",
+      "Bash(scp -P 9617 -i D:/Projects/hetzner/hetzner_195.201.31.49_ed25519 D:/Projects/myAI/app/userbot/client.py root@195.201.31.49:/var/www/tgbot/app/userbot/client.py)",
+      "Bash(ssh -p 9617 -i D:/Projects/hetzner/hetzner_195.201.31.49_ed25519 root@195.201.31.49 'curl -s http://127.0.0.1:8000/health && echo '\\\\'''\\\\'' && docker logs tgbot-bot-1 --tail=10')"
     ]
   }
 }

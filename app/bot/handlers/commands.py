@@ -1,13 +1,11 @@
 import logging
-from datetime import datetime, timezone
 
 from aiogram import Bot, Router
 from aiogram.filters import Command
 from aiogram.types import Message
 
+from app.bot.storage import save_outgoing
 from app.config import get_settings
-from app.db.database import AsyncSessionLocal
-from app.db.repository import MessageRepo
 from app.logic.reply import run_ai_reply
 
 logger = logging.getLogger(__name__)
@@ -26,13 +24,9 @@ async def cmd_start(msg: Message) -> None:
 
 @router.message(Command("ai"))
 async def cmd_ai(msg: Message, bot: Bot) -> None:
-    if settings.bot_mode not in ("manual", "assist", "auto"):
-        await msg.answer("Режим бота не настроен.")
-        return
-
     thinking = await msg.answer("⏳ Думаю...")
     try:
-        reply_text = await run_ai_reply(chat_id=msg.chat.id, trigger_msg=msg)
+        reply_text = await run_ai_reply(chat_id=msg.chat.id)
     except Exception:
         logger.exception("LLM error for chat_id=%s", msg.chat.id)
         await thinking.edit_text("❌ Ошибка при обращении к LLM.")
@@ -40,17 +34,10 @@ async def cmd_ai(msg: Message, bot: Bot) -> None:
 
     await thinking.edit_text(reply_text)
 
-    # log the outgoing reply
-    async with AsyncSessionLocal() as session:
-        repo = MessageRepo(session)
-        await repo.save_message(
-            chat_id=msg.chat.id,
-            user_id=None,
-            telegram_msg_id=thinking.message_id,
-            direction="out",
-            text=reply_text,
-            date_utc=datetime.now(tz=timezone.utc),
-            dialog_key=f"{msg.chat.id}:{msg.from_user.id}" if msg.from_user else f"{msg.chat.id}",
-            is_auto_reply=False,
-        )
-        await session.commit()
+    dialog_key = f"{msg.chat.id}:{msg.from_user.id}" if msg.from_user else f"{msg.chat.id}"
+    await save_outgoing(
+        chat_id=msg.chat.id,
+        telegram_msg_id=thinking.message_id,
+        text=reply_text,
+        dialog_key=dialog_key,
+    )
