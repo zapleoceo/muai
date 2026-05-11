@@ -164,6 +164,10 @@ async def embed_all_chats() -> None:
 
 async def run_embedder_loop() -> None:
     """30s boot delay, then embed all, repeat every hour."""
+    async with AsyncSessionLocal() as session:
+        stats = await MessageRepo(session).chunk_stats()
+    _status.total_chunks = stats["total_chunks"]
+
     await asyncio.sleep(30)
     while True:
         try:
