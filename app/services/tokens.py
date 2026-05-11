@@ -93,19 +93,30 @@ class TokenManager:
     # ── token access ──────────────────────────────────────────────────────────
 
     async def next_token(self, provider: str = "gemini") -> str | None:
-        async with self._lock:
-            if not self._slots:
-                return None
-            available = [s for s in self._slots if s.available()]
-            if not available:
-                # all cooling or daily-maxed — return the soonest-to-recover slot
-                soonest = min(self._slots, key=lambda s: s.cooldown_until or datetime.min.replace(tzinfo=timezone.utc))
-                soonest.increment()
-                return soonest.value
-            slot = available[self._idx % len(available)]
-            self._idx = (self._idx + 1) % len(available)
-            slot.increment()
-            return slot.value
+        while True:
+            async with self._lock:
+                if not self._slots:
+                    return None
+                available = [s for s in self._slots if s.available()]
+                if available:
+                    slot = available[self._idx % len(available)]
+                    self._idx = (self._idx + 1) % len(available)
+                    slot.increment()
+                    return slot.value
+                # All on cooldown — find how long until the soonest recovers
+                now = datetime.now(tz=timezone.utc)
+                soonest = min(
+                    (s for s in self._slots if s.cooldown_until),
+                    key=lambda s: s.cooldown_until,
+                    default=None,
+                )
+                if soonest is None:
+                    return None  # all daily-maxed, nothing to wait for
+                wait = (soonest.cooldown_until - now).total_seconds()
+            if wait > 0:
+                logger.info("TokenManager: all tokens on cooldown, waiting %.1fs", wait)
+                await asyncio.sleep(wait)
+            # loop back and try again
 
     async def on_rate_limit(self, token_value: str) -> None:
         async with self._lock:
