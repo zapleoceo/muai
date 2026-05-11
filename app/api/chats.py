@@ -94,6 +94,32 @@ async def stop_sync(_uid: int = Depends(require_owner)) -> dict:
     return {"ok": True, "action": "sync-stopped"}
 
 
+@router.get("/admin/sync/queue")
+async def sync_queue(_uid: int = Depends(require_owner)) -> dict:
+    from sqlalchemy import select
+    from app.db.database import AsyncSessionLocal
+    from app.db.models import Chat, ChatSyncConfig
+    mgr = get_sync_manager()
+    async with AsyncSessionLocal() as session:
+        rows = (await session.execute(
+            select(Chat.title, Chat.type, ChatSyncConfig.depth_days)
+            .join(ChatSyncConfig, Chat.id == ChatSyncConfig.chat_id)
+            .where(ChatSyncConfig.enabled.is_(True))
+            .order_by(Chat.title)
+        )).all()
+    current = mgr.status.current_chat
+    return {
+        "running": mgr.status.running,
+        "current_chat": current,
+        "chats_done": mgr.status.chats_done,
+        "queue": [
+            {"title": r.title or "—", "type": r.type, "depth_days": r.depth_days,
+             "active": (r.title == current)}
+            for r in rows
+        ],
+    }
+
+
 @router.post("/admin/sync/start")
 async def start_sync(_uid: int = Depends(require_owner)) -> dict:
     import asyncio

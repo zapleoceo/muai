@@ -191,6 +191,8 @@
     .depth-row { display: flex; align-items: center; gap: 12px; }
     .depth-row label { font-size: 0.85rem; color: #94a3b8; }
     .inp-number { width: 90px; text-align: center; }
+    .queue-item { display:flex; align-items:center; gap:8px; padding:4px 6px; border-radius:4px; color:#94a3b8; }
+    .queue-item-active { background:#1e3a5f; color:#93c5fd; font-weight:600; }
     .chat-folder-filter { width: auto; min-width: 120px; padding: 4px 8px; font-size: 0.78rem;
                           background: #1e293b; color: #94a3b8; border: 1px solid #334155;
                           border-radius: 6px; cursor: pointer; }
@@ -275,8 +277,16 @@
       <div class="sync-status-bar" id="sync-bar">
         <div class="spinner"></div>
         <span id="sync-bar-text">Синхронизация…</span>
-        <button class="btn btn-sm btn-danger" style="margin-left:auto" onclick="stopSync()">Стоп</button>
+        <button class="btn-icon" style="margin-left:auto;color:#ef4444" onclick="toggleSync()" title="Остановить">■</button>
       </div>
+
+      <details id="sync-queue-wrap" style="margin-bottom:12px;display:none">
+        <summary style="cursor:pointer;color:#64748b;font-size:0.8rem;user-select:none;padding:4px 0">
+          📋 Очередь синхронизации (<span id="sync-queue-count">0</span> чатов)
+        </summary>
+        <div id="sync-queue-list" style="max-height:220px;overflow-y:auto;margin-top:8px;
+             background:#0f1117;border-radius:8px;padding:8px;font-size:0.78rem"></div>
+      </details>
 
       <div class="chat-toolbar">
         <input class="inp chat-search" id="chat-search" type="search" placeholder="Поиск по названию или @username…" oninput="onSearch(this.value)">
@@ -751,9 +761,12 @@ function _updateSyncBtn(running) {
 async function pollSync() {
   clearInterval(_syncPollTimer);
   const refresh = async () => {
-    const r = await fetch('/api/admin/sync/status');
-    if (!r.ok) return;
-    const s = await r.json();
+    const [sr, qr] = await Promise.all([
+      fetch('/api/admin/sync/status'),
+      fetch('/api/admin/sync/queue'),
+    ]);
+    if (!sr.ok) return;
+    const s = await sr.json();
     const bar = document.getElementById('sync-bar');
     _updateSyncBtn(s.running);
     if (s.running) {
@@ -762,6 +775,25 @@ async function pollSync() {
         `Синхронизация… чат: ${s.current_chat || '—'} | обработано: ${s.chats_done} чатов, ${s.messages_saved} сообщений`;
     } else {
       bar.classList.remove('visible');
+    }
+    if (qr.ok) {
+      const q = await qr.json();
+      const wrap = document.getElementById('sync-queue-wrap');
+      const list = document.getElementById('sync-queue-list');
+      const cnt  = document.getElementById('sync-queue-count');
+      wrap.style.display = '';
+      cnt.textContent = q.queue.length;
+      list.innerHTML = q.queue.map(c => `
+        <div class="queue-item ${c.active ? 'queue-item-active' : ''}">
+          <span class="chat-type-badge">${esc(c.type)}</span>
+          ${c.active ? '<span class="spinner" style="width:10px;height:10px;border-width:2px"></span>' : ''}
+          <span>${esc(c.title)}</span>
+          <span style="margin-left:auto;color:#475569">${c.depth_days ? c.depth_days+'д' : 'глоб.'}</span>
+        </div>`).join('');
+      if (q.running) {
+        const active = list.querySelector('.queue-item-active');
+        if (active) active.scrollIntoView({block:'nearest'});
+      }
     }
   };
   await refresh();
