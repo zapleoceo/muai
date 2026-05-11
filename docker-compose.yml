@@ -12,6 +12,7 @@ services:
       - sessions:/app/sessions
       - /var/run/docker.sock:/var/run/docker.sock
       - /var/www/tgbot:/var/www/tgbot
+      - /root/.ssh:/root/.ssh:ro
     networks:
       - tgbot
 

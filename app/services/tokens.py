@@ -1,9 +1,9 @@
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import select
 
 from app.db.database import AsyncSessionLocal
 from app.db.models import ApiToken
@@ -12,6 +12,7 @@ logger = logging.getLogger(__name__)
 
 _COOLDOWN_RATE_LIMIT = 60    # seconds on HTTP 429
 _COOLDOWN_ERROR = 300        # 5 min on repeated errors
+DAILY_LIMIT = 1500           # free Gemini tier requests/day per key
 
 
 @dataclass
@@ -20,11 +21,26 @@ class _Slot:
     value: str
     label: str
     cooldown_until: datetime | None = field(default=None)
+    requests_today: int = field(default=0)
+    _day: date = field(default_factory=date.today)
 
     def available(self) -> bool:
+        self._reset_if_new_day()
+        if self.requests_today >= DAILY_LIMIT:
+            return False
         if not self.cooldown_until:
             return True
         return datetime.now(tz=timezone.utc) >= self.cooldown_until
+
+    def increment(self) -> None:
+        self._reset_if_new_day()
+        self.requests_today += 1
+
+    def _reset_if_new_day(self) -> None:
+        today = date.today()
+        if self._day != today:
+            self.requests_today = 0
+            self._day = today
 
     def masked(self) -> str:
         v = self.value
@@ -47,13 +63,15 @@ class TokenManager:
                 .order_by(ApiToken.id)
             )).scalars().all()
         async with self._lock:
-            existing = {s.db_id: s.cooldown_until for s in self._slots}
+            existing = {s.db_id: s for s in self._slots}
             self._slots = [
                 _Slot(
                     db_id=r.id,
                     value=r.token,
                     label=r.label or "",
-                    cooldown_until=existing.get(r.id),  # keep live cooldowns on reload
+                    cooldown_until=existing[r.id].cooldown_until if r.id in existing else None,
+                    requests_today=existing[r.id].requests_today if r.id in existing else 0,
+                    _day=existing[r.id]._day if r.id in existing else date.today(),
                 )
                 for r in rows
             ]
@@ -80,12 +98,14 @@ class TokenManager:
                 return None
             available = [s for s in self._slots if s.available()]
             if not available:
-                # all cooling — return the one with the soonest cooldown
+                # all cooling or daily-maxed — return the soonest-to-recover slot
                 soonest = min(self._slots, key=lambda s: s.cooldown_until or datetime.min.replace(tzinfo=timezone.utc))
+                soonest.increment()
                 return soonest.value
-            token = available[self._idx % len(available)]
+            slot = available[self._idx % len(available)]
             self._idx = (self._idx + 1) % len(available)
-            return token.value
+            slot.increment()
+            return slot.value
 
     async def on_rate_limit(self, token_value: str) -> None:
         async with self._lock:
@@ -143,13 +163,24 @@ class TokenManager:
 
     # ── status (for dashboard) ────────────────────────────────────────────────
 
-    def slot_status(self) -> dict[int, str]:
-        """Return {db_id: 'active'|'cooldown'|'inactive'} from live in-memory state."""
+    def slot_status(self) -> dict[int, dict]:
+        """Return {db_id: {status, requests_today, daily_limit}} from live in-memory state."""
         now = datetime.now(tz=timezone.utc)
-        return {
-            s.db_id: "cooldown" if s.cooldown_until and now < s.cooldown_until else "active"
-            for s in self._slots
-        }
+        result = {}
+        for s in self._slots:
+            s._reset_if_new_day()
+            if s.cooldown_until and now < s.cooldown_until:
+                status = "cooldown"
+            elif s.requests_today >= DAILY_LIMIT:
+                status = "daily_limit"
+            else:
+                status = "active"
+            result[s.db_id] = {
+                "status": status,
+                "requests_today": s.requests_today,
+                "daily_limit": DAILY_LIMIT,
+            }
+        return result
 
 
 # ── singleton ─────────────────────────────────────────────────────────────────

@@ -57,18 +57,21 @@ async def list_tokens(_uid: int = Depends(require_owner)) -> list[dict]:
     manager = get_token_manager()
     rows = await manager.list_tokens()
     statuses = manager.slot_status()
-    return [
-        {
+    result = []
+    for r in rows:
+        live = statuses.get(r.id)
+        result.append({
             "id": r.id,
             "provider": r.provider,
             "label": r.label or "",
             "masked": f"{r.token[:8]}...{r.token[-4:]}" if len(r.token) > 12 else "***",
             "is_active": r.is_active,
-            "status": statuses.get(r.id, "inactive" if not r.is_active else "active"),
+            "status": live["status"] if live else ("inactive" if not r.is_active else "active"),
+            "requests_today": live["requests_today"] if live else 0,
+            "daily_limit": live["daily_limit"] if live else 1500,
             "created_at": r.created_at.isoformat() if r.created_at else None,
-        }
-        for r in rows
-    ]
+        })
+    return result
 
 
 @router.post("/admin/tokens")

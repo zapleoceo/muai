@@ -41,6 +41,11 @@ async def get_dashboard_stats() -> dict:
             select(func.count()).select_from(Message).where(Message.direction == "out")
         )).scalar()
 
+        db_size_row = (await session.execute(
+            text("SELECT pg_size_pretty(pg_database_size(current_database())) AS total,"
+                 "       pg_size_pretty(pg_total_relation_size('messages')) AS messages_tbl")
+        )).one()
+
     return {
         "totals": {
             "messages": total_messages,
@@ -48,6 +53,8 @@ async def get_dashboard_stats() -> dict:
             "users": total_users,
             "incoming": in_count,
             "outgoing": out_count,
+            "db_size": db_size_row.total,
+            "messages_size": db_size_row.messages_tbl,
         },
         "daily":     [{"day": str(r.day)[:10], "count": r.cnt} for r in daily_rows],
         "top_chats": [{"title": r.title or r.type, "type": r.type, "count": r.cnt} for r in top_chat_rows],
