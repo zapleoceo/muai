@@ -8,7 +8,6 @@ from app.llm.base import LLMMessage
 
 
 def _media_info(msg: Message) -> tuple[str | None, str | None]:
-    """Return (media_type, file_id) for the first media attachment."""
     if msg.photo:
         return "photo", msg.photo[-1].file_id
     if msg.voice:
@@ -85,20 +84,49 @@ async def get_dialog_context(chat_id: int, limit: int = 20) -> list[LLMMessage]:
     ]
 
 
-async def search_chat_context(name_query: str, limit: int = 60) -> str | None:
-    """Search chats by name and return a formatted transcript, or None if not found."""
+async def resolve_chat_for_question(question: str, provider) -> int | None:
+    """Ask the LLM which chat from the DB the question refers to. Returns chat_id or None."""
+    async with AsyncSessionLocal() as session:
+        chats = await MessageRepo(session).list_all_chats()
+    if not chats:
+        return None
+
+    chat_list = "\n".join(
+        f"{c.id}: {c.title or ''} {('@' + c.username) if c.username else ''}".strip()
+        for c in chats
+    )
+    classifier_prompt = (
+        f"Список Telegram-чатов:\n{chat_list}\n\n"
+        f"Вопрос: {question}\n\n"
+        "Если вопрос касается переписки из конкретного чата — верни только его числовой id. "
+        "Если вопрос не про другой чат — верни none."
+    )
+    result = await provider.complete(
+        [LLMMessage(role="user", content=classifier_prompt)],
+        system_prompt="Ты определяешь id чата по вопросу. Отвечай строго: только число или слово none.",
+    )
+    result = result.strip().lower().strip(".")
+    if result == "none":
+        return None
+    try:
+        return int(result)
+    except ValueError:
+        return None
+
+
+async def fetch_chat_transcript(chat_id: int, limit: int = 60) -> str:
+    """Fetch recent messages from a chat formatted as a transcript."""
     async with AsyncSessionLocal() as session:
         repo = MessageRepo(session)
-        chats = await repo.find_chats_by_name(name_query)
-        if not chats:
-            return None
-        chat = chats[0]
-        rows = await repo.get_recent_messages_with_users(chat.id, limit=limit)
+        rows = await repo.get_recent_messages_with_users(chat_id, limit=limit)
+        chat_rows = await repo.list_all_chats()
+
+    chat_title = next((c.title for c in chat_rows if c.id == chat_id), str(chat_id))
 
     if not rows:
-        return f"[Чат «{chat.title}» найден, но сообщений нет]"
+        return f"[Чат «{chat_title}» найден, но сообщений нет]"
 
-    lines: list[str] = [f"[Переписка из чата «{chat.title}»]"]
+    lines: list[str] = [f"[Переписка из чата «{chat_title}»]"]
     for msg, user in rows:
         if msg.direction == "out":
             speaker = "Я"

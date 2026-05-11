@@ -147,14 +147,8 @@ class MessageRepo:
         q = q.order_by(Message.date_utc.asc()).limit(limit).offset(offset)
         return list((await self.session.execute(q)).scalars().all())
 
-    async def find_chats_by_name(self, query: str) -> list[Chat]:
-        """Find chats whose title contains query (case-insensitive)."""
-        q = (
-            select(Chat)
-            .where(Chat.title.ilike(f"%{query}%"))
-            .order_by(Chat.title)
-            .limit(5)
-        )
+    async def list_all_chats(self) -> list[Chat]:
+        q = select(Chat).order_by(Chat.title)
         return list((await self.session.execute(q)).scalars().all())
 
     async def get_recent_messages_with_users(
