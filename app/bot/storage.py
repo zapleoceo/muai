@@ -83,3 +83,30 @@ async def get_dialog_context(chat_id: int, limit: int = 20) -> list[LLMMessage]:
         )
         for r in rows
     ]
+
+
+async def search_chat_context(name_query: str, limit: int = 60) -> str | None:
+    """Search chats by name and return a formatted transcript, or None if not found."""
+    async with AsyncSessionLocal() as session:
+        repo = MessageRepo(session)
+        chats = await repo.find_chats_by_name(name_query)
+        if not chats:
+            return None
+        chat = chats[0]
+        rows = await repo.get_recent_messages_with_users(chat.id, limit=limit)
+
+    if not rows:
+        return f"[Чат «{chat.title}» найден, но сообщений нет]"
+
+    lines: list[str] = [f"[Переписка из чата «{chat.title}»]"]
+    for msg, user in rows:
+        if msg.direction == "out":
+            speaker = "Я"
+        elif user:
+            speaker = user.first_name or user.username or "Собеседник"
+        else:
+            speaker = "Собеседник"
+        text = msg.text or msg.caption or f"[{msg.media_type or 'медиа'}]"
+        lines.append(f"{speaker}: {text}")
+
+    return "\n".join(lines)

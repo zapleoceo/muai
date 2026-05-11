@@ -147,6 +147,30 @@ class MessageRepo:
         q = q.order_by(Message.date_utc.asc()).limit(limit).offset(offset)
         return list((await self.session.execute(q)).scalars().all())
 
+    async def find_chats_by_name(self, query: str) -> list[Chat]:
+        """Find chats whose title contains query (case-insensitive)."""
+        q = (
+            select(Chat)
+            .where(Chat.title.ilike(f"%{query}%"))
+            .order_by(Chat.title)
+            .limit(5)
+        )
+        return list((await self.session.execute(q)).scalars().all())
+
+    async def get_recent_messages_with_users(
+        self, chat_id: int, limit: int = 60
+    ) -> list[tuple[Message, TgUser | None]]:
+        """Get recent messages for a chat, joined with sender info."""
+        q = (
+            select(Message, TgUser)
+            .outerjoin(TgUser, Message.user_id == TgUser.id)
+            .where(Message.chat_id == chat_id)
+            .order_by(Message.date_utc.desc())
+            .limit(limit)
+        )
+        rows = (await self.session.execute(q)).all()
+        return list(reversed(rows))  # chronological order
+
     # ── settings ──────────────────────────────────────────────────────────────
 
     async def get_setting(self, key: str, default: str | None = None) -> str | None:
