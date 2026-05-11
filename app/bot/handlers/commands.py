@@ -24,12 +24,28 @@ async def cmd_start(msg: Message) -> None:
 
 @router.message(Command("ai"))
 async def cmd_ai(msg: Message, bot: Bot) -> None:
+    from app.bot.storage import save_incoming
+
+    # Save the user's question so it's included in the dialog context
+    await save_incoming(msg)
+
+    # Extract text after "/ai " as an explicit question (may be empty)
+    user_question = (msg.text or "").partition(" ")[2].strip() or None
+
     thinking = await msg.answer("⏳ Думаю...")
     try:
-        reply_text = await run_ai_reply(chat_id=msg.chat.id)
-    except Exception:
+        reply_text = await run_ai_reply(chat_id=msg.chat.id, question=user_question)
+    except Exception as exc:
         logger.exception("LLM error for chat_id=%s", msg.chat.id)
-        await thinking.edit_text("❌ Ошибка при обращении к LLM.")
+        err = str(exc)
+        if "blocked" in err or "empty response" in err:
+            await thinking.edit_text("⚠️ Gemini отказал в ответе (фильтр безопасности).")
+        elif "rate-limited" in err or "429" in err:
+            await thinking.edit_text("⚠️ Все токены Gemini на cooldown. Попробуй позже.")
+        elif "No Gemini tokens" in err:
+            await thinking.edit_text("⚠️ Нет активных токенов Gemini. Добавь на дашборде.")
+        else:
+            await thinking.edit_text(f"❌ Ошибка LLM: {err[:120]}")
         return
 
     await thinking.edit_text(reply_text)

@@ -52,10 +52,18 @@ class GeminiProvider(LLMProvider):
                         raise RuntimeError("All Gemini tokens rate-limited") from exc
                 else:
                     await manager.on_error(token)
-                    raise
-            except Exception:
+                    raise RuntimeError(f"Gemini HTTP {exc.code}") from exc
+            except urllib.error.URLError as exc:
+                # Network error — penalise token
                 await manager.on_error(token)
+                raise RuntimeError(f"Gemini network error: {exc.reason}") from exc
+            except _GeminiContentError:
+                # Response arrived but content was blocked or empty — token is fine
                 raise
+            except Exception as exc:
+                # Unexpected error — penalise token
+                await manager.on_error(token)
+                raise RuntimeError(f"Gemini unexpected error: {exc}") from exc
 
         raise RuntimeError("Gemini: exhausted retries")
 
@@ -63,4 +71,27 @@ class GeminiProvider(LLMProvider):
     def _call(req: urllib.request.Request) -> str:
         with urllib.request.urlopen(req, timeout=60) as resp:
             data = json.loads(resp.read())
-        return data["candidates"][0]["content"]["parts"][0]["text"]
+
+        # Prompt-level block (e.g. SAFETY before any candidate generated)
+        feedback = data.get("promptFeedback", {})
+        if feedback.get("blockReason"):
+            raise _GeminiContentError(f"prompt blocked: {feedback['blockReason']}")
+
+        candidates = data.get("candidates", [])
+        if not candidates:
+            raise _GeminiContentError("no candidates in response")
+
+        candidate = candidates[0]
+        finish = candidate.get("finishReason", "STOP")
+        content = candidate.get("content", {})
+        parts = content.get("parts", [])
+
+        if not parts:
+            # Safety block or other non-content finish
+            raise _GeminiContentError(f"empty response (finishReason={finish})")
+
+        return parts[0].get("text", "")
+
+
+class _GeminiContentError(RuntimeError):
+    """Response received but content is absent or blocked. Token is not at fault."""
