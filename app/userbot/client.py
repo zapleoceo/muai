@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 
@@ -42,7 +43,7 @@ async def start_userbot() -> bool:
     logger.info("Userbot started as: %s (id=%s)", me.first_name, me.id)
 
     if settings.sync_history_days > 0:
-        await sync_history(client, days=settings.sync_history_days)
+        asyncio.create_task(sync_history(client, days=settings.sync_history_days))
 
     return True
 
