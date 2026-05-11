@@ -15,6 +15,7 @@ from app.services.chat_settings import (
     type_allowed,
 )
 from app.services.sync_manager import get_sync_manager
+from app.userbot.client import get_client
 from app.userbot.media import chat_title, chat_type, chat_username
 from app.userbot.storage import save_history_message
 
@@ -92,38 +93,44 @@ async def _sync_dialog(
     chat_id: int,
     ctitle: str,
 ) -> int:
+    return await _sync_entity(client, dialog.entity, depth_days, chat_id, ctitle)
+
+
+async def _sync_entity(
+    client: TelegramClient,
+    entity,
+    depth_days: int,
+    chat_id: int,
+    ctitle: str,
+) -> int:
     mgr = get_sync_manager()
     since = datetime.now(tz=timezone.utc) - timedelta(days=depth_days)
     saved = 0
     user_cache: dict[int, bool] = {}
 
     try:
-        chat = dialog.entity
-
         async with AsyncSessionLocal() as session:
             await MessageRepo(session).upsert_chat_raw(
                 id=chat_id,
-                type=chat_type(chat),
+                type=chat_type(entity),
                 title=ctitle,
-                username=chat_username(chat),
+                username=chat_username(entity),
             )
             await session.commit()
 
         counter = 0
-        async for msg in client.iter_messages(chat, reverse=True, offset_date=since, limit=None):
+        async for msg in client.iter_messages(entity, reverse=True, offset_date=since, limit=None):
             if not msg.text and not msg.media:
                 continue
-
             counter += 1
             if counter % _CHECK_CANCEL_EVERY == 0:
                 if mgr.is_cancelled(chat_id):
                     mgr.clear_cancel(chat_id)
                     logger.info("Sync: mid-loop cancel for %s at msg %d", ctitle, counter)
                     break
-
             if await save_history_message(
                 chat_id=chat_id,
-                chat_entity=chat,
+                chat_entity=entity,
                 msg=msg,
                 user_cache=user_cache,
             ):
@@ -132,6 +139,24 @@ async def _sync_dialog(
     except asyncio.CancelledError:
         raise
     except Exception:
-        logger.exception("Userbot: failed to sync dialog %s", ctitle)
+        logger.exception("Userbot: failed to sync %s", ctitle)
 
+    return saved
+
+
+async def sync_single_chat(chat_id: int) -> int:
+    from app.services.chat_settings import get_chat_config, get_global_settings
+    client = get_client()
+    if not client.is_connected():
+        raise RuntimeError("Userbot not connected")
+
+    settings = await get_global_settings()
+    default_depth = settings.get("default_depth_days", 7)
+    cfg = await get_chat_config(chat_id)
+    depth = cfg.depth_days if cfg and cfg.depth_days is not None else default_depth
+
+    entity = await client.get_entity(chat_id)
+    ctitle = chat_title(entity) or str(chat_id)
+    saved = await _sync_entity(client, entity, depth, chat_id, ctitle)
+    logger.info("sync_single_chat: %s → +%d messages", ctitle, saved)
     return saved

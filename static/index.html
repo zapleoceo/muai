@@ -636,6 +636,8 @@ function renderChats() {
         ? `<button class="btn btn-sm btn-ghost"   data-action="skip"    data-id="${c.id}" title="Отключить">—</button>` : '';
       const cancelBtn  = c.status === 'active'
         ? `<button class="btn btn-sm btn-ghost"   data-action="cancel"  data-id="${c.id}" title="Отменить текущую синхр.">✕</button>` : '';
+      const syncNowBtn = c.status === 'active'
+        ? `<button class="btn btn-sm btn-ghost" data-action="sync-now" data-id="${c.id}" title="Синхронизировать сейчас">⚡</button>` : '';
       const deleteBtn  = `<button class="btn btn-sm btn-danger" data-action="delete" data-id="${c.id}" data-title="${esc(c.title)}" title="Удалить сообщения">🗑</button>`;
       return `<tr>
         <td><span class="chat-type-badge">${esc(c.type)}</span></td>
@@ -646,7 +648,7 @@ function renderChats() {
         <td style="color:#475569;font-size:0.78rem">
           <span class="depth-cell" data-id="${c.id}" data-depth="${c.depth_days ?? ''}" title="Нажмите для изменения глубины">${depth}</span>
         </td>
-        <td><div class="chat-actions">${approveBtn}${disableBtn}${cancelBtn}${deleteBtn}</div></td>
+        <td><div class="chat-actions">${approveBtn}${disableBtn}${syncNowBtn}${cancelBtn}${deleteBtn}</div></td>
       </tr>`;
     }).join('');
   }
@@ -689,6 +691,8 @@ document.addEventListener('click', async e => {
       body: JSON.stringify({reason}),
     });
     await loadChats();
+  } else if (action === 'sync-now') {
+    await fetch(`/api/admin/chats/${id}/sync-now`, {method:'POST'});
   } else if (action === 'cancel') {
     await fetch(`/api/admin/chats/${id}/cancel-sync`, {method:'POST'});
   } else if (action === 'delete') {

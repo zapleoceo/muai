@@ -49,6 +49,14 @@ async def skip_chat(
     return {"ok": True, "chat_id": chat_id, "action": "skipped"}
 
 
+@router.post("/admin/chats/{chat_id}/sync-now")
+async def sync_chat_now(chat_id: int, _uid: int = Depends(require_owner)) -> dict:
+    import asyncio
+    from app.userbot.sync import sync_single_chat
+    asyncio.create_task(sync_single_chat(chat_id))
+    return {"ok": True, "chat_id": chat_id}
+
+
 @router.post("/admin/chats/{chat_id}/cancel-sync")
 async def cancel_sync(chat_id: int, _uid: int = Depends(require_owner)) -> dict:
     get_sync_manager().cancel_chat(chat_id)
