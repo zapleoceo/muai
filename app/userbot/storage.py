@@ -4,7 +4,7 @@ from telethon.tl.types import User
 
 from app.db.database import AsyncSessionLocal
 from app.db.repository import MessageRepo
-from app.userbot.media import chat_title, chat_type, media_type
+from app.userbot.media import chat_title, chat_type, chat_username, media_type
 
 
 async def save_event(event, *, is_edit: bool = False) -> None:
@@ -22,7 +22,7 @@ async def save_event(event, *, is_edit: bool = False) -> None:
 
     async with AsyncSessionLocal() as session:
         repo = MessageRepo(session)
-        await repo.upsert_chat_raw(id=chat_id, type=chat_type(chat), title=chat_title(chat))
+        await repo.upsert_chat_raw(id=chat_id, type=chat_type(chat), title=chat_title(chat), username=chat_username(chat))
         if sender and isinstance(sender, User):
             await repo.upsert_user_raw(
                 id=sender.id,

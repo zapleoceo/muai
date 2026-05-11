@@ -21,13 +21,24 @@ class MessageRepo:
             id=chat.id,
             type=str(chat.type.value) if hasattr(chat.type, "value") else str(chat.type),
             title=getattr(chat, "title", None) or getattr(chat, "first_name", None),
+            username=getattr(chat, "username", None),
         )
 
-    async def upsert_chat_raw(self, *, id: int, type: str, title: str | None = None) -> None:
+    async def upsert_chat_raw(
+        self,
+        *,
+        id: int,
+        type: str,
+        title: str | None = None,
+        username: str | None = None,
+    ) -> None:
         stmt = (
             insert(Chat)
-            .values(id=id, type=type, title=title)
-            .on_conflict_do_update(index_elements=["id"], set_={"type": type, "title": title})
+            .values(id=id, type=type, title=title, username=username)
+            .on_conflict_do_update(
+                index_elements=["id"],
+                set_={"type": type, "title": title, "username": username},
+            )
         )
         await self.session.execute(stmt)
 

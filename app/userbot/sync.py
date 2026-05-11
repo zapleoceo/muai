@@ -15,7 +15,7 @@ from app.services.chat_settings import (
     type_allowed,
 )
 from app.services.sync_manager import get_sync_manager
-from app.userbot.media import chat_title, chat_type
+from app.userbot.media import chat_title, chat_type, chat_username
 from app.userbot.storage import save_history_message
 
 logger = logging.getLogger(__name__)
@@ -105,6 +105,7 @@ async def _sync_dialog(
                 id=chat_id,
                 type=chat_type(chat),
                 title=ctitle,
+                username=chat_username(chat),
             )
             await session.commit()
 

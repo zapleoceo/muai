@@ -17,6 +17,10 @@ def chat_title(entity) -> str | None:
     return getattr(entity, "title", None)
 
 
+def chat_username(entity) -> str | None:
+    return getattr(entity, "username", None)
+
+
 def media_type(msg) -> str | None:
     if msg.photo:
         return "photo"

@@ -100,27 +100,43 @@
     .inp-label { flex: 1; min-width: 100px; }
 
     /* ── Chats table ── */
-    .chat-filters { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+    .chat-toolbar { display: flex; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; align-items: center; }
+    .chat-search { flex: 1; min-width: 180px; }
     .filter-btn { padding: 4px 12px; background: #263045; color: #64748b; border: none;
                   border-radius: 6px; cursor: pointer; font-size: 0.78rem; transition: all .15s; }
     .filter-btn.active { background: #3b82f6; color: white; }
-    .chat-list { display: flex; flex-direction: column; gap: 2px; }
-    .chat-row { display: flex; align-items: center; gap: 10px; padding: 10px 12px;
-                background: #0f1117; border-radius: 8px; flex-wrap: wrap; }
-    .chat-row:hover { background: #161d2c; }
+    .chat-table { width: 100%; border-collapse: collapse; font-size: 0.82rem; }
+    .chat-table th { padding: 8px 10px; text-align: left; color: #475569; font-weight: 600;
+                     font-size: 0.72rem; text-transform: uppercase; letter-spacing: .04em;
+                     border-bottom: 1px solid #263045; white-space: nowrap; cursor: pointer;
+                     user-select: none; }
+    .chat-table th:hover { color: #94a3b8; }
+    .chat-table th .sort-arrow { margin-left: 4px; opacity: .4; }
+    .chat-table th.sorted .sort-arrow { opacity: 1; color: #3b82f6; }
+    .chat-table td { padding: 8px 10px; border-bottom: 1px solid #16202f; vertical-align: middle; }
+    .chat-table tr:hover td { background: #161d2c; }
+    .chat-table tr:last-child td { border-bottom: none; }
     .chat-type-badge { font-size: 0.68rem; padding: 2px 6px; border-radius: 4px;
-                       background: #263045; color: #64748b; flex-shrink: 0; }
-    .chat-title { flex: 1; min-width: 120px; color: #cbd5e1; font-size: 0.85rem;
-                  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-    .chat-status { font-size: 0.72rem; padding: 2px 8px; border-radius: 4px; flex-shrink: 0; }
-    .chat-status-active   { background: #14532d; color: #86efac; }
-    .chat-status-pending  { background: #422006; color: #fdba74; }
-    .chat-status-disabled { background: #1c1c27; color: #475569; }
-    .chat-status-unknown  { background: #1c1c27; color: #475569; }
-    .chat-depth { font-size: 0.72rem; color: #475569; flex-shrink: 0; min-width: 60px; }
-    .chat-actions { display: flex; gap: 6px; flex-shrink: 0; }
+                       background: #263045; color: #64748b; white-space: nowrap; }
+    .chat-name-cell { max-width: 260px; }
+    .chat-title-text { color: #cbd5e1; white-space: nowrap; overflow: hidden;
+                       text-overflow: ellipsis; display: block; max-width: 240px; }
+    .chat-username { font-size: 0.7rem; color: #3b82f6; }
+    .chat-status-badge { font-size: 0.7rem; padding: 2px 8px; border-radius: 4px; white-space: nowrap; }
+    .cs-active   { background: #14532d; color: #86efac; }
+    .cs-pending  { background: #422006; color: #fdba74; }
+    .cs-disabled { background: #1c1c27; color: #475569; }
+    .cs-unknown  { background: #1c1c27; color: #475569; }
+    .chat-actions { display: flex; gap: 5px; }
+    .pagination { display: flex; align-items: center; gap: 6px; margin-top: 14px;
+                  justify-content: center; flex-wrap: wrap; }
+    .page-btn { padding: 4px 10px; background: #263045; color: #64748b; border: none;
+                border-radius: 6px; cursor: pointer; font-size: 0.78rem; transition: all .15s; }
+    .page-btn:hover { background: #334155; color: #94a3b8; }
+    .page-btn.active { background: #3b82f6; color: white; }
+    .page-info { font-size: 0.75rem; color: #475569; }
     .sync-status-bar { background: #0f1117; border-radius: 8px; padding: 12px 16px;
-                       margin-bottom: 16px; display: none; font-size: 0.82rem; color: #94a3b8; }
+                       margin-bottom: 14px; display: none; font-size: 0.82rem; color: #94a3b8; }
     .sync-status-bar.visible { display: flex; align-items: center; gap: 12px; }
     .spinner { width: 14px; height: 14px; border: 2px solid #334155;
                border-top-color: #3b82f6; border-radius: 50%; animation: spin .8s linear infinite; flex-shrink: 0; }
@@ -206,7 +222,7 @@
         <h2>Управление синхронизацией</h2>
         <div style="display:flex;gap:8px">
           <button class="btn btn-sm btn-ghost" onclick="loadChats()">Обновить</button>
-          <button class="btn btn-sm btn-danger" id="btn-stop-sync" onclick="stopSync()">Стоп синхр.</button>
+          <button class="btn btn-sm btn-danger" onclick="stopSync()">Стоп синхр.</button>
         </div>
       </div>
 
@@ -216,14 +232,30 @@
         <button class="btn btn-sm btn-danger" style="margin-left:auto" onclick="stopSync()">Стоп</button>
       </div>
 
-      <div class="chat-filters">
-        <button class="filter-btn active" data-filter="all" onclick="setFilter('all',this)">Все</button>
-        <button class="filter-btn" data-filter="pending" onclick="setFilter('pending',this)">Ожидают</button>
-        <button class="filter-btn" data-filter="active" onclick="setFilter('active',this)">Активные</button>
-        <button class="filter-btn" data-filter="disabled" onclick="setFilter('disabled',this)">Отключены</button>
+      <div class="chat-toolbar">
+        <input class="inp chat-search" id="chat-search" type="search" placeholder="Поиск по названию или @username…" oninput="onSearch(this.value)">
+        <button class="filter-btn active" data-filter="all"      onclick="setFilter('all',this)">Все</button>
+        <button class="filter-btn"        data-filter="pending"  onclick="setFilter('pending',this)">Ожидают</button>
+        <button class="filter-btn"        data-filter="active"   onclick="setFilter('active',this)">Активные</button>
+        <button class="filter-btn"        data-filter="disabled" onclick="setFilter('disabled',this)">Отключены</button>
       </div>
 
-      <div class="chat-list" id="chat-list">Загрузка…</div>
+      <div id="chat-table-wrap">
+        <table class="chat-table">
+          <thead>
+            <tr>
+              <th onclick="sortBy('type')"   id="th-type">Тип <span class="sort-arrow">↕</span></th>
+              <th onclick="sortBy('title')"  id="th-title" class="sorted">Название <span class="sort-arrow">↑</span></th>
+              <th onclick="sortBy('status')" id="th-status">Статус <span class="sort-arrow">↕</span></th>
+              <th onclick="sortBy('message_count')" id="th-msgs" style="text-align:right">Сообщений <span class="sort-arrow">↕</span></th>
+              <th onclick="sortBy('depth_days')" id="th-depth">Глубина <span class="sort-arrow">↕</span></th>
+              <th>Действия</th>
+            </tr>
+          </thead>
+          <tbody id="chat-list"></tbody>
+        </table>
+      </div>
+      <div class="pagination" id="chat-pagination"></div>
     </div>
   </div>
 
@@ -363,92 +395,167 @@ async function loadLogs() {
 }
 
 // ── Chats ─────────────────────────────────────────────────────────────────────
+const PAGE_SIZE = 50;
 let _allChats = [];
 let _filter = 'all';
+let _search = '';
+let _sortCol = 'title';
+let _sortDir = 1;   // 1=asc -1=desc
+let _page = 0;
 let _syncPollTimer = null;
 
 async function loadChats() {
   const r = await fetch('/api/admin/chats');
   if (!r.ok) return;
   _allChats = await r.json();
+  _page = 0;
+  renderChats();
+}
+
+function onSearch(val) {
+  _search = val.trim().toLowerCase();
+  _page = 0;
   renderChats();
 }
 
 function setFilter(f, el) {
   _filter = f;
+  _page = 0;
   document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
   el.classList.add('active');
   renderChats();
 }
 
-function renderChats() {
-  const list = document.getElementById('chat-list');
-  const chats = _filter === 'all' ? _allChats : _allChats.filter(c => c.status === _filter);
+function sortBy(col) {
+  if (_sortCol === col) { _sortDir *= -1; }
+  else { _sortCol = col; _sortDir = 1; }
+  _page = 0;
+  updateSortHeaders();
+  renderChats();
+}
 
-  if (!chats.length) {
-    list.innerHTML = '<p style="color:#475569;font-size:0.85rem;padding:12px 0">Нет чатов в этой категории</p>';
-    return;
+function updateSortHeaders() {
+  const cols = ['type','title','status','message_count','depth_days'];
+  const arrows = {1:'↑', '-1':'↓'};
+  cols.forEach(c => {
+    const th = document.getElementById('th-' + (c === 'message_count' ? 'msgs' : c === 'depth_days' ? 'depth' : c));
+    if (!th) return;
+    th.classList.toggle('sorted', _sortCol === c);
+    th.querySelector('.sort-arrow').textContent = _sortCol === c ? arrows[String(_sortDir)] : '↕';
+  });
+}
+
+function getVisible() {
+  let chats = _allChats;
+  if (_filter !== 'all') chats = chats.filter(c => c.status === _filter);
+  if (_search) chats = chats.filter(c =>
+    (c.title || '').toLowerCase().includes(_search) ||
+    (c.username || '').toLowerCase().includes(_search) ||
+    String(c.id).includes(_search)
+  );
+  chats = [...chats].sort((a, b) => {
+    let av = a[_sortCol] ?? '', bv = b[_sortCol] ?? '';
+    if (typeof av === 'string') av = av.toLowerCase();
+    if (typeof bv === 'string') bv = bv.toLowerCase();
+    if (av < bv) return -_sortDir;
+    if (av > bv) return _sortDir;
+    return 0;
+  });
+  return chats;
+}
+
+function esc(s) {
+  return String(s ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+
+function renderChats() {
+  const tbody = document.getElementById('chat-list');
+  const chats = getVisible();
+  const total = chats.length;
+  const pageCount = Math.max(1, Math.ceil(total / PAGE_SIZE));
+  if (_page >= pageCount) _page = pageCount - 1;
+  const slice = chats.slice(_page * PAGE_SIZE, (_page + 1) * PAGE_SIZE);
+
+  const STATUS = {active:'активен', pending:'ожидает', disabled:'отключён', unknown:'неизвестно'};
+  const SC = {active:'cs-active', pending:'cs-pending', disabled:'cs-disabled', unknown:'cs-unknown'};
+
+  if (!slice.length) {
+    tbody.innerHTML = `<tr><td colspan="6" style="color:#475569;padding:20px;text-align:center">Нет чатов</td></tr>`;
+  } else {
+    tbody.innerHTML = slice.map(c => {
+      const depth = c.depth_days ? `${c.depth_days}д` : 'глоб.';
+      const uname = c.username ? `<span class="chat-username">@${esc(c.username)}</span>` : '';
+      const approveBtn = c.status !== 'active'
+        ? `<button class="btn btn-sm btn-success" data-action="approve" data-id="${c.id}" title="Включить синхронизацию">✓</button>` : '';
+      const disableBtn = c.status === 'active'
+        ? `<button class="btn btn-sm btn-ghost"   data-action="skip"    data-id="${c.id}" title="Отключить">—</button>` : '';
+      const cancelBtn  = c.status === 'active'
+        ? `<button class="btn btn-sm btn-ghost"   data-action="cancel"  data-id="${c.id}" title="Отменить текущую синхр.">✕</button>` : '';
+      const deleteBtn  = `<button class="btn btn-sm btn-danger" data-action="delete" data-id="${c.id}" data-title="${esc(c.title)}" title="Удалить сообщения">🗑</button>`;
+      return `<tr>
+        <td><span class="chat-type-badge">${esc(c.type)}</span></td>
+        <td class="chat-name-cell"><span class="chat-title-text" title="${esc(c.title)}">${esc(c.title)}</span>${uname}</td>
+        <td><span class="chat-status-badge ${SC[c.status]||'cs-unknown'}">${STATUS[c.status]||c.status}</span></td>
+        <td style="text-align:right;color:#94a3b8">${fmt(c.message_count)}</td>
+        <td style="color:#475569;font-size:0.78rem">${depth}</td>
+        <td><div class="chat-actions">${approveBtn}${disableBtn}${cancelBtn}${deleteBtn}</div></td>
+      </tr>`;
+    }).join('');
   }
 
-  list.innerHTML = chats.map(c => {
-    const statusLabel = {active:'активен', pending:'ожидает', disabled:'отключён', unknown:'неизвестно'}[c.status] || c.status;
-    const depth = c.depth_days ? `${c.depth_days}д` : 'глоб.';
-    const approveBtn = c.status !== 'active'
-      ? `<button class="btn btn-sm btn-success" onclick="approveChat(${c.id})">Синхр.</button>`
-      : '';
-    const disableBtn = c.status === 'active'
-      ? `<button class="btn btn-sm btn-ghost" onclick="skipChat(${c.id})">Откл.</button>`
-      : '';
-    const cancelBtn = c.status === 'active'
-      ? `<button class="btn btn-sm btn-ghost" onclick="cancelSync(${c.id})" title="Отменить текущую синхр.">✕</button>`
-      : '';
-    const deleteBtn = `<button class="btn btn-sm btn-danger" onclick="deleteMessages(${c.id},${JSON.stringify(c.title)})" title="Удалить сообщения">🗑</button>`;
-
-    return `
-      <div class="chat-row" id="cr-${c.id}">
-        <span class="chat-type-badge">${c.type}</span>
-        <span class="chat-title" title="${c.title}">${c.title}</span>
-        <span class="chat-status chat-status-${c.status}">${statusLabel}</span>
-        <span class="chat-depth">${depth}</span>
-        <div class="chat-actions">
-          ${approveBtn}${disableBtn}${cancelBtn}${deleteBtn}
-        </div>
-      </div>`;
-  }).join('');
+  // pagination
+  const pg = document.getElementById('chat-pagination');
+  if (pageCount <= 1) { pg.innerHTML = `<span class="page-info">${total} чатов</span>`; return; }
+  let html = `<span class="page-info">${total} чатов</span>`;
+  html += `<button class="page-btn" onclick="_page=Math.max(0,_page-1);renderChats()" ${_page===0?'disabled':''}>‹</button>`;
+  const start = Math.max(0, _page - 2), end = Math.min(pageCount, start + 5);
+  for (let i = start; i < end; i++)
+    html += `<button class="page-btn ${i===_page?'active':''}" onclick="_page=${i};renderChats()">${i+1}</button>`;
+  html += `<button class="page-btn" onclick="_page=Math.min(${pageCount-1},_page+1);renderChats()" ${_page===pageCount-1?'disabled':''}>›</button>`;
+  pg.innerHTML = html;
 }
 
-async function approveChat(id) {
-  const depthStr = prompt('Глубина синхронизации (дней, пусто = глобальная):');
-  if (depthStr === null) return;
-  const depth = depthStr.trim() ? parseInt(depthStr) : null;
-  await fetch(`/api/admin/chats/${id}/approve`, {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({depth_days: depth}),
-  });
-  await loadChats();
-}
+// Event delegation — no inline onclick with user data
+document.addEventListener('click', async e => {
+  const btn = e.target.closest('[data-action]');
+  if (!btn || !btn.closest('#chat-list, #chat-list + * [data-action]')) return;
+  // Only handle buttons inside the chat table area
+  if (!btn.closest('#chat-table-wrap')) return;
+  const action = btn.dataset.action;
+  const id = parseInt(btn.dataset.id);
+  if (!id) return;
 
-async function skipChat(id) {
-  const reason = prompt('Причина (необязательно):') ?? '';
-  await fetch(`/api/admin/chats/${id}/skip`, {
-    method: 'POST',
-    headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({reason}),
-  });
-  await loadChats();
-}
-
-async function cancelSync(id) {
-  await fetch(`/api/admin/chats/${id}/cancel-sync`, {method:'POST'});
-}
-
-async function deleteMessages(id, title) {
-  if (!confirm(`Удалить все сообщения чата "${title}"?`)) return;
-  const r = await fetch(`/api/admin/chats/${id}/messages`, {method:'DELETE'});
-  const d = await r.json();
-  alert(`Удалено ${d.deleted} сообщений`);
-}
+  if (action === 'approve') {
+    const depthStr = prompt('Глубина синхронизации (дней, пусто = глобальная):');
+    if (depthStr === null) return;
+    const depth = depthStr.trim() ? parseInt(depthStr) : null;
+    await fetch(`/api/admin/chats/${id}/approve`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({depth_days: depth}),
+    });
+    await loadChats();
+  } else if (action === 'skip') {
+    const reason = prompt('Причина отключения (необязательно):') ?? '';
+    await fetch(`/api/admin/chats/${id}/skip`, {
+      method:'POST', headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({reason}),
+    });
+    await loadChats();
+  } else if (action === 'cancel') {
+    await fetch(`/api/admin/chats/${id}/cancel-sync`, {method:'POST'});
+  } else if (action === 'delete') {
+    const title = btn.dataset.title || String(id);
+    if (!confirm(`Удалить все сообщения чата «${title}»?`)) return;
+    const r = await fetch(`/api/admin/chats/${id}/messages`, {method:'DELETE'});
+    if (r.ok) {
+      const d = await r.json();
+      alert(`Удалено ${d.deleted} сообщений`);
+    } else {
+      alert('Ошибка удаления: ' + r.status);
+    }
+    await loadChats();
+  }
+});
 
 async function stopSync() {
   await fetch('/api/admin/sync/stop', {method:'POST'});

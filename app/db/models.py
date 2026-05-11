@@ -14,6 +14,7 @@ class Chat(Base):
     id = Column(BigInteger, primary_key=True)
     type = Column(Text, nullable=False)
     title = Column(Text)
+    username = Column(Text)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 

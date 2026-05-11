@@ -8,7 +8,7 @@ import json
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, select, text
+from sqlalchemy import delete, func, select, text
 from sqlalchemy.dialects.postgresql import insert
 
 from app.db.database import AsyncSessionLocal
@@ -127,16 +127,22 @@ async def type_allowed(chat_type: str, settings: dict) -> bool:
 
 
 async def list_chats_with_config() -> list[dict]:
-    """Return all chats joined with their sync config (pending/active/disabled)."""
+    """Return all chats joined with their sync config and message count."""
     async with AsyncSessionLocal() as session:
+        msg_count_sub = (
+            select(Message.chat_id, func.count(Message.id).label("cnt"))
+            .group_by(Message.chat_id)
+            .subquery()
+        )
         rows = (await session.execute(
-            select(Chat, ChatSyncConfig)
+            select(Chat, ChatSyncConfig, msg_count_sub.c.cnt)
             .outerjoin(ChatSyncConfig, Chat.id == ChatSyncConfig.chat_id)
+            .outerjoin(msg_count_sub, Chat.id == msg_count_sub.c.chat_id)
             .order_by(Chat.title)
         )).all()
 
     result = []
-    for chat, cfg in rows:
+    for chat, cfg, msg_cnt in rows:
         if cfg is None:
             status = "unknown"
         elif cfg.enabled:
@@ -150,11 +156,13 @@ async def list_chats_with_config() -> list[dict]:
             "id": chat.id,
             "type": chat.type,
             "title": chat.title or str(chat.id),
+            "username": chat.username,
             "status": status,
             "enabled": cfg.enabled if cfg else False,
             "depth_days": cfg.depth_days if cfg else None,
             "skip_reason": cfg.skip_reason if cfg else None,
             "approved_at": cfg.approved_at.isoformat() if cfg and cfg.approved_at else None,
+            "message_count": msg_cnt or 0,
         })
     return result
 
