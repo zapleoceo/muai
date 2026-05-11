@@ -58,13 +58,28 @@ def _speaker(msg, user, chat_type: str) -> str:
     return "Собеседник"
 
 
-def _format_chunk(rows: list, chat_title: str, chat_type: str) -> str:
+def _tg_link(chat_id: int, username: str | None, tg_msg_id: int | None) -> str | None:
+    if not tg_msg_id:
+        return None
+    if username:
+        return f"https://t.me/{username}/{tg_msg_id}"
+    s = str(chat_id)
+    if s.startswith("-100"):
+        return f"https://t.me/c/{s[4:]}/{tg_msg_id}"
+    return None
+
+
+def _format_chunk(rows: list, chat_title: str, chat_type: str,
+                  chat_id: int = 0, chat_username: str | None = None) -> str:
     date = rows[0][0].date_utc
     type_label = {
         "private": "личный", "group": "группа",
         "supergroup": "супергруппа", "channel": "канал",
     }.get(chat_type, chat_type)
-    header = f"[Чат: {chat_title} | {type_label} | {date.strftime('%Y-%m-%d') if date else ''}]"
+    first_tg_id = next((r[0].telegram_msg_id for r in rows if r[0].telegram_msg_id), None)
+    link = _tg_link(chat_id, chat_username, first_tg_id)
+    link_part = f" | {link}" if link else ""
+    header = f"[Чат: {chat_title} | {type_label} | {date.strftime('%Y-%m-%d') if date else ''}{link_part}]"
     lines = [header]
     for msg, user in rows:
         speaker = _speaker(msg, user, chat_type)
@@ -77,13 +92,13 @@ def _format_chunk(rows: list, chat_title: str, chat_type: str) -> str:
 
 # ── per-chat embedding ────────────────────────────────────────────────────────
 
-async def embed_chat(chat_id: int, chat_title: str, chat_type: str) -> int:
+async def embed_chat(chat_id: int, chat_title: str, chat_type: str,
+                     chat_username: str | None = None) -> int:
     """Chunk and embed new messages for one chat. Returns new chunk count."""
     async with AsyncSessionLocal() as session:
         last_id = await MessageRepo(session).get_last_embedded_msg_id(chat_id)
         rows = await MessageRepo(session).get_messages_after_with_users(chat_id, after_id=last_id)
 
-    # Only embed messages with text or caption
     rows = [r for r in rows if r[0].text or r[0].caption]
     if not rows:
         return 0
@@ -91,13 +106,16 @@ async def embed_chat(chat_id: int, chat_title: str, chat_type: str) -> int:
     chunks_saved = 0
     for i in range(0, len(rows), _CHUNK_STEP):
         window = rows[i: i + _CHUNK_SIZE]
-        chunk_text = _format_chunk(window, chat_title, chat_type)
+        chunk_text = _format_chunk(window, chat_title, chat_type, chat_id, chat_username)
         if len(chunk_text) < _MIN_CHARS:
             continue
 
         date_from = window[0][0].date_utc
         date_to = window[-1][0].date_utc
         max_msg_id = max(r[0].id for r in window)
+        tg_ids = [r[0].telegram_msg_id for r in window if r[0].telegram_msg_id]
+        min_tg = min(tg_ids) if tg_ids else None
+        max_tg = max(tg_ids) if tg_ids else None
 
         try:
             vector = await embed_text(chunk_text)
@@ -113,11 +131,14 @@ async def embed_chat(chat_id: int, chat_title: str, chat_type: str) -> int:
             await session.execute(
                 text(
                     "INSERT INTO message_chunks "
-                    "(chat_id, chat_title, chunk_text, embedding, msg_date_from, msg_date_to, max_msg_id) "
-                    "VALUES (:cid, :title, :chunk, CAST(:emb AS vector), :df, :dt, :mid)"
+                    "(chat_id, chat_title, chunk_text, embedding, msg_date_from, msg_date_to, "
+                    "max_msg_id, min_tg_msg_id, max_tg_msg_id, chat_username) "
+                    "VALUES (:cid, :title, :chunk, CAST(:emb AS vector), :df, :dt, "
+                    ":mid, :min_tg, :max_tg, :uname)"
                 ),
                 {"cid": chat_id, "title": chat_title, "chunk": chunk_text,
-                 "emb": vec_str, "df": date_from, "dt": date_to, "mid": max_msg_id},
+                 "emb": vec_str, "df": date_from, "dt": date_to, "mid": max_msg_id,
+                 "min_tg": min_tg, "max_tg": max_tg, "uname": chat_username},
             )
             await session.commit()
 
@@ -142,7 +163,7 @@ async def embed_all_chats() -> None:
     for chat in chats:
         _status.current_chat = chat.title or str(chat.id)
         try:
-            n = await embed_chat(chat.id, chat.title or str(chat.id), chat.type or "unknown")
+            n = await embed_chat(chat.id, chat.title or str(chat.id), chat.type or "unknown", chat.username)
             if n:
                 logger.info("Embedder: %s → +%d chunks", chat.title, n)
         except asyncio.CancelledError:

@@ -104,6 +104,9 @@ class MessageChunk(Base):
     msg_date_from = Column(TIMESTAMP(timezone=True))
     msg_date_to = Column(TIMESTAMP(timezone=True))
     max_msg_id = Column(BigInteger)          # highest messages.id in this chunk
+    min_tg_msg_id = Column(BigInteger)       # lowest telegram_msg_id in this chunk
+    max_tg_msg_id = Column(BigInteger)       # highest telegram_msg_id in this chunk
+    chat_username = Column(Text)             # @username for link construction
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
     __table_args__ = (
