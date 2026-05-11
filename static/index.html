@@ -268,7 +268,7 @@
         <div style="display:flex;gap:8px">
           <button class="btn btn-sm btn-ghost" onclick="loadChats()">Обновить</button>
           <button class="btn btn-sm btn-ghost" onclick="syncFolders()" title="Синхронизировать папки Telegram">↻ Папки</button>
-          <button class="btn btn-sm btn-danger" onclick="stopSync()">Стоп синхр.</button>
+          <button class="btn-icon" id="sync-toggle-btn" onclick="toggleSync()" title="Запустить синхронизацию">▶</button>
         </div>
       </div>
 
@@ -722,8 +722,30 @@ document.addEventListener('click', async e => {
   });
 });
 
-async function stopSync() {
-  await fetch('/api/admin/sync/stop', {method:'POST'});
+async function toggleSync() {
+  const btn = document.getElementById('sync-toggle-btn');
+  const running = btn.dataset.running === '1';
+  if (running) {
+    await fetch('/api/admin/sync/stop', {method:'POST'});
+  } else {
+    await fetch('/api/admin/sync/start', {method:'POST'});
+  }
+}
+
+function _updateSyncBtn(running) {
+  const btn = document.getElementById('sync-toggle-btn');
+  if (!btn) return;
+  if (running) {
+    btn.textContent = '■';
+    btn.title = 'Остановить синхронизацию';
+    btn.dataset.running = '1';
+    btn.style.color = '#ef4444';
+  } else {
+    btn.textContent = '▶';
+    btn.title = 'Запустить синхронизацию';
+    btn.dataset.running = '0';
+    btn.style.color = '';
+  }
 }
 
 async function pollSync() {
@@ -733,6 +755,7 @@ async function pollSync() {
     if (!r.ok) return;
     const s = await r.json();
     const bar = document.getElementById('sync-bar');
+    _updateSyncBtn(s.running);
     if (s.running) {
       bar.classList.add('visible');
       document.getElementById('sync-bar-text').textContent =

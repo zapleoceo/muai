@@ -94,6 +94,21 @@ async def stop_sync(_uid: int = Depends(require_owner)) -> dict:
     return {"ok": True, "action": "sync-stopped"}
 
 
+@router.post("/admin/sync/start")
+async def start_sync(_uid: int = Depends(require_owner)) -> dict:
+    import asyncio
+    from app.config import get_settings
+    from app.userbot.client import get_client
+    from app.userbot.sync import sync_history
+    mgr = get_sync_manager()
+    if mgr.status.running:
+        return {"ok": False, "detail": "already running"}
+    client = get_client()
+    task = asyncio.create_task(sync_history(client, days=get_settings().sync_history_days))
+    mgr.set_task(task)
+    return {"ok": True, "action": "sync-started"}
+
+
 @router.get("/admin/sync/status")
 async def sync_status(_uid: int = Depends(require_owner)) -> dict:
     s = get_sync_manager().status
