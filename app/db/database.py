@@ -15,13 +15,8 @@ engine = create_async_engine(
 
 @event.listens_for(engine.sync_engine, "connect")
 def _on_connect(dbapi_conn, _):
-    dbapi_conn.run_async(lambda conn: conn.set_type_codec(
-        "vector",
-        encoder=lambda v: str(v),
-        decoder=lambda v: [float(x) for x in v.strip("[]").split(",")],
-        schema="pg_catalog",
-        format="text",
-    ))
+    from pgvector.asyncpg import register_vector
+    dbapi_conn.run_async(register_vector)
 
 
 AsyncSessionLocal = async_sessionmaker(
