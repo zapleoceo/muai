@@ -62,8 +62,13 @@ async def lifespan(app: FastAPI):
     from app.userbot.client import start_userbot
     await start_userbot()
 
+    import asyncio
+    from app.services.embedder import run_embedder_loop
+    embedder_task = asyncio.create_task(run_embedder_loop())
+
     yield
 
+    embedder_task.cancel()
     from app.userbot.client import stop_userbot
     await stop_userbot()
     await bot.session.close()

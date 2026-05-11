@@ -1,3 +1,4 @@
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import BigInteger, Boolean, Column, ForeignKey, Index, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
 from sqlalchemy.orm import DeclarativeBase
@@ -85,7 +86,25 @@ class ChatSyncConfig(Base):
 
     chat_id = Column(BigInteger, ForeignKey("chats.id"), primary_key=True)
     enabled = Column(Boolean, nullable=False, default=False)
-    depth_days = Column(BigInteger, nullable=True)   # None = use global default
+    depth_days = Column(BigInteger, nullable=True)
     approved_at = Column(TIMESTAMP(timezone=True), nullable=True)
-    skip_reason = Column(Text, nullable=True)        # why it was skipped/disabled
+    skip_reason = Column(Text, nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class MessageChunk(Base):
+    __tablename__ = "message_chunks"
+
+    id = Column(BigInteger, autoincrement=True, primary_key=True)
+    chat_id = Column(BigInteger, ForeignKey("chats.id"), nullable=False)
+    chat_title = Column(Text)
+    chunk_text = Column(Text, nullable=False)
+    embedding = Column(Vector(768))
+    msg_date_from = Column(TIMESTAMP(timezone=True))
+    msg_date_to = Column(TIMESTAMP(timezone=True))
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        Index("idx_chunks_chat", "chat_id"),
+        Index("idx_chunks_date", "msg_date_from"),
+    )

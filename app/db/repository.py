@@ -1,12 +1,12 @@
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.db.models import Chat, Message, Setting, TgUser
+from app.db.models import Chat, Message, MessageChunk, Setting, TgUser
 
 
 class MessageRepo:
@@ -164,6 +164,33 @@ class MessageRepo:
         )
         rows = (await self.session.execute(q)).all()
         return list(reversed(rows))  # chronological order
+
+    # ── chunks / vector search ────────────────────────────────────────────────
+
+    async def get_embedded_date_range(self, chat_id: int) -> datetime | None:
+        """Return the latest msg_date_to already embedded for this chat, or None."""
+        q = select(MessageChunk.msg_date_to).where(
+            MessageChunk.chat_id == chat_id
+        ).order_by(MessageChunk.msg_date_to.desc()).limit(1)
+        return (await self.session.execute(q)).scalar_one_or_none()
+
+    async def search_chunks(
+        self, embedding: list[float], limit: int = 12
+    ) -> list[MessageChunk]:
+        """Return the most similar chunks across all chats using cosine distance."""
+        vec_str = "[" + ",".join(str(x) for x in embedding) + "]"
+        rows = (await self.session.execute(
+            text(
+                "SELECT id, chat_id, chat_title, chunk_text, msg_date_from, msg_date_to "
+                "FROM message_chunks "
+                "WHERE embedding IS NOT NULL "
+                "ORDER BY embedding <=> :vec "
+                "LIMIT :lim"
+            ),
+            {"vec": vec_str, "lim": limit},
+        )).fetchall()
+        # Return as simple namedtuple-like rows
+        return rows  # type: ignore[return-value]
 
     # ── settings ──────────────────────────────────────────────────────────────
 
