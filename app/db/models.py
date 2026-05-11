@@ -64,3 +64,16 @@ class Setting(Base):
 
     key = Column(Text, primary_key=True)
     value = Column(Text)
+
+
+class ApiToken(Base):
+    __tablename__ = "api_tokens"
+
+    id = Column(BigInteger, autoincrement=True, primary_key=True)
+    provider = Column(Text, nullable=False, default="gemini")  # gemini | openai | ...
+    token = Column(Text, nullable=False)
+    label = Column(Text)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    last_used_at = Column(TIMESTAMP(timezone=True))
+    error_count = Column(BigInteger, default=0)

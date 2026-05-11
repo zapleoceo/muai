@@ -37,6 +37,11 @@ async def lifespan(app: FastAPI):
         await conn.run_sync(Base.metadata.create_all)
     logger.info("DB tables ready")
 
+    from app.services.tokens import get_token_manager
+    mgr = get_token_manager()
+    await mgr.seed_from_env(settings.gemini_api_key)
+    await mgr.load()
+
     if settings.webhook_url:
         await bot.set_webhook(
             url=settings.webhook_url,

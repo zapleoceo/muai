@@ -43,6 +43,26 @@
            border-radius: 8px; cursor: pointer; font-size: 0.85rem; }
     .btn:hover { background: #2563eb; }
     .btn-sm { padding: 5px 12px; font-size: 0.78rem; }
+    .btn-danger { background: #ef4444; }
+    .btn-danger:hover { background: #dc2626; }
+    .btn-ghost { background: #334155; }
+    .btn-ghost:hover { background: #475569; }
+    .token-row { display: flex; align-items: center; gap: 10px; padding: 10px 0;
+                 border-bottom: 1px solid #0f1117; flex-wrap: wrap; }
+    .token-row:last-child { border-bottom: none; }
+    .token-badge { font-family: monospace; font-size: 0.78rem; background: #0f1117;
+                   padding: 3px 8px; border-radius: 4px; color: #7dd3fc; }
+    .status-dot { width: 8px; height: 8px; border-radius: 50%; flex-shrink: 0; }
+    .status-active   { background: #22c55e; }
+    .status-cooldown { background: #f59e0b; }
+    .status-inactive { background: #475569; }
+    .token-label { color: #94a3b8; font-size: 0.82rem; flex: 1; min-width: 80px; }
+    .token-add { display: flex; gap: 8px; margin-top: 14px; flex-wrap: wrap; }
+    .token-add input { background: #0f1117; border: 1px solid #334155; border-radius: 8px;
+                       color: #e2e8f0; padding: 7px 12px; font-size: 0.82rem; }
+    .token-add input:focus { outline: none; border-color: #3b82f6; }
+    .token-add .inp-token { flex: 2; min-width: 200px; font-family: monospace; }
+    .token-add .inp-label { flex: 1; min-width: 100px; }
   </style>
 </head>
 <body>
@@ -85,6 +105,22 @@
     </div>
     <div id="logs-box">Загрузка…</div>
   </div>
+
+  <div class="section">
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+      <h2 style="margin:0">Gemini токены</h2>
+      <button class="btn btn-sm btn-ghost" onclick="loadTokens()">Обновить</button>
+    </div>
+    <div id="tokens-list">Загрузка…</div>
+    <div class="token-add">
+      <input class="inp-token" id="inp-token" type="password" placeholder="AIzaSy... (API ключ)" autocomplete="off">
+      <input class="inp-label" id="inp-label" type="text" placeholder="Метка (необязательно)">
+      <button class="btn btn-sm" onclick="addToken()">+ Добавить</button>
+    </div>
+    <p style="font-size:0.72rem;color:#475569;margin-top:8px">
+      Ключи хранятся в БД. При достижении лимита (429) токен уходит на cooldown 60 сек, система переходит на следующий.
+    </p>
+  </div>
 </div>
 
 <script>
@@ -99,6 +135,7 @@ async function onTelegramAuth(user) {
     document.getElementById('dash').style.display = 'block';
     loadStats();
     loadLogs();
+    loadTokens();
   } else {
     alert('Доступ запрещён');
   }
@@ -150,14 +187,63 @@ async function loadLogs() {
 function fmt(n) { return n?.toLocaleString('ru') ?? '—'; }
 function pct(a, b) { return b ? Math.round(a/b*100) : 0; }
 
+async function loadTokens() {
+  const box = document.getElementById('tokens-list');
+  const r = await fetch('/api/admin/tokens');
+  if (!r.ok) { box.textContent = 'Ошибка загрузки'; return; }
+  const tokens = await r.json();
+  if (!tokens.length) {
+    box.innerHTML = '<p style="color:#475569;font-size:0.85rem">Нет токенов. Добавьте первый ниже.</p>';
+    return;
+  }
+  box.innerHTML = tokens.map(t => `
+    <div class="token-row" id="tr-${t.id}">
+      <span class="status-dot status-${t.status}"></span>
+      <span class="token-badge">${t.masked}</span>
+      <span class="token-label">${t.label || '—'} <span style="color:#334155">(${t.provider})</span></span>
+      <span style="font-size:0.72rem;color:${t.status==='cooldown'?'#f59e0b':t.is_active?'#22c55e':'#475569'}">
+        ${t.status==='cooldown'?'cooldown':t.is_active?'active':'inactive'}
+      </span>
+      <button class="btn btn-sm btn-ghost" onclick="toggleToken(${t.id})">${t.is_active?'Выкл':'Вкл'}</button>
+      <button class="btn btn-sm btn-danger" onclick="deleteToken(${t.id})">✕</button>
+    </div>
+  `).join('');
+}
+
+async function addToken() {
+  const token = document.getElementById('inp-token').value.trim();
+  const label = document.getElementById('inp-label').value.trim();
+  if (!token) { alert('Введите токен'); return; }
+  const r = await fetch('/api/admin/tokens', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({token, label}),
+  });
+  if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+  document.getElementById('inp-token').value = '';
+  document.getElementById('inp-label').value = '';
+  loadTokens();
+}
+
+async function deleteToken(id) {
+  if (!confirm('Удалить токен?')) return;
+  await fetch(`/api/admin/tokens/${id}`, {method:'DELETE'});
+  loadTokens();
+}
+
+async function toggleToken(id) {
+  await fetch(`/api/admin/tokens/${id}/toggle`, {method:'PATCH'});
+  loadTokens();
+}
+
 // Check if already logged in
 fetch('/api/admin/stats').then(r => {
   if (r.ok) {
     document.getElementById('login').style.display = 'none';
     document.getElementById('dash').style.display = 'block';
-    r.json().then(d => { /* re-render */ });
     loadStats();
     loadLogs();
+    loadTokens();
   }
 });
 </script>

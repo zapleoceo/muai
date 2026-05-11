@@ -29,7 +29,16 @@
       "Bash(curl -sf 'https://api.cloudflare.com/client/v4/zones?name=veranda.my' -H 'Authorization: Bearer cfat_rcOv71CDcIPBavXrnzbJefjyU43mhYe8HhpDrW0Ybc1a7184' -H 'Content-Type: application/json')",
       "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(d['result'][0]['id'], d['result'][0]['name']\\)\")",
       "Bash(scp -P 9617 -i D:/Projects/hetzner/hetzner_195.201.31.49_ed25519 D:/Projects/myAI/app/userbot/client.py root@195.201.31.49:/var/www/tgbot/app/userbot/client.py)",
-      "Bash(ssh -p 9617 -i D:/Projects/hetzner/hetzner_195.201.31.49_ed25519 root@195.201.31.49 'curl -s http://127.0.0.1:8000/health && echo '\\\\'''\\\\'' && docker logs tgbot-bot-1 --tail=10')"
+      "Bash(ssh -p 9617 -i D:/Projects/hetzner/hetzner_195.201.31.49_ed25519 root@195.201.31.49 'curl -s http://127.0.0.1:8000/health && echo '\\\\'''\\\\'' && docker logs tgbot-bot-1 --tail=10')",
+      "Bash(scp -P 9617 -i D:/Projects/hetzner/hetzner_195.201.31.49_ed25519 D:/Projects/myAI/app/api/auth.py D:/Projects/myAI/app/api/admin.py root@195.201.31.49:/var/www/tgbot/app/api/)",
+      "Bash(scp -P 9617 -i D:/Projects/hetzner/hetzner_195.201.31.49_ed25519 D:/Projects/myAI/app/bot/handlers/commands.py D:/Projects/myAI/app/bot/handlers/messages.py root@195.201.31.49:/var/www/tgbot/app/bot/handlers/)",
+      "Bash(scp -P 9617 -i D:/Projects/hetzner/hetzner_195.201.31.49_ed25519 D:/Projects/myAI/app/bot/storage.py root@195.201.31.49:/var/www/tgbot/app/bot/)",
+      "Bash(scp -P 9617 -i D:/Projects/hetzner/hetzner_195.201.31.49_ed25519 D:/Projects/myAI/app/db/repository.py root@195.201.31.49:/var/www/tgbot/app/db/)",
+      "Bash(scp -P 9617 -i D:/Projects/hetzner/hetzner_195.201.31.49_ed25519 D:/Projects/myAI/app/logic/reply.py root@195.201.31.49:/var/www/tgbot/app/logic/)",
+      "Bash(scp -P 9617 -i D:/Projects/hetzner/hetzner_195.201.31.49_ed25519 D:/Projects/myAI/app/userbot/handlers.py D:/Projects/myAI/app/userbot/sync.py D:/Projects/myAI/app/userbot/media.py D:/Projects/myAI/app/userbot/storage.py root@195.201.31.49:/var/www/tgbot/app/userbot/)",
+      "Bash(ssh -p 9617 -i D:/Projects/hetzner/hetzner_195.201.31.49_ed25519 root@195.201.31.49 'mkdir -p /var/www/tgbot/app/services')",
+      "Bash(scp -P 9617 -i D:/Projects/hetzner/hetzner_195.201.31.49_ed25519 D:/Projects/myAI/app/services/__init__.py D:/Projects/myAI/app/services/auth.py D:/Projects/myAI/app/services/stats.py D:/Projects/myAI/app/services/deploy.py root@195.201.31.49:/var/www/tgbot/app/services/)",
+      "Bash(ssh -p 9617 -i D:/Projects/hetzner/hetzner_195.201.31.49_ed25519 root@195.201.31.49 'curl -s http://127.0.0.1:8000/health && docker logs tgbot-bot-1 --tail=8 2>&1')"
     ]
   }
 }

@@ -24,9 +24,10 @@ def get_llm_provider() -> LLMProvider:
             base_url="https://api.groq.com/openai/v1",
         )
 
-    elif settings.llm_provider == "gemini" and settings.gemini_api_key:
+    elif settings.llm_provider in ("gemini", "gemini-2.5-flash", "gemini-2.5-pro"):
         from app.llm.gemini_provider import GeminiProvider
-        _provider = GeminiProvider(api_key=settings.gemini_api_key)
+        model = settings.llm_provider if settings.llm_provider.startswith("gemini-2") else "gemini-2.5-flash"
+        _provider = GeminiProvider(model=model)
 
     else:
         _provider = StubProvider()
