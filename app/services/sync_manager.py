@@ -49,6 +49,15 @@ class SyncManager:
         self.status.running = False
         self.status.current_chat = None
 
+    def mark_single_started(self, chat_name: str) -> None:
+        self.status.running = True
+        self.status.started_at = datetime.now(tz=timezone.utc)
+        self.status.current_chat = chat_name
+
+    def mark_single_done(self) -> None:
+        self.status.running = False
+        self.status.current_chat = None
+
     def update_progress(self, chat_name: str, chats_done: int, messages_saved: int) -> None:
         self.status.current_chat = chat_name
         self.status.chats_done = chats_done

@@ -17,7 +17,7 @@ async def save_event(event, *, is_edit: bool = False) -> None:
     direction = "out" if msg.out else "in"
     dialog_key = f"{chat_id}:{user_id}" if user_id else f"{chat_id}"
     date_utc = msg.date.replace(tzinfo=timezone.utc) if msg.date.tzinfo is None else msg.date
-    reply_to = msg.reply_to.reply_to_msg_id if msg.reply_to else None
+    reply_to = getattr(msg.reply_to, 'reply_to_msg_id', None) if msg.reply_to else None
     edit_date = msg.edit_date.replace(tzinfo=timezone.utc) if is_edit and msg.edit_date else None
 
     async with AsyncSessionLocal() as session:
@@ -59,7 +59,7 @@ async def save_history_message(
     direction = "out" if msg.out else "in"
     dialog_key = f"{chat_id}:{sender_id}" if sender_id else f"{chat_id}"
     date_utc = msg.date.replace(tzinfo=timezone.utc) if msg.date.tzinfo is None else msg.date
-    reply_to = msg.reply_to.reply_to_msg_id if msg.reply_to else None
+    reply_to = getattr(msg.reply_to, 'reply_to_msg_id', None) if msg.reply_to else None
 
     async with AsyncSessionLocal() as session:
         repo = MessageRepo(session)

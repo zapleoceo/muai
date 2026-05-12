@@ -170,6 +170,13 @@ async def sync_single_chat(chat_id: int) -> int:
 
     entity = await client.get_entity(chat_id)
     ctitle = chat_title(entity) or str(chat_id)
-    saved = await _sync_entity(client, entity, depth, chat_id, ctitle)
+
+    mgr = get_sync_manager()
+    mgr.mark_single_started(ctitle)
+    try:
+        saved = await _sync_entity(client, entity, depth, chat_id, ctitle)
+    finally:
+        mgr.mark_single_done()
+
     logger.info("sync_single_chat: %s → +%d messages", ctitle, saved)
     return saved
