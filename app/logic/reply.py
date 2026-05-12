@@ -1,4 +1,5 @@
 import logging
+from datetime import datetime, timezone
 
 from app.bot.storage import get_dialog_context
 from app.db.database import AsyncSessionLocal
@@ -10,7 +11,7 @@ from app.llm.gemini_provider import GeminiContentError
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = (
+_SYSTEM_PROMPT_BASE = (
     "Ты личный ассистент владельца этого Telegram-аккаунта. "
     "У тебя есть доступ к истории переписки из всех Telegram-чатов владельца. "
     "Когда в начале диалога есть блок «[Релевантные фрагменты]» — это реальные сообщения "
@@ -18,6 +19,11 @@ SYSTEM_PROMPT = (
     "Отвечай лаконично, по делу, на том же языке, на котором написан вопрос. "
     "Не раскрывай, что ты AI, если тебя напрямую не спросят."
 )
+
+
+def _system_prompt() -> str:
+    today = datetime.now(tz=timezone.utc).strftime("%-d %B %Y")
+    return f"{_SYSTEM_PROMPT_BASE}\nСегодняшняя дата: {today} (UTC)."
 
 _SIMILARITY_THRESHOLD = 12   # return up to N chunks; pgvector already ranks by cosine
 
@@ -64,13 +70,13 @@ async def run_ai_reply(chat_id: int, question: str | None = None) -> str:
         messages.append(LLMMessage(role="user", content=question))
 
     try:
-        return await provider.complete(messages, system_prompt=SYSTEM_PROMPT)
+        return await provider.complete(messages, system_prompt=_system_prompt())
     except GeminiContentError as exc:
         logger.warning("Gemini blocked full context for chat %d: %s", chat_id, exc.reason)
         if question:
             logger.info("Retrying with question-only context")
             return await provider.complete(
                 [LLMMessage(role="user", content=question)],
-                system_prompt=SYSTEM_PROMPT,
+                system_prompt=_system_prompt(),
             )
         raise
