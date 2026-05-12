@@ -105,6 +105,8 @@ async def sync_history(client: TelegramClient, days: int = 2) -> None:
 
             chat_depth = cfg.depth_days if cfg.depth_days is not None else default_depth
 
+            mgr.update_progress(ctitle, chats_done, messages_total)
+
             if _can_skip(cfg, chat_depth, dialog.date):
                 logger.debug("Sync: skip %s (up to date)", ctitle)
                 skipped += 1
