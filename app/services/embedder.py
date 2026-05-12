@@ -94,17 +94,16 @@ def _format_chunk(rows: list, chat_title: str, chat_type: str,
         "private": "личный", "group": "группа",
         "supergroup": "супергруппа", "channel": "канал",
     }.get(chat_type, chat_type)
-    first_tg_id = next((r[0].telegram_msg_id for r in rows if r[0].telegram_msg_id), None)
-    link = _tg_link(chat_id, chat_username, first_tg_id)
-    link_part = f" | {link}" if link else ""
-    header = f"[Чат: {chat_title} | {type_label} | {date.strftime('%Y-%m-%d') if date else ''}{link_part}]"
+    header = f"[Чат: {chat_title} | {type_label} | {date.strftime('%Y-%m-%d') if date else ''}]"
     lines = [header]
     for msg, user in rows:
         speaker = _speaker(msg, user, chat_type)
         text_content = msg.text or msg.caption
         if not text_content:
             text_content = f"[{msg.media_type or 'медиа'}]"
-        lines.append(f"{speaker}: {text_content}")
+        link = _tg_link(chat_id, chat_username, msg.telegram_msg_id)
+        link_part = f" {link}" if link else ""
+        lines.append(f"{speaker}: {text_content}{link_part}")
     return "\n".join(lines)
 
 
