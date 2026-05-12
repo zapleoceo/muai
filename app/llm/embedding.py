@@ -13,7 +13,7 @@ _DIMS = 768
 async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> list[float]:
     """Return a 768-dim embedding vector via Gemini text-embedding-004."""
     from app.services.tokens import get_token_manager
-    token = await get_token_manager().next_token()
+    token = await get_token_manager().next_token("gemini")
     if not token:
         raise RuntimeError("No Gemini tokens available for embedding")
 
@@ -42,7 +42,7 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> list[f
         body = exc.read().decode(errors="replace") if hasattr(exc, "read") else ""
         mgr = get_token_manager()
         if exc.code == 429:
-            await mgr.on_rate_limit(token)
+            await mgr.on_rate_limit("gemini", token)
         else:
-            await mgr.on_error(token)
+            await mgr.on_error("gemini", token)
         raise RuntimeError(f"Embedding API error {exc.code}: {body[:200]}") from exc

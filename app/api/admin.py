@@ -1,6 +1,6 @@
 import logging
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Query
 from pydantic import BaseModel
 
 from app.api.auth import require_owner
@@ -91,9 +91,12 @@ class TokenIn(BaseModel):
 
 
 @router.get("/admin/tokens")
-async def list_tokens(_uid: int = Depends(require_owner)) -> list[dict]:
+async def list_tokens(
+    _uid: int = Depends(require_owner),
+    provider: str | None = Query(default=None),
+) -> list[dict]:
     manager = get_token_manager()
-    rows = await manager.list_tokens()
+    rows = await manager.list_tokens(provider=provider)
     statuses = manager.slot_status()
     result = []
     for r in rows:
@@ -106,7 +109,7 @@ async def list_tokens(_uid: int = Depends(require_owner)) -> list[dict]:
             "is_active": r.is_active,
             "status": live["status"] if live else ("inactive" if not r.is_active else "active"),
             "requests_today": live["requests_today"] if live else 0,
-            "daily_limit": live["daily_limit"] if live else 1500,
+            "daily_limit": live["daily_limit"] if live else (1500 if r.provider == "gemini" else 0),
             "created_at": r.created_at.isoformat() if r.created_at else None,
         })
     return result
