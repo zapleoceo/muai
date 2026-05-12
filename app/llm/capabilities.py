@@ -11,10 +11,13 @@ PROVIDER_CAPABILITIES: dict[str, set[str]] = {
 
 
 def normalize_capabilities(provider: str, capabilities: list[str] | None) -> list[str]:
+    allowed = PROVIDER_CAPABILITIES.get(provider, {CAP_CHAT})
     caps = [c.strip().lower() for c in (capabilities or []) if c and c.strip()]
     if not caps:
-        return sorted(PROVIDER_CAPABILITIES.get(provider, {CAP_CHAT}))
-    return sorted(dict.fromkeys(caps))
+        return sorted(allowed)
+    unique = list(dict.fromkeys(caps))
+    filtered = [c for c in unique if c in allowed]
+    return sorted(filtered or allowed)
 
 
 def effective_capabilities(provider: str, raw: list[str] | None) -> set[str]:

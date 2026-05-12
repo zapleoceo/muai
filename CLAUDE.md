@@ -147,6 +147,7 @@ return it. Sync skips it naturally. Existing messages stay in the DB.
     - `openai`: `chat, embed`
     - `deepseek`: `chat`
     - `groq`: `chat`
+  - If `capabilities` contains unsupported values for a provider, they are ignored (clamped to provider defaults).
 - **429 response** → 60s cooldown on that slot
 - **Other error** → 5 min cooldown
 - **Daily limit** → 1500 req/day per key (Gemini free tier); slot marked unavailable
