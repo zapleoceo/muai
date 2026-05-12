@@ -83,7 +83,7 @@ class TokenManager:
             ]
             self._idx_by_provider.setdefault(provider, 0)
             self._loaded.add(provider)
-        logger.info("TokenManager: %d active %s token(s)", len(self._slots), provider)
+        logger.info("TokenManager: %d active %s token(s)", len(self._slots_by_provider.get(provider, [])), provider)
 
     async def seed_from_env(self, api_key: str, provider: str = "gemini") -> None:
         """Insert the .env key into DB if no tokens exist yet."""
