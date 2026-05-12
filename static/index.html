@@ -383,17 +383,22 @@
     <!-- Tokens -->
     <div class="section">
       <div class="section-header">
-        <h2>Gemini токены</h2>
+        <h2>API токены</h2>
         <button class="btn btn-sm btn-ghost" onclick="loadTokens()">Обновить</button>
       </div>
       <div id="tokens-list">Загрузка…</div>
       <div class="token-add">
-        <input class="inp inp-token" id="inp-token" type="password" placeholder="AIzaSy… (API ключ)" autocomplete="off">
+        <select class="inp" id="inp-token-provider" style="flex:0 0 auto">
+          <option value="gemini">Gemini</option>
+          <option value="deepseek">DeepSeek</option>
+        </select>
+        <input class="inp inp-token" id="inp-token" type="password" placeholder="API ключ" autocomplete="off">
         <input class="inp inp-label" id="inp-token-label" type="text" placeholder="Метка (необязательно)">
         <button class="btn btn-sm" onclick="addToken()">+ Добавить</button>
       </div>
       <p style="font-size:0.72rem;color:#475569;margin-top:8px">
-        При 429 токен уходит на cooldown 60 сек, система переходит на следующий.
+        Gemini: при 429 токен уходит на cooldown 60 сек, система переходит на следующий.<br>
+        DeepSeek: используется первый активный токен (требует <code>LLM_PROVIDER=deepseek</code> в .env).
       </p>
     </div>
   </div>
@@ -1019,11 +1024,12 @@ async function loadTokens() {
 async function addToken() {
   const token = document.getElementById('inp-token').value.trim();
   const label = document.getElementById('inp-token-label').value.trim();
+  const provider = document.getElementById('inp-token-provider').value;
   if (!token) { alert('Введите токен'); return; }
   const r = await fetch('/api/admin/tokens', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({token, label}),
+    body: JSON.stringify({token, label, provider}),
   });
   if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
   document.getElementById('inp-token').value = '';

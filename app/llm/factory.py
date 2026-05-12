@@ -29,6 +29,10 @@ def get_llm_provider() -> LLMProvider:
         model = settings.llm_provider if settings.llm_provider.startswith("gemini-2") else "gemini-2.5-flash"
         _provider = GeminiProvider(model=model)
 
+    elif settings.llm_provider == "deepseek":
+        from app.llm.deepseek_provider import DeepSeekProvider
+        _provider = DeepSeekProvider()
+
     else:
         _provider = StubProvider()
 
