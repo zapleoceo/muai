@@ -2,9 +2,11 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy.dialects.postgresql import insert
 from telethon import TelegramClient
 
 from app.db.database import AsyncSessionLocal
+from app.db.models import ChatSyncConfig
 from app.db.repository import MessageRepo
 from app.services.chat_settings import (
     auto_approve_existing_chats,
@@ -135,6 +137,17 @@ async def _sync_entity(
                 user_cache=user_cache,
             ):
                 saved += 1
+
+        async with AsyncSessionLocal() as session:
+            await session.execute(
+                insert(ChatSyncConfig)
+                .values(chat_id=chat_id, last_synced_at=datetime.now(tz=timezone.utc))
+                .on_conflict_do_update(
+                    index_elements=["chat_id"],
+                    set_={"last_synced_at": datetime.now(tz=timezone.utc)},
+                )
+            )
+            await session.commit()
 
     except asyncio.CancelledError:
         raise

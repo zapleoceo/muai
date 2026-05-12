@@ -41,6 +41,7 @@ class EmbedderStatus:
     chats_done: int = 0
     chunks_added: int = 0
     total_chunks: int = 0
+    messages_pending: int = 0
     last_run: datetime | None = None
     errors: list[str] = field(default_factory=list)
 
@@ -55,6 +56,7 @@ def get_embedder_status() -> dict:
         "chats_done": _status.chats_done,
         "chunks_added": _status.chunks_added,
         "total_chunks": _status.total_chunks,
+        "messages_pending": _status.messages_pending,
         "last_run": _status.last_run.isoformat() if _status.last_run else None,
         "last_errors": _status.errors[-5:],
     }
@@ -193,10 +195,11 @@ async def embed_all_chats() -> None:
     async with AsyncSessionLocal() as session:
         stats = await MessageRepo(session).chunk_stats()
     _status.total_chunks = stats["total_chunks"]
+    _status.messages_pending = stats["messages_pending"]
     _status.running = False
     _status.current_chat = ""
     _status.last_run = datetime.now()
-    logger.info("Embedder: pass done — %d total chunks", _status.total_chunks)
+    logger.info("Embedder: pass done — %d total chunks, %d pending", _status.total_chunks, _status.messages_pending)
 
 
 async def run_embedder_loop() -> None:
@@ -204,6 +207,7 @@ async def run_embedder_loop() -> None:
     async with AsyncSessionLocal() as session:
         stats = await MessageRepo(session).chunk_stats()
     _status.total_chunks = stats["total_chunks"]
+    _status.messages_pending = stats["messages_pending"]
 
     await asyncio.sleep(30)
     while True:

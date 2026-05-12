@@ -192,9 +192,20 @@ class MessageRepo:
         return list((await self.session.execute(q)).all())
 
     async def chunk_stats(self) -> dict:
-        """Return total chunks and per-chat chunk counts."""
+        """Return total chunks, pending message count, and per-chat breakdown."""
         total = (await self.session.execute(
             text("SELECT COUNT(*) FROM message_chunks")
+        )).scalar()
+        pending = (await self.session.execute(
+            text("""
+                SELECT COUNT(*) FROM messages m
+                LEFT JOIN (
+                    SELECT chat_id, MAX(max_msg_id) AS last_id
+                    FROM message_chunks GROUP BY chat_id
+                ) lc ON lc.chat_id = m.chat_id
+                WHERE (m.text IS NOT NULL OR m.caption IS NOT NULL)
+                  AND m.id > COALESCE(lc.last_id, 0)
+            """)
         )).scalar()
         per_chat = (await self.session.execute(
             text("""
@@ -209,6 +220,7 @@ class MessageRepo:
         )).fetchall()
         return {
             "total_chunks": total,
+            "messages_pending": pending,
             "per_chat": [{"chat_id": r.chat_id, "title": r.title, "chunks": r.cnt, "last_msg_id": r.last_msg_id} for r in per_chat],
         }
 

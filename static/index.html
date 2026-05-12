@@ -309,6 +309,7 @@
               <th onclick="sortBy('status')" id="th-status">Статус <span class="sort-arrow">↕</span></th>
               <th onclick="sortBy('message_count')" id="th-msgs" style="text-align:right">Сообщений <span class="sort-arrow">↕</span></th>
               <th onclick="sortBy('depth_days')" id="th-depth">Глубина <span class="sort-arrow">↕</span></th>
+              <th onclick="sortBy('last_synced_at')" id="th-synced">Синк <span class="sort-arrow">↕</span></th>
               <th>Действия</th>
             </tr>
           </thead>
@@ -487,6 +488,7 @@ async function loadEmbedder() {
       <div>Чатов обработано: <b>${d.chats_done}</b></div>
       <div>Добавлено чанков: <b>${d.chunks_added}</b></div>
       <div>Всего в мозге: <b>${fmt(d.total_chunks)}</b></div>
+      <div>Ожидают чанкования: <b style="color:${d.messages_pending>0?'#fbbf24':'#4ade80'}">${fmt(d.messages_pending??'—')}</b></div>
       <div>Последний запуск: <b>${lastRun}</b></div>
     </div>
     <div style="font-size:.9rem;color:var(--muted)">Топ чатов по чанкам:</div>
@@ -578,10 +580,11 @@ function onFolderFilter(val) {
 }
 
 function updateSortHeaders() {
-  const cols = ['type','title','folder','status','message_count','depth_days'];
+  const cols = ['type','title','folder','status','message_count','depth_days','last_synced_at'];
+  const thId = {'message_count':'msgs','depth_days':'depth','last_synced_at':'synced'};
   const arrows = {1:'↑', '-1':'↓'};
   cols.forEach(c => {
-    const th = document.getElementById('th-' + (c === 'message_count' ? 'msgs' : c === 'depth_days' ? 'depth' : c === 'folder' ? 'folder' : c));
+    const th = document.getElementById('th-' + (thId[c] || c));
     if (!th) return;
     th.classList.toggle('sorted', _sortCol === c);
     th.querySelector('.sort-arrow').textContent = _sortCol === c ? arrows[String(_sortDir)] : '↕';
@@ -625,7 +628,7 @@ function renderChats() {
   const SC = {active:'cs-active', pending:'cs-pending', disabled:'cs-disabled', unknown:'cs-unknown'};
 
   if (!slice.length) {
-    tbody.innerHTML = `<tr><td colspan="7" style="color:#475569;padding:20px;text-align:center">Нет чатов</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="8" style="color:#475569;padding:20px;text-align:center">Нет чатов</td></tr>`;
   } else {
     tbody.innerHTML = slice.map(c => {
       const depth = c.depth_days ? `${c.depth_days}д` : 'глоб.';
@@ -648,6 +651,7 @@ function renderChats() {
         <td style="color:#475569;font-size:0.78rem">
           <span class="depth-cell" data-id="${c.id}" data-depth="${c.depth_days ?? ''}" title="Нажмите для изменения глубины">${depth}</span>
         </td>
+        <td style="color:#475569;font-size:0.75rem;white-space:nowrap">${c.last_synced_at ? new Date(c.last_synced_at).toLocaleString('ru',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—'}</td>
         <td><div class="chat-actions">${approveBtn}${disableBtn}${syncNowBtn}${cancelBtn}${deleteBtn}</div></td>
       </tr>`;
     }).join('');

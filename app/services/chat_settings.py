@@ -163,6 +163,7 @@ async def list_chats_with_config() -> list[dict]:
             "depth_days": cfg.depth_days if cfg else None,
             "skip_reason": cfg.skip_reason if cfg else None,
             "approved_at": cfg.approved_at.isoformat() if cfg and cfg.approved_at else None,
+            "last_synced_at": cfg.last_synced_at.isoformat() if cfg and cfg.last_synced_at else None,
             "message_count": msg_cnt or 0,
         })
     return result
