@@ -91,6 +91,7 @@ class ChatSyncConfig(Base):
     approved_at = Column(TIMESTAMP(timezone=True), nullable=True)
     skip_reason = Column(Text, nullable=True)
     last_synced_at = Column(TIMESTAMP(timezone=True), nullable=True)
+    synced_depth_days = Column(BigInteger, nullable=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
