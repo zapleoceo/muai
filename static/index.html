@@ -259,6 +259,7 @@
         <h2>🧠 Мозг (векторные чанки)</h2>
         <button class="btn-icon" onclick="loadEmbedder()" title="Обновить">↻</button>
         <button class="btn-icon btn-icon-green" id="embedder-toggle-btn" onclick="toggleEmbedder()" title="Запустить чанкование">▶</button>
+        <button class="btn-icon" onclick="clearChunks()" title="Очистить все чанки" style="color:#ef4444">🗑</button>
       </div>
       <div id="embedder-status">Загрузка…</div>
     </div>
@@ -455,6 +456,23 @@ async function loadStats() {
       <div class="bar-count">${x.count}</div>
     </div>
   `).join('');
+}
+
+async function clearChunks() {
+  const ok = confirm(
+    '⚠️ Очистка векторной базы\n\n' +
+    'Будут удалены ВСЕ чанки — весь «мозг» бота.\n' +
+    'Бот перестанет находить контекст из истории чатов до окончания повторного чанкования.\n\n' +
+    'Повторное чанкование запускается вручную кнопкой ▶ и займёт длительное время.\n\n' +
+    'Продолжить?'
+  );
+  if (!ok) return;
+  const r = await fetch('/api/admin/embedder/chunks', {method: 'DELETE'});
+  if (r.ok) {
+    const d = await r.json();
+    await loadEmbedder();
+    alert(`Удалено ${d.deleted} чанков. Запусти эмбеддер кнопкой ▶ для повторного чанкования.`);
+  }
 }
 
 async function toggleEmbedder() {

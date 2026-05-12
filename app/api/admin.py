@@ -70,6 +70,18 @@ async def embedder_stop(_uid: int = Depends(require_owner)) -> dict:
     return {"status": "stopped"}
 
 
+@router.delete("/admin/embedder/chunks")
+async def clear_chunks(_uid: int = Depends(require_owner)) -> dict:
+    from app.services.embedder import stop_embedder
+    from app.db.database import AsyncSessionLocal
+    from sqlalchemy import text
+    stop_embedder()
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(text("DELETE FROM message_chunks"))
+        await session.commit()
+    return {"deleted": result.rowcount}
+
+
 # ── token management ──────────────────────────────────────────────────────────
 
 class TokenIn(BaseModel):
