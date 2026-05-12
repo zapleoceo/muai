@@ -201,8 +201,14 @@
     .depth-cell:hover { color: #93c5fd; border-color: #93c5fd; }
     .avatar-cell { width: 36px; padding: 4px 4px 4px 8px !important; }
     .chat-avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover;
-                   display: block; }
-    .chat-avatar-link { display: block; line-height: 0; }
+                   display: block; cursor: pointer; }
+    .chat-avatar:hover { opacity: .8; }
+    .lightbox { position:fixed; inset:0; background:rgba(0,0,0,.8); display:flex;
+                flex-direction:column; align-items:center; justify-content:center;
+                z-index:1000; cursor:pointer; }
+    .lightbox img { max-width:320px; max-height:320px; border-radius:50%;
+                    box-shadow:0 0 40px rgba(0,0,0,.6); }
+    .lightbox-name { color:#e2e8f0; margin-top:14px; font-size:1rem; font-weight:600; }
     .chat-title-link { color: #e2e8f0; text-decoration: none; }
     .chat-title-link:hover { color: #7dd3fc; text-decoration: underline; }
     .topic-toggle { background: none; border: none; color: #475569; cursor: pointer;
@@ -585,6 +591,14 @@ async function syncFolders() {
   }
 }
 
+function showAvatar(src, name) {
+  const box = document.createElement('div');
+  box.className = 'lightbox';
+  box.innerHTML = `<img src="${src}"><div class="lightbox-name">${name}</div>`;
+  box.onclick = () => box.remove();
+  document.body.appendChild(box);
+}
+
 async function syncTopics() {
   const btn = document.getElementById('sync-topics-btn');
   if (btn) btn.textContent = '⏳ Ветки';
@@ -693,10 +707,8 @@ function renderChats() {
       const topicToggle = topics.length
         ? `<button class="topic-toggle" data-action="toggle-topics" data-id="${c.id}" title="${topics.length} веток">▶</button> ` : '';
       const tgLink = c.username ? `https://t.me/${c.username}` : null;
-      const avatarImg = `<img src="/api/admin/chats/${c.id}/avatar" class="chat-avatar" onerror="this.style.display='none'">`;
-      const avatarCell = tgLink
-        ? `<a href="${tgLink}" target="_blank" rel="noopener" class="chat-avatar-link">${avatarImg}</a>`
-        : avatarImg;
+      const avatarImg = `<img src="/api/admin/chats/${c.id}/avatar" class="chat-avatar" onclick="showAvatar(this.src,'${esc(c.title)}')" onerror="this.style.display='none'">`;
+      const avatarCell = avatarImg;
       const titleEl = tgLink
         ? `<a href="${tgLink}" target="_blank" rel="noopener" class="chat-title-link" title="${esc(c.title)}">${esc(c.title)}</a>`
         : `<span class="chat-title-text" title="${esc(c.title)}">${esc(c.title)}</span>`;
