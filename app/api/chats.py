@@ -1,6 +1,8 @@
+import io
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import Response
 from pydantic import BaseModel
 
 from app.api.auth import require_owner
@@ -11,12 +13,33 @@ from app.userbot import folders as folders_svc
 router = APIRouter()
 logger = logging.getLogger(__name__)
 
+_avatar_cache: dict[int, bytes | None] = {}
+
 
 # ── Chat list ─────────────────────────────────────────────────────────────────
 
 @router.get("/admin/chats")
 async def list_chats(_uid: int = Depends(require_owner)) -> list[dict]:
     return await cs.list_chats_with_config()
+
+
+@router.get("/admin/chats/{chat_id}/avatar")
+async def chat_avatar(chat_id: int, _uid: int = Depends(require_owner)) -> Response:
+    if chat_id not in _avatar_cache:
+        from app.userbot.client import get_client
+        client = get_client()
+        try:
+            buf = io.BytesIO()
+            await client.download_profile_photo(chat_id, file=buf)
+            data = buf.getvalue()
+            _avatar_cache[chat_id] = data if data else None
+        except Exception:
+            _avatar_cache[chat_id] = None
+    data = _avatar_cache.get(chat_id)
+    if not data:
+        raise HTTPException(status_code=404)
+    return Response(content=data, media_type="image/jpeg",
+                    headers={"Cache-Control": "max-age=3600"})
 
 
 # ── Per-chat actions ──────────────────────────────────────────────────────────

@@ -199,6 +199,8 @@
     .chat-folder-filter:focus { outline: none; border-color: #3b82f6; }
     .depth-cell { cursor: pointer; border-bottom: 1px dashed #475569; }
     .depth-cell:hover { color: #93c5fd; border-color: #93c5fd; }
+    .chat-avatar { width: 24px; height: 24px; border-radius: 50%; object-fit: cover;
+                   margin-right: 6px; vertical-align: middle; flex-shrink: 0; }
     .topic-toggle { background: none; border: none; color: #475569; cursor: pointer;
                     font-size: 0.7rem; padding: 0 3px; line-height: 1; }
     .topic-toggle:hover { color: #94a3b8; }
@@ -667,9 +669,10 @@ function renderChats() {
       const topics = c.topics || [];
       const topicToggle = topics.length
         ? `<button class="topic-toggle" data-action="toggle-topics" data-id="${c.id}" title="${topics.length} веток">▶</button> ` : '';
+      const avatar = `<img src="/api/admin/chats/${c.id}/avatar" class="chat-avatar" onerror="this.style.display='none'">`;
       rows.push(`<tr>
         <td><span class="chat-type-badge">${esc(c.type)}</span></td>
-        <td class="chat-name-cell">${topicToggle}<span class="chat-title-text" title="${esc(c.title)}">${esc(c.title)}</span>${uname}</td>
+        <td class="chat-name-cell">${topicToggle}${avatar}<span class="chat-title-text" title="${esc(c.title)}">${esc(c.title)}</span>${uname}</td>
         <td style="color:#64748b;font-size:0.78rem">${c.folder ? esc(c.folder) : '<span style="color:#334155">—</span>'}</td>
         <td><span class="chat-status-badge ${SC[c.status]||'cs-unknown'}">${STATUS[c.status]||c.status}</span></td>
         <td style="text-align:right;color:#94a3b8">${fmt(c.message_count)}</td>
