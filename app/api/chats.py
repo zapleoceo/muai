@@ -94,6 +94,16 @@ async def sync_folders(_uid: int = Depends(require_owner)) -> dict:
     return {"updated": updated}
 
 
+@router.post("/admin/chats/sync-topics")
+async def sync_topics(_uid: int = Depends(require_owner)) -> dict:
+    from app.userbot import topics as topics_svc
+    try:
+        updated = await topics_svc.sync_topics()
+    except RuntimeError as exc:
+        raise HTTPException(status_code=503, detail=str(exc))
+    return {"updated": updated}
+
+
 # ── Global sync control ───────────────────────────────────────────────────────
 
 @router.post("/admin/sync/stop")

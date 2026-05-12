@@ -12,7 +12,7 @@ from sqlalchemy import delete, func, select, text
 from sqlalchemy.dialects.postgresql import insert
 
 from app.db.database import AsyncSessionLocal
-from app.db.models import Chat, ChatSyncConfig, Message, Setting
+from app.db.models import Chat, ChatSyncConfig, ChatTopic, Message, Setting
 
 logger = logging.getLogger(__name__)
 
@@ -127,7 +127,7 @@ async def type_allowed(chat_type: str, settings: dict) -> bool:
 
 
 async def list_chats_with_config() -> list[dict]:
-    """Return all chats joined with their sync config and message count."""
+    """Return all chats joined with their sync config, message count, and topics."""
     async with AsyncSessionLocal() as session:
         msg_count_sub = (
             select(Message.chat_id, func.count(Message.id).label("cnt"))
@@ -140,6 +140,18 @@ async def list_chats_with_config() -> list[dict]:
             .outerjoin(msg_count_sub, Chat.id == msg_count_sub.c.chat_id)
             .order_by(Chat.title)
         )).all()
+
+        topic_rows = (await session.execute(
+            select(ChatTopic).order_by(ChatTopic.chat_id, ChatTopic.topic_id)
+        )).scalars().all()
+
+    topics_by_chat: dict[int, list[dict]] = {}
+    for t in topic_rows:
+        topics_by_chat.setdefault(t.chat_id, []).append({
+            "id": t.topic_id,
+            "title": t.title,
+            "is_closed": t.is_closed,
+        })
 
     result = []
     for chat, cfg, msg_cnt in rows:
@@ -165,6 +177,7 @@ async def list_chats_with_config() -> list[dict]:
             "approved_at": cfg.approved_at.isoformat() if cfg and cfg.approved_at else None,
             "last_synced_at": cfg.last_synced_at.isoformat() if cfg and cfg.last_synced_at else None,
             "message_count": msg_cnt or 0,
+            "topics": topics_by_chat.get(chat.id, []),
         })
     return result
 

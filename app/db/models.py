@@ -95,6 +95,21 @@ class ChatSyncConfig(Base):
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
 
+class ChatTopic(Base):
+    __tablename__ = "chat_topics"
+
+    id = Column(BigInteger, autoincrement=True, primary_key=True)
+    chat_id = Column(BigInteger, ForeignKey("chats.id", ondelete="CASCADE"), nullable=False)
+    topic_id = Column(BigInteger, nullable=False)
+    title = Column(Text)
+    is_closed = Column(Boolean, default=False)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("chat_id", "topic_id", name="uq_chat_topic"),
+    )
+
+
 class MessageChunk(Base):
     __tablename__ = "message_chunks"
 

@@ -199,6 +199,14 @@
     .chat-folder-filter:focus { outline: none; border-color: #3b82f6; }
     .depth-cell { cursor: pointer; border-bottom: 1px dashed #475569; }
     .depth-cell:hover { color: #93c5fd; border-color: #93c5fd; }
+    .topic-toggle { background: none; border: none; color: #475569; cursor: pointer;
+                    font-size: 0.7rem; padding: 0 3px; line-height: 1; }
+    .topic-toggle:hover { color: #94a3b8; }
+    tr.topic-row td { background: #161c28; padding: 4px 8px 4px 32px; font-size: 0.78rem;
+                      color: #64748b; border-top: none; }
+    tr.topic-row td:first-child { padding-left: 32px; color: #475569; }
+    .topic-title { color: #94a3b8; }
+    .topic-closed { text-decoration: line-through; opacity: 0.5; }
     .depth-input { width: 60px; font-size: 0.78rem; background: #0f172a; color: #e2e8f0;
                    border: 1px solid #3b82f6; border-radius: 4px; padding: 1px 4px;
                    text-align: center; outline: none; }
@@ -270,6 +278,7 @@
         <div style="display:flex;gap:8px">
           <button class="btn btn-sm btn-ghost" onclick="loadChats()">Обновить</button>
           <button class="btn btn-sm btn-ghost" onclick="syncFolders()" title="Синхронизировать папки Telegram">↻ Папки</button>
+          <button class="btn btn-sm btn-ghost" onclick="syncTopics()" id="sync-topics-btn" title="Синхронизировать ветки форумов">↻ Ветки</button>
           <button class="btn-icon" id="sync-toggle-btn" onclick="toggleSync()" title="Запустить синхронизацию">▶</button>
         </div>
       </div>
@@ -551,6 +560,18 @@ async function syncFolders() {
   }
 }
 
+async function syncTopics() {
+  const btn = document.getElementById('sync-topics-btn');
+  if (btn) btn.textContent = '⏳ Ветки';
+  const r = await fetch('/api/admin/chats/sync-topics', {method: 'POST'});
+  if (btn) btn.textContent = '↻ Ветки';
+  if (r.ok) {
+    const d = await r.json();
+    await loadChats();
+    alert(`Обновлено ${d.updated} форум-групп`);
+  }
+}
+
 function onSearch(val) {
   _search = val.trim().toLowerCase();
   _page = 0;
@@ -630,7 +651,8 @@ function renderChats() {
   if (!slice.length) {
     tbody.innerHTML = `<tr><td colspan="8" style="color:#475569;padding:20px;text-align:center">Нет чатов</td></tr>`;
   } else {
-    tbody.innerHTML = slice.map(c => {
+    const rows = [];
+    for (const c of slice) {
       const depth = c.depth_days ? `${c.depth_days}д` : 'глоб.';
       const uname = c.username ? `<span class="chat-username">@${esc(c.username)}</span>` : '';
       const approveBtn = c.status !== 'active'
@@ -642,9 +664,12 @@ function renderChats() {
       const syncNowBtn = c.status === 'active'
         ? `<button class="btn btn-sm btn-ghost" data-action="sync-now" data-id="${c.id}" title="Синхронизировать сейчас">⚡</button>` : '';
       const deleteBtn  = `<button class="btn btn-sm btn-danger" data-action="delete" data-id="${c.id}" data-title="${esc(c.title)}" title="Удалить сообщения">🗑</button>`;
-      return `<tr>
+      const topics = c.topics || [];
+      const topicToggle = topics.length
+        ? `<button class="topic-toggle" data-action="toggle-topics" data-id="${c.id}" title="${topics.length} веток">▶</button> ` : '';
+      rows.push(`<tr>
         <td><span class="chat-type-badge">${esc(c.type)}</span></td>
-        <td class="chat-name-cell"><span class="chat-title-text" title="${esc(c.title)}">${esc(c.title)}</span>${uname}</td>
+        <td class="chat-name-cell">${topicToggle}<span class="chat-title-text" title="${esc(c.title)}">${esc(c.title)}</span>${uname}</td>
         <td style="color:#64748b;font-size:0.78rem">${c.folder ? esc(c.folder) : '<span style="color:#334155">—</span>'}</td>
         <td><span class="chat-status-badge ${SC[c.status]||'cs-unknown'}">${STATUS[c.status]||c.status}</span></td>
         <td style="text-align:right;color:#94a3b8">${fmt(c.message_count)}</td>
@@ -653,8 +678,16 @@ function renderChats() {
         </td>
         <td style="color:#475569;font-size:0.75rem;white-space:nowrap">${c.last_synced_at ? new Date(c.last_synced_at).toLocaleString('ru',{month:'short',day:'numeric',hour:'2-digit',minute:'2-digit'}) : '—'}</td>
         <td><div class="chat-actions">${approveBtn}${disableBtn}${syncNowBtn}${cancelBtn}${deleteBtn}</div></td>
-      </tr>`;
-    }).join('');
+      </tr>`);
+      for (const t of topics) {
+        rows.push(`<tr class="topic-row" data-parent="${c.id}" style="display:none">
+          <td></td>
+          <td colspan="6"><span class="topic-title${t.is_closed ? ' topic-closed' : ''}">└ ${esc(t.title)}</span></td>
+          <td></td>
+        </tr>`);
+      }
+    }
+    tbody.innerHTML = rows.join('');
   }
 
   // pagination
@@ -695,6 +728,13 @@ document.addEventListener('click', async e => {
       body: JSON.stringify({reason}),
     });
     await loadChats();
+  } else if (action === 'toggle-topics') {
+    const expanded = btn.textContent.trim() === '▼';
+    btn.textContent = expanded ? '▶' : '▼';
+    document.querySelectorAll(`tr.topic-row[data-parent="${id}"]`).forEach(r => {
+      r.style.display = expanded ? 'none' : '';
+    });
+    return;
   } else if (action === 'sync-now') {
     await fetch(`/api/admin/chats/${id}/sync-now`, {method:'POST'});
   } else if (action === 'cancel') {
