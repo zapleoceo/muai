@@ -76,6 +76,7 @@ class ApiToken(Base):
     provider = Column(Text, nullable=False, default="gemini")  # gemini | openai | ...
     token = Column(Text, nullable=False)
     label = Column(Text)
+    capabilities = Column(JSONB)
     is_active = Column(Boolean, default=True)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
     last_used_at = Column(TIMESTAMP(timezone=True))

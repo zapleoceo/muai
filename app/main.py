@@ -40,6 +40,8 @@ async def lifespan(app: FastAPI):
     from app.services.tokens import get_token_manager
     mgr = get_token_manager()
     await mgr.seed_from_env(settings.gemini_api_key)
+    await mgr.seed_from_env(settings.openai_api_key, provider="openai")
+    await mgr.seed_from_env(settings.groq_api_key, provider="groq")
     await mgr.load()
 
     if settings.webhook_url:

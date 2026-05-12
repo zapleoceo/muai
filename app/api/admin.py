@@ -88,6 +88,7 @@ class TokenIn(BaseModel):
     token: str
     label: str = ""
     provider: str = "gemini"
+    capabilities: list[str] | None = None
 
 
 @router.get("/admin/tokens")
@@ -101,10 +102,14 @@ async def list_tokens(
     result = []
     for r in rows:
         live = statuses.get(r.id)
+        from app.llm.capabilities import effective_capabilities
+        caps_raw = r.capabilities if isinstance(r.capabilities, list) else None
+        caps = sorted(effective_capabilities(r.provider, caps_raw))
         result.append({
             "id": r.id,
             "provider": r.provider,
             "label": r.label or "",
+            "capabilities": live["capabilities"] if live and "capabilities" in live else caps,
             "masked": f"{r.token[:8]}...{r.token[-4:]}" if len(r.token) > 12 else "***",
             "is_active": r.is_active,
             "status": live["status"] if live else ("inactive" if not r.is_active else "active"),
@@ -119,7 +124,9 @@ async def list_tokens(
 async def add_token(body: TokenIn, _uid: int = Depends(require_owner)) -> dict:
     if not body.token.strip():
         raise HTTPException(status_code=400, detail="Token cannot be empty")
-    row = await get_token_manager().add(body.token.strip(), body.label.strip(), body.provider)
+    from app.llm.capabilities import normalize_capabilities
+    caps = normalize_capabilities(body.provider, body.capabilities)
+    row = await get_token_manager().add(body.token.strip(), body.label.strip(), body.provider, capabilities=caps)
     return {"id": row.id, "label": row.label, "provider": row.provider}
 
 

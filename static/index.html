@@ -391,10 +391,22 @@
         <select class="inp" id="inp-token-provider" style="flex:0 0 auto">
           <option value="gemini">Gemini</option>
           <option value="deepseek">DeepSeek</option>
+          <option value="openai">OpenAI</option>
+          <option value="groq">Groq</option>
         </select>
         <input class="inp inp-token" id="inp-token" type="password" placeholder="API ключ" autocomplete="off">
         <input class="inp inp-label" id="inp-token-label" type="text" placeholder="Метка (необязательно)">
         <button class="btn btn-sm" onclick="addToken()">+ Добавить</button>
+      </div>
+      <div style="display:flex;gap:14px;align-items:center;margin-top:10px;color:#94a3b8;font-size:0.85rem">
+        <label style="display:flex;gap:6px;align-items:center">
+          <input type="checkbox" id="cap-chat">
+          <span>chat</span>
+        </label>
+        <label style="display:flex;gap:6px;align-items:center">
+          <input type="checkbox" id="cap-embed">
+          <span>embed</span>
+        </label>
       </div>
       <p style="font-size:0.72rem;color:#475569;margin-top:8px">
         Gemini: при 429 токен уходит на cooldown 60 сек, система переходит на следующий.<br>
@@ -987,6 +999,22 @@ async function saveSettings() {
 }
 
 // ── Tokens ────────────────────────────────────────────────────────────────────
+function syncTokenCapsDefaults() {
+  const provider = document.getElementById('inp-token-provider').value;
+  const chat = document.getElementById('cap-chat');
+  const embed = document.getElementById('cap-embed');
+  if (provider === 'gemini' || provider === 'openai') {
+    chat.checked = true;
+    embed.checked = true;
+    return;
+  }
+  chat.checked = true;
+  embed.checked = false;
+}
+
+document.getElementById('inp-token-provider').addEventListener('change', syncTokenCapsDefaults);
+syncTokenCapsDefaults();
+
 async function loadTokens() {
   const box = document.getElementById('tokens-list');
   const r = await fetch('/api/admin/tokens');
@@ -1004,11 +1032,12 @@ async function loadTokens() {
     const statusColor = t.status==='cooldown'?'#f59e0b': t.status==='daily_limit'?'#ef4444': t.is_active?'#22c55e':'#475569';
     const statusText = t.status==='cooldown'?'cooldown': t.status==='daily_limit'?'лимит/сутки': t.is_active?'active':'inactive';
     const limitText = hasLimit ? `${t.requests_today} / ${t.daily_limit}` : `${t.requests_today} / —`;
+    const capsText = (t.capabilities && t.capabilities.length) ? t.capabilities.join(',') : '—';
     return `
     <div class="token-row" id="tr-${t.id}">
       <span class="status-dot status-${t.status==='daily_limit'?'inactive':t.status}"></span>
       <span class="token-badge">${t.masked}</span>
-      <span class="token-label">${t.label || '—'} <span style="color:#334155">(${t.provider})</span></span>
+      <span class="token-label">${t.label || '—'} <span style="color:#334155">(${t.provider})</span> <span style="color:#64748b">[${capsText}]</span></span>
       <div style="display:flex;flex-direction:column;gap:3px;min-width:120px">
         <div style="display:flex;justify-content:space-between;font-size:0.7rem;color:#64748b">
           <span style="color:${statusColor}">${statusText}</span>
@@ -1028,11 +1057,15 @@ async function addToken() {
   const token = document.getElementById('inp-token').value.trim();
   const label = document.getElementById('inp-token-label').value.trim();
   const provider = document.getElementById('inp-token-provider').value;
+  const caps = [];
+  if (document.getElementById('cap-chat').checked) caps.push('chat');
+  if (document.getElementById('cap-embed').checked) caps.push('embed');
+  if (!caps.length) { alert('Выбери хотя бы одну capability'); return; }
   if (!token) { alert('Введите токен'); return; }
   const r = await fetch('/api/admin/tokens', {
     method: 'POST',
     headers: {'Content-Type':'application/json'},
-    body: JSON.stringify({token, label, provider}),
+    body: JSON.stringify({token, label, provider, capabilities: caps}),
   });
   if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
   document.getElementById('inp-token').value = '';

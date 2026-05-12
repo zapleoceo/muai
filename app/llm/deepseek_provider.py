@@ -29,11 +29,11 @@ class DeepSeekProvider(LLMProvider):
         mgr = get_token_manager()
 
         for attempt in range(_MAX_RETRIES):
-            token = await mgr.next_token("deepseek")
-            if not token:
+            lease = await mgr.next_token("chat", provider="deepseek")
+            if not lease:
                 raise RuntimeError("No active DeepSeek token. Add one in Settings → API токены.")
 
-            client = self._client_for(token)
+            client = self._client_for(lease.token)
             try:
                 response = await client.chat.completions.create(
                     model=_MODEL,
@@ -46,10 +46,10 @@ class DeepSeekProvider(LLMProvider):
                 text = str(exc)
                 is_rate_limit = status == 429 or "rate limit" in text.lower() or "ratelimit" in text.lower()
                 if is_rate_limit:
-                    await mgr.on_rate_limit("deepseek", token)
+                    await mgr.on_rate_limit(lease.id)
                     logger.warning("DeepSeek 429 on attempt %d, rotating token", attempt + 1)
                     if attempt == _MAX_RETRIES - 1:
                         raise RuntimeError("All DeepSeek tokens rate-limited") from exc
                     continue
-                await mgr.on_error("deepseek", token)
+                await mgr.on_error(lease.id)
                 raise

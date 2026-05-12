@@ -7,6 +7,7 @@ from sqlalchemy import select
 
 from app.db.database import AsyncSessionLocal
 from app.db.models import ApiToken
+from app.llm.capabilities import effective_capabilities
 
 logger = logging.getLogger(__name__)
 
@@ -21,6 +22,7 @@ class _Slot:
     value: str
     label: str
     provider: str
+    capabilities: set[str]
     daily_limit: int
     cooldown_until: datetime | None = field(default=None)
     requests_today: int = field(default=0)
@@ -49,41 +51,50 @@ class _Slot:
         return f"{v[:8]}...{v[-4:]}" if len(v) > 12 else "***"
 
 
+@dataclass(frozen=True)
+class TokenLease:
+    id: int
+    provider: str
+    token: str
+
+
 class TokenManager:
     def __init__(self) -> None:
-        self._slots_by_provider: dict[str, list[_Slot]] = {}
-        self._idx_by_provider: dict[str, int] = {}
-        self._loaded: set[str] = set()
+        self._slots_by_id: dict[int, _Slot] = {}
+        self._rr_idx: dict[str, int] = {}
+        self._loaded = False
         self._lock = asyncio.Lock()
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
-    async def load(self, provider: str = "gemini") -> None:
+    async def load(self, provider: str | None = None) -> None:
         async with AsyncSessionLocal() as session:
-            rows = (await session.execute(
-                select(ApiToken)
-                .where(ApiToken.provider == provider, ApiToken.is_active.is_(True))
-                .order_by(ApiToken.id)
-            )).scalars().all()
+            q = select(ApiToken).where(ApiToken.is_active.is_(True)).order_by(ApiToken.provider, ApiToken.id)
+            if provider:
+                q = q.where(ApiToken.provider == provider)
+            rows = (await session.execute(q)).scalars().all()
         async with self._lock:
-            existing = {s.db_id: s for s in self._slots_by_provider.get(provider, [])}
-            daily_limit = self._daily_limit_for(provider)
-            self._slots_by_provider[provider] = [
-                _Slot(
+            existing = self._slots_by_id
+            next_slots: dict[int, _Slot] = {}
+            for r in rows:
+                prov = r.provider
+                caps_raw = r.capabilities if isinstance(r.capabilities, list) else None
+                caps = effective_capabilities(prov, caps_raw)
+                prev = existing.get(r.id)
+                next_slots[r.id] = _Slot(
                     db_id=r.id,
                     value=r.token,
                     label=r.label or "",
-                    provider=provider,
-                    daily_limit=daily_limit,
-                    cooldown_until=existing[r.id].cooldown_until if r.id in existing else None,
-                    requests_today=existing[r.id].requests_today if r.id in existing else 0,
-                    _day=existing[r.id]._day if r.id in existing else date.today(),
+                    provider=prov,
+                    capabilities=caps,
+                    daily_limit=self._daily_limit_for(prov),
+                    cooldown_until=prev.cooldown_until if prev else None,
+                    requests_today=prev.requests_today if prev else 0,
+                    _day=prev._day if prev else date.today(),
                 )
-                for r in rows
-            ]
-            self._idx_by_provider.setdefault(provider, 0)
-            self._loaded.add(provider)
-        logger.info("TokenManager: %d active %s token(s)", len(self._slots_by_provider.get(provider, [])), provider)
+            self._slots_by_id = next_slots
+            self._loaded = True
+        logger.info("TokenManager: %d active token(s)", len(self._slots_by_id))
 
     async def seed_from_env(self, api_key: str, provider: str = "gemini") -> None:
         """Insert the .env key into DB if no tokens exist yet."""
@@ -100,21 +111,25 @@ class TokenManager:
 
     # ── token access ──────────────────────────────────────────────────────────
 
-    async def next_token(self, provider: str = "gemini") -> str | None:
-        if provider not in self._loaded:
-            await self.load(provider)
+    async def next_token(self, capability: str, provider: str | None = None) -> TokenLease | None:
+        if not self._loaded:
+            await self.load()
+        key = f"{provider or '*'}:{capability}"
         while True:
             async with self._lock:
-                slots = self._slots_by_provider.get(provider, [])
+                slots = [
+                    s for s in self._slots_by_id.values()
+                    if capability in s.capabilities and (provider is None or s.provider == provider)
+                ]
                 if not slots:
                     return None
                 available = [s for s in slots if s.available()]
                 if available:
-                    idx = self._idx_by_provider.get(provider, 0)
+                    idx = self._rr_idx.get(key, 0)
                     slot = available[idx % len(available)]
-                    self._idx_by_provider[provider] = (idx + 1) % len(available)
+                    self._rr_idx[key] = (idx + 1) % len(available)
                     slot.increment()
-                    return slot.value
+                    return TokenLease(id=slot.db_id, provider=slot.provider, token=slot.value)
                 # All on cooldown — find how long until the soonest recovers
                 now = datetime.now(tz=timezone.utc)
                 soonest = min(
@@ -130,31 +145,31 @@ class TokenManager:
                 await asyncio.sleep(wait)
             # loop back and try again
 
-    async def on_rate_limit(self, provider: str, token_value: str) -> None:
+    async def on_rate_limit(self, token_id: int) -> None:
         async with self._lock:
-            for slot in self._slots_by_provider.get(provider, []):
-                if slot.value == token_value:
-                    slot.cooldown_until = datetime.now(tz=timezone.utc) + timedelta(seconds=_COOLDOWN_RATE_LIMIT)
-                    logger.warning("TokenManager: %s on rate-limit cooldown (%ds)", slot.masked(), _COOLDOWN_RATE_LIMIT)
-                    break
+            slot = self._slots_by_id.get(token_id)
+            if not slot:
+                return
+            slot.cooldown_until = datetime.now(tz=timezone.utc) + timedelta(seconds=_COOLDOWN_RATE_LIMIT)
+            logger.warning("TokenManager: %s on rate-limit cooldown (%ds)", slot.masked(), _COOLDOWN_RATE_LIMIT)
 
-    async def on_error(self, provider: str, token_value: str) -> None:
+    async def on_error(self, token_id: int) -> None:
         async with self._lock:
-            for slot in self._slots_by_provider.get(provider, []):
-                if slot.value == token_value:
-                    slot.cooldown_until = datetime.now(tz=timezone.utc) + timedelta(seconds=_COOLDOWN_ERROR)
-                    logger.warning("TokenManager: %s on error cooldown (%ds)", slot.masked(), _COOLDOWN_ERROR)
-                    break
+            slot = self._slots_by_id.get(token_id)
+            if not slot:
+                return
+            slot.cooldown_until = datetime.now(tz=timezone.utc) + timedelta(seconds=_COOLDOWN_ERROR)
+            logger.warning("TokenManager: %s on error cooldown (%ds)", slot.masked(), _COOLDOWN_ERROR)
 
     # ── CRUD (called from API routes) ─────────────────────────────────────────
 
-    async def add(self, token: str, label: str, provider: str = "gemini") -> ApiToken:
+    async def add(self, token: str, label: str, provider: str = "gemini", capabilities: list[str] | None = None) -> ApiToken:
         async with AsyncSessionLocal() as session:
-            row = ApiToken(provider=provider, token=token, label=label)
+            row = ApiToken(provider=provider, token=token, label=label, capabilities=capabilities)
             session.add(row)
             await session.commit()
             await session.refresh(row)
-        await self.load(provider)
+        await self.load()
         return row
 
     async def remove(self, token_id: int) -> bool:
@@ -162,10 +177,9 @@ class TokenManager:
             row = await session.get(ApiToken, token_id)
             if not row:
                 return False
-            provider = row.provider
             await session.delete(row)
             await session.commit()
-        await self.load(provider)
+        await self.load()
         return True
 
     async def toggle(self, token_id: int) -> ApiToken | None:
@@ -174,10 +188,9 @@ class TokenManager:
             if not row:
                 return None
             row.is_active = not row.is_active
-            provider = row.provider
             await session.commit()
             await session.refresh(row)
-        await self.load(provider)
+        await self.load()
         return row
 
     async def list_tokens(self, provider: str | None = None) -> list[ApiToken]:
@@ -193,20 +206,20 @@ class TokenManager:
         """Return {db_id: {status, requests_today, daily_limit}} from live in-memory state."""
         now = datetime.now(tz=timezone.utc)
         result = {}
-        for slots in self._slots_by_provider.values():
-            for s in slots:
-                s._reset_if_new_day()
-                if s.cooldown_until and now < s.cooldown_until:
-                    status = "cooldown"
-                elif s.daily_limit > 0 and s.requests_today >= s.daily_limit:
-                    status = "daily_limit"
-                else:
-                    status = "active"
-                result[s.db_id] = {
-                    "status": status,
-                    "requests_today": s.requests_today,
-                    "daily_limit": s.daily_limit,
-                }
+        for s in self._slots_by_id.values():
+            s._reset_if_new_day()
+            if s.cooldown_until and now < s.cooldown_until:
+                status = "cooldown"
+            elif s.daily_limit > 0 and s.requests_today >= s.daily_limit:
+                status = "daily_limit"
+            else:
+                status = "active"
+            result[s.db_id] = {
+                "status": status,
+                "requests_today": s.requests_today,
+                "daily_limit": s.daily_limit,
+                "capabilities": sorted(s.capabilities),
+            }
         return result
 
     @staticmethod

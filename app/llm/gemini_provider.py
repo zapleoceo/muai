@@ -32,11 +32,11 @@ class GeminiProvider(LLMProvider):
         body = self._build_body(messages, system_prompt)
 
         for attempt in range(_MAX_RETRIES):
-            token = await manager.next_token("gemini")
-            if not token:
+            lease = await manager.next_token("chat", provider="gemini")
+            if not lease:
                 raise RuntimeError("No Gemini tokens configured. Add one at /api/admin/tokens.")
 
-            url = f"{_BASE_URL}/{self._model}:generateContent?key={token}"
+            url = f"{_BASE_URL}/{self._model}:generateContent?key={lease.token}"
             req = urllib.request.Request(
                 url, data=body,
                 headers={"Content-Type": "application/json"},
@@ -46,21 +46,21 @@ class GeminiProvider(LLMProvider):
                 return await asyncio.get_event_loop().run_in_executor(None, self._call, req)
             except urllib.error.HTTPError as exc:
                 if exc.code == 429:
-                    await manager.on_rate_limit("gemini", token)
+                    await manager.on_rate_limit(lease.id)
                     logger.warning("Gemini 429 on attempt %d, rotating token", attempt + 1)
                     if attempt == _MAX_RETRIES - 1:
                         raise RuntimeError("All Gemini tokens rate-limited") from exc
                 else:
                     body_text = exc.read().decode(errors="replace") if hasattr(exc, "read") else ""
-                    await manager.on_error("gemini", token)
+                    await manager.on_error(lease.id)
                     raise RuntimeError(f"Gemini HTTP {exc.code}: {body_text[:200]}") from exc
             except urllib.error.URLError as exc:
-                await manager.on_error("gemini", token)
+                await manager.on_error(lease.id)
                 raise RuntimeError(f"Gemini network error: {exc.reason}") from exc
             except GeminiContentError:
                 raise
             except Exception as exc:
-                await manager.on_error("gemini", token)
+                await manager.on_error(lease.id)
                 raise RuntimeError(f"Gemini error: {exc}") from exc
 
         raise RuntimeError("Gemini: exhausted retries")

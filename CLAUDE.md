@@ -91,7 +91,7 @@ messages        id(PK), chat_id(FK), user_id(FK), telegram_msg_id, direction(in/
                 text, media_type, file_id, caption, raw_json, date_utc,
                 reply_to_msg_id, is_auto_reply, via_guest_bot, edit_date, dialog_key
 settings        key(PK), value   ← JSON blobs for global config (key="sync_settings")
-api_tokens      id(PK), provider, token, label, is_active, created_at, last_used_at, error_count
+api_tokens      id(PK), provider, token, label, capabilities(JSONB), is_active, created_at, last_used_at, error_count
 chat_sync_config chat_id(PK/FK→chats), enabled, depth_days, approved_at, skip_reason, created_at
 ```
 
@@ -141,6 +141,12 @@ return it. Sync skips it naturally. Existing messages stay in the DB.
 ## Token rotation (`app/services/tokens.py`)
 
 - Round-robin across active `_Slot` objects (in-memory)
+- Tokens have **capabilities** (JSON array in DB): `chat`, `embed`
+  - If `capabilities` is NULL, defaults are derived from `provider`:
+    - `gemini`: `chat, embed`
+    - `openai`: `chat, embed`
+    - `deepseek`: `chat`
+    - `groq`: `chat`
 - **429 response** → 60s cooldown on that slot
 - **Other error** → 5 min cooldown
 - **Daily limit** → 1500 req/day per key (Gemini free tier); slot marked unavailable
@@ -231,9 +237,9 @@ ssh hetzner-root "docker compose -f /var/www/tgbot/docker-compose.yml logs -f --
 | `DB_URL` | asyncpg connection string |
 | `DB_PASSWORD` | postgres password (also used by docker-compose) |
 | `LLM_PROVIDER` | `gemini-2.5-flash` \| `gemini-2.5-pro` \| `openai` \| `groq` \| `stub` |
-| `GEMINI_API_KEY` | seeded into DB on first start if no tokens exist |
-| `OPENAI_API_KEY` | optional |
-| `GROQ_API_KEY` | optional |
+| `GEMINI_API_KEY` | seeded into DB on first start if no `gemini` tokens exist |
+| `OPENAI_API_KEY` | seeded into DB on first start if no `openai` tokens exist |
+| `GROQ_API_KEY` | seeded into DB on first start if no `groq` tokens exist |
 | `SESSION_SECRET` | HMAC key for dashboard auth cookies |
 | `DEPLOY_SECRET` | Bearer token for `/api/admin/deploy` |
 | `TELEGRAM_BOT_USERNAME` | used in Telegram Login Widget |
