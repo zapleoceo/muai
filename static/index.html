@@ -199,8 +199,12 @@
     .chat-folder-filter:focus { outline: none; border-color: #3b82f6; }
     .depth-cell { cursor: pointer; border-bottom: 1px dashed #475569; }
     .depth-cell:hover { color: #93c5fd; border-color: #93c5fd; }
-    .chat-avatar { width: 24px; height: 24px; border-radius: 50%; object-fit: cover;
-                   margin-right: 6px; vertical-align: middle; flex-shrink: 0; }
+    .avatar-cell { width: 36px; padding: 4px 4px 4px 8px !important; }
+    .chat-avatar { width: 28px; height: 28px; border-radius: 50%; object-fit: cover;
+                   display: block; }
+    .chat-avatar-link { display: block; line-height: 0; }
+    .chat-title-link { color: #e2e8f0; text-decoration: none; }
+    .chat-title-link:hover { color: #7dd3fc; text-decoration: underline; }
     .topic-toggle { background: none; border: none; color: #475569; cursor: pointer;
                     font-size: 0.7rem; padding: 0 3px; line-height: 1; }
     .topic-toggle:hover { color: #94a3b8; }
@@ -315,6 +319,7 @@
         <table class="chat-table">
           <thead>
             <tr>
+              <th style="width:36px"></th>
               <th onclick="sortBy('type')"   id="th-type">Тип <span class="sort-arrow">↕</span></th>
               <th onclick="sortBy('title')"  id="th-title" class="sorted">Название <span class="sort-arrow">↑</span></th>
               <th onclick="sortBy('folder')" id="th-folder">Папка <span class="sort-arrow">↕</span></th>
@@ -669,7 +674,7 @@ function renderChats() {
   const SC = {active:'cs-active', pending:'cs-pending', disabled:'cs-disabled', unknown:'cs-unknown'};
 
   if (!slice.length) {
-    tbody.innerHTML = `<tr><td colspan="8" style="color:#475569;padding:20px;text-align:center">Нет чатов</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan="9" style="color:#475569;padding:20px;text-align:center">Нет чатов</td></tr>`;
   } else {
     const rows = [];
     for (const c of slice) {
@@ -687,10 +692,18 @@ function renderChats() {
       const topics = c.topics || [];
       const topicToggle = topics.length
         ? `<button class="topic-toggle" data-action="toggle-topics" data-id="${c.id}" title="${topics.length} веток">▶</button> ` : '';
-      const avatar = `<img src="/api/admin/chats/${c.id}/avatar" class="chat-avatar" onerror="this.style.display='none'">`;
+      const tgLink = c.username ? `https://t.me/${c.username}` : null;
+      const avatarImg = `<img src="/api/admin/chats/${c.id}/avatar" class="chat-avatar" onerror="this.style.display='none'">`;
+      const avatarCell = tgLink
+        ? `<a href="${tgLink}" target="_blank" rel="noopener" class="chat-avatar-link">${avatarImg}</a>`
+        : avatarImg;
+      const titleEl = tgLink
+        ? `<a href="${tgLink}" target="_blank" rel="noopener" class="chat-title-link" title="${esc(c.title)}">${esc(c.title)}</a>`
+        : `<span class="chat-title-text" title="${esc(c.title)}">${esc(c.title)}</span>`;
       rows.push(`<tr>
+        <td class="avatar-cell">${avatarCell}</td>
         <td><span class="chat-type-badge">${esc(c.type)}</span></td>
-        <td class="chat-name-cell">${topicToggle}${avatar}<span class="chat-title-text" title="${esc(c.title)}">${esc(c.title)}</span>${uname}</td>
+        <td class="chat-name-cell">${topicToggle}${titleEl}${uname}</td>
         <td style="color:#64748b;font-size:0.78rem">${c.folder ? esc(c.folder) : '<span style="color:#334155">—</span>'}</td>
         <td><span class="chat-status-badge ${SC[c.status]||'cs-unknown'}">${STATUS[c.status]||c.status}</span></td>
         <td style="text-align:right;color:#94a3b8">${fmt(c.message_count)}</td>
@@ -702,7 +715,7 @@ function renderChats() {
       </tr>`);
       for (const t of topics) {
         rows.push(`<tr class="topic-row" data-parent="${c.id}" style="display:none">
-          <td></td>
+          <td></td><td></td>
           <td colspan="6"><span class="topic-title${t.is_closed ? ' topic-closed' : ''}">└ ${esc(t.title)}</span></td>
           <td></td>
         </tr>`);
