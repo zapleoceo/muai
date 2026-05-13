@@ -12,6 +12,11 @@ def get_llm_provider() -> LLMProvider:
 
     settings = get_settings()
 
+    if settings.llm_provider == "auto":
+        from app.llm.multi_provider import MultiProvider
+        _provider = MultiProvider()
+        return _provider
+
     if settings.llm_provider == "openai" and settings.openai_api_key:
         from app.llm.openai_provider import OpenAIProvider
         _provider = OpenAIProvider(api_key=settings.openai_api_key)
