@@ -131,3 +131,27 @@ class MessageChunk(Base):
         Index("idx_chunks_chat", "chat_id"),
         Index("idx_chunks_date", "msg_date_from"),
     )
+
+
+class RouterSuggestion(Base):
+    __tablename__ = "router_suggestions"
+
+    id = Column(BigInteger, autoincrement=True, primary_key=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    reviewed_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    status = Column(Text, nullable=False, default="new")
+    reviewer_user_id = Column(BigInteger, nullable=True)
+
+    query = Column(Text, nullable=False)
+    current_plan = Column(JSONB, nullable=True)
+    proposed_plan = Column(JSONB, nullable=True)
+    proposed_rule = Column(Text, nullable=True)
+    context_summary = Column(JSONB, nullable=True)
+    feedback = Column(JSONB, nullable=True)
+    meta = Column(JSONB, nullable=True)
+
+    __table_args__ = (
+        Index("idx_router_suggestions_status", "status"),
+        Index("idx_router_suggestions_created_at", "created_at"),
+    )

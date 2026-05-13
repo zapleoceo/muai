@@ -31,6 +31,7 @@
       <div class="tab active" data-tab="dashboard">📊 Дашборд</div>
       <div class="tab" data-tab="chats">💬 Чаты</div>
       <div class="tab" data-tab="settings">⚙️ Настройки</div>
+        <div class="tab" data-tab="improvements">🧪 Улучшения</div>
     </div>
     <a class="topbar-logout" href="/auth/logout">Выйти</a>
   </div>
@@ -189,6 +190,25 @@
         Gemini: при 429 токен уходит на cooldown 60 сек, система переходит на следующий.<br>
         DeepSeek: при 429 токен уходит на cooldown 60 сек, система переходит на следующий (требует <code>LLM_PROVIDER=deepseek</code> в .env).
       </p>
+    </div>
+  </div>
+
+  <div class="page" id="tab-improvements">
+    <div class="section">
+      <div class="section-header">
+        <h2>Подтверждение улучшений логики</h2>
+        <div class="section-actions">
+          <select class="inp" id="impr-status" onchange="onImprovementStatus(this.value)" style="max-width:220px">
+            <option value="new">Новые</option>
+            <option value="approved">Одобрены</option>
+            <option value="rejected">Отклонены</option>
+            <option value="applied">Применены</option>
+            <option value="all">Все</option>
+          </select>
+          <button class="btn btn-sm btn-ghost" onclick="loadImprovements()">Обновить</button>
+        </div>
+      </div>
+      <div id="improvements-box">Загрузка…</div>
     </div>
   </div>
 </div>

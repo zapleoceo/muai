@@ -7,6 +7,7 @@ from app.api.admin.settings import router as settings_router
 from app.api.admin.stats import router as stats_router
 from app.api.admin.sync import router as sync_router
 from app.api.admin.tokens import router as tokens_router
+from app.api.admin.router_suggestions import router as router_suggestions_router
 
 router = APIRouter()
 router.include_router(stats_router)
@@ -16,3 +17,4 @@ router.include_router(tokens_router)
 router.include_router(chats_router)
 router.include_router(sync_router)
 router.include_router(settings_router)
+router.include_router(router_suggestions_router)
