@@ -43,6 +43,8 @@ _ROUTER_POLICIES = (
     "   Если после sql_find_chats есть кандидаты — во втором шаге ограничь chat_ids выбранными кандидатами.\n"
     "10) Для стратегий SQL_DATE_SUMMARY и HYBRID ставь max_steps=2 и on_empty='RETRY', чтобы можно было сделать второй заход retrieval.\n"
     "11) Не привязывайся к одному дню, если пользователь спрашивает про недельное расписание/афишу: пост часто публикуют накануне. Используй LAST_7_DAYS или более широкий EXPLICIT.\n"
+    "12) Если пользователь просит 'последнее сообщение/крайний текст' в конкретном чате — используй sql_recent_messages_by_chat_query (limit 1..5) и не проси подтверждений.\n"
+    "13) Не используй стратегию COMMAND в этом проекте. Если нужны уточнения — используй INFO_ONLY + clarify_question.\n"
 )
 
 
@@ -66,6 +68,7 @@ def _router_tool_catalog() -> str:
         "- sql_search_messages(scope, query, limit, chat_types?, chat_ids?)\n"
         "- sql_search_messages_by_date(scope, time_range, query, limit, chat_types?, chat_ids?)\n"
         "- sql_message_by_tg_ref(chat_username?, chat_id?, telegram_msg_id)\n"
+        "- sql_recent_messages_by_chat_query(scope, chat_query, limit, chat_types?)\n"
         "- sql_messages_by_chat_query_and_date(scope, time_range, chat_query, max_rows, chat_types?)\n"
         "- sql_messages_by_folder_and_date(scope, time_range, folder, max_rows, chat_types?)\n"
         "- sql_messages_by_date(scope, time_range, explicit_from?, explicit_to?, max_rows, chat_types?, chat_ids?)\n"
@@ -258,6 +261,48 @@ _FEWSHOTS: list[tuple[str, dict]] = [
                 {"name": "sql_stats_by_date", "args": {"scope": "ALL_CHATS", "chat_types": ["private"]}},
             ],
             "time_range": "YESTERDAY",
+            "scope": "ALL_CHATS",
+            "chat_types": ["private"],
+            "chat_ids": None,
+            "explicit_from": None,
+            "explicit_to": None,
+            "clarify_question": None,
+            "max_steps": 2,
+            "on_empty": "RETRY",
+        },
+    ),
+    (
+        "В чате Евочка Моя какое последнее сообщение есть ?",
+        {
+            "strategy": "SQL_DATE_SUMMARY",
+            "tools": [
+                {"name": "get_recent_dialog", "args": {"limit": 20}},
+                {"name": "sql_recent_messages_by_chat_query", "args": {"scope": "ALL_CHATS", "chat_types": ["private"], "chat_query": "Евочка Моя", "limit": 3}},
+            ],
+            "time_range": "NONE",
+            "scope": "ALL_CHATS",
+            "chat_types": ["private"],
+            "chat_ids": None,
+            "explicit_from": None,
+            "explicit_to": None,
+            "clarify_question": None,
+            "max_steps": 2,
+            "on_empty": "RETRY",
+        },
+    ),
+    (
+        "Саммари по чати с Евочкой ?",
+        {
+            "strategy": "SQL_DATE_SUMMARY",
+            "tools": [
+                {"name": "get_recent_dialog", "args": {"limit": 20}},
+                {
+                    "name": "sql_messages_by_chat_query_and_date",
+                    "args": {"scope": "ALL_CHATS", "max_rows": 2000, "chat_types": ["private"], "chat_query": "Евочка"},
+                },
+                {"name": "sql_stats_by_date", "args": {"scope": "ALL_CHATS", "chat_types": ["private"]}},
+            ],
+            "time_range": "LAST_7_DAYS",
             "scope": "ALL_CHATS",
             "chat_types": ["private"],
             "chat_ids": None,
@@ -543,6 +588,7 @@ def _validate_plan_invariants(plan: Plan) -> None:
                 "sql_search_messages_by_date",
                 "sql_lex_search_messages",
                 "sql_message_by_tg_ref",
+                "sql_recent_messages_by_chat_query",
                 "sql_messages_by_chat_query_and_date",
                 "sql_messages_by_folder_and_date",
             )
@@ -564,6 +610,7 @@ def _validate_plan_invariants(plan: Plan) -> None:
                 "sql_search_messages_by_date",
                 "sql_lex_search_messages",
                 "sql_message_by_tg_ref",
+                "sql_recent_messages_by_chat_query",
                 "sql_messages_by_chat_query_and_date",
                 "sql_messages_by_folder_and_date",
             )
@@ -645,6 +692,28 @@ async def route_query(
             [LLMMessage(role="user", content=raw), LLMMessage(role="user", content=repair_prompt)],
             system_prompt=_router_system_prompt(),
         )
-        plan2 = Plan.model_validate(_extract_json(raw2))
-        _validate_plan_invariants(plan2)
-        return plan2, raw2
+        try:
+            plan2 = Plan.model_validate(_extract_json(raw2))
+            _validate_plan_invariants(plan2)
+            return plan2, raw2
+        except Exception as exc2:
+            fallback = {
+                "strategy": "INFO_ONLY",
+                "tools": [{"name": "get_recent_dialog", "args": {"limit": 20}}],
+                "time_range": "NONE",
+                "scope": "CURRENT_CHAT",
+                "chat_types": None,
+                "chat_ids": None,
+                "explicit_from": None,
+                "explicit_to": None,
+                "clarify_question": (
+                    "Не смог корректно разобрать запрос для поиска по базе. "
+                    "Уточни, пожалуйста: какой чат/период/что именно нужно найти."
+                ),
+                "max_steps": 1,
+                "on_empty": "ASK_CLARIFY",
+                "notes": f"router_fallback:{str(exc2)[:120]}",
+            }
+            plan3 = Plan.model_validate(fallback)
+            _validate_plan_invariants(plan3)
+            return plan3, json.dumps(fallback, ensure_ascii=False)
