@@ -4,9 +4,9 @@ from aiogram import Bot, Router
 from aiogram.enums import ChatType
 from aiogram.types import Message
 
-from app.bot.storage import save_incoming, save_outgoing
 from app.llm.gemini_provider import GeminiContentError
 from app.logic.reply import run_ai_reply
+from app.services.message_ingest import ingest_aiogram_incoming, ingest_aiogram_outgoing
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -45,7 +45,7 @@ async def _llm_respond(msg: Message, question: str | None = None) -> None:
 
     await thinking.edit_text(reply_text)
     dialog_key = f"{msg.chat.id}:{msg.from_user.id}" if msg.from_user else f"{msg.chat.id}"
-    await save_outgoing(
+    await ingest_aiogram_outgoing(
         chat_id=msg.chat.id,
         telegram_msg_id=thinking.message_id,
         text=reply_text,
@@ -56,7 +56,7 @@ async def _llm_respond(msg: Message, question: str | None = None) -> None:
 @router.message()
 async def handle_message(msg: Message, bot: Bot) -> None:
     try:
-        await save_incoming(msg)
+        await ingest_aiogram_incoming(msg)
     except Exception:
         logger.exception("Failed to save message chat_id=%s msg_id=%s", msg.chat.id, msg.message_id)
 

@@ -5,7 +5,7 @@ from aiogram.filters import Command
 from aiogram.types import Message
 
 from app.bot.handlers.messages import _llm_respond
-from app.bot.storage import save_incoming
+from app.services.message_ingest import ingest_aiogram_incoming
 
 logger = logging.getLogger(__name__)
 router = Router()
@@ -22,6 +22,6 @@ async def cmd_start(msg: Message) -> None:
 
 @router.message(Command("ai"))
 async def cmd_ai(msg: Message, bot: Bot) -> None:
-    await save_incoming(msg)
+    await ingest_aiogram_incoming(msg)
     question = (msg.text or "").partition(" ")[2].strip() or None
     await _llm_respond(msg, question=question)

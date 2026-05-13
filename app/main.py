@@ -88,12 +88,10 @@ app = FastAPI(title="TG Bot API", lifespan=lifespan)
 from app.api.routes import router as api_router    # noqa: E402
 from app.api.auth   import router as auth_router   # noqa: E402
 from app.api.admin  import router as admin_router  # noqa: E402
-from app.api.chats  import router as chats_router  # noqa: E402
 
 app.include_router(api_router,    prefix="/api")
 app.include_router(auth_router)
 app.include_router(admin_router,  prefix="/api")
-app.include_router(chats_router,  prefix="/api")
 app.mount("/static", StaticFiles(directory="static"), name="static")
 
 
