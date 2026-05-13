@@ -39,8 +39,12 @@ def format_retrieved_context(ctx: RetrievedContext) -> str:
             ts = m.get("date_utc") or ""
             role = m.get("role") or ""
             chat_id = m.get("chat_id")
+            link = m.get("link") or ""
             text = _clip(str(m.get("text") or ""), _MAX_MSG_CHARS)
-            lines.append(f"{ts} chat={chat_id} {role}: {text}")
+            if link:
+                lines.append(f"{ts} chat={chat_id} {role}: {text}\nlink: {link}")
+            else:
+                lines.append(f"{ts} chat={chat_id} {role}: {text}")
         parts.append("[MESSAGES]\n" + "\n".join(lines))
 
     if ctx.chunks:

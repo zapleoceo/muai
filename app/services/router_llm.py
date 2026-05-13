@@ -16,6 +16,7 @@ _ROUTER_SYSTEM_PROMPT = (
     "Если пользователь просит 'только личные чаты' — ставь chat_types=['private'] и scope=ALL_CHATS. "
     "Если просит 'только группы' — chat_types=['group','supergroup']. "
     "Если просит 'только каналы' — chat_types=['channel']. "
+    "Если пользователь просит ссылку/пруф/исходник сообщения — используй sql_search_messages, и в ответе надо вернуть ссылку(и) из контекста. "
     "Не вычисляй конкретные timestamps: используй time_range enum. "
     "Если не уверен — задай clarify_question и используй стратегию INFO_ONLY."
 )
@@ -32,6 +33,7 @@ def _router_tool_catalog() -> str:
         "TOOLS:\n"
         "- get_recent_dialog(chat_id, limit)\n"
         "- rag_search(scope, query, top_k)\n"
+        "- sql_search_messages(scope, query, limit, chat_types?, chat_ids?)\n"
         "- sql_messages_by_date(scope, time_range, explicit_from?, explicit_to?, max_rows, chat_types?, chat_ids?)\n"
         "- sql_stats_by_date(scope, time_range, explicit_from?, explicit_to?, chat_types?, chat_ids?)\n"
     )
@@ -75,6 +77,24 @@ _FEWSHOTS: list[tuple[str, dict]] = [
             "explicit_from": None,
             "explicit_to": None,
             "clarify_question": None,
+        },
+    ),
+    (
+        "Дай ссылку на это сообщение",
+        {
+            "strategy": "HYBRID",
+            "tools": [
+                {"name": "get_recent_dialog", "args": {"limit": 20}},
+                {"name": "sql_search_messages", "args": {"scope": "ALL_CHATS", "limit": 20}},
+                {"name": "rag_search", "args": {"scope": "ALL_CHATS", "top_k": 6}},
+            ],
+            "time_range": "NONE",
+            "scope": "ALL_CHATS",
+            "chat_types": None,
+            "chat_ids": None,
+            "explicit_from": None,
+            "explicit_to": None,
+            "clarify_question": "Уточни, про какое именно сообщение речь: из какого чата/примерное время/цитата. Пока покажу ближайшие совпадения и ссылки, если они доступны.",
         },
     ),
     (
