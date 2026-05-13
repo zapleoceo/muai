@@ -7,10 +7,10 @@ from zoneinfo import ZoneInfo
 from sqlalchemy import func, select, text
 
 from app.db.database import AsyncSessionLocal
-from app.db.models import Message
+from app.db.models import Chat, Message
 from app.db.repository import MessageRepo
 from app.llm.embedding import embed_text
-from app.services.answering_types import Plan, PlanScope, PlanTimeRange, RetrievedContext, ToolRun
+from app.services.answering_types import Plan, PlanChatType, PlanScope, PlanTimeRange, RetrievedContext, ToolRun
 
 
 @dataclass(frozen=True)
@@ -96,14 +96,21 @@ async def tool_sql_messages_by_date(
     *,
     chat_id: int,
     scope: PlanScope,
+    chat_types: list[PlanChatType] | None,
+    chat_ids: list[int] | None,
     resolved: ResolvedRange,
     max_rows: int,
 ) -> tuple[list[dict], dict]:
     async with AsyncSessionLocal() as session:
         await session.execute(text("SET TRANSACTION READ ONLY"))
-        q = select(Message).where(Message.date_utc >= resolved.from_utc, Message.date_utc < resolved.to_utc)
+        q = select(Message)
+        if chat_types:
+            q = q.join(Chat, Chat.id == Message.chat_id).where(Chat.type.in_([ct.value for ct in chat_types]))
+        q = q.where(Message.date_utc >= resolved.from_utc, Message.date_utc < resolved.to_utc)
         if scope == PlanScope.CURRENT_CHAT:
             q = q.where(Message.chat_id == chat_id)
+        elif chat_ids:
+            q = q.where(Message.chat_id.in_(chat_ids))
         q = q.order_by(Message.date_utc.asc()).limit(max_rows)
         rows = list((await session.execute(q)).scalars().all())
 
@@ -132,13 +139,20 @@ async def tool_sql_stats_by_date(
     *,
     chat_id: int,
     scope: PlanScope,
+    chat_types: list[PlanChatType] | None,
+    chat_ids: list[int] | None,
     resolved: ResolvedRange,
 ) -> tuple[dict, dict]:
     async with AsyncSessionLocal() as session:
         await session.execute(text("SET TRANSACTION READ ONLY"))
-        q = select(func.count()).select_from(Message).where(Message.date_utc >= resolved.from_utc, Message.date_utc < resolved.to_utc)
+        q = select(func.count()).select_from(Message)
+        if chat_types:
+            q = q.join(Chat, Chat.id == Message.chat_id).where(Chat.type.in_([ct.value for ct in chat_types]))
+        q = q.where(Message.date_utc >= resolved.from_utc, Message.date_utc < resolved.to_utc)
         if scope == PlanScope.CURRENT_CHAT:
             q = q.where(Message.chat_id == chat_id)
+        elif chat_ids:
+            q = q.where(Message.chat_id.in_(chat_ids))
         total = (await session.execute(q)).scalar() or 0
     return {"messages": int(total)}, {"from_utc": resolved.from_utc.isoformat(), "to_utc": resolved.to_utc.isoformat()}
 
@@ -147,13 +161,19 @@ async def tool_rag_search(
     *,
     chat_id: int,
     scope: PlanScope,
+    chat_ids: list[int] | None,
     query: str,
     top_k: int,
 ) -> tuple[list[dict], dict]:
     q_vec = await embed_text(query, task_type="RETRIEVAL_QUERY")
     async with AsyncSessionLocal() as session:
         await session.execute(text("SET TRANSACTION READ ONLY"))
-        rows = await MessageRepo(session).search_chunks(q_vec, limit=top_k, chat_id=chat_id if scope == PlanScope.CURRENT_CHAT else None)
+        rows = await MessageRepo(session).search_chunks(
+            q_vec,
+            limit=top_k,
+            chat_id=chat_id if scope == PlanScope.CURRENT_CHAT else None,
+            chat_ids=chat_ids if scope != PlanScope.CURRENT_CHAT else None,
+        )
     items = [
         {
             "chunk_id": int(r.id),
@@ -213,8 +233,21 @@ async def execute_plan(
                 if not resolved:
                     raise ValueError("time_range required")
                 scope = PlanScope(tc.args.get("scope", plan.scope.value))
+                chat_types = tc.args.get("chat_types", plan.chat_types)
+                if chat_types:
+                    chat_types = [PlanChatType(x) for x in chat_types]
+                chat_ids = tc.args.get("chat_ids", plan.chat_ids)
+                if chat_ids:
+                    chat_ids = [int(x) for x in chat_ids]
                 max_rows = int(tc.args.get("max_rows", 1500))
-                msgs, meta = await tool_sql_messages_by_date(chat_id=chat_id, scope=scope, resolved=resolved, max_rows=max_rows)
+                msgs, meta = await tool_sql_messages_by_date(
+                    chat_id=chat_id,
+                    scope=scope,
+                    chat_types=chat_types,
+                    chat_ids=chat_ids,
+                    resolved=resolved,
+                    max_rows=max_rows,
+                )
                 ctx.messages.extend(msgs)
                 ctx.tool_runs.append(ToolRun(name=name, ok=True, meta=meta))
                 continue
@@ -223,16 +256,31 @@ async def execute_plan(
                 if not resolved:
                     raise ValueError("time_range required")
                 scope = PlanScope(tc.args.get("scope", plan.scope.value))
-                stats, meta = await tool_sql_stats_by_date(chat_id=chat_id, scope=scope, resolved=resolved)
+                chat_types = tc.args.get("chat_types", plan.chat_types)
+                if chat_types:
+                    chat_types = [PlanChatType(x) for x in chat_types]
+                chat_ids = tc.args.get("chat_ids", plan.chat_ids)
+                if chat_ids:
+                    chat_ids = [int(x) for x in chat_ids]
+                stats, meta = await tool_sql_stats_by_date(
+                    chat_id=chat_id,
+                    scope=scope,
+                    chat_types=chat_types,
+                    chat_ids=chat_ids,
+                    resolved=resolved,
+                )
                 ctx.stats.update(stats)
                 ctx.tool_runs.append(ToolRun(name=name, ok=True, meta=meta))
                 continue
 
             if name == "rag_search":
                 scope = PlanScope(tc.args.get("scope", plan.scope.value))
+                chat_ids = tc.args.get("chat_ids", plan.chat_ids)
+                if chat_ids:
+                    chat_ids = [int(x) for x in chat_ids]
                 top_k = int(tc.args.get("top_k", 8))
                 q = str(tc.args.get("query") or query)
-                chunks, meta = await tool_rag_search(chat_id=chat_id, scope=scope, query=q, top_k=top_k)
+                chunks, meta = await tool_rag_search(chat_id=chat_id, scope=scope, chat_ids=chat_ids, query=q, top_k=top_k)
                 ctx.chunks.extend(chunks)
                 ctx.tool_runs.append(ToolRun(name=name, ok=True, meta=meta))
                 continue

@@ -13,6 +13,9 @@ _ROUTER_SYSTEM_PROMPT = (
     "вернуть только валидный JSON по схеме Plan. "
     "Никакого текста вокруг JSON. "
     "Всегда добавляй get_recent_dialog(limit=20) для CURRENT_CHAT, если это не опасная команда. "
+    "Если пользователь просит 'только личные чаты' — ставь chat_types=['private'] и scope=ALL_CHATS. "
+    "Если просит 'только группы' — chat_types=['group','supergroup']. "
+    "Если просит 'только каналы' — chat_types=['channel']. "
     "Не вычисляй конкретные timestamps: используй time_range enum. "
     "Если не уверен — задай clarify_question и используй стратегию INFO_ONLY."
 )
@@ -29,8 +32,8 @@ def _router_tool_catalog() -> str:
         "TOOLS:\n"
         "- get_recent_dialog(chat_id, limit)\n"
         "- rag_search(scope, query, top_k)\n"
-        "- sql_messages_by_date(scope, time_range, explicit_from?, explicit_to?, max_rows)\n"
-        "- sql_stats_by_date(scope, time_range, explicit_from?, explicit_to?)\n"
+        "- sql_messages_by_date(scope, time_range, explicit_from?, explicit_to?, max_rows, chat_types?, chat_ids?)\n"
+        "- sql_stats_by_date(scope, time_range, explicit_from?, explicit_to?, chat_types?, chat_ids?)\n"
     )
 
 
@@ -46,6 +49,50 @@ _FEWSHOTS: list[tuple[str, dict]] = [
             ],
             "time_range": "YESTERDAY",
             "scope": "ALL_CHATS",
+            "chat_types": None,
+            "chat_ids": None,
+            "explicit_from": None,
+            "explicit_to": None,
+            "clarify_question": None,
+        },
+    ),
+    (
+        "Сводка за вчера только по личным чатам, без групп и каналов",
+        {
+            "strategy": "SQL_DATE_SUMMARY",
+            "tools": [
+                {"name": "get_recent_dialog", "args": {"limit": 20}},
+                {
+                    "name": "sql_messages_by_date",
+                    "args": {"scope": "ALL_CHATS", "max_rows": 1500, "chat_types": ["private"]},
+                },
+                {"name": "sql_stats_by_date", "args": {"scope": "ALL_CHATS", "chat_types": ["private"]}},
+            ],
+            "time_range": "YESTERDAY",
+            "scope": "ALL_CHATS",
+            "chat_types": ["private"],
+            "chat_ids": None,
+            "explicit_from": None,
+            "explicit_to": None,
+            "clarify_question": None,
+        },
+    ),
+    (
+        "Сводка за вчера только по группам",
+        {
+            "strategy": "SQL_DATE_SUMMARY",
+            "tools": [
+                {"name": "get_recent_dialog", "args": {"limit": 20}},
+                {
+                    "name": "sql_messages_by_date",
+                    "args": {"scope": "ALL_CHATS", "max_rows": 1500, "chat_types": ["group", "supergroup"]},
+                },
+                {"name": "sql_stats_by_date", "args": {"scope": "ALL_CHATS", "chat_types": ["group", "supergroup"]}},
+            ],
+            "time_range": "YESTERDAY",
+            "scope": "ALL_CHATS",
+            "chat_types": ["group", "supergroup"],
+            "chat_ids": None,
             "explicit_from": None,
             "explicit_to": None,
             "clarify_question": None,
@@ -61,6 +108,8 @@ _FEWSHOTS: list[tuple[str, dict]] = [
             ],
             "time_range": "NONE",
             "scope": "ALL_CHATS",
+            "chat_types": None,
+            "chat_ids": None,
             "explicit_from": None,
             "explicit_to": None,
             "clarify_question": None,
@@ -73,6 +122,8 @@ _FEWSHOTS: list[tuple[str, dict]] = [
             "tools": [{"name": "get_recent_dialog", "args": {"limit": 20}}],
             "time_range": "NONE",
             "scope": "CURRENT_CHAT",
+            "chat_types": None,
+            "chat_ids": None,
             "explicit_from": None,
             "explicit_to": None,
             "clarify_question": None,
@@ -85,6 +136,8 @@ _FEWSHOTS: list[tuple[str, dict]] = [
             "tools": [],
             "time_range": "YESTERDAY",
             "scope": "CURRENT_CHAT",
+            "chat_types": None,
+            "chat_ids": None,
             "explicit_from": None,
             "explicit_to": None,
             "clarify_question": "Подтверди команду и уточни scope: только этот чат или все чаты?",
@@ -129,6 +182,8 @@ async def route_query(
             "tools": [{"name": "tool_name", "args": {"k": "v"}}],
             "time_range": "NONE|YESTERDAY|TODAY|LAST_7_DAYS|EXPLICIT",
             "scope": "CURRENT_CHAT|ALL_CHATS",
+            "chat_types": ["private|group|supergroup|channel"],
+            "chat_ids": [123],
             "explicit_from": "ISO date/datetime | null",
             "explicit_to": "ISO date/datetime | null",
             "clarify_question": "string | null",

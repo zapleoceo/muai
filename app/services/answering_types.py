@@ -25,6 +25,13 @@ class PlanScope(str, Enum):
     ALL_CHATS = "ALL_CHATS"
 
 
+class PlanChatType(str, Enum):
+    PRIVATE = "private"
+    GROUP = "group"
+    SUPERGROUP = "supergroup"
+    CHANNEL = "channel"
+
+
 class PlanToolCall(BaseModel):
     name: str
     args: dict = Field(default_factory=dict)
@@ -35,6 +42,8 @@ class Plan(BaseModel):
     tools: list[PlanToolCall] = Field(default_factory=list)
     time_range: PlanTimeRange = PlanTimeRange.NONE
     scope: PlanScope = PlanScope.CURRENT_CHAT
+    chat_types: list[PlanChatType] | None = None
+    chat_ids: list[int] | None = None
     explicit_from: str | None = None
     explicit_to: str | None = None
     clarify_question: str | None = None
