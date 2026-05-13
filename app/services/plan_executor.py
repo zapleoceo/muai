@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
+import re
 from zoneinfo import ZoneInfo
 
 from sqlalchemy import case, func, select, text, or_
@@ -17,6 +18,23 @@ from app.services.answering_types import Plan, PlanChatType, PlanScope, PlanTime
 class ResolvedRange:
     from_utc: datetime
     to_utc: datetime
+
+
+async def ensure_search_infra() -> None:
+    ddl = [
+        "CREATE EXTENSION IF NOT EXISTS pg_trgm",
+        "CREATE INDEX IF NOT EXISTS idx_messages_fts_simple ON messages USING GIN (to_tsvector('simple', coalesce(text,'') || ' ' || coalesce(caption,'')))",
+        "CREATE INDEX IF NOT EXISTS idx_messages_fts_ru ON messages USING GIN (to_tsvector('russian', coalesce(text,'') || ' ' || coalesce(caption,'')))",
+        "CREATE INDEX IF NOT EXISTS idx_messages_fts_en ON messages USING GIN (to_tsvector('english', coalesce(text,'') || ' ' || coalesce(caption,'')))",
+        "CREATE INDEX IF NOT EXISTS idx_messages_trgm ON messages USING GIN ((coalesce(text,'') || ' ' || coalesce(caption,'')) gin_trgm_ops)",
+        "CREATE INDEX IF NOT EXISTS idx_chats_title_trgm ON chats USING GIN (coalesce(title,'') gin_trgm_ops)",
+        "CREATE INDEX IF NOT EXISTS idx_chats_username_trgm ON chats USING GIN (coalesce(username,'') gin_trgm_ops)",
+        "CREATE INDEX IF NOT EXISTS idx_chats_folder_trgm ON chats USING GIN (coalesce(folder,'') gin_trgm_ops)",
+    ]
+    async with AsyncSessionLocal() as session:
+        for stmt in ddl:
+            await session.execute(text(stmt))
+        await session.commit()
 
 
 def build_message_link(*, chat_id: int, chat_type: str | None, chat_username: str | None, telegram_msg_id: int | None) -> str | None:
@@ -228,6 +246,10 @@ async def tool_rag_search(
             "msg_date_to": r.msg_date_to.isoformat() if getattr(r, "msg_date_to", None) else None,
             "chat_username": getattr(r, "chat_username", None),
             "max_tg_msg_id": int(getattr(r, "max_tg_msg_id", 0) or 0) or None,
+            "min_msg_id": int(getattr(r, "min_msg_id", 0) or 0) or None,
+            "max_msg_id": int(getattr(r, "max_msg_id", 0) or 0) or None,
+            "msg_count": int(getattr(r, "msg_count", 0) or 0) or None,
+            "meta": getattr(r, "meta", None),
             "link": build_message_link(
                 chat_id=int(r.chat_id),
                 chat_type=None,
@@ -403,6 +425,184 @@ async def tool_sql_find_chats(
     return items, {"count": len(items), "limit": limit, "query": q_raw}
 
 
+def _has_cyrillic(s: str) -> bool:
+    return bool(re.search(r"[\u0400-\u04FF]", s))
+
+
+def _has_latin(s: str) -> bool:
+    return bool(re.search(r"[A-Za-z]", s))
+
+
+async def tool_sql_lex_search_messages(
+    *,
+    chat_id: int,
+    scope: PlanScope,
+    chat_types: list[PlanChatType] | None,
+    chat_ids: list[int] | None,
+    query: str,
+    limit: int,
+    resolved: ResolvedRange | None = None,
+) -> tuple[list[dict], dict]:
+    q_raw = str(query or "").strip()
+    if not q_raw:
+        return [], {"count": 0, "error": "empty_query"}
+
+    use_ru = _has_cyrillic(q_raw)
+    use_en = _has_latin(q_raw)
+    q_expr = "coalesce(m.text,'') || ' ' || coalesce(m.caption,'')"
+
+    params: dict[str, object] = {
+        "q": q_raw,
+        "lim": int(limit),
+        "use_ru": bool(use_ru),
+        "use_en": bool(use_en),
+    }
+
+    where = []
+    if resolved is not None:
+        where.append("m.date_utc >= :from_utc AND m.date_utc < :to_utc")
+        params["from_utc"] = resolved.from_utc
+        params["to_utc"] = resolved.to_utc
+
+    if chat_types:
+        where.append("c.type = ANY(CAST(:chat_types AS text[]))")
+        params["chat_types"] = [ct.value for ct in chat_types]
+
+    if scope == PlanScope.CURRENT_CHAT:
+        where.append("m.chat_id = :chat_id")
+        params["chat_id"] = int(chat_id)
+    elif chat_ids:
+        where.append("m.chat_id = ANY(CAST(:chat_ids AS bigint[]))")
+        params["chat_ids"] = [int(x) for x in chat_ids]
+
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
+
+    sql = text(
+        f"""
+        WITH q AS (
+          SELECT
+            websearch_to_tsquery('simple', :q)  AS qs,
+            websearch_to_tsquery('russian', :q) AS qru,
+            websearch_to_tsquery('english', :q) AS qen
+        )
+        SELECT
+          m.id AS message_id,
+          m.chat_id,
+          m.telegram_msg_id,
+          m.direction,
+          m.text,
+          m.caption,
+          m.media_type,
+          m.date_utc,
+          c.type AS chat_type,
+          c.title AS chat_title,
+          c.username AS chat_username,
+          ts_rank_cd(to_tsvector('simple', {q_expr}), q.qs) AS r_simple,
+          CASE WHEN :use_ru THEN ts_rank_cd(to_tsvector('russian', {q_expr}), q.qru) ELSE 0 END AS r_ru,
+          CASE WHEN :use_en THEN ts_rank_cd(to_tsvector('english', {q_expr}), q.qen) ELSE 0 END AS r_en,
+          similarity({q_expr}, :q) AS sim
+        FROM messages m
+        JOIN chats c ON c.id = m.chat_id
+        CROSS JOIN q
+        {where_sql}
+          AND (
+            to_tsvector('simple', {q_expr}) @@ q.qs
+            OR ({q_expr} % :q)
+          )
+        ORDER BY (r_simple + r_ru + r_en + sim) DESC, m.date_utc DESC, m.id DESC
+        LIMIT :lim
+        """
+    )
+
+    async with AsyncSessionLocal() as session:
+        await session.execute(text("SET TRANSACTION READ ONLY"))
+        await session.execute(text("SELECT set_limit(0.12)"))
+        rows = (await session.execute(sql, params)).fetchall()
+
+    items: list[dict] = []
+    for r in rows:
+        msg_text = r.text or r.caption or f"[{r.media_type or 'media'}]"
+        items.append(
+            {
+                "chat_id": int(r.chat_id),
+                "chat": {"id": int(r.chat_id), "type": r.chat_type, "title": r.chat_title, "username": r.chat_username},
+                "message_id": int(r.message_id),
+                "telegram_msg_id": int(r.telegram_msg_id) if r.telegram_msg_id is not None else None,
+                "direction": r.direction,
+                "role": "assistant" if r.direction == "out" else "user",
+                "text": msg_text,
+                "date_utc": r.date_utc.isoformat() if r.date_utc else None,
+                "link": build_message_link(
+                    chat_id=int(r.chat_id),
+                    chat_type=r.chat_type,
+                    chat_username=r.chat_username,
+                    telegram_msg_id=int(r.telegram_msg_id) if r.telegram_msg_id is not None else None,
+                ),
+                "score": float((r.r_simple or 0) + (r.r_ru or 0) + (r.r_en or 0) + (r.sim or 0)),
+                "score_parts": {
+                    "simple": float(r.r_simple or 0),
+                    "ru": float(r.r_ru or 0),
+                    "en": float(r.r_en or 0),
+                    "trgm": float(r.sim or 0),
+                },
+            }
+        )
+
+    return items, {"count": len(items), "limit": int(limit), "query": q_raw, "use_ru": bool(use_ru), "use_en": bool(use_en)}
+
+
+async def tool_sql_message_by_tg_ref(
+    *,
+    chat_username: str | None = None,
+    chat_id: int | None = None,
+    telegram_msg_id: int,
+) -> tuple[list[dict], dict]:
+    if not telegram_msg_id:
+        return [], {"count": 0, "error": "empty_telegram_msg_id"}
+
+    async with AsyncSessionLocal() as session:
+        await session.execute(text("SET TRANSACTION READ ONLY"))
+        c = None
+        if chat_id is not None:
+            c = (await session.execute(select(Chat).where(Chat.id == int(chat_id)))).scalar_one_or_none()
+        if not c and chat_username:
+            u = str(chat_username or "").strip().lstrip("@")
+            c = (await session.execute(select(Chat).where(Chat.username.ilike(u)))).scalar_one_or_none()
+            if not c:
+                c = (await session.execute(select(Chat).where(Chat.username.ilike(f"%{u}%")))).scalar_one_or_none()
+        if not c:
+            return [], {"count": 0, "error": "chat_not_found", "chat_username": chat_username, "chat_id": chat_id}
+
+        q = (
+            select(Message, Chat)
+            .join(Chat, Chat.id == Message.chat_id)
+            .where(Message.chat_id == c.id, Message.telegram_msg_id == int(telegram_msg_id))
+            .limit(5)
+        )
+        rows = (await session.execute(q)).all()
+
+    items = []
+    for (m, chat) in rows:
+        items.append(
+            {
+                "chat_id": int(m.chat_id),
+                "chat": {"id": int(m.chat_id), "type": chat.type, "title": chat.title, "username": chat.username},
+                "message_id": int(m.id),
+                "telegram_msg_id": int(m.telegram_msg_id) if m.telegram_msg_id is not None else None,
+                "direction": m.direction,
+                "role": "assistant" if m.direction == "out" else "user",
+                "text": m.text or m.caption or f"[{m.media_type or 'media'}]",
+                "date_utc": m.date_utc.isoformat() if m.date_utc else None,
+                "link": build_message_link(
+                    chat_id=int(m.chat_id),
+                    chat_type=chat.type,
+                    chat_username=chat.username,
+                    telegram_msg_id=int(m.telegram_msg_id) if m.telegram_msg_id is not None else None,
+                ),
+            }
+        )
+    return items, {"count": len(items), "chat_username": getattr(c, "username", None), "chat_id": int(getattr(c, "id", 0) or 0) or None, "telegram_msg_id": int(telegram_msg_id)}
+
 async def tool_sql_messages_by_chat_query_and_date(
     *,
     scope: PlanScope,
@@ -526,9 +726,9 @@ async def tool_sql_messages_by_folder_and_date(
 
 _ALLOWED_TOOLS: dict[str, set[str]] = {
     "INFO_ONLY": {"get_recent_dialog"},
-    "RAG_SEMANTIC": {"get_recent_dialog", "rag_search", "sql_search_messages", "sql_find_chats"},
-    "SQL_DATE_SUMMARY": {"get_recent_dialog", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date", "sql_stats_by_date", "sql_search_messages", "sql_search_messages_by_date", "sql_find_chats"},
-    "HYBRID": {"get_recent_dialog", "rag_search", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date", "sql_stats_by_date", "sql_search_messages", "sql_search_messages_by_date", "sql_find_chats"},
+    "RAG_SEMANTIC": {"get_recent_dialog", "rag_search", "sql_search_messages", "sql_find_chats", "sql_lex_search_messages"},
+    "SQL_DATE_SUMMARY": {"get_recent_dialog", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date", "sql_stats_by_date", "sql_search_messages", "sql_search_messages_by_date", "sql_find_chats", "sql_lex_search_messages", "sql_message_by_tg_ref"},
+    "HYBRID": {"get_recent_dialog", "rag_search", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date", "sql_stats_by_date", "sql_search_messages", "sql_search_messages_by_date", "sql_find_chats", "sql_lex_search_messages", "sql_message_by_tg_ref"},
     "COMMAND": set(),
 }
 
@@ -675,6 +875,40 @@ async def execute_plan(
                     query=q,
                     limit=lim,
                 )
+                ctx.messages.extend(msgs)
+                ctx.tool_runs.append(ToolRun(name=name, ok=True, meta=meta))
+                continue
+
+            if name == "sql_lex_search_messages":
+                scope = PlanScope(tc.args.get("scope", plan.scope.value))
+                chat_types = tc.args.get("chat_types", plan.chat_types)
+                if chat_types:
+                    chat_types = [PlanChatType(x) for x in chat_types]
+                chat_ids = tc.args.get("chat_ids", plan.chat_ids)
+                if chat_ids:
+                    chat_ids = [int(x) for x in chat_ids]
+                lim = int(tc.args.get("limit", 50))
+                q = str(tc.args.get("query") or query)
+                use_time = bool(tc.args.get("use_time_range", False))
+                msgs, meta = await tool_sql_lex_search_messages(
+                    chat_id=chat_id,
+                    scope=scope,
+                    chat_types=chat_types,
+                    chat_ids=chat_ids,
+                    query=q,
+                    limit=lim,
+                    resolved=resolved if (use_time and resolved) else None,
+                )
+                ctx.messages.extend(msgs)
+                ctx.tool_runs.append(ToolRun(name=name, ok=True, meta=meta))
+                continue
+
+            if name == "sql_message_by_tg_ref":
+                chat_username = str(tc.args.get("chat_username") or "")
+                chat_id_arg = tc.args.get("chat_id")
+                chat_id_val = int(chat_id_arg) if chat_id_arg is not None and str(chat_id_arg).strip() else None
+                telegram_msg_id = int(tc.args.get("telegram_msg_id") or 0)
+                msgs, meta = await tool_sql_message_by_tg_ref(chat_username=chat_username or None, chat_id=chat_id_val, telegram_msg_id=telegram_msg_id)
                 ctx.messages.extend(msgs)
                 ctx.tool_runs.append(ToolRun(name=name, ok=True, meta=meta))
                 continue

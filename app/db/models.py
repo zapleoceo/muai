@@ -1,5 +1,5 @@
 from pgvector.sqlalchemy import Vector
-from sqlalchemy import BigInteger, Boolean, Column, ForeignKey, Index, Text, UniqueConstraint
+from sqlalchemy import BigInteger, Boolean, Column, ForeignKey, Index, Integer, Text, UniqueConstraint
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP
 from sqlalchemy.orm import DeclarativeBase
 from sqlalchemy.sql import func
@@ -122,9 +122,12 @@ class MessageChunk(Base):
     msg_date_from = Column(TIMESTAMP(timezone=True))
     msg_date_to = Column(TIMESTAMP(timezone=True))
     max_msg_id = Column(BigInteger)          # highest messages.id in this chunk
+    min_msg_id = Column(BigInteger)          # lowest messages.id in this chunk
+    msg_count = Column(Integer)              # messages count in this chunk
     min_tg_msg_id = Column(BigInteger)       # lowest telegram_msg_id in this chunk
     max_tg_msg_id = Column(BigInteger)       # highest telegram_msg_id in this chunk
     chat_username = Column(Text)             # @username for link construction
+    meta = Column(JSONB)                     # arbitrary metadata (language hints, forwards, event_dates, etc.)
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
     __table_args__ = (

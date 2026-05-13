@@ -96,3 +96,16 @@ class MessageOpsRepo:
             q = q.where(Message.id > after_id)
         q = q.order_by(Message.id.asc())
         return list((await self.session.execute(q)).all())
+
+    async def get_messages_after_with_users_page(
+        self, chat_id: int, after_id: int | None, limit: int = 1000
+    ) -> list[tuple[Message, TgUser | None]]:
+        q = (
+            select(Message, TgUser)
+            .outerjoin(TgUser, Message.user_id == TgUser.id)
+            .where(Message.chat_id == chat_id)
+        )
+        if after_id is not None:
+            q = q.where(Message.id > after_id)
+        q = q.order_by(Message.id.asc()).limit(limit)
+        return list((await self.session.execute(q)).all())

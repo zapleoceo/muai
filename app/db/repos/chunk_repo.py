@@ -80,7 +80,7 @@ class ChunkRepo:
             params["chat_ids"] = chat_ids
         rows = (await self.session.execute(
             text(
-                "SELECT id, chat_id, chat_title, chunk_text, msg_date_from, msg_date_to, chat_username, max_tg_msg_id "
+                "SELECT id, chat_id, chat_title, chunk_text, msg_date_from, msg_date_to, chat_username, max_tg_msg_id, min_msg_id, max_msg_id, msg_count, meta "
                 "FROM message_chunks "
                 f"{where} "
                 "ORDER BY embedding <=> CAST(:vec AS vector) "

@@ -1,21 +1,26 @@
 import asyncio
+import json
 import logging
+import re
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from sqlalchemy import text
 
 from app.db.database import AsyncSessionLocal
 from app.db.repository import MessageRepo
-from app.llm.embedding import embed_text
+from app.llm.embedding import embed_texts
 
 logger = logging.getLogger(__name__)
 
-_CHUNK_SIZE = 5      # messages per chunk
-_CHUNK_STEP = 3      # step (overlap = 2)
 _MIN_CHARS = 30
 _BATCH_DELAY = 0.5   # seconds between API calls
 _INSERT_BATCH = 25
+_EMBED_BATCH = 10
+_PAGE_SIZE = 800
+_SESSION_GAP = timedelta(minutes=20)
+_MAX_CHUNK_CHARS = 3200
+_MAX_CHUNK_MSGS = 40
 
 _embed_task: asyncio.Task | None = None
 
@@ -88,6 +93,49 @@ def _tg_link(chat_id: int, username: str | None, tg_msg_id: int | None) -> str |
     return None
 
 
+def _extract_forward_hint(raw_json: dict | None) -> str | None:
+    if not raw_json:
+        return None
+    if raw_json.get("forward_origin"):
+        return "↪ переслано"
+    if raw_json.get("forward_from_chat") or raw_json.get("forward_from") or raw_json.get("forward_sender_name"):
+        return "↪ переслано"
+    if raw_json.get("fwd_from"):
+        return "↪ переслано"
+    if raw_json.get("forward_date"):
+        return "↪ переслано"
+    return None
+
+
+def _extract_event_dates(text: str) -> list[str]:
+    s = str(text or "")
+    out: list[str] = []
+    for m in re.finditer(r"\b\d{1,2}\.\d{1,2}(?:\.\d{2,4})?\s*-\s*\d{1,2}\.\d{1,2}(?:\.\d{2,4})?\b", s):
+        out.append(m.group(0))
+    for m in re.finditer(r"\b\d{1,2}\.\d{1,2}(?:\.\d{2,4})?\b", s):
+        out.append(m.group(0))
+    seen = set()
+    uniq = []
+    for x in out:
+        if x not in seen:
+            seen.add(x)
+            uniq.append(x)
+    return uniq[:10]
+
+
+def _looks_like_post(text: str) -> bool:
+    s = str(text or "")
+    if len(s) >= 700:
+        return True
+    if s.count("\n") >= 6:
+        return True
+    if re.search(r"\b\d{1,2}\.\d{1,2}\s*-\s*\d{1,2}\.\d{1,2}\b", s):
+        return True
+    if "афиша" in s.lower() or "распис" in s.lower() or "schedule" in s.lower() or "events" in s.lower():
+        return True
+    return False
+
+
 def _format_chunk(rows: list, chat_title: str, chat_type: str,
                   chat_id: int = 0, chat_username: str | None = None) -> str:
     date = rows[0][0].date_utc
@@ -102,9 +150,11 @@ def _format_chunk(rows: list, chat_title: str, chat_type: str,
         text_content = msg.text or msg.caption
         if not text_content:
             text_content = f"[{msg.media_type or 'медиа'}]"
+        fwd = _extract_forward_hint(getattr(msg, "raw_json", None))
+        fwd_part = f"{fwd} " if fwd else ""
         link = _tg_link(chat_id, chat_username, msg.telegram_msg_id)
         link_part = f" {link}" if link else ""
-        lines.append(f"{speaker}: {text_content}{link_part}")
+        lines.append(f"{speaker}: {fwd_part}{text_content}{link_part}")
     return "\n".join(lines)
 
 
@@ -113,78 +163,152 @@ def _format_chunk(rows: list, chat_title: str, chat_type: str,
 async def embed_chat(chat_id: int, chat_title: str, chat_type: str,
                      chat_username: str | None = None) -> int:
     """Chunk and embed new messages for one chat. Returns new chunk count."""
-    async with AsyncSessionLocal() as session:
-        last_id = await MessageRepo(session).get_last_embedded_msg_id(chat_id)
-        rows = await MessageRepo(session).get_messages_after_with_users(chat_id, after_id=last_id)
-
-    rows = [r for r in rows if r[0].text or r[0].caption]
-    if not rows:
-        return 0
-
-    pending: list[dict] = []
-    chunks_saved = 0
     insert_sql = text(
         "INSERT INTO message_chunks "
         "(chat_id, chat_title, chunk_text, embedding, msg_date_from, msg_date_to, "
-        "max_msg_id, min_tg_msg_id, max_tg_msg_id, chat_username) "
+        "min_msg_id, max_msg_id, msg_count, min_tg_msg_id, max_tg_msg_id, chat_username, meta) "
         "VALUES (:cid, :title, :chunk, CAST(:emb AS vector), :df, :dt, "
-        ":mid, :min_tg, :max_tg, :uname)"
+        ":min_mid, :max_mid, :msg_count, :min_tg, :max_tg, :uname, CAST(:meta AS jsonb))"
     )
 
+    chunks_saved = 0
+    pending_db: list[dict] = []
+
     async with AsyncSessionLocal() as session:
-        for i in range(0, len(rows), _CHUNK_STEP):
-            window = rows[i: i + _CHUNK_SIZE]
-            chunk_text = _format_chunk(window, chat_title, chat_type, chat_id, chat_username)
-            if len(chunk_text) < _MIN_CHARS:
-                continue
+        last_id = await MessageRepo(session).get_last_embedded_msg_id(chat_id)
 
-            date_from = window[0][0].date_utc
-            date_to = window[-1][0].date_utc
-            max_msg_id = max(r[0].id for r in window)
-            tg_ids = [r[0].telegram_msg_id for r in window if r[0].telegram_msg_id]
-            min_tg = min(tg_ids) if tg_ids else None
-            max_tg = max(tg_ids) if tg_ids else None
+    current: list = []
+    current_chars = 0
+    current_last_date: datetime | None = None
 
+    def flush_current() -> dict | None:
+        nonlocal current, current_chars, current_last_date
+        if not current:
+            return None
+        chunk_text = _format_chunk(current, chat_title, chat_type, chat_id, chat_username)
+        if len(chunk_text) < _MIN_CHARS:
+            current = []
+            current_chars = 0
+            current_last_date = None
+            return None
+
+        msgs = [r[0] for r in current]
+        date_from = msgs[0].date_utc
+        date_to = msgs[-1].date_utc
+        min_msg_id = min(int(m.id) for m in msgs if m.id is not None)
+        max_msg_id = max(int(m.id) for m in msgs if m.id is not None)
+        tg_ids = [int(m.telegram_msg_id) for m in msgs if m.telegram_msg_id]
+        min_tg = min(tg_ids) if tg_ids else None
+        max_tg = max(tg_ids) if tg_ids else None
+        event_dates: list[str] = []
+        for m in msgs:
+            event_dates.extend(_extract_event_dates(m.text or m.caption or ""))
+        meta = {
+            "chat_type": chat_type,
+            "has_forwards": any(bool(_extract_forward_hint(getattr(m, "raw_json", None))) for m in msgs),
+            "event_dates": list(dict.fromkeys(event_dates))[:10],
+        }
+
+        out = {
+            "cid": chat_id,
+            "title": chat_title,
+            "chunk": chunk_text,
+            "df": date_from,
+            "dt": date_to,
+            "min_mid": min_msg_id,
+            "max_mid": max_msg_id,
+            "msg_count": int(len(msgs)),
+            "min_tg": min_tg,
+            "max_tg": max_tg,
+            "uname": chat_username,
+            "meta": json.dumps(meta, ensure_ascii=False),
+        }
+        current = []
+        current_chars = 0
+        current_last_date = None
+        return out
+
+    to_embed: list[dict] = []
+
+    async with AsyncSessionLocal() as session:
+        page_after = last_id
+        while True:
+            rows = await MessageRepo(session).get_messages_after_with_users_page(chat_id, after_id=page_after, limit=_PAGE_SIZE)
+            if not rows:
+                break
+
+            for msg, user in rows:
+                if not (msg.text or msg.caption):
+                    continue
+
+                txt = msg.text or msg.caption or ""
+                if chat_type == "channel" or _looks_like_post(txt):
+                    ready = flush_current()
+                    if ready:
+                        to_embed.append(ready)
+                    current = [(msg, user)]
+                    current_chars = len(txt)
+                    current_last_date = msg.date_utc
+                    ready2 = flush_current()
+                    if ready2:
+                        to_embed.append(ready2)
+                    continue
+
+                if current_last_date and msg.date_utc and (msg.date_utc - current_last_date) > _SESSION_GAP:
+                    ready = flush_current()
+                    if ready:
+                        to_embed.append(ready)
+
+                if current and (len(current) >= _MAX_CHUNK_MSGS or (current_chars + len(txt)) >= _MAX_CHUNK_CHARS):
+                    ready = flush_current()
+                    if ready:
+                        to_embed.append(ready)
+
+                current.append((msg, user))
+                current_chars += len(txt) + 1
+                current_last_date = msg.date_utc
+
+            page_after = rows[-1][0].id if rows[-1][0].id is not None else page_after
+
+        ready = flush_current()
+        if ready:
+            to_embed.append(ready)
+
+    if not to_embed:
+        return 0
+
+    async with AsyncSessionLocal() as session:
+        for i in range(0, len(to_embed), _EMBED_BATCH):
+            batch = to_embed[i : i + _EMBED_BATCH]
+            texts = [b["chunk"] for b in batch]
             try:
-                vector = await embed_text(chunk_text)
+                vectors = await embed_texts(texts)
             except RuntimeError as exc:
-                logger.warning("Embed failed chat=%d chunk=%d: %s", chat_id, i, exc)
+                logger.warning("Embed failed chat=%d batch=%d: %s", chat_id, i, exc)
                 ts = datetime.now().strftime("%H:%M:%S")
                 _status.errors.append(f"[{ts}] {chat_title}: {exc}")
                 await asyncio.sleep(5)
                 continue
 
-            vec_str = "[" + ",".join(str(x) for x in vector) + "]"
-            pending.append(
-                {
-                    "cid": chat_id,
-                    "title": chat_title,
-                    "chunk": chunk_text,
-                    "emb": vec_str,
-                    "df": date_from,
-                    "dt": date_to,
-                    "mid": max_msg_id,
-                    "min_tg": min_tg,
-                    "max_tg": max_tg,
-                    "uname": chat_username,
-                }
-            )
+            for b, vec in zip(batch, vectors, strict=False):
+                vec_str = "[" + ",".join(str(x) for x in vec) + "]"
+                pending_db.append({**b, "emb": vec_str})
 
-            if len(pending) >= _INSERT_BATCH:
-                await session.execute(insert_sql, pending)
+            if len(pending_db) >= _INSERT_BATCH:
+                await session.execute(insert_sql, pending_db)
                 await session.commit()
-                chunks_saved += len(pending)
-                _status.chunks_added += len(pending)
-                pending.clear()
+                chunks_saved += len(pending_db)
+                _status.chunks_added += len(pending_db)
+                pending_db.clear()
 
             await asyncio.sleep(_BATCH_DELAY)
 
-        if pending:
-            await session.execute(insert_sql, pending)
+        if pending_db:
+            await session.execute(insert_sql, pending_db)
             await session.commit()
-            chunks_saved += len(pending)
-            _status.chunks_added += len(pending)
-            pending.clear()
+            chunks_saved += len(pending_db)
+            _status.chunks_added += len(pending_db)
+            pending_db.clear()
 
     return chunks_saved
 

@@ -1,8 +1,8 @@
 from app.services.answer_llm import answer_from_context
 from app.services.answering_types import ReplyResult
 from app.services.interactions import create_interaction
-from app.services.plan_executor import execute_plan
-from app.services.router_llm import grade_context, route_query
+from app.services.plan_executor import execute_plan, tool_get_recent_dialog
+from app.services.router_llm import grade_context, rerank_context, route_query
 
 
 async def run_answer_pipeline(
@@ -16,7 +16,17 @@ async def run_answer_pipeline(
     router_attempts: list[dict] = []
     grade_attempts: list[dict] = []
 
-    plan, router_raw = await route_query(query=query, user_id=user_id, chat_id=chat_id, language=language, timezone=timezone_name)
+    recent_dialog, _ = await tool_get_recent_dialog(chat_id=chat_id, limit=12)
+    init_state = {"recent_dialog": recent_dialog}
+
+    plan, router_raw = await route_query(
+        query=query,
+        user_id=user_id,
+        chat_id=chat_id,
+        language=language,
+        timezone=timezone_name,
+        state=init_state,
+    )
     router_attempts.append({"raw": router_raw, "plan": plan.model_dump()})
 
     retrieved = None
@@ -60,6 +70,7 @@ async def run_answer_pipeline(
             break
 
         state = {
+            "recent_dialog": recent_dialog,
             "previous_plan": final_plan.model_dump(),
             "retrieved_summary": summary,
             "grade": decision,
@@ -78,6 +89,27 @@ async def run_answer_pipeline(
 
     if retrieved is None:
         retrieved = await execute_plan(plan=final_plan, chat_id=chat_id, query=query, timezone_name=timezone_name)
+
+    if len(retrieved.messages) > 35 or len(retrieved.chunks) > 25:
+        decision, rerank_raw = await rerank_context(
+            query=query,
+            candidate_messages=retrieved.messages,
+            candidate_chunks=retrieved.chunks,
+            keep_messages=14,
+            keep_chunks=10,
+            language=language,
+        )
+        keep_message_ids = {int(x) for x in (decision.get("keep_message_ids") or []) if str(x).isdigit()}
+        keep_chunk_ids = {int(x) for x in (decision.get("keep_chunk_ids") or []) if str(x).isdigit()}
+        retrieved.meta["rerank"] = {"raw": rerank_raw, "decision": decision}
+        if keep_message_ids or keep_chunk_ids:
+            if keep_message_ids:
+                retrieved.messages = [m for m in retrieved.messages if int(m.get("message_id") or 0) in keep_message_ids]
+            if keep_chunk_ids:
+                retrieved.chunks = [c for c in retrieved.chunks if int(c.get("chunk_id") or 0) in keep_chunk_ids]
+        else:
+            retrieved.messages = []
+            retrieved.chunks = []
 
     text = await answer_from_context(query=query, plan=final_plan, ctx=retrieved)
 

@@ -35,6 +35,7 @@ async def run_deploy() -> None:
     prep_cmds = [
         ["git", "-C", "/var/www/tgbot", "pull", "origin", "master"],
         ["docker", "compose", "-f", _COMPOSE_FILE, "build", "bot"],
+        ["docker", "compose", "-f", _COMPOSE_FILE, "run", "--rm", "bot", "alembic", "upgrade", "head"],
     ]
     for cmd in prep_cmds:
         proc = await asyncio.create_subprocess_exec(
@@ -45,7 +46,21 @@ async def run_deploy() -> None:
         out, _ = await proc.communicate()
         logger.info("Deploy [%s]:\n%s", " ".join(cmd), out.decode(errors="replace"))
 
-    # Run `up -d` in a new session so it survives when this container is stopped.
+    stop_cmd = ["docker", "compose", "-f", _COMPOSE_FILE, "stop", "bot"]
+    await asyncio.create_subprocess_exec(
+        *stop_cmd,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+        start_new_session=True,
+    )
+    rm_cmd = ["docker", "compose", "-f", _COMPOSE_FILE, "rm", "-f", "bot"]
+    await asyncio.create_subprocess_exec(
+        *rm_cmd,
+        stdout=asyncio.subprocess.DEVNULL,
+        stderr=asyncio.subprocess.DEVNULL,
+        start_new_session=True,
+    )
+
     up_cmd = ["docker", "compose", "-f", _COMPOSE_FILE, "up", "-d", "bot"]
     await asyncio.create_subprocess_exec(
         *up_cmd,

@@ -21,24 +21,28 @@ _BASE_ROUTER_PROMPT = (
 _ROUTER_POLICIES = (
     "Правила:\n"
     "1) Для большинства стратегий, кроме COMMAND, включай get_recent_dialog(limit=20) для CURRENT_CHAT.\n"
+    "   Если в state есть recent_dialog — используй его как контекст и можешь НЕ дублировать get_recent_dialog.\n"
     "2) Если пользователь явно ограничивает тип чатов:\n"
     "   - только личные → chat_types=['private'], scope='ALL_CHATS'\n"
     "   - только группы → chat_types=['group','supergroup'], scope='ALL_CHATS'\n"
     "   - только каналы → chat_types=['channel'], scope='ALL_CHATS'\n"
     "3) Если пользователь спрашивает 'о чём' с конкретным человеком/чатом — по умолчанию предполагай личный чат:\n"
     "   chat_types=['private'], scope='ALL_CHATS'\n"
-    "4) Если пользователь просит ссылку/пруф/исходник — используй инструменты, которые возвращают link (sql_search_messages).\n"
+    "4) Если пользователь просит ссылку/пруф/исходник — используй инструменты, которые возвращают link (sql_lex_search_messages или sql_search_messages).\n"
     "5) Если в вопросе явно указан чат/человек и есть time_range — предпочитай sql_messages_by_chat_query_and_date, чтобы не тянуть лишнее.\n"
     "6) Если пользователь просит выборку/саммари по папке (folder) — используй sql_messages_by_folder_and_date.\n"
-    "7) Если вопрос про период и нужен конкретный факт/событие — используй sql_search_messages_by_date, но НЕ одним запросом: делай 2–4 tool-calls с разными query-variant.\n"
+    "7) Если вопрос про поиск по базе (включая расплывчатые формулировки) — предпочитай sql_lex_search_messages (он сочетает FTS+trgm).\n"
+    "   Если нужен период, включи use_time_range=true, но делай 2–4 tool-calls с разными query-variant.\n"
+    "   Если лексика не даёт результата — добавь rag_search как второй канал.\n"
     "   - добавляй синонимы (например: анонс/афиша/расписание; кино/фильм/сеанс; встреча/ивент/event)\n"
     "   - добавляй RU/EN варианты и транслит (веранда/veranda)\n"
     "   - добавляй 'якоря' формата (например: '📍', '🕖', 'вход', диапазон дат '11.05-17.05')\n"
-    "8) Если в запросе упоминается чат/папка/место, но непонятно какой именно чат нужен — сначала используй sql_find_chats.\n"
+    "8) Если пользователь прислал ссылку t.me/.../MSG_ID — это точный идентификатор. Используй sql_message_by_tg_ref(chat_username или chat_id, telegram_msg_id) и верни найденное сообщение.\n"
+    "9) Если в запросе упоминается чат/папка/место, но непонятно какой именно чат нужен — сначала используй sql_find_chats.\n"
     "   Если запрос может быть в RU, а чат назван в EN (или наоборот) — вызови sql_find_chats 2 раза с query-variant (например: 'веранда' и 'veranda').\n"
     "   Если после sql_find_chats есть кандидаты — во втором шаге ограничь chat_ids выбранными кандидатами.\n"
-    "9) Для стратегий SQL_DATE_SUMMARY и HYBRID ставь max_steps=2 и on_empty='RETRY', чтобы можно было сделать второй заход retrieval.\n"
-    "10) Не привязывайся к одному дню, если пользователь спрашивает про недельное расписание/афишу: пост часто публикуют накануне. Используй LAST_7_DAYS или более широкий EXPLICIT.\n"
+    "10) Для стратегий SQL_DATE_SUMMARY и HYBRID ставь max_steps=2 и on_empty='RETRY', чтобы можно было сделать второй заход retrieval.\n"
+    "11) Не привязывайся к одному дню, если пользователь спрашивает про недельное расписание/афишу: пост часто публикуют накануне. Используй LAST_7_DAYS или более широкий EXPLICIT.\n"
 )
 
 
@@ -58,8 +62,10 @@ def _router_tool_catalog() -> str:
         "- get_recent_dialog(chat_id, limit)\n"
         "- rag_search(scope, query, top_k)\n"
         "- sql_find_chats(query, limit, chat_types?)\n"
+        "- sql_lex_search_messages(scope, query, limit, chat_types?, chat_ids?, use_time_range?)\n"
         "- sql_search_messages(scope, query, limit, chat_types?, chat_ids?)\n"
         "- sql_search_messages_by_date(scope, time_range, query, limit, chat_types?, chat_ids?)\n"
+        "- sql_message_by_tg_ref(chat_username?, chat_id?, telegram_msg_id)\n"
         "- sql_messages_by_chat_query_and_date(scope, time_range, chat_query, max_rows, chat_types?)\n"
         "- sql_messages_by_folder_and_date(scope, time_range, folder, max_rows, chat_types?)\n"
         "- sql_messages_by_date(scope, time_range, explicit_from?, explicit_to?, max_rows, chat_types?, chat_ids?)\n"
@@ -151,8 +157,12 @@ _FEWSHOTS: list[tuple[str, dict]] = [
             "tools": [
                 {"name": "get_recent_dialog", "args": {"limit": 20}},
                 {
-                    "name": "sql_search_messages_by_date",
-                    "args": {"scope": "ALL_CHATS", "limit": 50, "chat_types": ["group", "supergroup"], "query": "Veranda"},
+                    "name": "sql_lex_search_messages",
+                    "args": {"scope": "ALL_CHATS", "limit": 60, "chat_types": ["group", "supergroup"], "query": "Veranda", "use_time_range": True},
+                },
+                {
+                    "name": "sql_lex_search_messages",
+                    "args": {"scope": "ALL_CHATS", "limit": 60, "chat_types": ["group", "supergroup"], "query": "веранда", "use_time_range": True},
                 },
             ],
             "time_range": "YESTERDAY",
@@ -174,9 +184,9 @@ _FEWSHOTS: list[tuple[str, dict]] = [
                 {"name": "get_recent_dialog", "args": {"limit": 20}},
                 {"name": "sql_find_chats", "args": {"limit": 8, "query": "Veranda", "chat_types": ["group", "supergroup", "channel"]}},
                 {"name": "sql_find_chats", "args": {"limit": 8, "query": "веранда", "chat_types": ["group", "supergroup", "channel"]}},
-                {"name": "sql_search_messages_by_date", "args": {"scope": "ALL_CHATS", "limit": 120, "query": "афиша", "chat_types": ["group", "supergroup", "channel"]}},
-                {"name": "sql_search_messages_by_date", "args": {"scope": "ALL_CHATS", "limit": 120, "query": "анонс", "chat_types": ["group", "supergroup", "channel"]}},
-                {"name": "sql_search_messages_by_date", "args": {"scope": "ALL_CHATS", "limit": 120, "query": "📍", "chat_types": ["group", "supergroup", "channel"]}},
+                {"name": "sql_lex_search_messages", "args": {"scope": "ALL_CHATS", "limit": 140, "query": "афиша", "chat_types": ["group", "supergroup", "channel"], "use_time_range": True}},
+                {"name": "sql_lex_search_messages", "args": {"scope": "ALL_CHATS", "limit": 140, "query": "анонс", "chat_types": ["group", "supergroup", "channel"], "use_time_range": True}},
+                {"name": "sql_lex_search_messages", "args": {"scope": "ALL_CHATS", "limit": 140, "query": "📍", "chat_types": ["group", "supergroup", "channel"], "use_time_range": True}},
             ],
             "time_range": "LAST_7_DAYS",
             "scope": "ALL_CHATS",
@@ -197,9 +207,9 @@ _FEWSHOTS: list[tuple[str, dict]] = [
                 {"name": "get_recent_dialog", "args": {"limit": 20}},
                 {"name": "sql_find_chats", "args": {"limit": 10, "query": "veranda", "chat_types": ["group", "supergroup", "channel"]}},
                 {"name": "sql_find_chats", "args": {"limit": 10, "query": "веранда", "chat_types": ["group", "supergroup", "channel"]}},
-                {"name": "sql_search_messages_by_date", "args": {"scope": "ALL_CHATS", "limit": 150, "query": "афиша", "chat_types": ["group", "supergroup", "channel"]}},
-                {"name": "sql_search_messages_by_date", "args": {"scope": "ALL_CHATS", "limit": 150, "query": "распис", "chat_types": ["group", "supergroup", "channel"]}},
-                {"name": "sql_search_messages_by_date", "args": {"scope": "ALL_CHATS", "limit": 150, "query": "11.05-17.05", "chat_types": ["group", "supergroup", "channel"]}},
+                {"name": "sql_lex_search_messages", "args": {"scope": "ALL_CHATS", "limit": 180, "query": "афиша", "chat_types": ["group", "supergroup", "channel"], "use_time_range": True}},
+                {"name": "sql_lex_search_messages", "args": {"scope": "ALL_CHATS", "limit": 180, "query": "распис", "chat_types": ["group", "supergroup", "channel"], "use_time_range": True}},
+                {"name": "sql_lex_search_messages", "args": {"scope": "ALL_CHATS", "limit": 180, "query": "11.05-17.05", "chat_types": ["group", "supergroup", "channel"], "use_time_range": True}},
             ],
             "time_range": "LAST_7_DAYS",
             "scope": "ALL_CHATS",
@@ -365,6 +375,50 @@ def _extract_json(text: str) -> dict:
     return json.loads(m.group(0))
 
 
+def _extract_tg_link_ref(query: str) -> dict | None:
+    s = str(query or "")
+
+    m = re.search(r"https?://t\.me/c/(?P<internal>\d+)(?:/\d+)?/(?P<msg>\d+)", s)
+    if m:
+        internal = m.group("internal")
+        msg = int(m.group("msg"))
+        return {"chat_id": int(f"-100{internal}"), "telegram_msg_id": msg}
+
+    m = re.search(r"https?://t\.me/(?P<username>[A-Za-z0-9_]{3,})(?:/\d+)?/(?P<msg>\d+)", s)
+    if m:
+        username = m.group("username")
+        msg = int(m.group("msg"))
+        return {"chat_username": username, "telegram_msg_id": msg}
+
+    return None
+
+
+def _build_plan_for_tg_ref(ref: dict) -> dict:
+    args = {"telegram_msg_id": int(ref["telegram_msg_id"])}
+    if ref.get("chat_id") is not None:
+        args["chat_id"] = int(ref["chat_id"])
+    if ref.get("chat_username") is not None:
+        args["chat_username"] = str(ref["chat_username"])
+
+    return {
+        "strategy": "SQL_DATE_SUMMARY",
+        "tools": [
+            {"name": "get_recent_dialog", "args": {"limit": 20}},
+            {"name": "sql_message_by_tg_ref", "args": args},
+        ],
+        "time_range": "NONE",
+        "scope": "ALL_CHATS",
+        "chat_types": None,
+        "chat_ids": None,
+        "explicit_from": None,
+        "explicit_to": None,
+        "clarify_question": None,
+        "max_steps": 2,
+        "on_empty": "RETRY",
+        "notes": "tg_link_ref",
+    }
+
+
 _GRADER_SYSTEM_PROMPT = (
     "Ты GRADE_CONTEXT узел в agentic RAG пайплайне. "
     "Оцени, достаточно ли RetrievedSummary для ответа на вопрос без домыслов. "
@@ -377,9 +431,69 @@ _GRADER_SYSTEM_PROMPT = (
     "}. "
     "RETRY выбирай, если похоже, что retrieval был неверно выбран (не тот чат/папка/тип чатов/период/инструмент) "
     "и можно улучшить план вторым заходом. "
-    "В router_hint кратко опиши, какие инструменты/ограничения стоит применить (sql_find_chats, sql_messages_by_date, sql_search_messages_by_date, rag_search). "
+    "В router_hint кратко опиши, какие инструменты/ограничения стоит применить (sql_find_chats, sql_messages_by_date, sql_lex_search_messages, sql_search_messages_by_date, rag_search). "
     "Если нужно уточнение у пользователя, выбери CLARIFY и заполни clarify_question."
 )
+
+
+_RERANK_SYSTEM_PROMPT = (
+    "Ты RERANK узел. Твоя задача — выбрать самые релевантные элементы из кандидатов для ответа на вопрос, без домыслов. "
+    "Верни только валидный JSON без текста вокруг. "
+    "Схема: {"
+    '"keep_message_ids":[int],'
+    '"keep_chunk_ids":[int],'
+    '"reason":"string|null"'
+    "}. "
+    "Оставляй только то, что явно помогает ответить. Если кандидаты слабые — верни пустые массивы."
+)
+
+
+async def rerank_context(
+    *,
+    query: str,
+    candidate_messages: list[dict],
+    candidate_chunks: list[dict],
+    keep_messages: int = 12,
+    keep_chunks: int = 8,
+    language: str = "ru",
+) -> tuple[dict, str]:
+    provider = get_llm_provider()
+    msgs = []
+    for m in candidate_messages[:80]:
+        msgs.append(
+            {
+                "message_id": m.get("message_id"),
+                "chat_id": m.get("chat_id"),
+                "chat_title": (m.get("chat") or {}).get("title"),
+                "date_utc": m.get("date_utc"),
+                "text": str(m.get("text") or "")[:800],
+                "link": m.get("link"),
+                "score": m.get("score"),
+            }
+        )
+    chs = []
+    for c in candidate_chunks[:60]:
+        chs.append(
+            {
+                "chunk_id": c.get("chunk_id"),
+                "chat_id": c.get("chat_id"),
+                "chat_title": c.get("chat_title"),
+                "msg_date_from": c.get("msg_date_from"),
+                "msg_date_to": c.get("msg_date_to"),
+                "text": str(c.get("text") or "")[:1000],
+                "link": c.get("link"),
+            }
+        )
+    input_block = {
+        "query": query,
+        "limits": {"keep_messages": int(keep_messages), "keep_chunks": int(keep_chunks)},
+        "messages": msgs,
+        "chunks": chs,
+        "language": language,
+    }
+    messages = [LLMMessage(role="user", content=json.dumps(input_block, ensure_ascii=False))]
+    raw = await provider.complete(messages, system_prompt=_RERANK_SYSTEM_PROMPT)
+    return _extract_json(raw), raw
 
 
 async def grade_context(
@@ -421,7 +535,18 @@ def _validate_plan_invariants(plan: Plan) -> None:
             raise ValueError("RAG_SEMANTIC: on_empty должен быть 'ASK_CLARIFY'")
 
     if plan.strategy.value == "SQL_DATE_SUMMARY":
-        if not any(n in tool_names for n in ("sql_messages_by_date", "sql_stats_by_date", "sql_search_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date")):
+        if not any(
+            n in tool_names
+            for n in (
+                "sql_messages_by_date",
+                "sql_stats_by_date",
+                "sql_search_messages_by_date",
+                "sql_lex_search_messages",
+                "sql_message_by_tg_ref",
+                "sql_messages_by_chat_query_and_date",
+                "sql_messages_by_folder_and_date",
+            )
+        ):
             raise ValueError("SQL_DATE_SUMMARY требует SQL tool (messages/stats)")
         if plan.max_steps < 2:
             raise ValueError("SQL_DATE_SUMMARY: max_steps должен быть >= 2")
@@ -431,7 +556,18 @@ def _validate_plan_invariants(plan: Plan) -> None:
     if plan.strategy.value == "HYBRID":
         if "rag_search" not in tool_names:
             raise ValueError("HYBRID требует rag_search")
-        if not any(n in tool_names for n in ("sql_messages_by_date", "sql_stats_by_date", "sql_search_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date")):
+        if not any(
+            n in tool_names
+            for n in (
+                "sql_messages_by_date",
+                "sql_stats_by_date",
+                "sql_search_messages_by_date",
+                "sql_lex_search_messages",
+                "sql_message_by_tg_ref",
+                "sql_messages_by_chat_query_and_date",
+                "sql_messages_by_folder_and_date",
+            )
+        ):
             raise ValueError("HYBRID требует SQL tool (messages/stats)")
         if plan.max_steps < 2:
             raise ValueError("HYBRID: max_steps должен быть >= 2")
@@ -456,6 +592,13 @@ async def route_query(
     timezone: str = "UTC",
     state: dict | None = None,
 ) -> tuple[Plan, str]:
+    tg_ref = _extract_tg_link_ref(query)
+    if tg_ref:
+        plan_dict = _build_plan_for_tg_ref(tg_ref)
+        plan = Plan.model_validate(plan_dict)
+        _validate_plan_invariants(plan)
+        return plan, json.dumps(plan_dict, ensure_ascii=False)
+
     provider = get_llm_provider()
     now = datetime.now().isoformat(timespec="seconds")
 
