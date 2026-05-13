@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from sqlalchemy import func, select, text, or_
+from sqlalchemy import case, func, select, text, or_
 
 from app.db.database import AsyncSessionLocal
 from app.db.models import Chat, Message
@@ -361,6 +361,48 @@ async def tool_sql_search_messages_by_date(
     }
 
 
+async def tool_sql_find_chats(
+    *,
+    query: str,
+    limit: int,
+    chat_types: list[PlanChatType] | None,
+) -> tuple[list[dict], dict]:
+    q_raw = str(query or "").strip().strip('"').strip("'")
+    if not q_raw:
+        return [], {"count": 0, "error": "empty_query"}
+    like = f"%{q_raw.lstrip('@')}%"
+
+    async with AsyncSessionLocal() as session:
+        await session.execute(text("SET TRANSACTION READ ONLY"))
+        score = (
+            case((Chat.username.ilike(q_raw.lstrip("@")), 100), else_=0)
+            + case((Chat.title.ilike(q_raw), 90), else_=0)
+            + case((Chat.title.ilike(like), 60), else_=0)
+            + case((Chat.folder.ilike(like), 50), else_=0)
+            + case((Chat.username.ilike(like), 40), else_=0)
+        ).label("score")
+
+        q = select(Chat, score).where(or_(Chat.title.ilike(like), Chat.username.ilike(like), Chat.folder.ilike(like)))
+        if chat_types:
+            q = q.where(Chat.type.in_([ct.value for ct in chat_types]))
+        q = q.order_by(score.desc(), Chat.title.asc().nulls_last(), Chat.id.asc()).limit(limit)
+        rows = (await session.execute(q)).all()
+
+    items = []
+    for (c, s) in rows:
+        items.append(
+            {
+                "chat_id": int(c.id),
+                "type": c.type,
+                "title": c.title,
+                "username": c.username,
+                "folder": c.folder,
+                "score": int(s or 0),
+            }
+        )
+    return items, {"count": len(items), "limit": limit, "query": q_raw}
+
+
 async def tool_sql_messages_by_chat_query_and_date(
     *,
     scope: PlanScope,
@@ -484,9 +526,9 @@ async def tool_sql_messages_by_folder_and_date(
 
 _ALLOWED_TOOLS: dict[str, set[str]] = {
     "INFO_ONLY": {"get_recent_dialog"},
-    "RAG_SEMANTIC": {"get_recent_dialog", "rag_search", "sql_search_messages"},
-    "SQL_DATE_SUMMARY": {"get_recent_dialog", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date", "sql_stats_by_date", "sql_search_messages", "sql_search_messages_by_date"},
-    "HYBRID": {"get_recent_dialog", "rag_search", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date", "sql_stats_by_date", "sql_search_messages", "sql_search_messages_by_date"},
+    "RAG_SEMANTIC": {"get_recent_dialog", "rag_search", "sql_search_messages", "sql_find_chats"},
+    "SQL_DATE_SUMMARY": {"get_recent_dialog", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date", "sql_stats_by_date", "sql_search_messages", "sql_search_messages_by_date", "sql_find_chats"},
+    "HYBRID": {"get_recent_dialog", "rag_search", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date", "sql_stats_by_date", "sql_search_messages", "sql_search_messages_by_date", "sql_find_chats"},
     "COMMAND": set(),
 }
 
@@ -520,6 +562,17 @@ async def execute_plan(
                 limit = int(tc.args.get("limit", 20))
                 msgs, meta = await tool_get_recent_dialog(chat_id=chat_id, limit=limit)
                 ctx.messages.extend(msgs)
+                ctx.tool_runs.append(ToolRun(name=name, ok=True, meta=meta))
+                continue
+
+            if name == "sql_find_chats":
+                lim = int(tc.args.get("limit", 10))
+                q = str(tc.args.get("query") or query)
+                chat_types = tc.args.get("chat_types", plan.chat_types)
+                if chat_types:
+                    chat_types = [PlanChatType(x) for x in chat_types]
+                items, meta = await tool_sql_find_chats(query=q, limit=lim, chat_types=chat_types)
+                ctx.meta.setdefault("chat_candidates", []).extend(items)
                 ctx.tool_runs.append(ToolRun(name=name, ok=True, meta=meta))
                 continue
 

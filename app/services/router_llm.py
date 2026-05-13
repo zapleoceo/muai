@@ -13,6 +13,7 @@ _BASE_ROUTER_PROMPT = (
     "вернуть только валидный JSON по схеме Plan. "
     "Никакого текста вокруг JSON. "
     "Не вычисляй конкретные timestamps: используй time_range enum. "
+    "Вход может содержать state (предыдущий план, краткое резюме retrieval и подсказку от grader) — используй state, чтобы улучшить план. "
     "Если не уверен — задай clarify_question и используй стратегию INFO_ONLY."
 )
 
@@ -29,6 +30,8 @@ _ROUTER_POLICIES = (
     "5) Если в вопросе явно указан чат/человек и есть time_range — предпочитай sql_messages_by_chat_query_and_date, чтобы не тянуть лишнее.\n"
     "6) Если пользователь просит выборку/саммари по папке (folder) — используй sql_messages_by_folder_and_date.\n"
     "7) Если вопрос про 'вчера/сегодня/неделю' и нужен конкретный факт/событие — сначала используй sql_search_messages_by_date по ключевым словам (например, 'веранде', 'veranda', 'фильм').\n"
+    "8) Если в запросе упоминается чат/папка/место, но непонятно какой именно чат нужен — сначала используй sql_find_chats, затем ограничь chat_ids.\n"
+    "9) Для стратегий SQL_DATE_SUMMARY и HYBRID ставь max_steps=2 и on_empty='RETRY', чтобы можно было сделать второй заход retrieval.\n"
 )
 
 
@@ -47,6 +50,7 @@ def _router_tool_catalog() -> str:
         "TOOLS:\n"
         "- get_recent_dialog(chat_id, limit)\n"
         "- rag_search(scope, query, top_k)\n"
+        "- sql_find_chats(query, limit, chat_types?)\n"
         "- sql_search_messages(scope, query, limit, chat_types?, chat_ids?)\n"
         "- sql_search_messages_by_date(scope, time_range, query, limit, chat_types?, chat_ids?)\n"
         "- sql_messages_by_chat_query_and_date(scope, time_range, chat_query, max_rows, chat_types?)\n"
@@ -73,6 +77,44 @@ _FEWSHOTS: list[tuple[str, dict]] = [
             "explicit_from": None,
             "explicit_to": None,
             "clarify_question": None,
+            "max_steps": 2,
+            "on_empty": "RETRY",
+        },
+    ),
+    (
+        "Саммари за последние 7 дней",
+        {
+            "strategy": "SQL_DATE_SUMMARY",
+            "tools": [
+                {"name": "get_recent_dialog", "args": {"limit": 20}},
+                {"name": "sql_messages_by_date", "args": {"scope": "ALL_CHATS", "max_rows": 2000}},
+                {"name": "sql_stats_by_date", "args": {"scope": "ALL_CHATS"}},
+            ],
+            "time_range": "LAST_7_DAYS",
+            "scope": "ALL_CHATS",
+            "chat_types": None,
+            "chat_ids": None,
+            "explicit_from": None,
+            "explicit_to": None,
+            "clarify_question": None,
+            "max_steps": 2,
+            "on_empty": "RETRY",
+        },
+    ),
+    (
+        "Что было в мае?",
+        {
+            "strategy": "SQL_DATE_SUMMARY",
+            "tools": [{"name": "get_recent_dialog", "args": {"limit": 20}}],
+            "time_range": "EXPLICIT",
+            "scope": "ALL_CHATS",
+            "chat_types": None,
+            "chat_ids": None,
+            "explicit_from": None,
+            "explicit_to": None,
+            "clarify_question": "Уточни, пожалуйста: какой год и какие даты мая нужны (например, 2026-05-01..2026-05-31)?",
+            "max_steps": 2,
+            "on_empty": "RETRY",
         },
     ),
     (
@@ -91,6 +133,8 @@ _FEWSHOTS: list[tuple[str, dict]] = [
             "explicit_from": None,
             "explicit_to": None,
             "clarify_question": None,
+            "max_steps": 2,
+            "on_empty": "RETRY",
         },
     ),
     (
@@ -111,6 +155,28 @@ _FEWSHOTS: list[tuple[str, dict]] = [
             "explicit_from": None,
             "explicit_to": None,
             "clarify_question": None,
+            "max_steps": 2,
+            "on_empty": "RETRY",
+        },
+    ),
+    (
+        "анонс события на веранде на эту неделю ?",
+        {
+            "strategy": "SQL_DATE_SUMMARY",
+            "tools": [
+                {"name": "get_recent_dialog", "args": {"limit": 20}},
+                {"name": "sql_find_chats", "args": {"limit": 8, "query": "Veranda", "chat_types": ["group", "supergroup", "channel"]}},
+                {"name": "sql_search_messages_by_date", "args": {"scope": "ALL_CHATS", "limit": 120, "query": "📍", "chat_types": ["group", "supergroup", "channel"]}},
+            ],
+            "time_range": "LAST_7_DAYS",
+            "scope": "ALL_CHATS",
+            "chat_types": ["group", "supergroup", "channel"],
+            "chat_ids": None,
+            "explicit_from": None,
+            "explicit_to": None,
+            "clarify_question": None,
+            "max_steps": 2,
+            "on_empty": "RETRY",
         },
     ),
     (
@@ -132,6 +198,8 @@ _FEWSHOTS: list[tuple[str, dict]] = [
             "explicit_from": None,
             "explicit_to": None,
             "clarify_question": None,
+            "max_steps": 2,
+            "on_empty": "RETRY",
         },
     ),
     (
@@ -153,6 +221,8 @@ _FEWSHOTS: list[tuple[str, dict]] = [
             "explicit_from": None,
             "explicit_to": None,
             "clarify_question": None,
+            "max_steps": 2,
+            "on_empty": "RETRY",
         },
     ),
     (
@@ -171,6 +241,8 @@ _FEWSHOTS: list[tuple[str, dict]] = [
             "explicit_from": None,
             "explicit_to": None,
             "clarify_question": "Уточни, про какое именно сообщение речь: из какого чата/примерное время/цитата. Пока покажу ближайшие совпадения и ссылки, если они доступны.",
+            "max_steps": 2,
+            "on_empty": "RETRY",
         },
     ),
     (
@@ -192,6 +264,8 @@ _FEWSHOTS: list[tuple[str, dict]] = [
             "explicit_from": None,
             "explicit_to": None,
             "clarify_question": None,
+            "max_steps": 2,
+            "on_empty": "RETRY",
         },
     ),
     (
@@ -209,6 +283,8 @@ _FEWSHOTS: list[tuple[str, dict]] = [
             "explicit_from": None,
             "explicit_to": None,
             "clarify_question": None,
+            "max_steps": 1,
+            "on_empty": "ASK_CLARIFY",
         },
     ),
     (
@@ -223,6 +299,8 @@ _FEWSHOTS: list[tuple[str, dict]] = [
             "explicit_from": None,
             "explicit_to": None,
             "clarify_question": None,
+            "max_steps": 1,
+            "on_empty": "ASK_CLARIFY",
         },
     ),
     (
@@ -237,6 +315,8 @@ _FEWSHOTS: list[tuple[str, dict]] = [
             "explicit_from": None,
             "explicit_to": None,
             "clarify_question": "Подтверди команду и уточни scope: только этот чат или все чаты?",
+            "max_steps": 1,
+            "on_empty": "ASK_CLARIFY",
         },
     ),
 ]
@@ -252,30 +332,86 @@ def _extract_json(text: str) -> dict:
     return json.loads(m.group(0))
 
 
+_GRADER_SYSTEM_PROMPT = (
+    "Ты GRADE_CONTEXT узел в agentic RAG пайплайне. "
+    "Оцени, достаточно ли RetrievedSummary для ответа на вопрос без домыслов. "
+    "Верни только валидный JSON без текста вокруг. "
+    "Схема: {"
+    '"verdict":"OK|RETRY|CLARIFY",'
+    '"reason":"string|null",'
+    '"clarify_question":"string|null",'
+    '"router_hint":"string|null"'
+    "}. "
+    "RETRY выбирай, если похоже, что retrieval был неверно выбран (не тот чат/папка/тип чатов/период/инструмент) "
+    "и можно улучшить план вторым заходом. "
+    "В router_hint кратко опиши, какие инструменты/ограничения стоит применить (sql_find_chats, sql_messages_by_date, sql_search_messages_by_date, rag_search). "
+    "Если нужно уточнение у пользователя, выбери CLARIFY и заполни clarify_question."
+)
+
+
+async def grade_context(
+    *,
+    query: str,
+    plan: Plan,
+    retrieved_summary: dict,
+    language: str = "ru",
+) -> tuple[dict, str]:
+    provider = get_llm_provider()
+    input_block = {
+        "query": query,
+        "plan": plan.model_dump(),
+        "retrieved_summary": retrieved_summary,
+        "catalog": _router_tool_catalog(),
+        "language": language,
+    }
+    messages = [LLMMessage(role="user", content=json.dumps(input_block, ensure_ascii=False))]
+    raw = await provider.complete(messages, system_prompt=_GRADER_SYSTEM_PROMPT)
+    return _extract_json(raw), raw
+
 def _validate_plan_invariants(plan: Plan) -> None:
     tool_names = [t.name for t in plan.tools]
     if plan.strategy.value == "INFO_ONLY":
         bad = [n for n in tool_names if n != "get_recent_dialog"]
         if bad:
             raise ValueError("INFO_ONLY допускает только get_recent_dialog")
+        if plan.max_steps != 1:
+            raise ValueError("INFO_ONLY: max_steps должен быть 1")
+        if plan.on_empty.value != "ASK_CLARIFY":
+            raise ValueError("INFO_ONLY: on_empty должен быть 'ASK_CLARIFY'")
 
     if plan.strategy.value == "RAG_SEMANTIC":
         if "rag_search" not in tool_names:
             raise ValueError("RAG_SEMANTIC требует rag_search")
+        if plan.max_steps != 1:
+            raise ValueError("RAG_SEMANTIC: max_steps должен быть 1")
+        if plan.on_empty.value != "ASK_CLARIFY":
+            raise ValueError("RAG_SEMANTIC: on_empty должен быть 'ASK_CLARIFY'")
 
     if plan.strategy.value == "SQL_DATE_SUMMARY":
         if not any(n in tool_names for n in ("sql_messages_by_date", "sql_stats_by_date", "sql_search_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date")):
             raise ValueError("SQL_DATE_SUMMARY требует SQL tool (messages/stats)")
+        if plan.max_steps < 2:
+            raise ValueError("SQL_DATE_SUMMARY: max_steps должен быть >= 2")
+        if plan.on_empty.value != "RETRY":
+            raise ValueError("SQL_DATE_SUMMARY: on_empty должен быть 'RETRY'")
 
     if plan.strategy.value == "HYBRID":
         if "rag_search" not in tool_names:
             raise ValueError("HYBRID требует rag_search")
         if not any(n in tool_names for n in ("sql_messages_by_date", "sql_stats_by_date", "sql_search_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date")):
             raise ValueError("HYBRID требует SQL tool (messages/stats)")
+        if plan.max_steps < 2:
+            raise ValueError("HYBRID: max_steps должен быть >= 2")
+        if plan.on_empty.value != "RETRY":
+            raise ValueError("HYBRID: on_empty должен быть 'RETRY'")
 
     if plan.strategy.value == "COMMAND":
         if plan.tools:
             raise ValueError("COMMAND: инструменты должны быть пустыми (в этом проекте)")
+        if plan.max_steps != 1:
+            raise ValueError("COMMAND: max_steps должен быть 1")
+        if plan.on_empty.value != "ASK_CLARIFY":
+            raise ValueError("COMMAND: on_empty должен быть 'ASK_CLARIFY'")
 
 
 async def route_query(
@@ -285,6 +421,7 @@ async def route_query(
     chat_id: int,
     language: str = "ru",
     timezone: str = "UTC",
+    state: dict | None = None,
 ) -> tuple[Plan, str]:
     provider = get_llm_provider()
     now = datetime.now().isoformat(timespec="seconds")
@@ -298,6 +435,7 @@ async def route_query(
             "timezone": timezone,
             "now": now,
         },
+        "state": state,
         "catalog": _router_tool_catalog(),
         "schema_hint": {
             "strategy": "INFO_ONLY|RAG_SEMANTIC|SQL_DATE_SUMMARY|HYBRID|COMMAND",
@@ -309,6 +447,8 @@ async def route_query(
             "explicit_from": "ISO date/datetime | null",
             "explicit_to": "ISO date/datetime | null",
             "clarify_question": "string | null",
+            "max_steps": "1..3",
+            "on_empty": "ASK_CLARIFY|RETRY",
         },
         "few_shots": [{"q": q, "plan": p} for (q, p) in _FEWSHOTS],
     }

@@ -36,6 +36,10 @@ class PlanToolCall(BaseModel):
     name: str
     args: dict = Field(default_factory=dict)
 
+class PlanOnEmpty(str, Enum):
+    ASK_CLARIFY = "ASK_CLARIFY"
+    RETRY = "RETRY"
+
 
 class Plan(BaseModel):
     strategy: PlanStrategy
@@ -47,6 +51,8 @@ class Plan(BaseModel):
     explicit_from: str | None = None
     explicit_to: str | None = None
     clarify_question: str | None = None
+    max_steps: int = 1
+    on_empty: PlanOnEmpty = PlanOnEmpty.ASK_CLARIFY
     notes: str | None = None
 
     @model_validator(mode="after")
@@ -54,6 +60,10 @@ class Plan(BaseModel):
         if self.time_range == PlanTimeRange.EXPLICIT:
             if not self.explicit_from or not self.explicit_to:
                 raise ValueError("explicit_from and explicit_to are required when time_range=EXPLICIT")
+        if self.max_steps < 1:
+            raise ValueError("max_steps must be >= 1")
+        if self.max_steps > 3:
+            raise ValueError("max_steps must be <= 3")
         return self
 
 
