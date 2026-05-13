@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from app.db.database import AsyncSessionLocal
 from app.db.models import ApiToken
-from app.llm.capabilities import effective_capabilities
+from app.llm.capabilities import effective_capabilities, normalize_capabilities
 
 logger = logging.getLogger(__name__)
 
@@ -189,6 +189,17 @@ class TokenManager:
             if not row:
                 return None
             row.is_active = not row.is_active
+            await session.commit()
+            await session.refresh(row)
+        await self.load()
+        return row
+
+    async def update_capabilities(self, token_id: int, capabilities: list[str] | None) -> ApiToken | None:
+        async with AsyncSessionLocal() as session:
+            row = await session.get(ApiToken, token_id)
+            if not row:
+                return None
+            row.capabilities = normalize_capabilities(row.provider, capabilities)
             await session.commit()
             await session.refresh(row)
         await self.load()

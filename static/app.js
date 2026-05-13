@@ -80,6 +80,8 @@ async function bootstrap() {
   window.addToken = settings.addToken;
   window.deleteToken = settings.deleteToken;
   window.toggleToken = settings.toggleToken;
+  window.toggleTokenCapsEditor = settings.toggleTokenCapsEditor;
+  window.saveTokenCaps = settings.saveTokenCaps;
 
   window.loadImprovements = improvements.loadImprovements;
   window.onImprovementStatus = improvements.onImprovementStatus;

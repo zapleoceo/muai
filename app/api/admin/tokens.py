@@ -15,6 +15,10 @@ class TokenIn(BaseModel):
     capabilities: list[str] | None = None
 
 
+class TokenCapsPatch(BaseModel):
+    capabilities: list[str] | None = None
+
+
 @router.get("/admin/tokens")
 async def list_tokens(
     _uid: int = Depends(require_owner),
@@ -66,3 +70,17 @@ async def toggle_token(token_id: int, _uid: int = Depends(require_owner)) -> dic
     if not row:
         raise HTTPException(status_code=404, detail="Token not found")
     return {"id": row.id, "is_active": row.is_active}
+
+
+@router.patch("/admin/tokens/{token_id}/capabilities")
+async def update_token_capabilities(
+    token_id: int,
+    body: TokenCapsPatch,
+    _uid: int = Depends(require_owner),
+) -> dict:
+    row = await get_token_manager().update_capabilities(token_id, body.capabilities)
+    if not row:
+        raise HTTPException(status_code=404, detail="Token not found")
+    caps_raw = row.capabilities if isinstance(row.capabilities, list) else None
+    caps = normalize_capabilities(row.provider, caps_raw)
+    return {"id": row.id, "capabilities": caps}

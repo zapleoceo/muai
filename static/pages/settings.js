@@ -2,6 +2,7 @@ import { apiFetch } from '../api.js';
 
 const TYPE_LABELS = { private: 'Личные', group: 'Группы', supergroup: 'Супергруппы', channel: 'Каналы' };
 let _settings = {};
+let _tokens = [];
 
 export function initSettingsPage() {
   const providerSelect = document.getElementById('inp-token-provider');
@@ -97,12 +98,12 @@ export async function loadTokens() {
   const box = document.getElementById('tokens-list');
   const r = await apiFetch('/api/admin/tokens');
   if (!r.ok) { box.textContent = 'Ошибка загрузки'; return; }
-  const tokens = await r.json();
-  if (!tokens.length) {
+  _tokens = await r.json();
+  if (!_tokens.length) {
     box.innerHTML = '<p style=\"color:#475569;font-size:0.85rem\">Нет токенов. Добавьте первый ниже.</p>';
     return;
   }
-  box.innerHTML = tokens.map(t => {
+  box.innerHTML = _tokens.map(t => {
     const hasLimit = t.daily_limit && t.daily_limit > 0;
     const pct2 = hasLimit ? Math.round(t.requests_today / t.daily_limit * 100) : 0;
     const pctClamped = Math.min(Math.max(pct2, 0), 100);
@@ -111,6 +112,8 @@ export async function loadTokens() {
     const statusText = t.status === 'cooldown' ? 'cooldown' : t.status === 'daily_limit' ? 'лимит/сутки' : t.is_active ? 'active' : 'inactive';
     const limitText = hasLimit ? `${t.requests_today} / ${t.daily_limit}` : `${t.requests_today} / —`;
     const capsText = (t.capabilities && t.capabilities.length) ? t.capabilities.join(',') : '—';
+    const hasChat = t.capabilities && t.capabilities.includes('chat');
+    const hasEmbed = t.capabilities && t.capabilities.includes('embed');
     return `
     <div class=\"token-row\" id=\"tr-${t.id}\">
       <span class=\"status-dot status-${t.status === 'daily_limit' ? 'inactive' : t.status}\"></span>
@@ -125,10 +128,48 @@ export async function loadTokens() {
           <div style=\"background:${barColor};height:4px;border-radius:3px;width:${pctClamped}%;transition:width .4s\"></div>
         </div>
       </div>
+      <button class=\"btn btn-sm btn-ghost\" onclick=\"toggleTokenCapsEditor(${t.id})\">Права</button>
       <button class=\"btn btn-sm btn-ghost\" onclick=\"toggleToken(${t.id})\">${t.is_active ? 'Выкл' : 'Вкл'}</button>
       <button class=\"btn btn-sm btn-danger\" onclick=\"deleteToken(${t.id})\">✕</button>
+    </div>
+    <div id=\"caps-${t.id}\" style=\"display:none;margin:6px 0 10px 26px;background:#0f1117;border-radius:10px;padding:10px\">
+      <div style=\"display:flex;gap:14px;align-items:center;color:#94a3b8;font-size:0.85rem;flex-wrap:wrap\">
+        <label style=\"display:flex;gap:6px;align-items:center\">
+          <input type=\"checkbox\" id=\"caprow-chat-${t.id}\" ${hasChat ? 'checked' : ''}>
+          <span>chat</span>
+        </label>
+        <label style=\"display:flex;gap:6px;align-items:center\">
+          <input type=\"checkbox\" id=\"caprow-embed-${t.id}\" ${hasEmbed ? 'checked' : ''}>
+          <span>embed</span>
+        </label>
+        <button class=\"btn btn-sm\" onclick=\"saveTokenCaps(${t.id})\">Сохранить</button>
+        <button class=\"btn btn-sm btn-ghost\" onclick=\"toggleTokenCapsEditor(${t.id})\">Закрыть</button>
+      </div>
     </div>`;
   }).join('');
+}
+
+export function toggleTokenCapsEditor(id) {
+  const el = document.getElementById(`caps-${id}`);
+  if (!el) return;
+  const visible = el.style.display !== 'none';
+  el.style.display = visible ? 'none' : 'block';
+}
+
+export async function saveTokenCaps(id) {
+  const chat = document.getElementById(`caprow-chat-${id}`);
+  const embed = document.getElementById(`caprow-embed-${id}`);
+  const caps = [];
+  if (chat && chat.checked) caps.push('chat');
+  if (embed && embed.checked) caps.push('embed');
+  if (!caps.length) { alert('Выбери хотя бы одну capability'); return; }
+  const r = await apiFetch(`/api/admin/tokens/${id}/capabilities`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ capabilities: caps }),
+  });
+  if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+  loadTokens();
 }
 
 export async function addToken() {
@@ -161,4 +202,3 @@ export async function toggleToken(id) {
   await apiFetch(`/api/admin/tokens/${id}/toggle`, { method: 'PATCH' });
   loadTokens();
 }
-
