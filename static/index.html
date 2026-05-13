@@ -4,7 +4,13 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>My AI — Dashboard</title>
-  <link rel="stylesheet" href="/static/app.css">
+  <script>
+    window.APP_VERSION = Date.now().toString();
+    const l = document.createElement('link');
+    l.rel = 'stylesheet';
+    l.href = `/static/app.css?v=${window.APP_VERSION}`;
+    document.head.appendChild(l);
+  </script>
 </head>
 <body>
 <div class="login-screen" id="login">
@@ -194,6 +200,8 @@
   </div>
 </div>
 
-<script type="module" src="/static/app.js"></script>
+<script type="module">
+  import(`/static/app.js?v=${window.APP_VERSION}`);
+</script>
 </body>
 </html>

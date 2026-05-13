@@ -1,9 +1,6 @@
-import { apiFetch } from './api.js';
-import { clearChunks, loadEmbedder, loadLogs, loadStats, toggleEmbedder } from './pages/dashboard.js';
-import { initChatsPage, loadChats, onFolderFilter, onSearch, pollSync, renderChats, setFilter, showAvatar, sortBy, syncFolders, syncTopics, toggleSync } from './pages/chats.js';
-import { addBlacklist, addToken, deleteToken, initSettingsPage, loadSettings, loadTokens, removeBlacklist, saveSettings, toggleToken, toggleType } from './pages/settings.js';
+const v = window.APP_VERSION ? `?v=${window.APP_VERSION}` : '';
 
-function showApp() {
+function showApp(loadStats, loadEmbedder, loadLogs) {
   document.getElementById('login').style.display = 'none';
   document.getElementById('app').style.display = 'flex';
   loadStats();
@@ -11,13 +8,13 @@ function showApp() {
   loadLogs();
 }
 
-async function onTelegramAuth(user) {
+async function onTelegramAuth(apiFetch, showAppFn, loadStats, loadEmbedder, loadLogs, user) {
   const r = await apiFetch('/auth/telegram', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(user),
   });
-  if (r.ok) showApp();
+  if (r.ok) showAppFn(loadStats, loadEmbedder, loadLogs);
   else alert('Доступ запрещён');
 }
 
@@ -36,42 +33,55 @@ function initTabs() {
 }
 
 async function bootstrap() {
+  const { apiFetch } = await import(`./api.js${v}`);
+  const dashboard = await import(`./pages/dashboard.js${v}`);
+  const chats = await import(`./pages/chats.js${v}`);
+  const settings = await import(`./pages/settings.js${v}`);
+
   initTabs();
-  initChatsPage();
-  initSettingsPage();
+  chats.initChatsPage();
+  settings.initSettingsPage();
 
-  window.onTelegramAuth = onTelegramAuth;
-  window.clearChunks = clearChunks;
-  window.toggleEmbedder = toggleEmbedder;
-  window.loadEmbedder = loadEmbedder;
-  window.loadLogs = loadLogs;
+  window.onTelegramAuth = (user) => onTelegramAuth(
+    apiFetch,
+    showApp,
+    dashboard.loadStats,
+    dashboard.loadEmbedder,
+    dashboard.loadLogs,
+    user,
+  );
 
-  window.loadChats = loadChats;
-  window.syncFolders = syncFolders;
-  window.syncTopics = syncTopics;
-  window.onSearch = onSearch;
-  window.setFilter = setFilter;
-  window.sortBy = sortBy;
-  window.onFolderFilter = onFolderFilter;
-  window.renderChats = renderChats;
-  window.showAvatar = showAvatar;
-  window.toggleSync = toggleSync;
-  window.pollSync = pollSync;
+  window.clearChunks = dashboard.clearChunks;
+  window.toggleEmbedder = dashboard.toggleEmbedder;
+  window.loadEmbedder = dashboard.loadEmbedder;
+  window.loadLogs = dashboard.loadLogs;
 
-  window.loadSettings = loadSettings;
-  window.saveSettings = saveSettings;
-  window.toggleType = toggleType;
-  window.addBlacklist = addBlacklist;
-  window.removeBlacklist = removeBlacklist;
+  window.loadChats = chats.loadChats;
+  window.syncFolders = chats.syncFolders;
+  window.syncTopics = chats.syncTopics;
+  window.onSearch = chats.onSearch;
+  window.setFilter = chats.setFilter;
+  window.sortBy = chats.sortBy;
+  window.onFolderFilter = chats.onFolderFilter;
+  window.renderChats = chats.renderChats;
+  window.showAvatar = chats.showAvatar;
+  window.toggleSync = chats.toggleSync;
+  window.pollSync = chats.pollSync;
 
-  window.loadTokens = loadTokens;
-  window.addToken = addToken;
-  window.deleteToken = deleteToken;
-  window.toggleToken = toggleToken;
+  window.loadSettings = settings.loadSettings;
+  window.saveSettings = settings.saveSettings;
+  window.toggleType = settings.toggleType;
+  window.addBlacklist = settings.addBlacklist;
+  window.removeBlacklist = settings.removeBlacklist;
+
+  window.loadTokens = settings.loadTokens;
+  window.addToken = settings.addToken;
+  window.deleteToken = settings.deleteToken;
+  window.toggleToken = settings.toggleToken;
 
   apiFetch('/api/admin/stats').then(r => {
     if (!r.ok) return;
-    r.json().then(() => showApp());
+    r.json().then(() => showApp(dashboard.loadStats, dashboard.loadEmbedder, dashboard.loadLogs));
   });
 }
 
