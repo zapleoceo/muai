@@ -37,6 +37,20 @@ async def ensure_search_infra() -> None:
         await session.commit()
 
 
+async def ensure_chunk_schema() -> None:
+    ddl = [
+        "ALTER TABLE message_chunks ADD COLUMN IF NOT EXISTS min_msg_id bigint",
+        "ALTER TABLE message_chunks ADD COLUMN IF NOT EXISTS msg_count integer",
+        "ALTER TABLE message_chunks ADD COLUMN IF NOT EXISTS meta jsonb",
+        "CREATE INDEX IF NOT EXISTS idx_chunks_min_msg_id ON message_chunks (min_msg_id)",
+        "CREATE INDEX IF NOT EXISTS idx_chunks_max_msg_id ON message_chunks (max_msg_id)",
+    ]
+    async with AsyncSessionLocal() as session:
+        for stmt in ddl:
+            await session.execute(text(stmt))
+        await session.commit()
+
+
 def build_message_link(*, chat_id: int, chat_type: str | None, chat_username: str | None, telegram_msg_id: int | None) -> str | None:
     if not telegram_msg_id:
         return None

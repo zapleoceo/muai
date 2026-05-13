@@ -22,21 +22,35 @@ async def get_logs(lines: int = 200) -> str:
 
 async def run_migration() -> None:
     proc = await asyncio.create_subprocess_exec(
-        "alembic", "upgrade", "head",
+        "python",
+        "-c",
+        "import asyncio; from app.services.plan_executor import ensure_search_infra, ensure_chunk_schema; "
+        "asyncio.run(ensure_search_infra()); asyncio.run(ensure_chunk_schema()); print('schema OK')",
         cwd="/app",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
     )
     out, _ = await proc.communicate()
-    logger.info("Migration output:\n%s", out.decode(errors="replace"))
+    logger.info("Schema init output:\n%s", out.decode(errors="replace"))
 
 
 async def run_deploy() -> None:
     prep_cmds = [
         ["git", "-C", "/var/www/tgbot", "pull", "origin", "master"],
         ["docker", "compose", "-f", _COMPOSE_FILE, "build", "bot"],
-        ["docker", "compose", "-f", _COMPOSE_FILE, "run", "--rm", "bot", "python", "-c", "import psycopg2; print('psycopg2 OK')"],
-        ["docker", "compose", "-f", _COMPOSE_FILE, "run", "--rm", "bot", "alembic", "upgrade", "head"],
+        [
+            "docker",
+            "compose",
+            "-f",
+            _COMPOSE_FILE,
+            "run",
+            "--rm",
+            "bot",
+            "python",
+            "-c",
+            "import asyncio; from app.services.plan_executor import ensure_search_infra, ensure_chunk_schema; "
+            "asyncio.run(ensure_search_infra()); asyncio.run(ensure_chunk_schema()); print('schema OK')",
+        ],
     ]
     for cmd in prep_cmds:
         proc = await asyncio.create_subprocess_exec(

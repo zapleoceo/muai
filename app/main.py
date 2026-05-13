@@ -36,9 +36,11 @@ async def lifespan(app: FastAPI):
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     logger.info("DB tables ready")
-    from app.services.plan_executor import ensure_search_infra
+    from app.services.plan_executor import ensure_chunk_schema, ensure_search_infra
     await ensure_search_infra()
     logger.info("DB search infra ready")
+    await ensure_chunk_schema()
+    logger.info("DB chunk schema ready")
 
     from app.services.tokens import get_token_manager
     mgr = get_token_manager()
