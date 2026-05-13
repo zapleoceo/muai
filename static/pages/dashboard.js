@@ -37,6 +37,10 @@ export async function loadStats() {
     <div class="card"><div class="label">Пользователей</div><div class="value">${fmt(t.users)}</div></div>
     <div class="card"><div class="label">Размер БД</div><div class="value" style="font-size:1.3rem">${t.db_size || '—'}</div><div class="sub">сообщения: ${t.messages_size || '—'}</div></div>
     <div class="card"><div class="label">Чанков (мозг)</div><div class="value">${fmt(t.chunks || 0)}</div><div class="sub">в ${fmt(t.embedded_chats || 0)} чатах</div></div>
+    <div class="card card-wide">
+      <div class="label">Сообщений за 7 дней</div>
+      <div class="day-chart" id="daily-chart"></div>
+    </div>
   `;
 
   const daily = d.daily;

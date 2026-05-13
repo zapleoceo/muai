@@ -29,6 +29,7 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
         gap: 16px; margin-bottom: 28px; }
 .card { background: #1e2533; border-radius: 12px; padding: 20px; }
+.card-wide { grid-column: 1 / -1; }
 .card .label { font-size: 0.75rem; color: #64748b; text-transform: uppercase;
                letter-spacing: .05em; margin-bottom: 8px; }
 .card .value { font-size: 2rem; font-weight: 700; color: #f8fafc; }
