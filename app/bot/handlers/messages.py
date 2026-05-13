@@ -42,7 +42,9 @@ async def _llm_respond(msg: Message, question: str | None = None) -> None:
         logger.error("LLM error chat=%s: %s", msg.chat.id, err)
         lower = err.lower()
         if "deepseek" in lower:
-            if "no active deepseek token" in lower:
+            if "insufficient balance" in lower or "402" in lower:
+                await thinking.edit_text("⚠️ DeepSeek: недостаточно средств (402 Insufficient Balance). Пополни баланс или добавь другой токен.")
+            elif "no active deepseek token" in lower:
                 await thinking.edit_text("⚠️ Нет активных токенов DeepSeek с capability chat. Проверь в Настройки → API токены.")
             elif "rate-limited" in lower or "429" in lower:
                 await thinking.edit_text("⚠️ Все токены DeepSeek на cooldown. Подожди минуту и попробуй снова.")

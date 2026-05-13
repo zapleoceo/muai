@@ -45,11 +45,19 @@ class DeepSeekProvider(LLMProvider):
                 status = getattr(exc, "status_code", None)
                 text = str(exc)
                 is_rate_limit = status == 429 or "rate limit" in text.lower() or "ratelimit" in text.lower()
+                is_insufficient = status == 402 or "insufficient balance" in text.lower()
+                is_auth = status in (401, 403) or "invalid api key" in text.lower() or "authentication" in text.lower()
                 if is_rate_limit:
                     await mgr.on_rate_limit(lease.id)
                     logger.warning("DeepSeek 429 on attempt %d, rotating token", attempt + 1)
                     if attempt == _MAX_RETRIES - 1:
                         raise RuntimeError("All DeepSeek tokens rate-limited") from exc
                     continue
+                if is_insufficient:
+                    await mgr.on_error(lease.id)
+                    raise RuntimeError("DeepSeek 402: insufficient balance. Пополни баланс или замени токен.") from exc
+                if is_auth:
+                    await mgr.on_error(lease.id)
+                    raise RuntimeError("DeepSeek auth error: invalid token. Проверь API ключ или добавь новый.") from exc
                 await mgr.on_error(lease.id)
-                raise
+                raise RuntimeError(f"DeepSeek error: {text[:200]}") from exc
