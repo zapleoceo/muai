@@ -352,11 +352,74 @@ async def tool_sql_messages_by_chat_query_and_date(
     }
 
 
+async def tool_sql_messages_by_folder_and_date(
+    *,
+    scope: PlanScope,
+    chat_id: int,
+    resolved: ResolvedRange,
+    folder: str,
+    chat_types: list[PlanChatType] | None,
+    max_rows: int,
+) -> tuple[list[dict], dict]:
+    folder_raw = str(folder or "").strip().strip('"').strip("'")
+    if not folder_raw:
+        return [], {"count": 0, "error": "empty_folder"}
+    like = f"%{folder_raw}%"
+
+    async with AsyncSessionLocal() as session:
+        await session.execute(text("SET TRANSACTION READ ONLY"))
+        q = (
+            select(Message, Chat)
+            .join(Chat, Chat.id == Message.chat_id)
+            .where(Message.date_utc >= resolved.from_utc, Message.date_utc < resolved.to_utc)
+            .where(Chat.folder.ilike(like))
+        )
+        if scope == PlanScope.CURRENT_CHAT:
+            q = q.where(Message.chat_id == chat_id)
+        if chat_types:
+            q = q.where(Chat.type.in_([ct.value for ct in chat_types]))
+        rows = (await session.execute(q.order_by(Message.date_utc.asc()).limit(max_rows))).all()
+
+    items = []
+    for (m, c) in rows:
+        items.append(
+            {
+                "chat_id": int(m.chat_id),
+                "chat": {
+                    "id": int(m.chat_id),
+                    "type": c.type,
+                    "title": c.title,
+                    "username": c.username,
+                    "folder": c.folder,
+                },
+                "message_id": int(m.id),
+                "telegram_msg_id": int(m.telegram_msg_id) if m.telegram_msg_id is not None else None,
+                "direction": m.direction,
+                "role": "assistant" if m.direction == "out" else "user",
+                "text": m.text or m.caption or f"[{m.media_type or 'media'}]",
+                "date_utc": m.date_utc.isoformat() if m.date_utc else None,
+                "link": build_message_link(
+                    chat_id=int(m.chat_id),
+                    chat_type=c.type,
+                    chat_username=c.username,
+                    telegram_msg_id=int(m.telegram_msg_id) if m.telegram_msg_id is not None else None,
+                ),
+            }
+        )
+    return items, {
+        "count": len(items),
+        "max_rows": max_rows,
+        "folder": folder_raw,
+        "from_utc": resolved.from_utc.isoformat(),
+        "to_utc": resolved.to_utc.isoformat(),
+    }
+
+
 _ALLOWED_TOOLS: dict[str, set[str]] = {
     "INFO_ONLY": {"get_recent_dialog"},
     "RAG_SEMANTIC": {"get_recent_dialog", "rag_search", "sql_search_messages"},
-    "SQL_DATE_SUMMARY": {"get_recent_dialog", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_stats_by_date", "sql_search_messages"},
-    "HYBRID": {"get_recent_dialog", "rag_search", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_stats_by_date", "sql_search_messages"},
+    "SQL_DATE_SUMMARY": {"get_recent_dialog", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date", "sql_stats_by_date", "sql_search_messages"},
+    "HYBRID": {"get_recent_dialog", "rag_search", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date", "sql_stats_by_date", "sql_search_messages"},
     "COMMAND": set(),
 }
 
@@ -485,6 +548,27 @@ async def execute_plan(
                     chat_id=chat_id,
                     resolved=resolved,
                     chat_query=chat_query,
+                    chat_types=chat_types,
+                    max_rows=max_rows,
+                )
+                ctx.messages.extend(msgs)
+                ctx.tool_runs.append(ToolRun(name=name, ok=True, meta=meta))
+                continue
+
+            if name == "sql_messages_by_folder_and_date":
+                if not resolved:
+                    raise ValueError("time_range required")
+                scope = PlanScope(tc.args.get("scope", plan.scope.value))
+                chat_types = tc.args.get("chat_types", plan.chat_types)
+                if chat_types:
+                    chat_types = [PlanChatType(x) for x in chat_types]
+                max_rows = int(tc.args.get("max_rows", 1500))
+                folder = str(tc.args.get("folder") or "")
+                msgs, meta = await tool_sql_messages_by_folder_and_date(
+                    scope=scope,
+                    chat_id=chat_id,
+                    resolved=resolved,
+                    folder=folder,
                     chat_types=chat_types,
                     max_rows=max_rows,
                 )
