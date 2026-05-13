@@ -40,14 +40,25 @@ async def _llm_respond(msg: Message, question: str | None = None) -> None:
     except RuntimeError as exc:
         err = str(exc)
         logger.error("LLM error chat=%s: %s", msg.chat.id, err)
-        if "rate-limited" in err or "429" in err:
-            await thinking.edit_text("⚠️ Все токены Gemini на cooldown. Подожди минуту и попробуй снова.")
-        elif "No Gemini tokens" in err:
-            await thinking.edit_text("⚠️ Нет активных токенов Gemini. Добавь на дашборде.")
-        elif "HTTP" in err:
-            await thinking.edit_text(f"⚠️ Ошибка API Gemini: <code>{err[:150]}</code>")
-        elif "network" in err:
-            await thinking.edit_text("⚠️ Нет соединения с Gemini API. Проверь сеть.")
+        lower = err.lower()
+        if "deepseek" in lower:
+            if "no active deepseek token" in lower:
+                await thinking.edit_text("⚠️ Нет активных токенов DeepSeek с capability chat. Проверь в Настройки → API токены.")
+            elif "rate-limited" in lower or "429" in lower:
+                await thinking.edit_text("⚠️ Все токены DeepSeek на cooldown. Подожди минуту и попробуй снова.")
+            else:
+                await thinking.edit_text(f"⚠️ Ошибка DeepSeek: <code>{err[:150]}</code>")
+        elif "no gemini tokens" in lower:
+            await thinking.edit_text(
+                "⚠️ Нет активных токенов Gemini для чата.\n"
+                "Если ты хочешь отвечать через DeepSeek — поставь <code>LLM_PROVIDER=deepseek</code> и перезапусти."
+            )
+        elif "rate-limited" in lower or "429" in lower:
+            await thinking.edit_text("⚠️ Все токены на cooldown (429). Подожди минуту и попробуй снова.")
+        elif "http" in lower:
+            await thinking.edit_text(f"⚠️ Ошибка API: <code>{err[:150]}</code>")
+        elif "network" in lower:
+            await thinking.edit_text("⚠️ Нет соединения с API. Проверь сеть.")
         else:
             await thinking.edit_text(f"❌ Неизвестная ошибка: <code>{err[:150]}</code>")
         return
