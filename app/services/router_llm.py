@@ -14,6 +14,7 @@ _BASE_ROUTER_PROMPT = (
     "Никакого текста вокруг JSON. "
     "Не вычисляй конкретные timestamps: используй time_range enum. "
     "Вход может содержать state (предыдущий план, краткое резюме retrieval и подсказку от grader) — используй state, чтобы улучшить план. "
+    "Твоя сильная сторона — переформулировка запроса для retrieval: подбирай 2–4 варианта (синонимы, транслит, RU/EN), а не один-единственный keyword. "
     "Если не уверен — задай clarify_question и используй стратегию INFO_ONLY."
 )
 
@@ -29,9 +30,15 @@ _ROUTER_POLICIES = (
     "4) Если пользователь просит ссылку/пруф/исходник — используй инструменты, которые возвращают link (sql_search_messages).\n"
     "5) Если в вопросе явно указан чат/человек и есть time_range — предпочитай sql_messages_by_chat_query_and_date, чтобы не тянуть лишнее.\n"
     "6) Если пользователь просит выборку/саммари по папке (folder) — используй sql_messages_by_folder_and_date.\n"
-    "7) Если вопрос про 'вчера/сегодня/неделю' и нужен конкретный факт/событие — сначала используй sql_search_messages_by_date по ключевым словам (например, 'веранде', 'veranda', 'фильм').\n"
-    "8) Если в запросе упоминается чат/папка/место, но непонятно какой именно чат нужен — сначала используй sql_find_chats, затем ограничь chat_ids.\n"
+    "7) Если вопрос про период и нужен конкретный факт/событие — используй sql_search_messages_by_date, но НЕ одним запросом: делай 2–4 tool-calls с разными query-variant.\n"
+    "   - добавляй синонимы (например: анонс/афиша/расписание; кино/фильм/сеанс; встреча/ивент/event)\n"
+    "   - добавляй RU/EN варианты и транслит (веранда/veranda)\n"
+    "   - добавляй 'якоря' формата (например: '📍', '🕖', 'вход', диапазон дат '11.05-17.05')\n"
+    "8) Если в запросе упоминается чат/папка/место, но непонятно какой именно чат нужен — сначала используй sql_find_chats.\n"
+    "   Если запрос может быть в RU, а чат назван в EN (или наоборот) — вызови sql_find_chats 2 раза с query-variant (например: 'веранда' и 'veranda').\n"
+    "   Если после sql_find_chats есть кандидаты — во втором шаге ограничь chat_ids выбранными кандидатами.\n"
     "9) Для стратегий SQL_DATE_SUMMARY и HYBRID ставь max_steps=2 и on_empty='RETRY', чтобы можно было сделать второй заход retrieval.\n"
+    "10) Не привязывайся к одному дню, если пользователь спрашивает про недельное расписание/афишу: пост часто публикуют накануне. Используй LAST_7_DAYS или более широкий EXPLICIT.\n"
 )
 
 
@@ -166,7 +173,33 @@ _FEWSHOTS: list[tuple[str, dict]] = [
             "tools": [
                 {"name": "get_recent_dialog", "args": {"limit": 20}},
                 {"name": "sql_find_chats", "args": {"limit": 8, "query": "Veranda", "chat_types": ["group", "supergroup", "channel"]}},
+                {"name": "sql_find_chats", "args": {"limit": 8, "query": "веранда", "chat_types": ["group", "supergroup", "channel"]}},
+                {"name": "sql_search_messages_by_date", "args": {"scope": "ALL_CHATS", "limit": 120, "query": "афиша", "chat_types": ["group", "supergroup", "channel"]}},
+                {"name": "sql_search_messages_by_date", "args": {"scope": "ALL_CHATS", "limit": 120, "query": "анонс", "chat_types": ["group", "supergroup", "channel"]}},
                 {"name": "sql_search_messages_by_date", "args": {"scope": "ALL_CHATS", "limit": 120, "query": "📍", "chat_types": ["group", "supergroup", "channel"]}},
+            ],
+            "time_range": "LAST_7_DAYS",
+            "scope": "ALL_CHATS",
+            "chat_types": ["group", "supergroup", "channel"],
+            "chat_ids": None,
+            "explicit_from": None,
+            "explicit_to": None,
+            "clarify_question": None,
+            "max_steps": 2,
+            "on_empty": "RETRY",
+        },
+    ),
+    (
+        "посмотри был где-то в группах анонс в понедельник со всеми событиями на веранде на неделю",
+        {
+            "strategy": "SQL_DATE_SUMMARY",
+            "tools": [
+                {"name": "get_recent_dialog", "args": {"limit": 20}},
+                {"name": "sql_find_chats", "args": {"limit": 10, "query": "veranda", "chat_types": ["group", "supergroup", "channel"]}},
+                {"name": "sql_find_chats", "args": {"limit": 10, "query": "веранда", "chat_types": ["group", "supergroup", "channel"]}},
+                {"name": "sql_search_messages_by_date", "args": {"scope": "ALL_CHATS", "limit": 150, "query": "афиша", "chat_types": ["group", "supergroup", "channel"]}},
+                {"name": "sql_search_messages_by_date", "args": {"scope": "ALL_CHATS", "limit": 150, "query": "распис", "chat_types": ["group", "supergroup", "channel"]}},
+                {"name": "sql_search_messages_by_date", "args": {"scope": "ALL_CHATS", "limit": 150, "query": "11.05-17.05", "chat_types": ["group", "supergroup", "channel"]}},
             ],
             "time_range": "LAST_7_DAYS",
             "scope": "ALL_CHATS",
