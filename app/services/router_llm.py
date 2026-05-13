@@ -17,6 +17,7 @@ _ROUTER_SYSTEM_PROMPT = (
     "Если просит 'только группы' — chat_types=['group','supergroup']. "
     "Если просит 'только каналы' — chat_types=['channel']. "
     "Если пользователь просит ссылку/пруф/исходник сообщения — используй sql_search_messages, и в ответе надо вернуть ссылку(и) из контекста. "
+    "Если запрос в форме 'о чем с <имя> говорили' — это почти всегда про личный чат: ставь chat_types=['private'] и scope=ALL_CHATS. "
     "Не вычисляй конкретные timestamps: используй time_range enum. "
     "Если не уверен — задай clarify_question и используй стратегию INFO_ONLY."
 )
@@ -60,6 +61,27 @@ _FEWSHOTS: list[tuple[str, dict]] = [
     ),
     (
         "Сводка за вчера только по личным чатам, без групп и каналов",
+        {
+            "strategy": "SQL_DATE_SUMMARY",
+            "tools": [
+                {"name": "get_recent_dialog", "args": {"limit": 20}},
+                {
+                    "name": "sql_messages_by_date",
+                    "args": {"scope": "ALL_CHATS", "max_rows": 1500, "chat_types": ["private"]},
+                },
+                {"name": "sql_stats_by_date", "args": {"scope": "ALL_CHATS", "chat_types": ["private"]}},
+            ],
+            "time_range": "YESTERDAY",
+            "scope": "ALL_CHATS",
+            "chat_types": ["private"],
+            "chat_ids": None,
+            "explicit_from": None,
+            "explicit_to": None,
+            "clarify_question": None,
+        },
+    ),
+    (
+        "О чем с Евочкой говорили вчера?",
         {
             "strategy": "SQL_DATE_SUMMARY",
             "tools": [
