@@ -45,6 +45,7 @@ _ROUTER_POLICIES = (
     "11) Не привязывайся к одному дню, если пользователь спрашивает про недельное расписание/афишу: пост часто публикуют накануне. Используй LAST_7_DAYS или более широкий EXPLICIT.\n"
     "12) Если пользователь просит 'последнее сообщение/крайний текст' в конкретном чате — используй sql_recent_messages_by_chat_query (limit 1..5) и не проси подтверждений.\n"
     "13) Не используй стратегию COMMAND в этом проекте. Если нужны уточнения — используй INFO_ONLY + clarify_question.\n"
+    "14) Если пользователь просит саммари/поиск по всей истории — используй time_range=ALL_TIME (но учитывай лимиты max_rows/limit и при необходимости проси уточнить период).\n"
 )
 
 
@@ -303,6 +304,29 @@ _FEWSHOTS: list[tuple[str, dict]] = [
                 {"name": "sql_stats_by_date", "args": {"scope": "ALL_CHATS", "chat_types": ["private"]}},
             ],
             "time_range": "LAST_7_DAYS",
+            "scope": "ALL_CHATS",
+            "chat_types": ["private"],
+            "chat_ids": None,
+            "explicit_from": None,
+            "explicit_to": None,
+            "clarify_question": None,
+            "max_steps": 2,
+            "on_empty": "RETRY",
+        },
+    ),
+    (
+        "Сделай саммари по всей истории чата с Евочкой",
+        {
+            "strategy": "SQL_DATE_SUMMARY",
+            "tools": [
+                {"name": "get_recent_dialog", "args": {"limit": 20}},
+                {
+                    "name": "sql_messages_by_chat_query_and_date",
+                    "args": {"scope": "ALL_CHATS", "max_rows": 2500, "chat_types": ["private"], "chat_query": "Евочка"},
+                },
+                {"name": "sql_stats_by_date", "args": {"scope": "ALL_CHATS", "chat_types": ["private"]}},
+            ],
+            "time_range": "ALL_TIME",
             "scope": "ALL_CHATS",
             "chat_types": ["private"],
             "chat_ids": None,
@@ -663,7 +687,7 @@ async def route_query(
         "schema_hint": {
             "strategy": "INFO_ONLY|RAG_SEMANTIC|SQL_DATE_SUMMARY|HYBRID|COMMAND",
             "tools": [{"name": "tool_name", "args": {"k": "v"}}],
-            "time_range": "NONE|YESTERDAY|TODAY|LAST_7_DAYS|EXPLICIT",
+            "time_range": "NONE|YESTERDAY|TODAY|LAST_7_DAYS|ALL_TIME|EXPLICIT",
             "scope": "CURRENT_CHAT|ALL_CHATS",
             "chat_types": ["private|group|supergroup|channel"],
             "chat_ids": [123],

@@ -92,6 +92,9 @@ def resolve_time_range(*, time_range: PlanTimeRange, tz: str, explicit_from: str
     elif time_range == PlanTimeRange.LAST_7_DAYS:
         start_local = datetime.combine(today_local - timedelta(days=6), time(0, 0), tzinfo=zone)
         end_local = datetime.combine(today_local + timedelta(days=1), time(0, 0), tzinfo=zone)
+    elif time_range == PlanTimeRange.ALL_TIME:
+        start_local = datetime(1970, 1, 1, 0, 0, tzinfo=zone)
+        end_local = now_local + timedelta(seconds=1)
     elif time_range == PlanTimeRange.EXPLICIT:
         if not explicit_from or not explicit_to:
             raise ValueError("explicit_from/explicit_to required")
