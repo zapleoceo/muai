@@ -28,6 +28,7 @@ _ROUTER_POLICIES = (
     "4) Если пользователь просит ссылку/пруф/исходник — используй инструменты, которые возвращают link (sql_search_messages).\n"
     "5) Если в вопросе явно указан чат/человек и есть time_range — предпочитай sql_messages_by_chat_query_and_date, чтобы не тянуть лишнее.\n"
     "6) Если пользователь просит выборку/саммари по папке (folder) — используй sql_messages_by_folder_and_date.\n"
+    "7) Если вопрос про 'вчера/сегодня/неделю' и нужен конкретный факт/событие — сначала используй sql_search_messages_by_date по ключевым словам (например, 'веранде', 'veranda', 'фильм').\n"
 )
 
 
@@ -47,6 +48,7 @@ def _router_tool_catalog() -> str:
         "- get_recent_dialog(chat_id, limit)\n"
         "- rag_search(scope, query, top_k)\n"
         "- sql_search_messages(scope, query, limit, chat_types?, chat_ids?)\n"
+        "- sql_search_messages_by_date(scope, time_range, query, limit, chat_types?, chat_ids?)\n"
         "- sql_messages_by_chat_query_and_date(scope, time_range, chat_query, max_rows, chat_types?)\n"
         "- sql_messages_by_folder_and_date(scope, time_range, folder, max_rows, chat_types?)\n"
         "- sql_messages_by_date(scope, time_range, explicit_from?, explicit_to?, max_rows, chat_types?, chat_ids?)\n"
@@ -85,6 +87,26 @@ _FEWSHOTS: list[tuple[str, dict]] = [
             "time_range": "YESTERDAY",
             "scope": "ALL_CHATS",
             "chat_types": None,
+            "chat_ids": None,
+            "explicit_from": None,
+            "explicit_to": None,
+            "clarify_question": None,
+        },
+    ),
+    (
+        "какой фильм вчера показывали на веранде ?",
+        {
+            "strategy": "SQL_DATE_SUMMARY",
+            "tools": [
+                {"name": "get_recent_dialog", "args": {"limit": 20}},
+                {
+                    "name": "sql_search_messages_by_date",
+                    "args": {"scope": "ALL_CHATS", "limit": 50, "chat_types": ["group", "supergroup"], "query": "Veranda"},
+                },
+            ],
+            "time_range": "YESTERDAY",
+            "scope": "ALL_CHATS",
+            "chat_types": ["group", "supergroup"],
             "chat_ids": None,
             "explicit_from": None,
             "explicit_to": None,
@@ -242,13 +264,13 @@ def _validate_plan_invariants(plan: Plan) -> None:
             raise ValueError("RAG_SEMANTIC требует rag_search")
 
     if plan.strategy.value == "SQL_DATE_SUMMARY":
-        if not any(n in tool_names for n in ("sql_messages_by_date", "sql_stats_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date")):
+        if not any(n in tool_names for n in ("sql_messages_by_date", "sql_stats_by_date", "sql_search_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date")):
             raise ValueError("SQL_DATE_SUMMARY требует SQL tool (messages/stats)")
 
     if plan.strategy.value == "HYBRID":
         if "rag_search" not in tool_names:
             raise ValueError("HYBRID требует rag_search")
-        if not any(n in tool_names for n in ("sql_messages_by_date", "sql_stats_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date")):
+        if not any(n in tool_names for n in ("sql_messages_by_date", "sql_stats_by_date", "sql_search_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date")):
             raise ValueError("HYBRID требует SQL tool (messages/stats)")
 
     if plan.strategy.value == "COMMAND":
