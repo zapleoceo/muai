@@ -16,7 +16,6 @@ jobs:
             "set -e; cd /var/www/tgbot; \
              GIT_SSH_COMMAND='ssh -i /root/.ssh/github_deploy -o StrictHostKeyChecking=no' git pull origin master; \
              docker compose build bot; \
-             docker compose run --rm bot python -c \"import asyncio\nfrom app.services.plan_executor import ensure_search_infra, ensure_chunk_schema\n\nasync def main():\n    await ensure_search_infra()\n    await ensure_chunk_schema()\n    print('schema OK')\n\nasyncio.run(main())\"; \
              docker compose stop bot || true; docker compose rm -f bot || true; \
              docker compose up -d --force-recreate bot; \
              docker compose ps; \

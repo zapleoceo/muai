@@ -45,26 +45,6 @@ async def run_deploy() -> None:
     prep_cmds = [
         ["git", "-C", "/var/www/tgbot", "pull", "origin", "master"],
         ["docker", "compose", "-f", _COMPOSE_FILE, "build", "bot"],
-        [
-            "docker",
-            "compose",
-            "-f",
-            _COMPOSE_FILE,
-            "run",
-            "--rm",
-            "bot",
-            "python",
-            "-c",
-            "import asyncio\n"
-            "from app.services.plan_executor import ensure_search_infra, ensure_chunk_schema\n"
-            "\n"
-            "async def main():\n"
-            "    await ensure_search_infra()\n"
-            "    await ensure_chunk_schema()\n"
-            "    print('schema OK')\n"
-            "\n"
-            "asyncio.run(main())\n",
-        ],
     ]
     for cmd in prep_cmds:
         proc = await asyncio.create_subprocess_exec(
