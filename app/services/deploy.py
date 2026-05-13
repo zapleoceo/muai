@@ -24,9 +24,15 @@ async def run_migration() -> None:
     proc = await asyncio.create_subprocess_exec(
         "python",
         "-c",
-        "import asyncio; from app.services.plan_executor import ensure_search_infra, ensure_chunk_schema; "
-        "async def main(): await ensure_search_infra(); await ensure_chunk_schema(); print('schema OK'); "
-        "asyncio.run(main())",
+        "import asyncio\n"
+        "from app.services.plan_executor import ensure_search_infra, ensure_chunk_schema\n"
+        "\n"
+        "async def main():\n"
+        "    await ensure_search_infra()\n"
+        "    await ensure_chunk_schema()\n"
+        "    print('schema OK')\n"
+        "\n"
+        "asyncio.run(main())\n",
         cwd="/app",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
@@ -49,9 +55,15 @@ async def run_deploy() -> None:
             "bot",
             "python",
             "-c",
-            "import asyncio; from app.services.plan_executor import ensure_search_infra, ensure_chunk_schema; "
-            "async def main(): await ensure_search_infra(); await ensure_chunk_schema(); print('schema OK'); "
-            "asyncio.run(main())",
+            "import asyncio\n"
+            "from app.services.plan_executor import ensure_search_infra, ensure_chunk_schema\n"
+            "\n"
+            "async def main():\n"
+            "    await ensure_search_infra()\n"
+            "    await ensure_chunk_schema()\n"
+            "    print('schema OK')\n"
+            "\n"
+            "asyncio.run(main())\n",
         ],
     ]
     for cmd in prep_cmds:
