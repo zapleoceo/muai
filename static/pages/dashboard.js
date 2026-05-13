@@ -46,13 +46,21 @@ export async function loadStats() {
   `;
 
   const daily = d.daily;
-  const maxD = Math.max(...daily.map(x => x.count), 1);
-  document.getElementById('daily-chart').innerHTML = daily.map(x => `
-    <div class="day-col">
-      <div class="day-bar" style="height:${Math.round(x.count / maxD * 70) + 2}px" title="${x.count}"></div>
-      <div class="day-label">${x.day.slice(5)}</div>
-    </div>
-  `).join('');
+  const daily7 = (daily || []).slice(-7);
+  const maxD = Math.max(...daily7.map(x => x.count), 1);
+  const MAX_BAR_PX = 34;
+  const MIN_BAR_PX = 3;
+  document.getElementById('daily-chart').innerHTML = daily7.map(x => {
+    const day = String(x.day ?? '').split('-').pop() || '';
+    const h = Math.round(x.count / maxD * MAX_BAR_PX);
+    const barPx = Math.max(MIN_BAR_PX, h);
+    return `
+      <div class="day-col" title="${x.count}">
+        <div class="day-bar" style="height:${barPx}px"></div>
+        <div class="day-label">${day}</div>
+      </div>
+    `;
+  }).join('');
 
   const maxC = Math.max(...d.top_chats.map(x => x.count), 1);
   document.getElementById('top-chats').innerHTML = d.top_chats.map(x => `
