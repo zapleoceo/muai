@@ -1,5 +1,6 @@
 import logging
 from contextlib import asynccontextmanager
+import asyncio
 
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
@@ -113,8 +114,19 @@ async def webhook(
     if settings.webhook_secret and x_telegram_bot_api_secret_token != settings.webhook_secret:
         raise HTTPException(status_code=403, detail="Invalid secret token")
     body = await request.body()
-    update = Update.model_validate_json(body)
-    await dp.feed_update(bot, update)
+    try:
+        update = Update.model_validate_json(body)
+    except Exception:
+        logger.exception("Invalid Telegram update payload")
+        return Response(status_code=200)
+
+    async def _process() -> None:
+        try:
+            await dp.feed_update(bot, update)
+        except Exception:
+            logger.exception("Failed to process update_id=%s", getattr(update, "update_id", None))
+
+    asyncio.create_task(_process())
     return Response(status_code=200)
 
 

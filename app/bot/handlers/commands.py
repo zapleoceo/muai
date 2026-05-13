@@ -22,6 +22,8 @@ async def cmd_start(msg: Message) -> None:
 
 @router.message(Command("ai"))
 async def cmd_ai(msg: Message, bot: Bot) -> None:
-    await ingest_aiogram_incoming(msg)
+    inserted = await ingest_aiogram_incoming(msg)
+    if not inserted:
+        return
     question = (msg.text or "").partition(" ")[2].strip() or None
     await _llm_respond(msg, question=question)

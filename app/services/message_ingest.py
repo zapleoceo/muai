@@ -24,7 +24,7 @@ def _aiogram_media_info(msg: AiogramMessage) -> tuple[str | None, str | None]:
     return None, None
 
 
-async def ingest_aiogram_incoming(msg: AiogramMessage) -> None:
+async def ingest_aiogram_incoming(msg: AiogramMessage) -> bool:
     media_type, file_id = _aiogram_media_info(msg)
     user = msg.from_user
     date_utc = datetime.fromtimestamp(msg.date.timestamp(), tz=timezone.utc) if msg.date else None
@@ -35,7 +35,7 @@ async def ingest_aiogram_incoming(msg: AiogramMessage) -> None:
         await repo.upsert_chat(msg.chat)
         if user:
             await repo.upsert_user(user)
-        await repo.save_message(
+        saved = await repo.save_message(
             chat_id=msg.chat.id,
             user_id=user.id if user else None,
             telegram_msg_id=msg.message_id,
@@ -50,6 +50,7 @@ async def ingest_aiogram_incoming(msg: AiogramMessage) -> None:
             dialog_key=dialog_key,
         )
         await session.commit()
+    return saved is not None
 
 
 async def ingest_aiogram_outgoing(*, chat_id: int, telegram_msg_id: int, text: str, dialog_key: str) -> None:

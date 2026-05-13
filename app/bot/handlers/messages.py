@@ -105,14 +105,17 @@ async def on_feedback(cb: CallbackQuery) -> None:
 @router.message()
 async def handle_message(msg: Message, bot: Bot) -> None:
     try:
-        await ingest_aiogram_incoming(msg)
+        inserted = await ingest_aiogram_incoming(msg)
     except Exception:
         logger.exception("Failed to save message chat_id=%s msg_id=%s", msg.chat.id, msg.message_id)
+        inserted = True
 
     # Auto-reply in private chats only; groups use /ai
     if msg.chat.type != ChatType.PRIVATE:
         return
     if not (msg.text or msg.caption):
+        return
+    if not inserted:
         return
 
     await _llm_respond(msg, question=msg.text or msg.caption)
