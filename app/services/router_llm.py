@@ -338,6 +338,29 @@ _FEWSHOTS: list[tuple[str, dict]] = [
         },
     ),
     (
+        "Проанализируй всю историю чата с евочкой",
+        {
+            "strategy": "SQL_DATE_SUMMARY",
+            "tools": [
+                {"name": "get_recent_dialog", "args": {"limit": 20}},
+                {
+                    "name": "sql_messages_by_chat_query_and_date",
+                    "args": {"scope": "ALL_CHATS", "max_rows": 2500, "chat_types": ["private"], "chat_query": "Евочка"},
+                },
+                {"name": "sql_stats_by_date", "args": {"scope": "ALL_CHATS", "chat_types": ["private"]}},
+            ],
+            "time_range": "ALL_TIME",
+            "scope": "ALL_CHATS",
+            "chat_types": ["private"],
+            "chat_ids": None,
+            "explicit_from": None,
+            "explicit_to": None,
+            "clarify_question": None,
+            "max_steps": 2,
+            "on_empty": "RETRY",
+        },
+    ),
+    (
         "Дай ссылку на это сообщение",
         {
             "strategy": "HYBRID",

@@ -140,7 +140,7 @@ async def tool_get_recent_dialog(*, chat_id: int, limit: int) -> tuple[list[dict
                 "message_id": int(m.id),
                 "telegram_msg_id": int(m.telegram_msg_id) if m.telegram_msg_id is not None else None,
                 "direction": m.direction,
-                "role": "assistant" if m.direction == "out" else "user",
+                "role": "me" if m.direction == "out" else "them",
                 "text": m.text or m.caption or f"[{m.media_type or 'media'}]",
                 "date_utc": m.date_utc.isoformat() if m.date_utc else None,
                 "link": link,
@@ -319,7 +319,7 @@ async def tool_sql_search_messages(
                 "message_id": int(m.id),
                 "telegram_msg_id": int(m.telegram_msg_id) if m.telegram_msg_id is not None else None,
                 "direction": m.direction,
-                "role": "assistant" if m.direction == "out" else "user",
+                "role": "me" if m.direction == "out" else "them",
                 "text": m.text or m.caption or f"[{m.media_type or 'media'}]",
                 "date_utc": m.date_utc.isoformat() if m.date_utc else None,
                 "link": build_message_link(
@@ -380,7 +380,7 @@ async def tool_sql_search_messages_by_date(
                 "message_id": int(m.id),
                 "telegram_msg_id": int(m.telegram_msg_id) if m.telegram_msg_id is not None else None,
                 "direction": m.direction,
-                "role": "assistant" if m.direction == "out" else "user",
+                "role": "me" if m.direction == "out" else "them",
                 "text": m.text or m.caption or f"[{m.media_type or 'media'}]",
                 "date_utc": m.date_utc.isoformat() if m.date_utc else None,
                 "link": build_message_link(
@@ -459,7 +459,7 @@ async def tool_sql_recent_messages_by_chat_query(
                 "message_id": int(m.id),
                 "telegram_msg_id": int(m.telegram_msg_id) if m.telegram_msg_id is not None else None,
                 "direction": m.direction,
-                "role": "assistant" if m.direction == "out" else "user",
+                "role": "me" if m.direction == "out" else "them",
                 "text": m.text or m.caption or f"[{m.media_type or 'media'}]",
                 "date_utc": m.date_utc.isoformat() if m.date_utc else None,
                 "link": build_message_link(
@@ -630,7 +630,7 @@ async def tool_sql_lex_search_messages(
                 "message_id": int(r.message_id),
                 "telegram_msg_id": int(r.telegram_msg_id) if r.telegram_msg_id is not None else None,
                 "direction": r.direction,
-                "role": "assistant" if r.direction == "out" else "user",
+                "role": "me" if r.direction == "out" else "them",
                 "text": msg_text,
                 "date_utc": r.date_utc.isoformat() if r.date_utc else None,
                 "link": build_message_link(
@@ -691,7 +691,7 @@ async def tool_sql_message_by_tg_ref(
                 "message_id": int(m.id),
                 "telegram_msg_id": int(m.telegram_msg_id) if m.telegram_msg_id is not None else None,
                 "direction": m.direction,
-                "role": "assistant" if m.direction == "out" else "user",
+                "role": "me" if m.direction == "out" else "them",
                 "text": m.text or m.caption or f"[{m.media_type or 'media'}]",
                 "date_utc": m.date_utc.isoformat() if m.date_utc else None,
                 "link": build_message_link(
@@ -742,7 +742,7 @@ async def tool_sql_messages_by_chat_query_and_date(
                 "message_id": int(m.id),
                 "telegram_msg_id": int(m.telegram_msg_id) if m.telegram_msg_id is not None else None,
                 "direction": m.direction,
-                "role": "assistant" if m.direction == "out" else "user",
+                "role": "me" if m.direction == "out" else "them",
                 "text": m.text or m.caption or f"[{m.media_type or 'media'}]",
                 "date_utc": m.date_utc.isoformat() if m.date_utc else None,
                 "link": build_message_link(
@@ -805,7 +805,7 @@ async def tool_sql_messages_by_folder_and_date(
                 "message_id": int(m.id),
                 "telegram_msg_id": int(m.telegram_msg_id) if m.telegram_msg_id is not None else None,
                 "direction": m.direction,
-                "role": "assistant" if m.direction == "out" else "user",
+                "role": "me" if m.direction == "out" else "them",
                 "text": m.text or m.caption or f"[{m.media_type or 'media'}]",
                 "date_utc": m.date_utc.isoformat() if m.date_utc else None,
                 "link": build_message_link(

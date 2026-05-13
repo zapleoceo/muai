@@ -1,4 +1,4 @@
-from app.services.answer_llm import answer_from_context
+from app.services.answer_llm import answer_from_context, summarize_large_history
 from app.services.answering_types import ReplyResult
 from app.services.interactions import create_interaction
 from app.services.plan_executor import execute_plan, tool_get_recent_dialog
@@ -90,7 +90,8 @@ async def run_answer_pipeline(
     if retrieved is None:
         retrieved = await execute_plan(plan=final_plan, chat_id=chat_id, query=query, timezone_name=timezone_name)
 
-    if len(retrieved.messages) > 35 or len(retrieved.chunks) > 25:
+    use_hier_summary = bool(final_plan.time_range.value == "ALL_TIME" and len(retrieved.messages) > 120)
+    if not use_hier_summary and (len(retrieved.messages) > 35 or len(retrieved.chunks) > 25):
         decision, rerank_raw = await rerank_context(
             query=query,
             candidate_messages=retrieved.messages,
@@ -111,7 +112,10 @@ async def run_answer_pipeline(
             retrieved.messages = []
             retrieved.chunks = []
 
-    text = await answer_from_context(query=query, plan=final_plan, ctx=retrieved)
+    if use_hier_summary:
+        text = await summarize_large_history(query=query, messages=retrieved.messages, language=language)
+    else:
+        text = await answer_from_context(query=query, plan=final_plan, ctx=retrieved)
 
     final_summary = {
         "messages": len(retrieved.messages),
