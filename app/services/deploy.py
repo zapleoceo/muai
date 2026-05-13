@@ -35,6 +35,7 @@ async def run_deploy() -> None:
     prep_cmds = [
         ["git", "-C", "/var/www/tgbot", "pull", "origin", "master"],
         ["docker", "compose", "-f", _COMPOSE_FILE, "build", "bot"],
+        ["docker", "compose", "-f", _COMPOSE_FILE, "run", "--rm", "bot", "python", "-c", "import psycopg2; print('psycopg2 OK')"],
         ["docker", "compose", "-f", _COMPOSE_FILE, "run", "--rm", "bot", "alembic", "upgrade", "head"],
     ]
     for cmd in prep_cmds:
