@@ -268,12 +268,12 @@ export function renderChats() {
       const topicToggle = topics.length
         ? `<button class=\"topic-toggle\" data-action=\"toggle-topics\" data-id=\"${c.id}\" title=\"${topics.length} веток\">▶</button> ` : '';
       const tgLink = c.username ? `https://t.me/${c.username}` : null;
-      const avatarImg = `<img src=\"/api/admin/chats/${c.id}/avatar\" class=\"chat-avatar\" onclick=\"showAvatar(this.src,'${esc(c.title)}')\" onerror=\"this.style.display='none'\">`;
+      const avatarImg = '';
       const titleEl = tgLink
         ? `<a href=\"${tgLink}\" target=\"_blank\" rel=\"noopener\" class=\"chat-title-link\" title=\"${esc(c.title)}\">${esc(c.title)}</a>`
         : `<span class=\"chat-title-text\" title=\"${esc(c.title)}\">${esc(c.title)}</span>`;
       rows.push(`<tr>
-        <td class=\"avatar-cell\">${avatarImg}</td>
+        <td class=\"avatar-cell\"></td>
         <td><span class=\"chat-type-badge\">${esc(c.type)}</span></td>
         <td class=\"chat-name-cell\">${topicToggle}${titleEl}${uname}</td>
         <td style=\"color:#64748b;font-size:0.78rem\">${c.folder ? esc(c.folder) : '<span style=\"color:#334155\">—</span>'}</td>
