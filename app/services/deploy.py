@@ -25,7 +25,8 @@ async def run_migration() -> None:
         "python",
         "-c",
         "import asyncio; from app.services.plan_executor import ensure_search_infra, ensure_chunk_schema; "
-        "asyncio.run(ensure_search_infra()); asyncio.run(ensure_chunk_schema()); print('schema OK')",
+        "async def main(): await ensure_search_infra(); await ensure_chunk_schema(); print('schema OK'); "
+        "asyncio.run(main())",
         cwd="/app",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
@@ -49,7 +50,8 @@ async def run_deploy() -> None:
             "python",
             "-c",
             "import asyncio; from app.services.plan_executor import ensure_search_infra, ensure_chunk_schema; "
-            "asyncio.run(ensure_search_infra()); asyncio.run(ensure_chunk_schema()); print('schema OK')",
+            "async def main(): await ensure_search_infra(); await ensure_chunk_schema(); print('schema OK'); "
+            "asyncio.run(main())",
         ],
     ]
     for cmd in prep_cmds:
