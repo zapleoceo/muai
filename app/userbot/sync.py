@@ -2,6 +2,7 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 from telethon import TelegramClient
 
@@ -70,15 +71,18 @@ async def sync_history(client: TelegramClient, days: int = 2) -> None:
     chats_done = 0
     messages_total = 0
     skipped = 0
+    cfg_cache: dict[int, ChatSyncConfig] = {}
+    async with AsyncSessionLocal() as session:
+        rows = (await session.execute(
+            select(ChatSyncConfig)
+        )).scalars().all()
+        cfg_cache = {int(c.chat_id): c for c in rows}
 
     try:
         async for dialog in client.iter_dialogs():
             ctype = chat_type(dialog.entity)
             ctitle = chat_title(dialog.entity) or str(dialog.id)
             chat_id = dialog.id
-
-            settings = await get_global_settings()
-            default_depth = settings.get("default_depth_days", days)
 
             if not await type_allowed(ctype, settings):
                 logger.debug("Sync: skip %s (type=%s not allowed)", ctitle, ctype)
@@ -88,7 +92,7 @@ async def sync_history(client: TelegramClient, days: int = 2) -> None:
                 logger.info("Sync: skip %s (blacklisted)", ctitle)
                 continue
 
-            cfg = await get_chat_config(chat_id)
+            cfg = cfg_cache.get(int(chat_id))
             if cfg is None:
                 await create_pending(chat_id)
                 logger.info("Sync: new chat queued as pending: %s", ctitle)

@@ -9,6 +9,7 @@ let _sortCol = 'title';
 let _sortDir = 1;
 let _page = 0;
 let _syncPollTimer = null;
+let _queueIds = new Set();
 
 export function initChatsPage() {
   document.addEventListener('click', async e => {
@@ -213,7 +214,8 @@ function updateSortHeaders() {
 
 function getVisible() {
   let chats = _allChats;
-  if (_filter !== 'all') chats = chats.filter(c => c.status === _filter);
+  if (_filter === 'queue') chats = chats.filter(c => _queueIds.has(c.id));
+  else if (_filter !== 'all') chats = chats.filter(c => c.status === _filter);
   if (_folderFilter) chats = chats.filter(c => (c.folder || '') === _folderFilter);
   if (_search) {
     chats = chats.filter(c =>
@@ -353,6 +355,15 @@ export async function pollSync() {
     }
     if (qr.ok) {
       const q = await qr.json();
+      _queueIds = new Set((q.queue || []).map(x => x.id).filter(Boolean));
+      const qBtn = document.querySelector('.filter-btn[data-filter="queue"]');
+      if (qBtn) {
+        const n = (q.queue || []).length;
+        qBtn.textContent = n ? `Ожидают (${n})` : 'Ожидают';
+        const titles = (q.queue || []).slice(0, 12).map(c => c.title).filter(Boolean);
+        qBtn.title = titles.length ? (`Очередь синхронизации:\n- ` + titles.join('\n- ')) : 'Очередь синхронизации пуста';
+      }
+      if (_filter === 'queue') renderChats();
       const wrap = document.getElementById('sync-queue-wrap');
       const list = document.getElementById('sync-queue-list');
       const cnt = document.getElementById('sync-queue-count');

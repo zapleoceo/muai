@@ -14,26 +14,52 @@ async def stop_sync(_uid: int = Depends(require_owner)) -> dict:
 
 @router.get("/admin/sync/queue")
 async def sync_queue(_uid: int = Depends(require_owner)) -> dict:
+    from datetime import datetime, timedelta, timezone
     from sqlalchemy import select
     from app.db.database import AsyncSessionLocal
     from app.db.models import Chat, ChatSyncConfig
+    from app.services.chat_settings import get_global_settings, is_blacklisted, type_allowed
     mgr = get_sync_manager()
+    settings = await get_global_settings()
     async with AsyncSessionLocal() as session:
         rows = (await session.execute(
-            select(Chat.title, Chat.type, ChatSyncConfig.depth_days)
+            select(Chat.id, Chat.title, Chat.username, Chat.type, ChatSyncConfig.depth_days, ChatSyncConfig.last_synced_at)
             .join(ChatSyncConfig, Chat.id == ChatSyncConfig.chat_id)
             .where(ChatSyncConfig.enabled.is_(True))
-            .order_by(Chat.title)
+            .order_by(ChatSyncConfig.last_synced_at.asc().nullsfirst(), Chat.title.asc().nulls_last(), Chat.id.asc())
         )).all()
     current = mgr.status.current_chat
+    now = datetime.now(tz=timezone.utc)
+    queue = []
+    excluded = 0
+    for r in rows:
+        if not await type_allowed(r.type, settings):
+            excluded += 1
+            continue
+        if await is_blacklisted(int(r.id), r.username, settings):
+            excluded += 1
+            continue
+        last = r.last_synced_at
+        if last and last.tzinfo is None:
+            last = last.replace(tzinfo=timezone.utc)
+        queue.append(
+            {
+                "id": int(r.id),
+                "title": r.title or "—",
+                "username": r.username,
+                "type": r.type,
+                "depth_days": r.depth_days,
+                "last_synced_at": r.last_synced_at.isoformat() if r.last_synced_at else None,
+                "active": (r.title == current),
+                "stale": True if (last is None) else ((now - last) > timedelta(minutes=10)),
+            }
+        )
     return {
         "running": mgr.status.running,
         "current_chat": current,
         "chats_done": mgr.status.chats_done,
-        "queue": [
-            {"title": r.title or "—", "type": r.type, "depth_days": r.depth_days, "active": (r.title == current)}
-            for r in rows
-        ],
+        "excluded": excluded,
+        "queue": queue,
     }
 
 
