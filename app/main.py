@@ -75,6 +75,8 @@ async def lifespan(app: FastAPI):
         await embedder_task
     except asyncio.CancelledError:
         pass
+    from app.services.sync_manager import get_sync_manager
+    await get_sync_manager().shutdown()
     from app.userbot.client import stop_userbot
     await stop_userbot()
     await bot.session.close()
@@ -115,4 +117,11 @@ async def webhook(
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok"}
+    from sqlalchemy import text
+    from app.db.database import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as session:
+            await session.execute(text("SELECT 1"))
+        return {"status": "ok", "db": "ok"}
+    except Exception:
+        raise HTTPException(status_code=503, detail="db unavailable")

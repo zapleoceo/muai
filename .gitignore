@@ -11,3 +11,5 @@ build/
 sessions/
 *.session
 *.session-journal
+_tools/
+.claude/settings.local.json

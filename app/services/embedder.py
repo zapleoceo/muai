@@ -15,6 +15,7 @@ _CHUNK_SIZE = 5      # messages per chunk
 _CHUNK_STEP = 3      # step (overlap = 2)
 _MIN_CHARS = 30
 _BATCH_DELAY = 0.5   # seconds between API calls
+_INSERT_BATCH = 25
 
 _embed_task: asyncio.Task | None = None
 
@@ -120,48 +121,70 @@ async def embed_chat(chat_id: int, chat_title: str, chat_type: str,
     if not rows:
         return 0
 
+    pending: list[dict] = []
     chunks_saved = 0
-    for i in range(0, len(rows), _CHUNK_STEP):
-        window = rows[i: i + _CHUNK_SIZE]
-        chunk_text = _format_chunk(window, chat_title, chat_type, chat_id, chat_username)
-        if len(chunk_text) < _MIN_CHARS:
-            continue
+    insert_sql = text(
+        "INSERT INTO message_chunks "
+        "(chat_id, chat_title, chunk_text, embedding, msg_date_from, msg_date_to, "
+        "max_msg_id, min_tg_msg_id, max_tg_msg_id, chat_username) "
+        "VALUES (:cid, :title, :chunk, CAST(:emb AS vector), :df, :dt, "
+        ":mid, :min_tg, :max_tg, :uname)"
+    )
 
-        date_from = window[0][0].date_utc
-        date_to = window[-1][0].date_utc
-        max_msg_id = max(r[0].id for r in window)
-        tg_ids = [r[0].telegram_msg_id for r in window if r[0].telegram_msg_id]
-        min_tg = min(tg_ids) if tg_ids else None
-        max_tg = max(tg_ids) if tg_ids else None
+    async with AsyncSessionLocal() as session:
+        for i in range(0, len(rows), _CHUNK_STEP):
+            window = rows[i: i + _CHUNK_SIZE]
+            chunk_text = _format_chunk(window, chat_title, chat_type, chat_id, chat_username)
+            if len(chunk_text) < _MIN_CHARS:
+                continue
 
-        try:
-            vector = await embed_text(chunk_text)
-        except RuntimeError as exc:
-            logger.warning("Embed failed chat=%d chunk=%d: %s", chat_id, i, exc)
-            ts = datetime.now().strftime("%H:%M:%S")
-            _status.errors.append(f"[{ts}] {chat_title}: {exc}")
-            await asyncio.sleep(5)
-            continue
+            date_from = window[0][0].date_utc
+            date_to = window[-1][0].date_utc
+            max_msg_id = max(r[0].id for r in window)
+            tg_ids = [r[0].telegram_msg_id for r in window if r[0].telegram_msg_id]
+            min_tg = min(tg_ids) if tg_ids else None
+            max_tg = max(tg_ids) if tg_ids else None
 
-        vec_str = "[" + ",".join(str(x) for x in vector) + "]"
-        async with AsyncSessionLocal() as session:
-            await session.execute(
-                text(
-                    "INSERT INTO message_chunks "
-                    "(chat_id, chat_title, chunk_text, embedding, msg_date_from, msg_date_to, "
-                    "max_msg_id, min_tg_msg_id, max_tg_msg_id, chat_username) "
-                    "VALUES (:cid, :title, :chunk, CAST(:emb AS vector), :df, :dt, "
-                    ":mid, :min_tg, :max_tg, :uname)"
-                ),
-                {"cid": chat_id, "title": chat_title, "chunk": chunk_text,
-                 "emb": vec_str, "df": date_from, "dt": date_to, "mid": max_msg_id,
-                 "min_tg": min_tg, "max_tg": max_tg, "uname": chat_username},
+            try:
+                vector = await embed_text(chunk_text)
+            except RuntimeError as exc:
+                logger.warning("Embed failed chat=%d chunk=%d: %s", chat_id, i, exc)
+                ts = datetime.now().strftime("%H:%M:%S")
+                _status.errors.append(f"[{ts}] {chat_title}: {exc}")
+                await asyncio.sleep(5)
+                continue
+
+            vec_str = "[" + ",".join(str(x) for x in vector) + "]"
+            pending.append(
+                {
+                    "cid": chat_id,
+                    "title": chat_title,
+                    "chunk": chunk_text,
+                    "emb": vec_str,
+                    "df": date_from,
+                    "dt": date_to,
+                    "mid": max_msg_id,
+                    "min_tg": min_tg,
+                    "max_tg": max_tg,
+                    "uname": chat_username,
+                }
             )
-            await session.commit()
 
-        chunks_saved += 1
-        _status.chunks_added += 1
-        await asyncio.sleep(_BATCH_DELAY)
+            if len(pending) >= _INSERT_BATCH:
+                await session.execute(insert_sql, pending)
+                await session.commit()
+                chunks_saved += len(pending)
+                _status.chunks_added += len(pending)
+                pending.clear()
+
+            await asyncio.sleep(_BATCH_DELAY)
+
+        if pending:
+            await session.execute(insert_sql, pending)
+            await session.commit()
+            chunks_saved += len(pending)
+            _status.chunks_added += len(pending)
+            pending.clear()
 
     return chunks_saved
 

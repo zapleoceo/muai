@@ -26,6 +26,9 @@ def _system_prompt() -> str:
     return f"{_SYSTEM_PROMPT_BASE}\nСегодняшняя дата: {today} (UTC)."
 
 _SIMILARITY_THRESHOLD = 12   # return up to N chunks; pgvector already ranks by cosine
+_MAX_RAG_CHARS = 12_000
+_MAX_RAG_CHUNKS = 8
+_MAX_RAG_CHUNK_CHARS = 2_500
 
 
 async def _retrieve_context(question: str) -> str | None:
@@ -41,9 +44,25 @@ async def _retrieve_context(question: str) -> str | None:
     if not chunks:
         return None
 
-    parts = ["[Релевантные фрагменты из Telegram-истории владельца]"]
+    header = "[Релевантные фрагменты из Telegram-истории владельца]"
+    parts = [header]
+    total = len(header)
+    added = 0
     for row in chunks:
-        parts.append(row.chunk_text)
+        if added >= _MAX_RAG_CHUNKS:
+            break
+        chunk = row.chunk_text or ""
+        if len(chunk) > _MAX_RAG_CHUNK_CHARS:
+            chunk = chunk[:_MAX_RAG_CHUNK_CHARS].rstrip() + "…"
+        projected = total + 2 + len(chunk)
+        if projected > _MAX_RAG_CHARS:
+            break
+        parts.append(chunk)
+        total = projected
+        added += 1
+
+    if added == 0:
+        return None
     return "\n\n".join(parts)
 
 

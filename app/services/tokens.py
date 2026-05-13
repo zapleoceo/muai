@@ -11,17 +11,17 @@ from app.llm.capabilities import effective_capabilities
 
 logger = logging.getLogger(__name__)
 
-_COOLDOWN_RATE_LIMIT = 60    # seconds on HTTP 429
-_COOLDOWN_ERROR = 300        # 5 min on repeated errors
-GEMINI_DAILY_LIMIT = 1500    # free Gemini tier requests/day per key
+_COOLDOWN_RATE_LIMIT = 60
+_COOLDOWN_ERROR = 300
+GEMINI_DAILY_LIMIT = 1500
 
 
 @dataclass
 class _Slot:
     db_id: int
+    provider: str
     value: str
     label: str
-    provider: str
     capabilities: set[str]
     daily_limit: int
     cooldown_until: datetime | None = field(default=None)
@@ -34,7 +34,10 @@ class _Slot:
             return False
         if not self.cooldown_until:
             return True
-        return datetime.now(tz=timezone.utc) >= self.cooldown_until
+        if datetime.now(tz=timezone.utc) >= self.cooldown_until:
+            self.cooldown_until = None
+            return True
+        return False
 
     def increment(self) -> None:
         self._reset_if_new_day()
@@ -67,12 +70,13 @@ class TokenManager:
 
     # ── lifecycle ─────────────────────────────────────────────────────────────
 
-    async def load(self, provider: str | None = None) -> None:
+    async def load(self) -> None:
         async with AsyncSessionLocal() as session:
-            q = select(ApiToken).where(ApiToken.is_active.is_(True)).order_by(ApiToken.provider, ApiToken.id)
-            if provider:
-                q = q.where(ApiToken.provider == provider)
-            rows = (await session.execute(q)).scalars().all()
+            rows = (await session.execute(
+                select(ApiToken)
+                .where(ApiToken.is_active.is_(True))
+                .order_by(ApiToken.provider, ApiToken.id)
+            )).scalars().all()
         async with self._lock:
             existing = self._slots_by_id
             next_slots: dict[int, _Slot] = {}
@@ -83,9 +87,9 @@ class TokenManager:
                 prev = existing.get(r.id)
                 next_slots[r.id] = _Slot(
                     db_id=r.id,
+                    provider=r.provider,
                     value=r.token,
                     label=r.label or "",
-                    provider=prov,
                     capabilities=caps,
                     daily_limit=self._daily_limit_for(prov),
                     cooldown_until=prev.cooldown_until if prev else None,
@@ -97,7 +101,6 @@ class TokenManager:
         logger.info("TokenManager: %d active token(s)", len(self._slots_by_id))
 
     async def seed_from_env(self, api_key: str, provider: str = "gemini") -> None:
-        """Insert the .env key into DB if no tokens exist yet."""
         if not api_key:
             return
         async with AsyncSessionLocal() as session:
@@ -130,7 +133,6 @@ class TokenManager:
                     self._rr_idx[key] = (idx + 1) % len(available)
                     slot.increment()
                     return TokenLease(id=slot.db_id, provider=slot.provider, token=slot.value)
-                # All on cooldown — find how long until the soonest recovers
                 now = datetime.now(tz=timezone.utc)
                 soonest = min(
                     (s for s in slots if s.cooldown_until),
@@ -138,12 +140,11 @@ class TokenManager:
                     default=None,
                 )
                 if soonest is None:
-                    return None  # all daily-maxed, nothing to wait for
+                    return None
                 wait = (soonest.cooldown_until - now).total_seconds()
             if wait > 0:
                 logger.info("TokenManager: all tokens on cooldown, waiting %.1fs", wait)
                 await asyncio.sleep(wait)
-            # loop back and try again
 
     async def on_rate_limit(self, token_id: int) -> None:
         async with self._lock:
@@ -161,7 +162,7 @@ class TokenManager:
             slot.cooldown_until = datetime.now(tz=timezone.utc) + timedelta(seconds=_COOLDOWN_ERROR)
             logger.warning("TokenManager: %s on error cooldown (%ds)", slot.masked(), _COOLDOWN_ERROR)
 
-    # ── CRUD (called from API routes) ─────────────────────────────────────────
+    # ── CRUD ─────────────────────────────────────────────────────────────────
 
     async def add(self, token: str, label: str, provider: str = "gemini", capabilities: list[str] | None = None) -> ApiToken:
         async with AsyncSessionLocal() as session:
@@ -200,10 +201,9 @@ class TokenManager:
                 q = q.where(ApiToken.provider == provider)
             return list((await session.execute(q)).scalars().all())
 
-    # ── status (for dashboard) ────────────────────────────────────────────────
+    # ── status ────────────────────────────────────────────────────────────────
 
     def slot_status(self) -> dict[int, dict]:
-        """Return {db_id: {status, requests_today, daily_limit}} from live in-memory state."""
         now = datetime.now(tz=timezone.utc)
         result = {}
         for s in self._slots_by_id.values():
@@ -211,12 +211,15 @@ class TokenManager:
             if s.cooldown_until and now < s.cooldown_until:
                 status = "cooldown"
             elif s.daily_limit > 0 and s.requests_today >= s.daily_limit:
+            elif s.daily_limit > 0 and s.requests_today >= s.daily_limit:
                 status = "daily_limit"
             else:
                 status = "active"
             result[s.db_id] = {
                 "status": status,
                 "requests_today": s.requests_today,
+                "daily_limit": s.daily_limit,
+                "capabilities": sorted(s.capabilities),
                 "daily_limit": s.daily_limit,
                 "capabilities": sorted(s.capabilities),
             }
@@ -228,8 +231,6 @@ class TokenManager:
             return GEMINI_DAILY_LIMIT
         return 0
 
-
-# ── singleton ─────────────────────────────────────────────────────────────────
 
 _manager: TokenManager | None = None
 

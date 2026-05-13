@@ -1,8 +1,8 @@
 import asyncio
 import json
 import logging
-import urllib.error
-import urllib.request
+
+import httpx
 
 from app.llm.base import LLMMessage, LLMProvider
 
@@ -31,37 +31,38 @@ class GeminiProvider(LLMProvider):
 
         body = self._build_body(messages, system_prompt)
 
-        for attempt in range(_MAX_RETRIES):
-            lease = await manager.next_token("chat", provider="gemini")
-            if not lease:
-                raise RuntimeError("No Gemini tokens configured. Add one at /api/admin/tokens.")
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+            for attempt in range(_MAX_RETRIES):
+                lease = await manager.next_token("chat", provider="gemini")
+                if not lease:
+                    raise RuntimeError("No Gemini tokens configured. Add one at /api/admin/tokens.")
 
-            url = f"{_BASE_URL}/{self._model}:generateContent?key={lease.token}"
-            req = urllib.request.Request(
-                url, data=body,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
-            try:
-                return await asyncio.get_event_loop().run_in_executor(None, self._call, req)
-            except urllib.error.HTTPError as exc:
-                if exc.code == 429:
+                url = f"{_BASE_URL}/{self._model}:generateContent?key={lease.token}"
+                try:
+                    resp = await client.post(url, content=body, headers={"Content-Type": "application/json"})
+                except (httpx.TransportError, asyncio.TimeoutError) as exc:
+                    await manager.on_error(lease.id)
+                    raise RuntimeError(f"Gemini network error: {str(exc)[:200]}") from exc
+
+                if resp.status_code == 429:
                     await manager.on_rate_limit(lease.id)
                     logger.warning("Gemini 429 on attempt %d, rotating token", attempt + 1)
                     if attempt == _MAX_RETRIES - 1:
-                        raise RuntimeError("All Gemini tokens rate-limited") from exc
-                else:
-                    body_text = exc.read().decode(errors="replace") if hasattr(exc, "read") else ""
+                        raise RuntimeError("All Gemini tokens rate-limited")
+                    continue
+
+                if resp.status_code >= 400:
                     await manager.on_error(lease.id)
-                    raise RuntimeError(f"Gemini HTTP {exc.code}: {body_text[:200]}") from exc
-            except urllib.error.URLError as exc:
-                await manager.on_error(lease.id)
-                raise RuntimeError(f"Gemini network error: {exc.reason}") from exc
-            except GeminiContentError:
-                raise
-            except Exception as exc:
-                await manager.on_error(lease.id)
-                raise RuntimeError(f"Gemini error: {exc}") from exc
+                    raise RuntimeError(f"Gemini HTTP {resp.status_code}: {resp.text[:200]}")
+
+                try:
+                    data = resp.json()
+                    return self._parse_response(data)
+                except GeminiContentError:
+                    raise
+                except Exception as exc:
+                    await manager.on_error(lease.id)
+                    raise RuntimeError(f"Gemini error: {str(exc)[:200]}") from exc
 
         raise RuntimeError("Gemini: exhausted retries")
 
@@ -77,10 +78,7 @@ class GeminiProvider(LLMProvider):
         return json.dumps(payload).encode()
 
     @staticmethod
-    def _call(req: urllib.request.Request) -> str:
-        with urllib.request.urlopen(req, timeout=60) as resp:
-            data = json.loads(resp.read())
-
+    def _parse_response(data: dict) -> str:
         # Prompt-level block
         feedback = data.get("promptFeedback", {})
         block_reason = feedback.get("blockReason")

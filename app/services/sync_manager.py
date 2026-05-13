@@ -36,6 +36,16 @@ class SyncManager:
             self._task.cancel()
             logger.info("SyncManager: global sync task cancelled")
 
+    async def shutdown(self) -> None:
+        task = self._task
+        if task and not task.done():
+            task.cancel()
+            logger.info("SyncManager: awaiting sync task cancellation")
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
     def set_task(self, task: asyncio.Task) -> None:
         self._task = task
 
