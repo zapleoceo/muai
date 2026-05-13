@@ -5,11 +5,13 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 
 from app.db.database import AsyncSessionLocal
+from app.db.models import Chat, ChatSyncConfig
 from app.db.repository import MessageRepo
 from app.llm.embedding import embed_texts
+from app.services.chat_sync_settings_service import ChatSyncSettingsService
 
 logger = logging.getLogger(__name__)
 
@@ -321,10 +323,48 @@ async def embed_all_chats() -> None:
     _status.errors = []
     logger.info("Embedder: starting pass")
 
+    settings_svc = ChatSyncSettingsService()
+    sync_settings = await settings_svc.get()
+
     async with AsyncSessionLocal() as session:
-        chats = await MessageRepo(session).list_all_chats()
+        pending_rows = (await session.execute(
+            text(
+                """
+                WITH lc AS (
+                    SELECT chat_id, MAX(max_msg_id) AS last_id
+                    FROM message_chunks
+                    GROUP BY chat_id
+                )
+                SELECT c.id AS chat_id, c.type AS type, c.title AS title, c.username AS username,
+                       COALESCE(cfg.enabled, false) AS enabled,
+                       COUNT(m.id) AS pending
+                FROM chats c
+                LEFT JOIN chat_sync_config cfg ON cfg.chat_id = c.id
+                LEFT JOIN lc ON lc.chat_id = c.id
+                JOIN messages m ON m.chat_id = c.id
+                WHERE (m.text IS NOT NULL OR m.caption IS NOT NULL)
+                  AND m.id > COALESCE(lc.last_id, 0)
+                GROUP BY c.id, c.type, c.title, c.username, cfg.enabled
+                ORDER BY pending DESC, c.title NULLS LAST, c.id ASC
+                """
+            )
+        )).fetchall()
+
+        chats: list[Chat] = []
+        for r in pending_rows:
+            chat = Chat(id=r.chat_id, type=r.type, title=r.title, username=r.username)
+            chat._embed_pending = int(r.pending or 0)  # type: ignore[attr-defined]
+            chat._embed_enabled = bool(r.enabled)      # type: ignore[attr-defined]
+            chats.append(chat)
 
     for chat in chats:
+        if not getattr(chat, "_embed_enabled", False):
+            continue
+        if settings_svc.is_blacklisted(int(chat.id), getattr(chat, "username", None), sync_settings):
+            continue
+        if not settings_svc.type_allowed(str(chat.type or ""), sync_settings):
+            continue
+
         _status.current_chat = chat.title or str(chat.id)
         try:
             n = await embed_chat(chat.id, chat.title or str(chat.id), chat.type or "unknown", chat.username)
