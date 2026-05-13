@@ -211,15 +211,12 @@ class TokenManager:
             if s.cooldown_until and now < s.cooldown_until:
                 status = "cooldown"
             elif s.daily_limit > 0 and s.requests_today >= s.daily_limit:
-            elif s.daily_limit > 0 and s.requests_today >= s.daily_limit:
                 status = "daily_limit"
             else:
                 status = "active"
             result[s.db_id] = {
                 "status": status,
                 "requests_today": s.requests_today,
-                "daily_limit": s.daily_limit,
-                "capabilities": sorted(s.capabilities),
                 "daily_limit": s.daily_limit,
                 "capabilities": sorted(s.capabilities),
             }
