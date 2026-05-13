@@ -7,20 +7,31 @@ from app.llm.factory import get_llm_provider
 from app.services.answering_types import Plan
 
 
-_ROUTER_SYSTEM_PROMPT = (
+_BASE_ROUTER_PROMPT = (
     "Ты RouterLLM для Telegram-ассистента. "
     "Твоя задача: выбрать стратегию ответа и список инструментов, "
     "вернуть только валидный JSON по схеме Plan. "
     "Никакого текста вокруг JSON. "
-    "Всегда добавляй get_recent_dialog(limit=20) для CURRENT_CHAT, если это не опасная команда. "
-    "Если пользователь просит 'только личные чаты' — ставь chat_types=['private'] и scope=ALL_CHATS. "
-    "Если просит 'только группы' — chat_types=['group','supergroup']. "
-    "Если просит 'только каналы' — chat_types=['channel']. "
-    "Если пользователь просит ссылку/пруф/исходник сообщения — используй sql_search_messages, и в ответе надо вернуть ссылку(и) из контекста. "
-    "Если запрос в форме 'о чем с <имя> говорили' — это почти всегда про личный чат: ставь chat_types=['private'] и scope=ALL_CHATS. "
     "Не вычисляй конкретные timestamps: используй time_range enum. "
     "Если не уверен — задай clarify_question и используй стратегию INFO_ONLY."
 )
+
+_ROUTER_POLICIES = (
+    "Правила:\n"
+    "1) Для большинства стратегий, кроме COMMAND, включай get_recent_dialog(limit=20) для CURRENT_CHAT.\n"
+    "2) Если пользователь явно ограничивает тип чатов:\n"
+    "   - только личные → chat_types=['private'], scope='ALL_CHATS'\n"
+    "   - только группы → chat_types=['group','supergroup'], scope='ALL_CHATS'\n"
+    "   - только каналы → chat_types=['channel'], scope='ALL_CHATS'\n"
+    "3) Если пользователь спрашивает 'о чём' с конкретным человеком/чатом — по умолчанию предполагай личный чат:\n"
+    "   chat_types=['private'], scope='ALL_CHATS'\n"
+    "4) Если пользователь просит ссылку/пруф/исходник — используй инструменты, которые возвращают link (sql_search_messages).\n"
+    "5) Если в вопросе явно указан чат/человек и есть time_range — предпочитай sql_messages_by_chat_query_and_date, чтобы не тянуть лишнее.\n"
+)
+
+
+def _router_system_prompt() -> str:
+    return _BASE_ROUTER_PROMPT + "\n\n" + _ROUTER_POLICIES
 
 
 def _router_tool_catalog() -> str:
@@ -35,6 +46,7 @@ def _router_tool_catalog() -> str:
         "- get_recent_dialog(chat_id, limit)\n"
         "- rag_search(scope, query, top_k)\n"
         "- sql_search_messages(scope, query, limit, chat_types?, chat_ids?)\n"
+        "- sql_messages_by_chat_query_and_date(scope, time_range, chat_query, max_rows, chat_types?)\n"
         "- sql_messages_by_date(scope, time_range, explicit_from?, explicit_to?, max_rows, chat_types?, chat_ids?)\n"
         "- sql_stats_by_date(scope, time_range, explicit_from?, explicit_to?, chat_types?, chat_ids?)\n"
     )
@@ -87,8 +99,8 @@ _FEWSHOTS: list[tuple[str, dict]] = [
             "tools": [
                 {"name": "get_recent_dialog", "args": {"limit": 20}},
                 {
-                    "name": "sql_messages_by_date",
-                    "args": {"scope": "ALL_CHATS", "max_rows": 1500, "chat_types": ["private"]},
+                    "name": "sql_messages_by_chat_query_and_date",
+                    "args": {"scope": "ALL_CHATS", "max_rows": 1500, "chat_types": ["private"], "chat_query": "Евочка"},
                 },
                 {"name": "sql_stats_by_date", "args": {"scope": "ALL_CHATS", "chat_types": ["private"]}},
             ],
@@ -198,6 +210,32 @@ def _extract_json(text: str) -> dict:
     return json.loads(m.group(0))
 
 
+def _validate_plan_invariants(plan: Plan) -> None:
+    tool_names = [t.name for t in plan.tools]
+    if plan.strategy.value == "INFO_ONLY":
+        bad = [n for n in tool_names if n != "get_recent_dialog"]
+        if bad:
+            raise ValueError("INFO_ONLY допускает только get_recent_dialog")
+
+    if plan.strategy.value == "RAG_SEMANTIC":
+        if "rag_search" not in tool_names:
+            raise ValueError("RAG_SEMANTIC требует rag_search")
+
+    if plan.strategy.value == "SQL_DATE_SUMMARY":
+        if not any(n in tool_names for n in ("sql_messages_by_date", "sql_stats_by_date", "sql_messages_by_chat_query_and_date")):
+            raise ValueError("SQL_DATE_SUMMARY требует SQL tool (messages/stats)")
+
+    if plan.strategy.value == "HYBRID":
+        if "rag_search" not in tool_names:
+            raise ValueError("HYBRID требует rag_search")
+        if not any(n in tool_names for n in ("sql_messages_by_date", "sql_stats_by_date", "sql_messages_by_chat_query_and_date")):
+            raise ValueError("HYBRID требует SQL tool (messages/stats)")
+
+    if plan.strategy.value == "COMMAND":
+        if plan.tools:
+            raise ValueError("COMMAND: инструменты должны быть пустыми (в этом проекте)")
+
+
 async def route_query(
     *,
     query: str,
@@ -235,9 +273,10 @@ async def route_query(
 
     messages = [LLMMessage(role="user", content=json.dumps(input_block, ensure_ascii=False))]
 
-    raw = await provider.complete(messages, system_prompt=_ROUTER_SYSTEM_PROMPT)
+    raw = await provider.complete(messages, system_prompt=_router_system_prompt())
     try:
         plan = Plan.model_validate(_extract_json(raw))
+        _validate_plan_invariants(plan)
         return plan, raw
     except Exception as exc:
         repair_prompt = (
@@ -246,7 +285,8 @@ async def route_query(
         )
         raw2 = await provider.complete(
             [LLMMessage(role="user", content=raw), LLMMessage(role="user", content=repair_prompt)],
-            system_prompt=_ROUTER_SYSTEM_PROMPT,
+            system_prompt=_router_system_prompt(),
         )
         plan2 = Plan.model_validate(_extract_json(raw2))
+        _validate_plan_invariants(plan2)
         return plan2, raw2
