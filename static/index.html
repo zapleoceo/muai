@@ -32,33 +32,39 @@
   <div class="page active" id="tab-dashboard">
     <div class="grid" id="totals"></div>
 
-    <div class="section">
-      <h2>Сообщений за 7 дней</h2>
-      <div class="day-chart" id="daily-chart"></div>
-    </div>
+    <div class="dashboard-split">
+      <div class="section">
+        <h2>Сообщений за 7 дней</h2>
+        <div class="day-chart" id="daily-chart"></div>
+      </div>
 
-    <div class="section">
-      <h2>Топ чатов (7 дней)</h2>
-      <div id="top-chats"></div>
+      <div class="section">
+        <h2>Топ чатов (7 дней)</h2>
+        <div id="top-chats"></div>
+      </div>
     </div>
 
     <div class="section">
       <div class="section-header">
         <h2>🧠 Мозг (векторные чанки)</h2>
-        <button class="btn-icon" onclick="loadEmbedder()" title="Обновить">↻</button>
-        <button class="btn-icon btn-icon-green" id="embedder-toggle-btn" onclick="toggleEmbedder()" title="Запустить чанкование">▶</button>
-        <button class="btn-icon" onclick="clearChunks()" title="Очистить все чанки" style="color:#ef4444">🗑</button>
+        <div class="section-actions">
+          <button class="btn-icon" onclick="loadEmbedder()" title="Обновить">↻</button>
+          <button class="btn-icon btn-icon-green" id="embedder-toggle-btn" onclick="toggleEmbedder()" title="Запустить чанкование">▶</button>
+          <button class="btn-icon" onclick="clearChunks()" title="Очистить все чанки" style="color:#ef4444">🗑</button>
+        </div>
       </div>
       <div id="embedder-status">Загрузка…</div>
     </div>
 
-    <div class="section">
-      <div class="section-header">
+    <details class="section" id="logs-section">
+      <summary class="section-header">
         <h2>Логи бота</h2>
-        <button class="btn btn-sm btn-ghost" onclick="loadLogs()">Обновить</button>
-      </div>
+        <div class="section-actions">
+          <button class="btn btn-sm btn-ghost" onclick="event.preventDefault();event.stopPropagation();loadLogs()">Обновить</button>
+        </div>
+      </summary>
       <div id="logs-box">Загрузка…</div>
-    </div>
+    </details>
   </div>
 
   <div class="page" id="tab-chats">

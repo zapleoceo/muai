@@ -36,8 +36,17 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 
 .section { background: #1e2533; border-radius: 12px; padding: 20px; margin-bottom: 20px; }
 .section h2 { font-size: 1rem; color: #94a3b8; margin-bottom: 16px; }
-.section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+.section-header { display: flex; align-items: center; justify-content: flex-start; gap: 12px; margin-bottom: 16px; }
 .section-header h2 { margin: 0; }
+.section-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
+
+.dashboard-split { display: flex; gap: 16px; align-items: stretch; flex-wrap: wrap; margin-bottom: 20px; }
+.dashboard-split .section { flex: 1 1 360px; margin-bottom: 0; }
+
+details.section > summary { list-style: none; }
+details.section > summary::-webkit-details-marker { display: none; }
+details.section > summary.section-header { cursor: pointer; }
+details.section[open] > summary.section-header { margin-bottom: 16px; }
 
 .bar-row { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; font-size: 0.85rem; }
 .bar-row .name { width: 200px; white-space: nowrap; overflow: hidden;

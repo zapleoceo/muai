@@ -26,6 +26,24 @@ class ChunkRepo:
                   AND m.id > COALESCE(lc.last_id, 0)
             """)
         )).scalar()
+        pending_by_chat = (await self.session.execute(
+            text("""
+                WITH lc AS (
+                    SELECT chat_id, MAX(max_msg_id) AS last_id
+                    FROM message_chunks
+                    GROUP BY chat_id
+                )
+                SELECT c.id AS chat_id, c.title AS title, COUNT(m.id) AS pending
+                FROM messages m
+                JOIN chats c ON c.id = m.chat_id
+                LEFT JOIN lc ON lc.chat_id = m.chat_id
+                WHERE (m.text IS NOT NULL OR m.caption IS NOT NULL)
+                  AND m.id > COALESCE(lc.last_id, 0)
+                GROUP BY c.id, c.title
+                ORDER BY pending DESC
+                LIMIT 30
+            """)
+        )).fetchall()
         per_chat = (await self.session.execute(
             text("""
                 SELECT mc.chat_id, c.title, COUNT(*) AS cnt,
@@ -40,6 +58,7 @@ class ChunkRepo:
         return {
             "total_chunks": total,
             "messages_pending": pending,
+            "pending_by_chat": [{"chat_id": r.chat_id, "title": r.title, "pending": r.pending} for r in pending_by_chat],
             "per_chat": [{"chat_id": r.chat_id, "title": r.title, "chunks": r.cnt, "last_msg_id": r.last_msg_id} for r in per_chat],
         }
 
