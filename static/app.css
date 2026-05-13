@@ -29,7 +29,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
         gap: 16px; margin-bottom: 28px; }
 .card { background: #1e2533; border-radius: 12px; padding: 20px; }
-.card-wide { grid-column: 1 / -1; }
 .card .label { font-size: 0.75rem; color: #64748b; text-transform: uppercase;
                letter-spacing: .05em; margin-bottom: 8px; }
 .card .value { font-size: 2rem; font-weight: 700; color: #f8fafc; }
@@ -40,9 +39,6 @@ body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
 .section-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }
 .section-header h2 { margin: 0; }
 .section-actions { margin-left: auto; display: flex; align-items: center; gap: 8px; }
-
-.dashboard-split { display: flex; gap: 16px; align-items: stretch; flex-wrap: wrap; margin-bottom: 20px; }
-.dashboard-split .section { flex: 1 1 360px; margin-bottom: 0; }
 
 details.section > summary { list-style: none; }
 details.section > summary::-webkit-details-marker { display: none; }
@@ -56,10 +52,10 @@ details.section[open] > summary.section-header { margin-bottom: 16px; }
 .bar { background: #3b82f6; height: 18px; border-radius: 4px; min-width: 4px; transition: width .4s; }
 .bar-count { width: 50px; text-align: right; color: #64748b; }
 
-.day-chart { display: flex; align-items: flex-end; gap: 6px; height: 80px; }
-.day-col { display: flex; flex-direction: column; align-items: center; flex: 1; }
-.day-bar { width: 100%; background: #3b82f6; border-radius: 3px 3px 0 0; min-height: 2px; }
-.day-label { font-size: 0.65rem; color: #475569; margin-top: 4px; }
+.day-chart { display: grid; grid-template-columns: repeat(7, 1fr); align-items: end; gap: 3px; height: 56px; }
+.day-col { display: flex; flex-direction: column; align-items: center; min-width: 0; }
+.day-bar { width: 100%; background: #3b82f6; border-radius: 2px 2px 0 0; min-height: 2px; }
+.day-label { font-size: 0.55rem; color: #475569; margin-top: 3px; }
 
 #logs-box { background: #0f1117; border-radius: 8px; padding: 12px;
             font-family: monospace; font-size: 0.75rem; color: #94a3b8;
