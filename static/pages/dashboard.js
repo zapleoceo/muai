@@ -34,8 +34,10 @@ export async function loadStats() {
       <div class="sub">Исх: ${fmt(t.outgoing)} (${pct(t.outgoing, t.messages)}%)</div>
     </div>
     <div class="card">
-      <div class="label">Чаты / Пользователи</div>
-      <div class="value">${fmt(t.chats)} / ${fmt(t.users)}</div>
+      <div class="label">Чаты</div>
+      <div class="value">${fmt(t.chats)}</div>
+      <div class="label" style="margin-top:10px">Пользователи</div>
+      <div class="value">${fmt(t.users)}</div>
     </div>
     <div class="card"><div class="label">Размер БД</div><div class="value" style="font-size:1.3rem">${t.db_size || '—'}</div><div class="sub">сообщения: ${t.messages_size || '—'}</div></div>
     <div class="card"><div class="label">Чанков (мозг)</div><div class="value">${fmt(t.chunks || 0)}</div><div class="sub">в ${fmt(t.embedded_chats || 0)} чатах</div></div>
