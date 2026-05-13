@@ -155,3 +155,31 @@ class RouterSuggestion(Base):
         Index("idx_router_suggestions_status", "status"),
         Index("idx_router_suggestions_created_at", "created_at"),
     )
+
+
+class Interaction(Base):
+    __tablename__ = "interactions"
+
+    id = Column(BigInteger, autoincrement=True, primary_key=True)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    user_id = Column(BigInteger, nullable=True)
+    chat_id = Column(BigInteger, nullable=False)
+
+    query = Column(Text, nullable=False)
+    router_plan = Column(JSONB, nullable=True)
+    router_raw = Column(Text, nullable=True)
+
+    tool_runs = Column(JSONB, nullable=True)
+    retrieved_summary = Column(JSONB, nullable=True)
+
+    answer_text = Column(Text, nullable=True)
+
+    feedback = Column(Text, nullable=True)
+    feedback_comment = Column(Text, nullable=True)
+    feedback_at = Column(TIMESTAMP(timezone=True), nullable=True)
+
+    __table_args__ = (
+        Index("idx_interactions_chat_created_at", "chat_id", "created_at"),
+        Index("idx_interactions_feedback", "feedback"),
+    )

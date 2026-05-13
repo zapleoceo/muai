@@ -2,20 +2,33 @@ import logging
 
 from aiogram import Bot, Router
 from aiogram.enums import ChatType
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 from app.llm.gemini_provider import GeminiContentError
 from app.logic.reply import run_ai_reply
+from app.services.interactions import set_feedback
 from app.services.message_ingest import ingest_aiogram_incoming, ingest_aiogram_outgoing
 
 logger = logging.getLogger(__name__)
 router = Router()
 
 
+def _feedback_kb(interaction_id: int):
+    kb = InlineKeyboardBuilder()
+    kb.button(text="👍", callback_data=f"fb:like:{interaction_id}")
+    kb.button(text="👎", callback_data=f"fb:dislike:{interaction_id}")
+    kb.adjust(2)
+    return kb.as_markup()
+
+
 async def _llm_respond(msg: Message, question: str | None = None) -> None:
     thinking = await msg.answer("⏳")
     try:
-        reply_text = await run_ai_reply(chat_id=msg.chat.id, question=question)
+        if not question:
+            await thinking.edit_text("Вопрос пустой.")
+            return
+        res = await run_ai_reply(chat_id=msg.chat.id, user_id=msg.from_user.id if msg.from_user else None, question=question)
     except GeminiContentError as exc:
         logger.warning("Gemini content block chat=%s: %s", msg.chat.id, exc.reason)
         await thinking.edit_text(
@@ -43,14 +56,37 @@ async def _llm_respond(msg: Message, question: str | None = None) -> None:
         await thinking.edit_text(f"❌ Неожиданная ошибка: <code>{str(exc)[:150]}</code>")
         return
 
-    await thinking.edit_text(reply_text)
+    markup = _feedback_kb(res.interaction_id) if res.interaction_id else None
+    await thinking.edit_text(res.text, reply_markup=markup)
     dialog_key = f"{msg.chat.id}:{msg.from_user.id}" if msg.from_user else f"{msg.chat.id}"
     await ingest_aiogram_outgoing(
         chat_id=msg.chat.id,
         telegram_msg_id=thinking.message_id,
-        text=reply_text,
+        text=res.text,
         dialog_key=dialog_key,
     )
+
+
+@router.callback_query(lambda c: bool(c.data) and c.data.startswith("fb:"))
+async def on_feedback(cb: CallbackQuery) -> None:
+    data = cb.data or ""
+    parts = data.split(":")
+    if len(parts) != 3:
+        await cb.answer("Ошибка")
+        return
+    feedback = parts[1]
+    try:
+        interaction_id = int(parts[2])
+    except ValueError:
+        await cb.answer("Ошибка")
+        return
+
+    if feedback not in ("like", "dislike"):
+        await cb.answer("Ошибка")
+        return
+
+    await set_feedback(interaction_id=interaction_id, feedback=feedback)
+    await cb.answer("Сохранено")
 
 
 @router.message()

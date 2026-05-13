@@ -62,16 +62,21 @@ class ChunkRepo:
             "per_chat": [{"chat_id": r.chat_id, "title": r.title, "chunks": r.cnt, "last_msg_id": r.last_msg_id} for r in per_chat],
         }
 
-    async def search_chunks(self, embedding: list[float], limit: int = 12):
+    async def search_chunks(self, embedding: list[float], limit: int = 12, chat_id: int | None = None):
         vec_str = "[" + ",".join(str(x) for x in embedding) + "]"
+        where = "WHERE embedding IS NOT NULL"
+        params: dict[str, object] = {"vec": vec_str, "lim": limit}
+        if chat_id is not None:
+            where += " AND chat_id = :chat_id"
+            params["chat_id"] = chat_id
         rows = (await self.session.execute(
             text(
                 "SELECT id, chat_id, chat_title, chunk_text, msg_date_from, msg_date_to "
                 "FROM message_chunks "
-                "WHERE embedding IS NOT NULL "
+                f"{where} "
                 "ORDER BY embedding <=> CAST(:vec AS vector) "
                 "LIMIT :lim"
             ),
-            {"vec": vec_str, "lim": limit},
+            params,
         )).fetchall()
         return rows

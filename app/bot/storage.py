@@ -5,11 +5,11 @@ from app.llm.base import LLMMessage
 
 async def get_dialog_context(chat_id: int, limit: int = 20) -> list[LLMMessage]:
     async with AsyncSessionLocal() as session:
-        rows = await MessageRepo(session).get_messages(chat_id=chat_id, limit=limit)
+        rows = await MessageRepo(session).get_recent_messages_with_users(chat_id=chat_id, limit=limit)
     return [
         LLMMessage(
-            role="assistant" if r.direction == "out" else "user",
-            content=r.text or r.caption or f"[{r.media_type or 'media'}]",
+            role="assistant" if m.direction == "out" else "user",
+            content=m.text or m.caption or f"[{m.media_type or 'media'}]",
         )
-        for r in rows
+        for (m, _u) in rows
     ]

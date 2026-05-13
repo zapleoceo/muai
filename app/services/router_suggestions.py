@@ -6,6 +6,32 @@ from app.db.database import AsyncSessionLocal
 from app.db.models import RouterSuggestion
 
 
+async def create_router_suggestion(
+    *,
+    query: str,
+    current_plan: dict | None,
+    proposed_plan: dict | None,
+    proposed_rule: str | None,
+    context_summary: dict | None,
+    feedback: dict | None,
+    meta: dict | None,
+) -> int:
+    row = RouterSuggestion(
+        query=query,
+        current_plan=current_plan,
+        proposed_plan=proposed_plan,
+        proposed_rule=proposed_rule,
+        context_summary=context_summary,
+        feedback=feedback,
+        meta=meta,
+    )
+    async with AsyncSessionLocal() as session:
+        session.add(row)
+        await session.flush()
+        await session.commit()
+        return int(row.id)
+
+
 async def list_router_suggestions(
     *,
     status: str | None,
