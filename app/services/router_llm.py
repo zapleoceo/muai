@@ -45,7 +45,10 @@ _ROUTER_POLICIES = (
     "11) Не привязывайся к одному дню, если пользователь спрашивает про недельное расписание/афишу: пост часто публикуют накануне. Используй LAST_7_DAYS или более широкий EXPLICIT.\n"
     "12) Если пользователь просит 'последнее сообщение/крайний текст' в конкретном чате — используй sql_recent_messages_by_chat_query (limit 1..5) и не проси подтверждений.\n"
     "13) Не используй стратегию COMMAND в этом проекте. Если нужны уточнения — используй INFO_ONLY + clarify_question.\n"
-    "14) Если пользователь просит саммари/поиск по всей истории — используй time_range=ALL_TIME (но учитывай лимиты max_rows/limit и при необходимости проси уточнить период).\n"
+    "14) Если пользователь просит саммари/поиск по всей истории ('вся история', 'за всё время') — используй time_range=ALL_TIME.\n"
+    "15) Для лучших ответов по умолчанию начинай с более узкого окна и расширяй его только если данных не хватило:\n"
+    "   - LAST_7_DAYS → LAST_30_DAYS → ALL_TIME.\n"
+    "   Решение о расширении бери из state.grade.expand_time_range_to, если оно есть.\n"
 )
 
 
@@ -519,11 +522,13 @@ _GRADER_SYSTEM_PROMPT = (
     '"verdict":"OK|RETRY|CLARIFY",'
     '"reason":"string|null",'
     '"clarify_question":"string|null",'
-    '"router_hint":"string|null"'
+    '"router_hint":"string|null",'
+    '"expand_time_range_to":"NONE|LAST_7_DAYS|LAST_30_DAYS|ALL_TIME|null"'
     "}. "
     "RETRY выбирай, если похоже, что retrieval был неверно выбран (не тот чат/папка/тип чатов/период/инструмент) "
     "и можно улучшить план вторым заходом. "
     "В router_hint кратко опиши, какие инструменты/ограничения стоит применить (sql_find_chats, sql_messages_by_date, sql_lex_search_messages, sql_search_messages_by_date, rag_search). "
+    "Если проблема в том, что период слишком узкий — заполни expand_time_range_to более широким окном (LAST_30_DAYS или ALL_TIME). "
     "Если нужно уточнение у пользователя, выбери CLARIFY и заполни clarify_question."
 )
 
@@ -686,6 +691,15 @@ async def route_query(
     timezone: str = "UTC",
     state: dict | None = None,
 ) -> tuple[Plan, str]:
+    def _time_range_rank(v: str) -> int:
+        m = {"NONE": 0, "YESTERDAY": 1, "TODAY": 1, "LAST_7_DAYS": 2, "LAST_30_DAYS": 3, "ALL_TIME": 4, "EXPLICIT": 4}
+        return int(m.get(v, 0))
+
+    forced_time_range = None
+    if state:
+        f = state.get("force_time_range")
+        if isinstance(f, str) and f:
+            forced_time_range = f
     tg_ref = _extract_tg_link_ref(query)
     if tg_ref:
         plan_dict = _build_plan_for_tg_ref(tg_ref)
@@ -710,7 +724,7 @@ async def route_query(
         "schema_hint": {
             "strategy": "INFO_ONLY|RAG_SEMANTIC|SQL_DATE_SUMMARY|HYBRID|COMMAND",
             "tools": [{"name": "tool_name", "args": {"k": "v"}}],
-            "time_range": "NONE|YESTERDAY|TODAY|LAST_7_DAYS|ALL_TIME|EXPLICIT",
+            "time_range": "NONE|YESTERDAY|TODAY|LAST_7_DAYS|LAST_30_DAYS|ALL_TIME|EXPLICIT",
             "scope": "CURRENT_CHAT|ALL_CHATS",
             "chat_types": ["private|group|supergroup|channel"],
             "chat_ids": [123],
@@ -729,6 +743,10 @@ async def route_query(
     try:
         plan = Plan.model_validate(_extract_json(raw))
         _validate_plan_invariants(plan)
+        if forced_time_range and plan.strategy.value not in ("INFO_ONLY", "COMMAND"):
+            if _time_range_rank(forced_time_range) > _time_range_rank(plan.time_range.value):
+                plan = plan.model_copy(update={"time_range": forced_time_range, "explicit_from": None, "explicit_to": None})
+                _validate_plan_invariants(plan)
         return plan, raw
     except Exception as exc:
         repair_prompt = (
@@ -742,6 +760,10 @@ async def route_query(
         try:
             plan2 = Plan.model_validate(_extract_json(raw2))
             _validate_plan_invariants(plan2)
+            if forced_time_range and plan2.strategy.value not in ("INFO_ONLY", "COMMAND"):
+                if _time_range_rank(forced_time_range) > _time_range_rank(plan2.time_range.value):
+                    plan2 = plan2.model_copy(update={"time_range": forced_time_range, "explicit_from": None, "explicit_to": None})
+                    _validate_plan_invariants(plan2)
             return plan2, raw2
         except Exception as exc2:
             fallback = {

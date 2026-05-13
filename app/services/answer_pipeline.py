@@ -69,12 +69,19 @@ async def run_answer_pipeline(
         if verdict != "RETRY":
             break
 
+        expand_to = decision.get("expand_time_range_to")
+        force_time_range = None
+        if isinstance(expand_to, str) and expand_to:
+            force_time_range = expand_to
+
         state = {
             "recent_dialog": recent_dialog,
             "previous_plan": final_plan.model_dump(),
             "retrieved_summary": summary,
             "grade": decision,
         }
+        if force_time_range:
+            state["force_time_range"] = force_time_range
         final_plan, final_router_raw = await route_query(
             query=query,
             user_id=user_id,

@@ -17,6 +17,7 @@ class PlanTimeRange(str, Enum):
     YESTERDAY = "YESTERDAY"
     TODAY = "TODAY"
     LAST_7_DAYS = "LAST_7_DAYS"
+    LAST_30_DAYS = "LAST_30_DAYS"
     ALL_TIME = "ALL_TIME"
     EXPLICIT = "EXPLICIT"
 
