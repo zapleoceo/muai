@@ -27,10 +27,10 @@ def validate_plan_invariants(plan: Plan) -> None:
     if plan.strategy.value == "RAG_SEMANTIC":
         if "rag_search" not in tool_names:
             raise ValueError("RAG_SEMANTIC требует rag_search")
-        if plan.max_steps != 1:
-            raise ValueError("RAG_SEMANTIC: max_steps должен быть 1")
-        if plan.on_empty.value != "ASK_CLARIFY":
-            raise ValueError("RAG_SEMANTIC: on_empty должен быть 'ASK_CLARIFY'")
+        if plan.max_steps < 2:
+            raise ValueError("RAG_SEMANTIC: max_steps должен быть >= 2")
+        if plan.on_empty.value != "RETRY":
+            raise ValueError("RAG_SEMANTIC: on_empty должен быть 'RETRY'")
 
     _SQL_TOOLS = {
         "sql_messages_by_date", "sql_stats_by_date", "sql_search_messages_by_date",
@@ -206,7 +206,7 @@ def compile_query_model_to_plan(*, query_model: QueryModel, query: str) -> Plan:
         tools=base_tools + [PlanToolCall(name="rag_search", args={"scope": c.scope.value, "query": str(query), "top_k": 12, "chat_ids": c.chat_ids})],
         time_range=time_range, scope=c.scope, chat_types=chat_types, chat_ids=c.chat_ids,
         explicit_from=explicit_from, explicit_to=explicit_to, clarify_question=None,
-        max_steps=1, on_empty=PlanOnEmpty.ASK_CLARIFY, notes="compiled:rag",
+        max_steps=max(2, int(query_model.max_steps or 2)), on_empty=PlanOnEmpty.RETRY, notes="compiled:rag",
     )
     validate_plan_invariants(plan)
     return plan

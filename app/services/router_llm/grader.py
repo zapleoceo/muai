@@ -60,6 +60,32 @@ async def grade_context(
     retrieved_summary: dict,
     language: str = "ru",
 ) -> tuple[dict, str]:
+    msg_n = int(retrieved_summary.get("messages") or 0)
+    chunk_n = int(retrieved_summary.get("chunks") or 0)
+    total = msg_n + chunk_n
+
+    if msg_n >= 8 or chunk_n >= 4:
+        decision = {
+            "verdict": "OK",
+            "reason": "enough_context",
+            "clarify_question": None,
+            "router_hint": None,
+            "expand_time_range_to": None,
+            "propose_dynamic_tool": None,
+        }
+        return decision, json.dumps(decision, ensure_ascii=False)
+
+    if total == 0 and str(plan.time_range.value) == "LAST_7_DAYS":
+        decision = {
+            "verdict": "RETRY",
+            "reason": "empty_context_expand_time_range",
+            "clarify_question": None,
+            "router_hint": "expand_time_range",
+            "expand_time_range_to": "LAST_30_DAYS",
+            "propose_dynamic_tool": None,
+        }
+        return decision, json.dumps(decision, ensure_ascii=False)
+
     provider = get_llm_provider()
     input_block = {
         "query": query,

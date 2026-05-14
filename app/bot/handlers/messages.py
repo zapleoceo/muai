@@ -24,11 +24,26 @@ def _feedback_kb(interaction_id: int):
 
 async def _llm_respond(msg: Message, question: str | None = None) -> None:
     thinking = await msg.answer("⏳")
+    last_status = ""
+    async def _progress(text: str) -> None:
+        nonlocal last_status
+        if not text or text == last_status:
+            return
+        last_status = text
+        try:
+            await thinking.edit_text(text)
+        except Exception:
+            pass
     try:
         if not question:
             await thinking.edit_text("Вопрос пустой.")
             return
-        res = await run_ai_reply(chat_id=msg.chat.id, user_id=msg.from_user.id if msg.from_user else None, question=question)
+        res = await run_ai_reply(
+            chat_id=msg.chat.id,
+            user_id=msg.from_user.id if msg.from_user else None,
+            question=question,
+            on_progress=_progress,
+        )
     except GeminiContentError as exc:
         logger.warning("Gemini content block chat=%s: %s", msg.chat.id, exc.reason)
         await thinking.edit_text(

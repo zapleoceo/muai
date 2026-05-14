@@ -1,4 +1,6 @@
 from datetime import datetime, timezone
+from io import BytesIO
+import logging
 
 from aiogram.types import Message as AiogramMessage
 from telethon.tl.types import User as TelethonUser
@@ -6,6 +8,9 @@ from telethon.tl.types import User as TelethonUser
 from app.db.database import AsyncSessionLocal
 from app.db.repository import MessageRepo
 from app.userbot.media import chat_title, chat_type, chat_username, media_type as telethon_media_type
+from app.llm.transcribe import transcribe_audio
+
+logger = logging.getLogger(__name__)
 
 
 def _aiogram_media_info(msg: AiogramMessage) -> tuple[str | None, str | None]:
@@ -29,6 +34,19 @@ async def ingest_aiogram_incoming(msg: AiogramMessage) -> bool:
     user = msg.from_user
     date_utc = datetime.fromtimestamp(msg.date.timestamp(), tz=timezone.utc) if msg.date else None
     dialog_key = f"{msg.chat.id}:{user.id}" if user else f"{msg.chat.id}"
+    text_value = msg.text or msg.caption
+    if media_type == "voice" and not text_value and msg.voice and msg.bot:
+        try:
+            buf = BytesIO()
+            f = await msg.bot.get_file(msg.voice.file_id)
+            await msg.bot.download_file(f.file_path, destination=buf)
+            data = buf.getvalue()
+            mime = getattr(msg.voice, "mime_type", None) or "audio/ogg"
+            t = await transcribe_audio(data=data, mime_type=mime, language="ru")
+            if t:
+                text_value = t
+        except Exception as exc:
+            logger.warning("Voice transcription failed chat=%s msg_id=%s: %s", msg.chat.id, msg.message_id, str(exc)[:200])
 
     async with AsyncSessionLocal() as session:
         repo = MessageRepo(session)
@@ -40,7 +58,7 @@ async def ingest_aiogram_incoming(msg: AiogramMessage) -> bool:
             user_id=user.id if user else None,
             telegram_msg_id=msg.message_id,
             direction="in",
-            text=msg.text or msg.caption,
+            text=text_value,
             media_type=media_type,
             file_id=file_id,
             caption=msg.caption if msg.text is None else None,

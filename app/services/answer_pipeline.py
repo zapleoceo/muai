@@ -1,4 +1,5 @@
 import json
+from collections.abc import Awaitable, Callable
 
 from app.services.answer_llm import answer_from_context, summarize_large_history
 from app.services.answering_types import (
@@ -25,6 +26,7 @@ async def run_answer_pipeline(
     query: str,
     language: str = "ru",
     timezone_name: str = "UTC",
+    on_progress: Callable[[str], Awaitable[None]] | None = None,
 ) -> ReplyResult:
     router_attempts: list[dict] = []
     grade_attempts: list[dict] = []
@@ -46,9 +48,15 @@ async def run_answer_pipeline(
     final_plan = plan
     final_router_raw = router_raw
 
+    async def _progress(text: str) -> None:
+        if on_progress is not None:
+            await on_progress(text)
+
     step = 0
     _HARD_LIMIT = 10  # absolute cap regardless of max_steps or grader verdicts
     while step < _HARD_LIMIT:
+        if step == 0:
+            await _progress("🔍 ищу в базе…")
         retrieved = await execute_plan(plan=final_plan, chat_id=chat_id, query=query, timezone_name=timezone_name)
 
         summary = {
@@ -69,7 +77,35 @@ async def run_answer_pipeline(
         if str(final_plan.on_empty.value) != "RETRY":
             break
 
+        if (len(retrieved.messages) + len(retrieved.chunks)) == 0 and final_plan.strategy == PlanStrategy.RAG_SEMANTIC:
+            await _progress("🔍 ищу в базе…")
+            use_time_range = final_plan.time_range != PlanTimeRange.NONE
+            base_tools = [t for t in (final_plan.tools or []) if t.name == "get_recent_dialog"] or [PlanToolCall(name="get_recent_dialog", args={"limit": 20})]
+            lex = PlanToolCall(
+                name="sql_lex_search_messages",
+                args={
+                    "scope": final_plan.scope.value,
+                    "chat_types": [ct.value for ct in (final_plan.chat_types or [])] or None,
+                    "chat_ids": final_plan.chat_ids,
+                    "query": query,
+                    "limit": 60,
+                    "use_time_range": bool(use_time_range),
+                },
+            )
+            final_plan = final_plan.model_copy(
+                update={
+                    "strategy": PlanStrategy.SQL_DATE_SUMMARY,
+                    "tools": base_tools + [lex],
+                    "max_steps": 2,
+                    "on_empty": PlanOnEmpty.RETRY,
+                    "notes": "rag_fallback:lex_sql",
+                }
+            )
+            step += 1
+            continue
+
         if (len(retrieved.messages) + len(retrieved.chunks)) == 0 and final_plan.time_range != PlanTimeRange.NONE:
+            await _progress("📊 анализирую…")
             coverage_plan = final_plan.model_copy(
                 update={
                     "strategy": PlanStrategy.SQL_DATE_SUMMARY,
@@ -100,6 +136,7 @@ async def run_answer_pipeline(
             coverage_ctx = await execute_plan(plan=coverage_plan, chat_id=chat_id, query=query, timezone_name=timezone_name)
             summary["coverage"] = {"stats": coverage_ctx.stats, "meta": coverage_ctx.meta}
 
+        await _progress("📊 анализирую…")
         decision, grade_raw = await grade_context(query=query, plan=final_plan, retrieved_summary=summary, language=language)
         grade_attempts.append({"raw": grade_raw, "decision": decision})
 
@@ -194,12 +231,14 @@ async def run_answer_pipeline(
             if keep_chunk_ids:
                 retrieved.chunks = [c for c in retrieved.chunks if int(c.get("chunk_id") or 0) in keep_chunk_ids]
         else:
-            retrieved.messages = []
-            retrieved.chunks = []
+            retrieved.messages = retrieved.messages[:14]
+            retrieved.chunks = retrieved.chunks[:10]
 
     if use_hier_summary:
+        await _progress("✍️ формирую ответ…")
         text = await summarize_large_history(query=query, messages=retrieved.messages, language=language)
     else:
+        await _progress("✍️ формирую ответ…")
         text = await answer_from_context(query=query, plan=final_plan, ctx=retrieved)
 
     final_summary = {
