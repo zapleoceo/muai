@@ -56,22 +56,36 @@ async def resolve_chat(chat_id: int, _uid: int = Depends(require_owner)) -> dict
     from sqlalchemy import update
     from app.db.models import Chat, TgUser
     client = get_client()
+    deleted = False
     try:
         entity = await client.get_entity(chat_id)
+        deleted = bool(getattr(entity, "deleted", False))
     except Exception as exc:
-        raise HTTPException(status_code=404, detail=str(exc))
-    first_name = getattr(entity, "first_name", None) or ""
-    last_name = getattr(entity, "last_name", None) or ""
-    username = getattr(entity, "username", None)
-    title = (f"{first_name} {last_name}".strip()) or getattr(entity, "title", None) or str(chat_id)
+        err = str(exc).lower()
+        if "deleted" in err or "invalid" in err or "not found" in err:
+            deleted = True
+        else:
+            raise HTTPException(status_code=404, detail=str(exc))
+
+    if deleted:
+        title = "[Удалён]"
+        username = None
+        first_name = last_name = None
+    else:
+        first_name = getattr(entity, "first_name", None) or ""
+        last_name = getattr(entity, "last_name", None) or ""
+        username = getattr(entity, "username", None)
+        title = (f"{first_name} {last_name}".strip()) or getattr(entity, "title", None) or str(chat_id)
+
     async with AsyncSessionLocal() as session:
         await session.execute(update(Chat).where(Chat.id == chat_id).values(title=title, username=username))
-        await session.execute(update(TgUser).where(TgUser.id == chat_id).values(
-            first_name=first_name or None, last_name=last_name or None, username=username,
-        ))
+        if not deleted:
+            await session.execute(update(TgUser).where(TgUser.id == chat_id).values(
+                first_name=first_name or None, last_name=last_name or None, username=username,
+            ))
         await session.commit()
     return {"chat_id": chat_id, "title": title, "username": username,
-            "first_name": first_name or None, "last_name": last_name or None}
+            "first_name": first_name or None, "last_name": last_name or None, "deleted": deleted}
 
 
 @router.post("/admin/chats/{chat_id}/approve")

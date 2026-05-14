@@ -50,6 +50,23 @@ export function initChatsPage() {
       await apiFetch(`/api/admin/chats/${id}/sync-now`, { method: 'POST' });
     } else if (action === 'cancel') {
       await apiFetch(`/api/admin/chats/${id}/cancel-sync`, { method: 'POST' });
+    } else if (action === 'resolve') {
+      btn.textContent = '⏳';
+      btn.disabled = true;
+      const r = await apiFetch(`/api/admin/chats/${id}/resolve`);
+      if (r.ok) {
+        const d = await r.json();
+        const label = d.deleted ? '[Удалён]' : (d.title || String(id));
+        btn.closest('tr').querySelector('.chat-title-text, .chat-title-link').textContent = label;
+        if (d.deleted) {
+          btn.closest('tr').querySelector('.chat-title-text, .chat-title-link').insertAdjacentHTML('afterend', '<span style="color:#ef4444;font-size:0.72rem;margin-left:4px">удалён</span>');
+        }
+        btn.remove();
+      } else {
+        btn.textContent = '🔍';
+        btn.disabled = false;
+      }
+      return;
     } else if (action === 'delete') {
       const title = btn.dataset.title || String(id);
       if (!confirm(`Удалить все сообщения чата «${title}»?`)) return;
@@ -308,10 +325,16 @@ export function renderChats() {
       const topicToggle = topics.length
         ? `<button class=\"topic-toggle\" data-action=\"toggle-topics\" data-id=\"${c.id}\" title=\"${topics.length} веток\">▶</button> ` : '';
       const tgLink = c.username ? `https://t.me/${c.username}` : null;
+      const isUnresolved = /^\d+$/.test(c.title);
+      const isDeleted = c.title === '[Удалён]';
+      const resolveBtn = (isUnresolved || isDeleted)
+        ? `<button class="btn btn-sm btn-ghost" data-action="resolve" data-id="${c.id}" title="Определить владельца через Telegram" style="font-size:0.7rem">🔍</button>`
+        : '';
+      const deletedBadge = isDeleted ? `<span style="color:#ef4444;font-size:0.72rem;margin-left:4px">удалён</span>` : '';
       const avatarImg = '';
       const titleEl = tgLink
-        ? `<a href=\"${tgLink}\" target=\"_blank\" rel=\"noopener\" class=\"chat-title-link\" title=\"${esc(c.title)}\">${esc(c.title)}</a>`
-        : `<span class=\"chat-title-text\" title=\"${esc(c.title)}\">${esc(c.title)}</span>`;
+        ? `<a href=\"${tgLink}\" target=\"_blank\" rel=\"noopener\" class=\"chat-title-link\" title=\"${esc(c.title)}\">${esc(c.title)}</a>${deletedBadge}`
+        : `<span class=\"chat-title-text\" title=\"${esc(c.title)}\">${esc(c.title)}</span>${deletedBadge}`;
       rows.push(`<tr>
         <td><span class=\"chat-type-badge\">${esc(c.type)}</span></td>
         <td class=\"chat-name-cell\">${topicToggle}${titleEl}${uname}</td>
@@ -322,7 +345,7 @@ export function renderChats() {
           <span class=\"depth-cell\" data-id=\"${c.id}\" data-depth=\"${c.depth_days ?? ''}\" title=\"Нажмите для изменения глубины\">${depth}</span>
         </td>
         <td style=\"color:#475569;font-size:0.75rem;white-space:nowrap\">${c.last_synced_at ? new Date(c.last_synced_at).toLocaleString('ru', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '—'}</td>
-        <td><div class=\"chat-actions\">${approveBtn}${disableBtn}${syncNowBtn}${cancelBtn}${deleteBtn}</div></td>
+        <td><div class=\"chat-actions\">${resolveBtn}${approveBtn}${disableBtn}${syncNowBtn}${cancelBtn}${deleteBtn}</div></td>
       </tr>`);
       for (const t of topics) {
         rows.push(`<tr class=\"topic-row\" data-parent=\"${c.id}\" style=\"display:none\">
