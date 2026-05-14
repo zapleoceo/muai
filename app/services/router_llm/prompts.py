@@ -35,7 +35,10 @@ _ROUTER_POLICIES = (
     "   - 'сколько я отправил сообщений' → direction=out + COUNT\n"
     "   - 'топ чатов по активности' → GROUP BY chat_id + COUNT + ORDER BY desc\n"
     "   - любая агрегация/подсчёт/выборка с фильтром, недоступная через стандартные операции\n"
-    "   Доступные поля: message_id, chat_id, user_id, direction(in/out), text_any, media_type, date_utc, telegram_msg_id.\n"
+    "   Доступные поля: message_id, chat_id, user_id, direction(in/out), text_any, media_type, date_utc, telegram_msg_id,\n"
+    "   chat_title (название чата), chat_type (тип: private/group/supergroup/channel), chat_username, folder.\n"
+    "   → Чтобы искать в конкретном чате: filters=[{field:'chat_title', op:'ILIKE', value:'имя чата'}]\n"
+    "   → Чтобы искать свои сообщения: filters=[{field:'direction', op:'EQ', value:'out'}]\n"
     "   Доступные агрегации: COUNT, MIN, MAX.\n"
     "   Доступные операторы фильтра: EQ, NEQ, GT, GTE, LT, LTE, ILIKE, IS_NULL, IS_NOT_NULL.\n"
 )
@@ -51,6 +54,10 @@ GRADER_SYSTEM_PROMPT = (
     "и можно улучшить план вторым заходом. "
     "В router_hint кратко опиши, какие инструменты/ограничения стоит применить. "
     "Если проблема в том, что период слишком узкий — заполни expand_time_range_to более широким окном. "
+    "Если контекст пустой И в вопросе упоминается конкретный чат/название — заполни propose_dynamic_tool "
+    "с фильтром {field:'chat_title', op:'ILIKE', value:'<название>'} и text_any ILIKE по ключевым словам. "
+    "Поля для dynamic_tool: message_id, chat_id, chat_title, chat_type, chat_username, folder, "
+    "user_id, direction(in/out), text_any, media_type, date_utc, telegram_msg_id. "
     "Если нужно уточнение у пользователя, выбери CLARIFY и заполни clarify_question."
 )
 

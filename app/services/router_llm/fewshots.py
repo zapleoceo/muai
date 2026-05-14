@@ -138,10 +138,17 @@ QUERY_FEWSHOTS: list[tuple[str, dict]] = [
     ),
     (
         "lec-telecom - в нем есть про сайт что?",
-        {"output_shape": "LIST", "operation": "SEARCH", "need_proof": True, "precision_bias": "PRECISION",
-         "constraints": {"scope": "ALL_CHATS", "chat_query": "lec-telecom", "time_range": "ALL_TIME", "limit": 30},
-         "query_variants": ["сайт", "сделал сайт", "разработка"],
-         "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
+        {"output_shape": "LIST", "operation": "DYNAMIC_QUERY", "need_proof": True, "precision_bias": "PRECISION",
+         "constraints": {"scope": "ALL_CHATS", "time_range": "ALL_TIME"},
+         "dynamic_tool": {
+             "select": [{"field": "chat_id", "agg": None}, {"field": "telegram_msg_id", "agg": None}, {"field": "date_utc", "agg": None}, {"field": "text_any", "agg": None}, {"field": "chat_title", "agg": None}],
+             "filters": [{"field": "chat_title", "op": "ILIKE", "value": "lec-telecom"}, {"field": "text_any", "op": "ILIKE", "value": "сайт"}],
+             "group_by": [],
+             "order_by": [{"field": "date_utc", "desc": True}],
+             "limit": 30,
+             "require_time_range": False,
+         },
+         "query_variants": [], "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
     ),
     (
         "lec-telecom есть такой чат в базе?",
