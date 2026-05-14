@@ -188,9 +188,12 @@ export async function onSyncTypeChange() {
 }
 
 function _updateFilterCounts() {
-  const counts = { active: 0, pending: 0, disabled: 0 };
-  for (const c of _allChats) if (counts[c.status] !== undefined) counts[c.status]++;
-  const labels = { active: 'Активные', pending: 'Новые', disabled: 'Отключены' };
+  const counts = { active: 0, pending: 0, disabled: 0, deleted: 0 };
+  for (const c of _allChats) {
+    if (c.type === 'deleted') { counts.deleted++; continue; }
+    if (counts[c.status] !== undefined) counts[c.status]++;
+  }
+  const labels = { active: 'Активные', pending: 'Новые', disabled: 'Отключены', deleted: 'Удалённые' };
   for (const [f, label] of Object.entries(labels)) {
     const btn = document.querySelector(`.filter-btn[data-filter="${f}"]`);
     if (btn) btn.textContent = counts[f] ? `${label} (${counts[f]})` : label;
@@ -272,7 +275,8 @@ function updateSortHeaders() {
 function getVisible() {
   let chats = _allChats;
   if (_filter === 'syncing') chats = chats.filter(c => _syncingIds.has(c.id));
-  else if (_filter !== 'all') chats = chats.filter(c => c.status === _filter);
+  else if (_filter === 'deleted') chats = chats.filter(c => c.type === 'deleted');
+  else if (_filter !== 'all') chats = chats.filter(c => c.status === _filter && c.type !== 'deleted');
   if (_folderFilter) chats = chats.filter(c => (c.folder || '') === _folderFilter);
   if (_search) {
     chats = chats.filter(c =>
@@ -312,13 +316,13 @@ export function renderChats() {
     for (const c of slice) {
       const depth = c.depth_days ? `${c.depth_days}д` : 'глоб.';
       const uname = c.username ? `<span class=\"chat-username\">@${esc(c.username)}</span>` : '';
-      const approveBtn = c.status !== 'active'
+      const approveBtn = !isDeleted && c.status !== 'active'
         ? `<button class=\"btn btn-sm btn-success\" data-action=\"approve\" data-id=\"${c.id}\" title=\"Включить синхронизацию\">✓</button>` : '';
-      const disableBtn = c.status === 'active'
+      const disableBtn = !isDeleted && c.status === 'active'
         ? `<button class=\"btn btn-sm btn-ghost\" data-action=\"skip\" data-id=\"${c.id}\" title=\"Отключить\">—</button>` : '';
-      const cancelBtn = c.status === 'active'
+      const cancelBtn = !isDeleted && c.status === 'active'
         ? `<button class=\"btn btn-sm btn-ghost\" data-action=\"cancel\" data-id=\"${c.id}\" title=\"Отменить текущую синхр.\">✕</button>` : '';
-      const syncNowBtn = c.status === 'active'
+      const syncNowBtn = !isDeleted && c.status === 'active'
         ? `<button class=\"btn btn-sm btn-ghost\" data-action=\"sync-now\" data-id=\"${c.id}\" title=\"Синхронизировать сейчас\">⚡</button>` : '';
       const deleteBtn = `<button class=\"btn btn-sm btn-danger\" data-action=\"delete\" data-id=\"${c.id}\" data-title=\"${esc(c.title)}\" title=\"Удалить сообщения\">🗑</button>`;
       const topics = c.topics || [];
@@ -326,7 +330,7 @@ export function renderChats() {
         ? `<button class=\"topic-toggle\" data-action=\"toggle-topics\" data-id=\"${c.id}\" title=\"${topics.length} веток\">▶</button> ` : '';
       const tgLink = c.username ? `https://t.me/${c.username}` : null;
       const isUnresolved = /^\d+$/.test(c.title);
-      const isDeleted = c.title === '[Удалён]';
+      const isDeleted = c.type === 'deleted' || c.title === '[Удалён]';
       const resolveBtn = (isUnresolved || isDeleted)
         ? `<button class="btn btn-sm btn-ghost" data-action="resolve" data-id="${c.id}" title="Определить владельца через Telegram" style="font-size:0.7rem">🔍</button>`
         : '';

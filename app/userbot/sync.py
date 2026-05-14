@@ -107,6 +107,15 @@ async def sync_history(client: TelegramClient, days: int = 2) -> None:
                 logger.info("Sync: new chat queued as pending: %s", ctitle)
                 continue
 
+            if getattr(dialog.entity, "deleted", False):
+                async with AsyncSessionLocal() as session:
+                    await MessageRepo(session).upsert_chat_raw(
+                        id=chat_id, type="deleted", title="[Удалён]", username=None,
+                    )
+                    await session.commit()
+                logger.info("Sync: skip %s (deleted account)", chat_id)
+                continue
+
             if not cfg.enabled:
                 logger.debug("Sync: skip %s (not enabled)", ctitle)
                 continue

@@ -3,7 +3,7 @@ from telethon.tl.types import Channel, Chat, User
 
 def chat_type(entity) -> str:
     if isinstance(entity, User):
-        return "private"
+        return "deleted" if getattr(entity, "deleted", False) else "private"
     if isinstance(entity, Chat):
         return "group"
     if isinstance(entity, Channel):
@@ -13,6 +13,8 @@ def chat_type(entity) -> str:
 
 def chat_title(entity) -> str | None:
     if isinstance(entity, User):
+        if getattr(entity, "deleted", False):
+            return "[Удалён]"
         return entity.first_name
     return getattr(entity, "title", None)
 
