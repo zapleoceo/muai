@@ -100,23 +100,34 @@ class MediaEmbedderManager:
 
         async with AsyncSessionLocal() as session:
             total = (await session.execute(text("SELECT COUNT(*) FROM media_chunks"))).scalar() or 0
-            pending = (await session.execute(
-                text(
-                    """
-                    SELECT COUNT(*)
-                    FROM messages m
-                    JOIN chats c ON c.id = m.chat_id
-                    LEFT JOIN media_chunks mc
-                      ON mc.chat_id = m.chat_id AND mc.source_tg_msg_id = m.telegram_msg_id
-                    WHERE m.media_type IS NOT NULL
-                      AND m.media_type = ANY(CAST(:types AS text[]))
-                      AND c.type = ANY(CAST(:allowed_chat_types AS text[]))
-                      AND NOT (m.chat_id = ANY(CAST(:bl_ids AS bigint[])))
-                      AND NOT (c.username = ANY(CAST(:bl_usernames AS text[])))
-                      AND mc.id IS NULL
-                    """
-                )
-            ), {"types": self.status.types or [], "allowed_chat_types": allowed_chat_types, "bl_ids": bl_ids, "bl_usernames": bl_usernames})).scalar() or 0
+            pending = (
+                (
+                    await session.execute(
+                        text(
+                            """
+                            SELECT COUNT(*)
+                            FROM messages m
+                            JOIN chats c ON c.id = m.chat_id
+                            LEFT JOIN media_chunks mc
+                              ON mc.chat_id = m.chat_id AND mc.source_tg_msg_id = m.telegram_msg_id
+                            WHERE m.media_type IS NOT NULL
+                              AND m.media_type = ANY(CAST(:types AS text[]))
+                              AND c.type = ANY(CAST(:allowed_chat_types AS text[]))
+                              AND NOT (m.chat_id = ANY(CAST(:bl_ids AS bigint[])))
+                              AND NOT (c.username = ANY(CAST(:bl_usernames AS text[])))
+                              AND mc.id IS NULL
+                            """
+                        ),
+                        {
+                            "types": self.status.types or [],
+                            "allowed_chat_types": allowed_chat_types,
+                            "bl_ids": bl_ids,
+                            "bl_usernames": bl_usernames,
+                        },
+                    )
+                ).scalar()
+                or 0
+            )
         self.status.total_chunks = int(total)
         self.status.pending = int(pending)
         return {"total_chunks": int(total), "pending": int(pending)}
