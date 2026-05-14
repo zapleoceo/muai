@@ -9,8 +9,6 @@ let _sortCol = 'title';
 let _sortDir = 1;
 let _page = 0;
 let _syncPollTimer = null;
-let _queuePollTimer = null;
-let _queueIds = new Set();
 let _syncingIds = new Set();
 
 export function initChatsPage() {
@@ -143,6 +141,7 @@ export async function loadChats() {
     }
     _page = 0;
     updateFolderDropdown();
+    _updateFilterCounts();
     renderChats();
   } finally {
     if (btn) { btn.disabled = false; }
@@ -167,6 +166,16 @@ export async function onSyncTypeChange() {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ allowed_types: types }),
   });
+}
+
+function _updateFilterCounts() {
+  const counts = { active: 0, pending: 0, disabled: 0 };
+  for (const c of _allChats) if (counts[c.status] !== undefined) counts[c.status]++;
+  const labels = { active: 'Активные', pending: 'Новые', disabled: 'Отключены' };
+  for (const [f, label] of Object.entries(labels)) {
+    const btn = document.querySelector(`.filter-btn[data-filter="${f}"]`);
+    if (btn) btn.textContent = counts[f] ? `${label} (${counts[f]})` : label;
+  }
 }
 
 function updateFolderDropdown() {
@@ -243,8 +252,7 @@ function updateSortHeaders() {
 
 function getVisible() {
   let chats = _allChats;
-  if (_filter === 'queue') chats = chats.filter(c => _queueIds.has(c.id));
-  else if (_filter === 'syncing') chats = chats.filter(c => _syncingIds.has(c.id));
+  if (_filter === 'syncing') chats = chats.filter(c => _syncingIds.has(c.id));
   else if (_filter !== 'all') chats = chats.filter(c => c.status === _filter);
   if (_folderFilter) chats = chats.filter(c => (c.folder || '') === _folderFilter);
   if (_search) {
@@ -392,42 +400,8 @@ async function _refreshStatus() {
   if (_filter === 'syncing') renderChats();
 }
 
-async function _refreshQueue() {
-  const qr = await apiFetch('/api/admin/sync/queue');
-  if (!qr.ok) return;
-  const q = await qr.json();
-  _queueIds = new Set((q.queue || []).map(x => x.id).filter(Boolean));
-  const qBtn = document.querySelector('.filter-btn[data-filter="queue"]');
-  if (qBtn) {
-    const n = (q.queue || []).length;
-    qBtn.textContent = n ? `Ожидают (${n})` : 'Ожидают';
-    const titles = (q.queue || []).slice(0, 12).map(c => c.title).filter(Boolean);
-    qBtn.title = titles.length ? (`Очередь синхронизации:\n- ` + titles.join('\n- ')) : 'Очередь синхронизации пуста';
-  }
-  if (_filter === 'queue') renderChats();
-  const wrap = document.getElementById('sync-queue-wrap');
-  const list = document.getElementById('sync-queue-list');
-  const cnt = document.getElementById('sync-queue-count');
-  if (!wrap || !list || !cnt) return;
-  wrap.style.display = '';
-  cnt.textContent = q.queue.length;
-  list.innerHTML = q.queue.map(c => `
-    <div class="queue-item ${c.active ? 'queue-item-active' : ''}">
-      <span class="chat-type-badge">${esc(c.type)}</span>
-      ${c.active ? '<span class="spinner" style="width:10px;height:10px;border-width:2px"></span>' : ''}
-      <span>${esc(c.title)}</span>
-      <span style="margin-left:auto;color:#475569">${c.depth_days ? c.depth_days + 'д' : 'глоб.'}</span>
-    </div>`).join('');
-  if (q.running) {
-    const active = list.querySelector('.queue-item-active');
-    if (active) active.scrollIntoView({ block: 'nearest' });
-  }
-}
-
 export async function pollSync() {
   clearInterval(_syncPollTimer);
-  clearInterval(_queuePollTimer);
-  await Promise.all([_refreshStatus(), _refreshQueue()]);
+  await _refreshStatus();
   _syncPollTimer = setInterval(_refreshStatus, 3000);
-  _queuePollTimer = setInterval(_refreshQueue, 30000);
 }
