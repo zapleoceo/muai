@@ -1,6 +1,7 @@
 import asyncio
 import json
 import logging
+import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from hashlib import sha256
@@ -18,6 +19,7 @@ logger = logging.getLogger(__name__)
 
 _PAGE_SIZE = 50
 _MAX_BYTES = 5_000_000
+_EMBED_DIMS = 512
 
 
 @dataclass
@@ -207,7 +209,7 @@ class MediaEmbedderManager:
         insert_sql = text(
             "INSERT INTO media_chunks "
             "(chat_id, chat_title, chat_username, source_msg_id, source_tg_msg_id, media_type, date_utc, chunk_text, embedding, meta) "
-            "VALUES (:chat_id, :chat_title, :chat_username, :source_msg_id, :source_tg_msg_id, :media_type, :date_utc, :chunk_text, CAST(:emb AS vector), CAST(:meta AS jsonb)) "
+            "VALUES (:chat_id, :chat_title, :chat_username, :source_msg_id, :source_tg_msg_id, :media_type, :date_utc, :chunk_text, CAST(:emb AS vector(512)), CAST(:meta AS jsonb)) "
             "ON CONFLICT (chat_id, source_tg_msg_id) DO NOTHING"
         )
 
@@ -338,6 +340,20 @@ class MediaEmbedderManager:
                                 break
                             continue
 
+                    if not isinstance(emb, list) or len(emb) != _EMBED_DIMS or not all(isinstance(x, (int, float)) and math.isfinite(float(x)) for x in emb):
+                        try:
+                            emb = await embed_text(chunk_text, task_type="RETRIEVAL_DOCUMENT")
+                        except Exception as exc:
+                            meta["embed_text_error"] = str(exc)[:200]
+                            self.status.errors.append(str(exc)[:200])
+                            if "rate-limited" in str(exc).lower():
+                                break
+                            continue
+
+                    if not isinstance(emb, list) or len(emb) != _EMBED_DIMS:
+                        self.status.errors.append(f"bad_embedding_dim:{len(emb) if isinstance(emb, list) else 'none'}")
+                        continue
+
                     vec_str = "[" + ",".join(str(x) for x in emb) + "]"
                     pending_db.append(
                         {
@@ -358,9 +374,9 @@ class MediaEmbedderManager:
             if pending_db:
                 try:
                     async with AsyncSessionLocal() as session:
-                        await session.execute(insert_sql, pending_db)
+                        res = await session.execute(insert_sql, pending_db)
                         await session.commit()
-                    self.status.chunks_added += len(pending_db)
+                    self.status.chunks_added += int(res.rowcount or 0)
                 except Exception as exc:
                     logger.exception("MediaEmbedder: failed to insert chunks")
                     self.status.errors.append(f"db_insert_error: {str(exc)[:200]}")
