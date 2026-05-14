@@ -4,26 +4,35 @@ import logging
 logger = logging.getLogger(__name__)
 
 _COMPOSE_FILE = "/var/www/tgbot/docker-compose.yml"
+_COMPOSE = ["docker", "compose", "-f", _COMPOSE_FILE]
+
+
+async def _run(*cmd: str, check: bool = True) -> str:
+    proc = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.STDOUT,
+    )
+    try:
+        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=300)
+    except asyncio.TimeoutError:
+        proc.kill()
+        raise RuntimeError(f"Command timed out: {' '.join(cmd)}")
+    output = stdout.decode(errors="replace")
+    if check and proc.returncode not in (0, None):
+        raise RuntimeError(f"Command failed (rc={proc.returncode}): {' '.join(cmd)}\n{output}")
+    return output
 
 
 async def get_logs(lines: int = 200) -> str:
     try:
-        proc = await asyncio.create_subprocess_exec(
-            "docker", "compose", "-f", _COMPOSE_FILE,
-            "logs", "bot", f"--tail={lines}", "--no-log-prefix",
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        stdout, _ = await asyncio.wait_for(proc.communicate(), timeout=15)
-        return stdout.decode(errors="replace")
+        return await _run(*_COMPOSE, "logs", "bot", f"--tail={lines}", "--no-log-prefix")
     except Exception as exc:
         return f"Error fetching logs: {exc}"
 
 
 async def run_migration() -> None:
-    proc = await asyncio.create_subprocess_exec(
-        "python",
-        "-c",
+    script = (
         "import asyncio\n"
         "from app.services.plan_executor import ensure_search_infra, ensure_chunk_schema\n"
         "\n"
@@ -32,7 +41,10 @@ async def run_migration() -> None:
         "    await ensure_chunk_schema()\n"
         "    print('schema OK')\n"
         "\n"
-        "asyncio.run(main())\n",
+        "asyncio.run(main())\n"
+    )
+    proc = await asyncio.create_subprocess_exec(
+        "python", "-c", script,
         cwd="/app",
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.STDOUT,
@@ -42,39 +54,28 @@ async def run_migration() -> None:
 
 
 async def run_deploy() -> None:
-    prep_cmds = [
-        ["git", "-C", "/var/www/tgbot", "pull", "origin", "master"],
-        ["docker", "compose", "-f", _COMPOSE_FILE, "build", "bot"],
-    ]
-    for cmd in prep_cmds:
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.STDOUT,
-        )
-        out, _ = await proc.communicate()
-        logger.info("Deploy [%s]:\n%s", " ".join(cmd), out.decode(errors="replace"))
+    logger.info("Deploy: starting")
 
-    stop_cmd = ["docker", "compose", "-f", _COMPOSE_FILE, "stop", "bot"]
-    await asyncio.create_subprocess_exec(
-        *stop_cmd,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-        start_new_session=True,
+    pull_out = await _run(
+        "git", "-C", "/var/www/tgbot", "pull", "origin", "master",
     )
-    rm_cmd = ["docker", "compose", "-f", _COMPOSE_FILE, "rm", "-f", "bot"]
-    await asyncio.create_subprocess_exec(
-        *rm_cmd,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-        start_new_session=True,
-    )
+    logger.info("Deploy [git pull]:\n%s", pull_out)
 
-    up_cmd = ["docker", "compose", "-f", _COMPOSE_FILE, "up", "-d", "bot"]
-    await asyncio.create_subprocess_exec(
-        *up_cmd,
-        stdout=asyncio.subprocess.DEVNULL,
-        stderr=asyncio.subprocess.DEVNULL,
-        start_new_session=True,
-    )
-    logger.info("Deploy [%s]: launched in new session", " ".join(up_cmd))
+    build_out = await _run(*_COMPOSE, "build", "bot")
+    logger.info("Deploy [build]:\n%s", build_out)
+
+    await _run(*_COMPOSE, "stop", "bot", check=False)
+    await _run(*_COMPOSE, "rm", "-f", "bot", check=False)
+    await _run(*_COMPOSE, "up", "-d", "bot")
+
+    await asyncio.sleep(15)
+
+    status_out = await _run(*_COMPOSE, "ps", "bot", "--format", "{{.Status}}", check=False)
+    status = status_out.strip().lower()
+    logger.info("Deploy: container status = %r", status)
+
+    if any(s in status for s in ("restarting", "exited", "unhealthy")):
+        logs = await get_logs(60)
+        logger.error("Deploy: container failed to start.\n%s", logs)
+    else:
+        logger.info("Deploy: container is up OK")
