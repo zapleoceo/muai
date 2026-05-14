@@ -316,6 +316,8 @@ export function renderChats() {
     for (const c of slice) {
       const depth = c.depth_days ? `${c.depth_days}д` : 'глоб.';
       const uname = c.username ? `<span class=\"chat-username\">@${esc(c.username)}</span>` : '';
+      const isUnresolved = /^\d+$/.test(c.title);
+      const isDeleted = c.type === 'deleted' || c.title === '[Удалён]';
       const approveBtn = !isDeleted && c.status !== 'active'
         ? `<button class=\"btn btn-sm btn-success\" data-action=\"approve\" data-id=\"${c.id}\" title=\"Включить синхронизацию\">✓</button>` : '';
       const disableBtn = !isDeleted && c.status === 'active'
@@ -329,8 +331,6 @@ export function renderChats() {
       const topicToggle = topics.length
         ? `<button class=\"topic-toggle\" data-action=\"toggle-topics\" data-id=\"${c.id}\" title=\"${topics.length} веток\">▶</button> ` : '';
       const tgLink = c.username ? `https://t.me/${c.username}` : null;
-      const isUnresolved = /^\d+$/.test(c.title);
-      const isDeleted = c.type === 'deleted' || c.title === '[Удалён]';
       const resolveBtn = (isUnresolved || isDeleted)
         ? `<button class="btn btn-sm btn-ghost" data-action="resolve" data-id="${c.id}" title="Определить владельца через Telegram" style="font-size:0.7rem">🔍</button>`
         : '';
