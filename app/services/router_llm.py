@@ -44,6 +44,7 @@ _ROUTER_POLICIES = (
     "10) Для стратегий SQL_DATE_SUMMARY и HYBRID ставь max_steps=2 и on_empty='RETRY', чтобы можно было сделать второй заход retrieval.\n"
     "11) Не привязывайся к одному дню, если пользователь спрашивает про недельное расписание/афишу: пост часто публикуют накануне. Используй LAST_7_DAYS или более широкий EXPLICIT.\n"
     "12) Если пользователь просит 'последнее сообщение/крайний текст' в конкретном чате — используй sql_recent_messages_by_chat_query (limit 1..5) и не проси подтверждений.\n"
+    "12.1) Если пользователь просит показать медиа определённого типа (например: голосовые/voice, фото/photo, документы/document) в конкретном чате — используй sql_media_messages_by_chat_query.\n"
     "13) Не используй стратегию COMMAND в этом проекте. Если нужны уточнения — используй INFO_ONLY + clarify_question.\n"
     "14) Если пользователь просит саммари/поиск по всей истории ('вся история', 'за всё время') — используй time_range=ALL_TIME.\n"
     "15) Для лучших ответов по умолчанию начинай с более узкого окна и расширяй его только если данных не хватило:\n"
@@ -73,6 +74,7 @@ def _router_tool_catalog() -> str:
         "- sql_search_messages_by_date(scope, time_range, query, limit, chat_types?, chat_ids?)\n"
         "- sql_message_by_tg_ref(chat_username?, chat_id?, telegram_msg_id)\n"
         "- sql_recent_messages_by_chat_query(scope, chat_query, limit, chat_types?)\n"
+        "- sql_media_messages_by_chat_query(scope, chat_query?, media_type, limit, chat_types?, use_time_range?)\n"
         "- sql_messages_by_chat_query_and_date(scope, time_range, chat_query, max_rows, chat_types?)\n"
         "- sql_messages_by_folder_and_date(scope, time_range, folder, max_rows, chat_types?)\n"
         "- sql_messages_by_date(scope, time_range, explicit_from?, explicit_to?, max_rows, chat_types?, chat_ids?)\n"
@@ -641,6 +643,7 @@ def _validate_plan_invariants(plan: Plan) -> None:
                 "sql_lex_search_messages",
                 "sql_message_by_tg_ref",
                 "sql_recent_messages_by_chat_query",
+                "sql_media_messages_by_chat_query",
                 "sql_messages_by_chat_query_and_date",
                 "sql_messages_by_folder_and_date",
             )
@@ -663,6 +666,7 @@ def _validate_plan_invariants(plan: Plan) -> None:
                 "sql_lex_search_messages",
                 "sql_message_by_tg_ref",
                 "sql_recent_messages_by_chat_query",
+                "sql_media_messages_by_chat_query",
                 "sql_messages_by_chat_query_and_date",
                 "sql_messages_by_folder_and_date",
             )

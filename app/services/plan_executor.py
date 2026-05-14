@@ -556,6 +556,101 @@ async def tool_sql_recent_messages_by_chat_query(
     }
 
 
+async def tool_sql_media_messages_by_chat_query(
+    *,
+    scope: PlanScope,
+    chat_id: int,
+    chat_query: str | None,
+    chat_types: list[PlanChatType] | None,
+    media_type: str,
+    limit: int,
+    resolved: ResolvedRange | None = None,
+) -> tuple[list[dict], dict]:
+    q_norm = str(chat_query or "").strip().strip('"').strip("'").lstrip("@")
+    media_norm = str(media_type or "").strip().lower()
+    if not media_norm:
+        return [], {"count": 0, "error": "empty_media_type"}
+
+    async with AsyncSessionLocal() as session:
+        await session.execute(text("SET TRANSACTION READ ONLY"))
+
+        if scope == PlanScope.CURRENT_CHAT:
+            selected_chat = (await session.execute(select(Chat).where(Chat.id == chat_id).limit(1))).scalar_one_or_none()
+        else:
+            if not q_norm:
+                return [], {"count": 0, "error": "empty_chat_query"}
+            like = f"%{q_norm}%"
+            score = (
+                case((Chat.username.ilike(q_norm), 100), else_=0)
+                + case((Chat.title.ilike(q_norm), 90), else_=0)
+                + case((Chat.title.ilike(like), 60), else_=0)
+                + case((Chat.username.ilike(like), 40), else_=0)
+            ).label("score")
+            cq = select(Chat, score).where(or_(Chat.title.ilike(like), Chat.username.ilike(like)))
+            if chat_types:
+                cq = cq.where(Chat.type.in_([ct.value for ct in chat_types]))
+            row = (await session.execute(cq.order_by(score.desc(), Chat.title.asc().nulls_last(), Chat.id.asc()).limit(1))).first()
+            selected_chat = row[0] if row else None
+
+        if not selected_chat:
+            return [], {"count": 0, "chat_query": q_norm, "error": "chat_not_found"}
+
+        q = (
+            select(Message, Chat)
+            .join(Chat, Chat.id == Message.chat_id)
+            .where(Message.chat_id == selected_chat.id)
+            .where(Message.media_type == media_norm)
+        )
+        if resolved:
+            q = q.where(Message.date_utc >= resolved.from_utc, Message.date_utc < resolved.to_utc)
+        q = q.order_by(Message.date_utc.desc()).limit(limit)
+        rows = (await session.execute(q)).all()
+
+    items = []
+    for (m, c) in rows:
+        items.append(
+            {
+                "chat_id": int(m.chat_id),
+                "chat": {
+                    "id": int(m.chat_id),
+                    "type": c.type,
+                    "title": c.title,
+                    "username": c.username,
+                    "folder": c.folder,
+                },
+                "message_id": int(m.id),
+                "telegram_msg_id": int(m.telegram_msg_id) if m.telegram_msg_id is not None else None,
+                "direction": m.direction,
+                "role": "me" if m.direction == "out" else "them",
+                "text": m.text or m.caption or f"[{m.media_type or 'media'}]",
+                "date_utc": m.date_utc.isoformat() if m.date_utc else None,
+                "link": build_message_link(
+                    chat_id=int(m.chat_id),
+                    chat_type=c.type,
+                    chat_username=c.username,
+                    telegram_msg_id=int(m.telegram_msg_id) if m.telegram_msg_id is not None else None,
+                ),
+            }
+        )
+    return items, {
+        "count": len(items),
+        "limit": limit,
+        "media_type": media_norm,
+        "chat_query": q_norm or None,
+        "selected_chat": {
+            "id": int(selected_chat.id),
+            "type": selected_chat.type,
+            "title": selected_chat.title,
+            "username": selected_chat.username,
+            "folder": selected_chat.folder,
+        }
+        if selected_chat
+        else None,
+        "from_utc": resolved.from_utc.isoformat() if resolved else None,
+        "to_utc": resolved.to_utc.isoformat() if resolved else None,
+    }
+
+
 async def tool_sql_find_chats(
     *,
     query: str,
@@ -900,8 +995,8 @@ async def tool_sql_messages_by_folder_and_date(
 _ALLOWED_TOOLS: dict[str, set[str]] = {
     "INFO_ONLY": {"get_recent_dialog"},
     "RAG_SEMANTIC": {"get_recent_dialog", "rag_search", "sql_search_messages", "sql_find_chats", "sql_lex_search_messages"},
-    "SQL_DATE_SUMMARY": {"get_recent_dialog", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date", "sql_stats_by_date", "sql_search_messages", "sql_search_messages_by_date", "sql_find_chats", "sql_lex_search_messages", "sql_message_by_tg_ref", "sql_recent_messages_by_chat_query"},
-    "HYBRID": {"get_recent_dialog", "rag_search", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date", "sql_stats_by_date", "sql_search_messages", "sql_search_messages_by_date", "sql_find_chats", "sql_lex_search_messages", "sql_message_by_tg_ref", "sql_recent_messages_by_chat_query"},
+    "SQL_DATE_SUMMARY": {"get_recent_dialog", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date", "sql_stats_by_date", "sql_search_messages", "sql_search_messages_by_date", "sql_find_chats", "sql_lex_search_messages", "sql_message_by_tg_ref", "sql_recent_messages_by_chat_query", "sql_media_messages_by_chat_query"},
+    "HYBRID": {"get_recent_dialog", "rag_search", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date", "sql_stats_by_date", "sql_search_messages", "sql_search_messages_by_date", "sql_find_chats", "sql_lex_search_messages", "sql_message_by_tg_ref", "sql_recent_messages_by_chat_query", "sql_media_messages_by_chat_query"},
     "COMMAND": set(),
 }
 
@@ -1065,6 +1160,28 @@ async def execute_plan(
                     chat_query=cq,
                     chat_types=chat_types,
                     limit=lim,
+                )
+                ctx.messages.extend(msgs)
+                ctx.tool_runs.append(ToolRun(name=name, ok=True, meta=meta))
+                continue
+
+            if name == "sql_media_messages_by_chat_query":
+                scope = PlanScope(tc.args.get("scope", plan.scope.value))
+                chat_types = tc.args.get("chat_types", plan.chat_types)
+                if chat_types:
+                    chat_types = [PlanChatType(x) for x in chat_types]
+                lim = int(tc.args.get("limit", 30))
+                cq = tc.args.get("chat_query")
+                mt = str(tc.args.get("media_type") or "")
+                use_time = bool(tc.args.get("use_time_range", False))
+                msgs, meta = await tool_sql_media_messages_by_chat_query(
+                    scope=scope,
+                    chat_id=chat_id,
+                    chat_query=str(cq) if cq is not None else None,
+                    chat_types=chat_types,
+                    media_type=mt,
+                    limit=lim,
+                    resolved=resolved if (use_time and resolved) else None,
                 )
                 ctx.messages.extend(msgs)
                 ctx.tool_runs.append(ToolRun(name=name, ok=True, meta=meta))
