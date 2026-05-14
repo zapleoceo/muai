@@ -112,7 +112,8 @@ function _renderEmbedder(d) {
   const errHtml = d.last_errors?.length
     ? `<div style="margin-top:8px;color:#ef4444;font-size:.85rem">Последние ошибки:<br>${d.last_errors.map(e => `• ${esc(e)}`).join('<br>')}</div>`
     : '';
-  const queue = d.pending_by_chat || [];
+  const allowedTypes = new Set(d.chat_types || ['private', 'group']);
+  const queue = (d.pending_by_chat || []).filter(c => !c.chat_type || allowedTypes.has(c.chat_type));
   const maxQ = Math.max(...queue.map(x => x.pending), 1);
   const queueHtml = queue.length
     ? `<div style="margin-top:6px">${queue.slice(0, 12).map(c => `
