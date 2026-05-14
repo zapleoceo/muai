@@ -11,8 +11,8 @@ logger = logging.getLogger(__name__)
 _BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"
 _BASE_URL_V2 = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent"
 _VOYAGE_URL = "https://api.voyageai.com/v1/embeddings"
-_VOYAGE_MODEL = "voyage-3"  # supports output_dimension=768; 200M tokens/month free
-_DIMS = 768
+_VOYAGE_MODEL = "voyage-3-lite"  # native 512 dims; 200M tokens/month free
+_DIMS = 512  # voyage-3-lite=512 native; gemini-embedding-001 supports reduction to 512
 
 
 class _EmbeddingQueue:
@@ -235,7 +235,7 @@ async def _embed_voyage_batch(mgr: Any, *, token_id: int, token: str, texts: lis
         "model": _VOYAGE_MODEL,
         "input": texts,
         "input_type": "document",
-        "output_dimension": _DIMS,
+        # voyage-3-lite native output is 512; no output_dimension needed
     }
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
