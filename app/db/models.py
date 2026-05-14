@@ -136,6 +136,31 @@ class MessageChunk(Base):
     )
 
 
+class MediaChunk(Base):
+    __tablename__ = "media_chunks"
+
+    id = Column(BigInteger, autoincrement=True, primary_key=True)
+    chat_id = Column(BigInteger, ForeignKey("chats.id"), nullable=False)
+    chat_title = Column(Text)
+    chat_username = Column(Text)
+
+    source_msg_id = Column(BigInteger, nullable=False)
+    source_tg_msg_id = Column(BigInteger, nullable=True)
+    media_type = Column(Text, nullable=False)
+    date_utc = Column(TIMESTAMP(timezone=True))
+
+    chunk_text = Column(Text, nullable=False)
+    embedding = Column(Vector(768))
+    meta = Column(JSONB)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    __table_args__ = (
+        UniqueConstraint("chat_id", "source_tg_msg_id", name="uq_media_chunks_chat_tg_msg"),
+        Index("idx_media_chunks_chat", "chat_id"),
+        Index("idx_media_chunks_date", "date_utc"),
+    )
+
+
 class RouterSuggestion(Base):
     __tablename__ = "router_suggestions"
 

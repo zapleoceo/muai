@@ -24,22 +24,6 @@ _SESSION_GAP = timedelta(minutes=20)
 _MAX_CHUNK_CHARS = 3200
 _MAX_CHUNK_MSGS = 40
 
-_embed_task: asyncio.Task | None = None
-
-
-def start_embedder() -> None:
-    global _embed_task
-    if _embed_task and not _embed_task.done():
-        return
-    _embed_task = asyncio.create_task(embed_all_chats())
-
-
-def stop_embedder() -> None:
-    global _embed_task
-    if _embed_task and not _embed_task.done():
-        _embed_task.cancel()
-
-
 # ── status singleton ──────────────────────────────────────────────────────────
 
 @dataclass
@@ -52,6 +36,7 @@ class EmbedderStatus:
     messages_pending: int = 0
     last_run: datetime | None = None
     errors: list[str] = field(default_factory=list)
+    enabled: bool = True
 
 
 _status = EmbedderStatus()
@@ -60,6 +45,7 @@ _status = EmbedderStatus()
 def get_embedder_status() -> dict:
     return {
         "running": _status.running,
+        "enabled": _status.enabled,
         "current_chat": _status.current_chat,
         "chats_done": _status.chats_done,
         "chunks_added": _status.chunks_added,
@@ -388,21 +374,96 @@ async def embed_all_chats() -> None:
     logger.info("Embedder: pass done — %d total chunks, %d pending", _status.total_chunks, _status.messages_pending)
 
 
-async def run_embedder_loop() -> None:
-    """30s boot delay, then embed all, repeat every hour."""
-    async with AsyncSessionLocal() as session:
-        stats = await MessageRepo(session).chunk_stats()
-    _status.total_chunks = stats["total_chunks"]
-    _status.messages_pending = stats["messages_pending"]
+class TextEmbedderManager:
+    def __init__(self) -> None:
+        self._daemon_task: asyncio.Task | None = None
+        self._run_task: asyncio.Task | None = None
+        self._wake = asyncio.Event()
 
-    await asyncio.sleep(30)
-    while True:
-        try:
-            await embed_all_chats()
-        except asyncio.CancelledError:
-            _status.running = False
-            break
-        except Exception:
-            logger.exception("Embedder loop error")
-            _status.running = False
-        await asyncio.sleep(3600)
+    def start(self) -> None:
+        _status.enabled = True
+        self._wake.set()
+
+    def stop(self) -> None:
+        _status.enabled = False
+        task = self._run_task
+        if task and not task.done():
+            task.cancel()
+
+    def is_running(self) -> bool:
+        task = self._run_task
+        return task is not None and not task.done()
+
+    def trigger_once(self) -> None:
+        _status.enabled = True
+        self._wake.set()
+
+    def start_daemon(self) -> None:
+        if self._daemon_task and not self._daemon_task.done():
+            return
+        self._daemon_task = asyncio.create_task(self._run_daemon())
+
+    async def shutdown(self) -> None:
+        self.stop()
+        task = self._daemon_task
+        if task and not task.done():
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+
+    async def _run_daemon(self) -> None:
+        async with AsyncSessionLocal() as session:
+            stats = await MessageRepo(session).chunk_stats()
+        _status.total_chunks = stats["total_chunks"]
+        _status.messages_pending = stats["messages_pending"]
+
+        await asyncio.sleep(30)
+        while True:
+            if not _status.enabled:
+                _status.running = False
+                self._wake.clear()
+                await self._wake.wait()
+                continue
+
+            if self._run_task and not self._run_task.done():
+                self._wake.clear()
+                await self._wake.wait()
+                continue
+
+            self._wake.clear()
+            self._run_task = asyncio.create_task(embed_all_chats())
+            try:
+                await self._run_task
+            except asyncio.CancelledError:
+                _status.running = False
+            except Exception:
+                logger.exception("Embedder loop error")
+                _status.running = False
+
+            if not _status.enabled:
+                continue
+
+            try:
+                await asyncio.wait_for(self._wake.wait(), timeout=3600)
+            except asyncio.TimeoutError:
+                pass
+
+
+_text_embedder_manager: TextEmbedderManager | None = None
+
+
+def get_text_embedder_manager() -> TextEmbedderManager:
+    global _text_embedder_manager
+    if _text_embedder_manager is None:
+        _text_embedder_manager = TextEmbedderManager()
+    return _text_embedder_manager
+
+
+def start_embedder() -> None:
+    get_text_embedder_manager().start()
+
+
+def stop_embedder() -> None:
+    get_text_embedder_manager().stop()

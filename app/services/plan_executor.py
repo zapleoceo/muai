@@ -39,11 +39,33 @@ async def ensure_search_infra() -> None:
 
 async def ensure_chunk_schema() -> None:
     ddl = [
+        "CREATE EXTENSION IF NOT EXISTS vector",
         "ALTER TABLE message_chunks ADD COLUMN IF NOT EXISTS min_msg_id bigint",
         "ALTER TABLE message_chunks ADD COLUMN IF NOT EXISTS msg_count integer",
         "ALTER TABLE message_chunks ADD COLUMN IF NOT EXISTS meta jsonb",
         "CREATE INDEX IF NOT EXISTS idx_chunks_min_msg_id ON message_chunks (min_msg_id)",
         "CREATE INDEX IF NOT EXISTS idx_chunks_max_msg_id ON message_chunks (max_msg_id)",
+        "CREATE INDEX IF NOT EXISTS idx_chunks_embedding_hnsw ON message_chunks USING hnsw (embedding vector_cosine_ops)",
+        """
+        CREATE TABLE IF NOT EXISTS media_chunks (
+            id BIGSERIAL PRIMARY KEY,
+            chat_id BIGINT NOT NULL REFERENCES chats(id),
+            chat_title TEXT,
+            chat_username TEXT,
+            source_msg_id BIGINT NOT NULL,
+            source_tg_msg_id BIGINT,
+            media_type TEXT NOT NULL,
+            date_utc TIMESTAMPTZ,
+            chunk_text TEXT NOT NULL,
+            embedding vector(768),
+            meta jsonb,
+            created_at TIMESTAMPTZ DEFAULT now(),
+            CONSTRAINT uq_media_chunks_chat_tg_msg UNIQUE (chat_id, source_tg_msg_id)
+        )
+        """,
+        "CREATE INDEX IF NOT EXISTS idx_media_chunks_chat ON media_chunks (chat_id)",
+        "CREATE INDEX IF NOT EXISTS idx_media_chunks_date ON media_chunks (date_utc)",
+        "CREATE INDEX IF NOT EXISTS idx_media_chunks_embedding_hnsw ON media_chunks USING hnsw (embedding vector_cosine_ops)",
     ]
     async with AsyncSessionLocal() as session:
         for stmt in ddl:
@@ -250,36 +272,83 @@ async def tool_rag_search(
     q_vec = await embed_text(query, task_type="RETRIEVAL_QUERY")
     async with AsyncSessionLocal() as session:
         await session.execute(text("SET TRANSACTION READ ONLY"))
-        rows = await MessageRepo(session).search_chunks(
+        text_rows = await MessageRepo(session).search_chunks(
             q_vec,
             limit=top_k,
             chat_id=chat_id if scope == PlanScope.CURRENT_CHAT else None,
             chat_ids=chat_ids if scope != PlanScope.CURRENT_CHAT else None,
         )
-    items = [
-        {
-            "chunk_id": int(r.id),
-            "chat_id": int(r.chat_id),
-            "chat_title": r.chat_title,
-            "text": r.chunk_text,
-            "msg_date_from": r.msg_date_from.isoformat() if getattr(r, "msg_date_from", None) else None,
-            "msg_date_to": r.msg_date_to.isoformat() if getattr(r, "msg_date_to", None) else None,
-            "chat_username": getattr(r, "chat_username", None),
-            "max_tg_msg_id": int(getattr(r, "max_tg_msg_id", 0) or 0) or None,
-            "min_msg_id": int(getattr(r, "min_msg_id", 0) or 0) or None,
-            "max_msg_id": int(getattr(r, "max_msg_id", 0) or 0) or None,
-            "msg_count": int(getattr(r, "msg_count", 0) or 0) or None,
-            "meta": getattr(r, "meta", None),
-            "link": build_message_link(
-                chat_id=int(r.chat_id),
-                chat_type=None,
-                chat_username=getattr(r, "chat_username", None),
-                telegram_msg_id=int(getattr(r, "max_tg_msg_id", 0) or 0) or None,
-            ),
-        }
-        for r in rows
-    ]
-    return items, {"count": len(items), "top_k": top_k}
+        media_rows = await MessageRepo(session).search_media_chunks(
+            q_vec,
+            limit=top_k,
+            chat_id=chat_id if scope == PlanScope.CURRENT_CHAT else None,
+            chat_ids=chat_ids if scope != PlanScope.CURRENT_CHAT else None,
+        )
+
+    candidates: list[dict] = []
+    for r in text_rows:
+        dist = float(getattr(r, "distance", 0.0) or 0.0)
+        candidates.append(
+            {
+                "kind": "text",
+                "score": dist,
+                "chunk_id": int(r.id),
+                "chat_id": int(r.chat_id),
+                "chat_title": r.chat_title,
+                "text": r.chunk_text,
+                "msg_date_from": r.msg_date_from.isoformat() if getattr(r, "msg_date_from", None) else None,
+                "msg_date_to": r.msg_date_to.isoformat() if getattr(r, "msg_date_to", None) else None,
+                "chat_username": getattr(r, "chat_username", None),
+                "max_tg_msg_id": int(getattr(r, "max_tg_msg_id", 0) or 0) or None,
+                "min_msg_id": int(getattr(r, "min_msg_id", 0) or 0) or None,
+                "max_msg_id": int(getattr(r, "max_msg_id", 0) or 0) or None,
+                "msg_count": int(getattr(r, "msg_count", 0) or 0) or None,
+                "meta": getattr(r, "meta", None),
+                "link": build_message_link(
+                    chat_id=int(r.chat_id),
+                    chat_type=None,
+                    chat_username=getattr(r, "chat_username", None),
+                    telegram_msg_id=int(getattr(r, "max_tg_msg_id", 0) or 0) or None,
+                ),
+            }
+        )
+
+    for r in media_rows:
+        dist = float(getattr(r, "distance", 0.0) or 0.0)
+        source_tg_msg_id = int(getattr(r, "source_tg_msg_id", 0) or 0) or None
+        candidates.append(
+            {
+                "kind": "media",
+                "score": dist,
+                "chunk_id": -int(r.id),
+                "chat_id": int(r.chat_id),
+                "chat_title": getattr(r, "chat_title", None),
+                "text": r.chunk_text,
+                "msg_date_from": getattr(r, "date_utc", None).isoformat() if getattr(r, "date_utc", None) else None,
+                "msg_date_to": getattr(r, "date_utc", None).isoformat() if getattr(r, "date_utc", None) else None,
+                "chat_username": getattr(r, "chat_username", None),
+                "max_tg_msg_id": source_tg_msg_id,
+                "min_msg_id": None,
+                "max_msg_id": None,
+                "msg_count": 1,
+                "meta": getattr(r, "meta", None),
+                "link": build_message_link(
+                    chat_id=int(r.chat_id),
+                    chat_type=None,
+                    chat_username=getattr(r, "chat_username", None),
+                    telegram_msg_id=source_tg_msg_id,
+                ),
+            }
+        )
+
+    candidates.sort(key=lambda x: float(x.get("score") or 0.0))
+    items = candidates[: max(0, int(top_k))]
+    return items, {
+        "count": len(items),
+        "top_k": top_k,
+        "text_count": len(text_rows),
+        "media_count": len(media_rows),
+    }
 
 
 async def tool_sql_search_messages(

@@ -1,4 +1,5 @@
 import asyncio
+import base64
 import json
 import logging
 from typing import Any
@@ -8,21 +9,68 @@ import httpx
 logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"
+_BASE_URL_V2 = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent"
 _DIMS = 768
 
 
-async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> list[float]:
-    from app.services.tokens import get_token_manager
-    mgr = get_token_manager()
-    lease = await mgr.next_token("embed")
-    if not lease:
-        raise RuntimeError("No tokens with embed capability. Add one in Settings → API токены.")
+class _EmbeddingQueue:
+    def __init__(self) -> None:
+        self._q: asyncio.Queue[tuple[asyncio.Future, Any]] = asyncio.Queue()
+        self._worker: asyncio.Task | None = None
+        self._lock = asyncio.Lock()
 
-    if lease.provider == "gemini":
-        return await _embed_gemini(mgr, token_id=lease.id, token=lease.token, text=text, task_type=task_type)
-    if lease.provider == "openai":
-        return await _embed_openai(mgr, token_id=lease.id, token=lease.token, text=text)
-    raise RuntimeError(f"Embedding provider not supported: {lease.provider}")
+    async def _ensure_worker(self) -> None:
+        async with self._lock:
+            if self._worker and not self._worker.done():
+                return
+            self._worker = asyncio.create_task(self._run())
+
+    async def _run(self) -> None:
+        while True:
+            fut, coro = await self._q.get()
+            try:
+                res = await coro
+                if not fut.cancelled():
+                    fut.set_result(res)
+            except Exception as exc:
+                if not fut.cancelled():
+                    fut.set_exception(exc)
+            finally:
+                self._q.task_done()
+
+    async def submit(self, coro) -> Any:
+        await self._ensure_worker()
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        await self._q.put((fut, coro))
+        return await fut
+
+
+_queue: _EmbeddingQueue | None = None
+
+
+def _get_queue() -> _EmbeddingQueue:
+    global _queue
+    if _queue is None:
+        _queue = _EmbeddingQueue()
+    return _queue
+
+
+async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> list[float]:
+    async def _job() -> list[float]:
+        from app.services.tokens import get_token_manager
+        mgr = get_token_manager()
+        lease = await mgr.next_token("embed")
+        if not lease:
+            raise RuntimeError("No tokens with embed capability. Add one in Settings → API токены.")
+
+        if lease.provider == "gemini":
+            return await _embed_gemini(mgr, token_id=lease.id, token=lease.token, text=text, task_type=task_type)
+        if lease.provider == "openai":
+            return await _embed_openai(mgr, token_id=lease.id, token=lease.token, text=text)
+        raise RuntimeError(f"Embedding provider not supported: {lease.provider}")
+
+    return await _get_queue().submit(_job())
 
 
 async def embed_texts(texts: list[str], task_type: str = "RETRIEVAL_DOCUMENT") -> list[list[float]]:
@@ -32,17 +80,36 @@ async def embed_texts(texts: list[str], task_type: str = "RETRIEVAL_DOCUMENT") -
     if len(items) == 1:
         return [await embed_text(items[0], task_type=task_type)]
 
-    from app.services.tokens import get_token_manager
-    mgr = get_token_manager()
-    lease = await mgr.next_token("embed")
-    if not lease:
-        raise RuntimeError("No tokens with embed capability. Add one in Settings → API токены.")
+    async def _job() -> list[list[float]]:
+        from app.services.tokens import get_token_manager
+        mgr = get_token_manager()
+        lease = await mgr.next_token("embed")
+        if not lease:
+            raise RuntimeError("No tokens with embed capability. Add one in Settings → API токены.")
 
-    if lease.provider == "gemini":
-        return await _embed_gemini_batch(mgr, token_id=lease.id, token=lease.token, texts=items, task_type=task_type)
-    if lease.provider == "openai":
-        return await _embed_openai_batch(mgr, token_id=lease.id, token=lease.token, texts=items)
-    raise RuntimeError(f"Embedding provider not supported: {lease.provider}")
+        if lease.provider == "gemini":
+            return await _embed_gemini_batch(mgr, token_id=lease.id, token=lease.token, texts=items, task_type=task_type)
+        if lease.provider == "openai":
+            return await _embed_openai_batch(mgr, token_id=lease.id, token=lease.token, texts=items)
+        raise RuntimeError(f"Embedding provider not supported: {lease.provider}")
+
+    return await _get_queue().submit(_job())
+
+
+async def embed_gemini_multimodal(
+    *,
+    parts: list[dict],
+    output_dimensionality: int = _DIMS,
+) -> list[float]:
+    async def _job() -> list[float]:
+        from app.services.tokens import get_token_manager
+        mgr = get_token_manager()
+        lease = await mgr.next_token("embed", provider="gemini")
+        if not lease:
+            raise RuntimeError("No Gemini tokens with embed capability. Add one in Settings → API токены.")
+        return await _embed_gemini_v2(mgr, token_id=lease.id, token=lease.token, parts=parts, output_dimensionality=output_dimensionality)
+
+    return await _get_queue().submit(_job())
 
 
 async def _embed_gemini(mgr: Any, *, token_id: int, token: str, text: str, task_type: str) -> list[float]:
@@ -104,6 +171,40 @@ async def _embed_gemini_batch(mgr: Any, *, token_id: int, token: str, texts: lis
         raise RuntimeError(f"Embedding API network error: {str(exc)[:200]}") from exc
 
 
+async def _embed_gemini_v2(
+    mgr: Any,
+    *,
+    token_id: int,
+    token: str,
+    parts: list[dict],
+    output_dimensionality: int,
+) -> list[float]:
+    payload = {
+        "model": "models/gemini-embedding-2",
+        "content": {"parts": parts},
+        "outputDimensionality": int(output_dimensionality),
+    }
+    url = f"{_BASE_URL_V2}?key={token}"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(90.0)) as client:
+            resp = await client.post(url, json=payload)
+        if resp.status_code == 429:
+            await mgr.on_rate_limit(token_id)
+            raise RuntimeError("Embedding API error 429: rate-limited")
+        if resp.status_code >= 400:
+            await mgr.on_error(token_id)
+            raise RuntimeError(f"Embedding API error {resp.status_code}: {resp.text[:200]}")
+        data = resp.json()
+        emb = data.get("embedding") or {}
+        values = emb.get("values")
+        if not isinstance(values, list):
+            raise RuntimeError("Embedding API error: missing embedding values")
+        return values
+    except (httpx.TransportError, asyncio.TimeoutError) as exc:
+        await mgr.on_error(token_id)
+        raise RuntimeError(f"Embedding API network error: {str(exc)[:200]}") from exc
+
+
 _openai_clients: dict[str, object] = {}
 
 
@@ -157,3 +258,12 @@ async def _embed_openai_batch(mgr: Any, *, token_id: int, token: str, texts: lis
         else:
             await mgr.on_error(token_id)
         raise
+
+
+def inline_data_part(*, mime_type: str, data: bytes) -> dict:
+    return {
+        "inlineData": {
+            "mimeType": str(mime_type),
+            "data": base64.b64encode(data).decode(),
+        }
+    }

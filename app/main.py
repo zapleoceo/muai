@@ -70,17 +70,18 @@ async def lifespan(app: FastAPI):
     from app.userbot.client import start_userbot
     await start_userbot()
 
-    import asyncio
-    from app.services.embedder import run_embedder_loop
-    embedder_task = asyncio.create_task(run_embedder_loop())
+    from app.services.embedder import get_text_embedder_manager
+    from app.services.media_embedder import get_media_embedder_manager
+
+    text_embedder = get_text_embedder_manager()
+    text_embedder.start_daemon()
+    media_embedder = get_media_embedder_manager()
+    media_embedder.start_daemon()
 
     yield
 
-    embedder_task.cancel()
-    try:
-        await embedder_task
-    except asyncio.CancelledError:
-        pass
+    await media_embedder.shutdown()
+    await text_embedder.shutdown()
     from app.services.sync_manager import get_sync_manager
     await get_sync_manager().shutdown()
     from app.userbot.client import stop_userbot

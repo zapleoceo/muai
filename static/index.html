@@ -60,6 +60,27 @@
       <div id="embedder-status">Загрузка…</div>
     </div>
 
+    <div class="section">
+      <div class="section-header">
+        <h2>📎 Файлы (эмбеддинг)</h2>
+        <div class="section-actions">
+          <button class="btn-icon" onclick="loadMediaEmbedder()" title="Обновить">↻</button>
+          <button class="btn-icon btn-icon-green" id="media-embedder-toggle-btn" onclick="toggleMediaEmbedder()" title="Запустить эмбеддинг файлов">▶</button>
+          <button class="btn-icon" onclick="clearMediaChunks()" title="Очистить файловые чанки" style="color:#ef4444">🗑</button>
+        </div>
+      </div>
+      <div style="margin-bottom:10px;color:#94a3b8;font-size:.9rem">Типы файлов для обработки</div>
+      <div id="media-embedder-types" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+        <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" value="document">document</label>
+        <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" value="photo">photo</label>
+        <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" value="voice">voice</label>
+        <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" value="audio">audio</label>
+        <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" value="video">video</label>
+        <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" value="video_note">video_note</label>
+      </div>
+      <div id="media-embedder-status">Загрузка…</div>
+    </div>
+
     <details class="section" id="logs-section">
       <summary class="section-header">
         <h2>Логи бота</h2>

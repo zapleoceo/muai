@@ -66,7 +66,7 @@ def _router_tool_catalog() -> str:
         "- COMMAND: только явные команды, опасно.\n\n"
         "TOOLS:\n"
         "- get_recent_dialog(chat_id, limit)\n"
-        "- rag_search(scope, query, top_k)\n"
+        "- rag_search(scope, query, top_k)  # ищет по векторным чанкам текста и файлов (message_chunks + media_chunks)\n"
         "- sql_find_chats(query, limit, chat_types?)\n"
         "- sql_lex_search_messages(scope, query, limit, chat_types?, chat_ids?, use_time_range?)\n"
         "- sql_search_messages(scope, query, limit, chat_types?, chat_ids?)\n"

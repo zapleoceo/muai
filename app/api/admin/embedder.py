@@ -1,10 +1,12 @@
 from fastapi import APIRouter, Depends
+from pydantic import BaseModel
 from sqlalchemy import text
 
 from app.api.auth import require_owner
 from app.db.database import AsyncSessionLocal
 from app.db.repository import MessageRepo
 from app.services.embedder import get_embedder_status, start_embedder, stop_embedder
+from app.services.media_embedder import get_media_embedder_manager
 
 router = APIRouter()
 
@@ -35,3 +37,47 @@ async def clear_chunks(_uid: int = Depends(require_owner)) -> dict:
         result = await session.execute(text("DELETE FROM message_chunks"))
         await session.commit()
     return {"deleted": result.rowcount}
+
+
+class MediaStartBody(BaseModel):
+    types: list[str] = []
+
+
+@router.get("/admin/media-embedder/status")
+async def media_embedder_status(_uid: int = Depends(require_owner)) -> dict:
+    mgr = get_media_embedder_manager()
+    stats = await mgr.get_stats()
+    s = mgr.status
+    return {
+        "running": s.running,
+        "enabled": s.enabled,
+        "current_item": s.current_item,
+        "items_done": s.items_done,
+        "chunks_added": s.chunks_added,
+        "total_chunks": stats["total_chunks"],
+        "pending": stats["pending"],
+        "last_run": s.last_run.isoformat() if s.last_run else None,
+        "types": s.types,
+        "last_errors": s.errors[-5:],
+    }
+
+
+@router.post("/admin/media-embedder/start")
+async def media_embedder_start(body: MediaStartBody, _uid: int = Depends(require_owner)) -> dict:
+    mgr = get_media_embedder_manager()
+    mgr.start(types=body.types)
+    return {"status": "started", "types": mgr.status.types}
+
+
+@router.post("/admin/media-embedder/stop")
+async def media_embedder_stop(_uid: int = Depends(require_owner)) -> dict:
+    mgr = get_media_embedder_manager()
+    mgr.stop()
+    return {"status": "stopped"}
+
+
+@router.delete("/admin/media-embedder/chunks")
+async def media_embedder_clear(_uid: int = Depends(require_owner)) -> dict:
+    mgr = get_media_embedder_manager()
+    deleted = await mgr.clear_chunks()
+    return {"deleted": deleted}

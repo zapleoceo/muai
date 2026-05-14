@@ -80,10 +80,40 @@ class ChunkRepo:
             params["chat_ids"] = chat_ids
         rows = (await self.session.execute(
             text(
-                "SELECT id, chat_id, chat_title, chunk_text, msg_date_from, msg_date_to, chat_username, max_tg_msg_id, min_msg_id, max_msg_id, msg_count, meta "
+                "SELECT id, chat_id, chat_title, chunk_text, msg_date_from, msg_date_to, chat_username, max_tg_msg_id, min_msg_id, max_msg_id, msg_count, meta, "
+                "(embedding <=> CAST(:vec AS vector)) AS distance "
                 "FROM message_chunks "
                 f"{where} "
-                "ORDER BY embedding <=> CAST(:vec AS vector) "
+                "ORDER BY distance "
+                "LIMIT :lim"
+            ),
+            params,
+        )).fetchall()
+        return rows
+
+    async def search_media_chunks(
+        self,
+        embedding: list[float],
+        limit: int = 12,
+        chat_id: int | None = None,
+        chat_ids: list[int] | None = None,
+    ):
+        vec_str = "[" + ",".join(str(x) for x in embedding) + "]"
+        where = "WHERE embedding IS NOT NULL"
+        params: dict[str, object] = {"vec": vec_str, "lim": limit}
+        if chat_id is not None:
+            where += " AND chat_id = :chat_id"
+            params["chat_id"] = chat_id
+        elif chat_ids:
+            where += " AND chat_id = ANY(CAST(:chat_ids AS bigint[]))"
+            params["chat_ids"] = chat_ids
+        rows = (await self.session.execute(
+            text(
+                "SELECT id, chat_id, chat_title, chat_username, source_tg_msg_id, media_type, date_utc, chunk_text, meta, "
+                "(embedding <=> CAST(:vec AS vector)) AS distance "
+                "FROM media_chunks "
+                f"{where} "
+                "ORDER BY distance "
                 "LIMIT :lim"
             ),
             params,

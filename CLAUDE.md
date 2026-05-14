@@ -93,6 +93,8 @@ messages        id(PK), chat_id(FK), user_id(FK), telegram_msg_id, direction(in/
 settings        key(PK), value   ← JSON blobs for global config (key="sync_settings")
 api_tokens      id(PK), provider, token, label, capabilities(JSONB), is_active, created_at, last_used_at, error_count
 chat_sync_config chat_id(PK/FK→chats), enabled, depth_days, approved_at, skip_reason, created_at
+message_chunks  chat_id, chunk_text, embedding(vector), msg_date_from/to, msg id ranges, meta(jsonb)
+media_chunks    chat_id, source_tg_msg_id, media_type, chunk_text, embedding(vector), meta(jsonb)
 ```
 
 **Applying migrations:** The container has no psycopg2, so Alembic can't run directly.
@@ -111,6 +113,8 @@ docker compose exec -T db psql -U bot tgbot -c "CREATE TABLE ..."
 | `get_token_manager()` | `app.services.tokens` | API key rotation + daily limit tracking |
 | `get_sync_manager()` | `app.services.sync_manager` | Sync task ref + per-chat cancellation |
 | `get_client()` | `app.userbot.client` | Telethon TelegramClient |
+| `get_text_embedder_manager()` | `app.services.embedder` | Text chunk embedder daemon + start/stop |
+| `get_media_embedder_manager()` | `app.services.media_embedder` | Media/file embedder daemon + start/stop |
 
 All singletons are initialized in `app/main.py` lifespan, in this order:
 1. DB `create_all`
@@ -258,6 +262,46 @@ ssh hetzner-root "docker compose -f /var/www/tgbot/docker-compose.yml logs -f --
 4. Register router in `app/main.py` if new file
 5. Frontend → update `static/index.html`
 6. Commit, push → GitHub Actions auto-deploys
+
+---
+
+## Embedding (text + media)
+
+### High-level
+
+- Text embedding produces rows in `message_chunks` from `messages.text/caption`.
+- Media embedding produces rows in `media_chunks` from `messages.media_type`:
+  - media is downloaded transiently (bytes in memory), embedded, and discarded
+  - only `chunk_text`, `embedding`, and metadata are stored
+
+### Queue and token safety
+
+All embedding calls go through a single async queue in `app/llm/embedding.py`. This prevents parallel workers from competing for tokens and causing unnecessary 429 spikes.
+
+### Text embedder
+
+- Service: `app/services/embedder.py`
+- Controlled via `TextEmbedderManager` (daemon + cancellable runs).
+- Admin API:
+  - `POST /api/admin/embedder/restart` (enables and triggers a pass)
+  - `POST /api/admin/embedder/stop`
+  - `GET /api/admin/embedder/status`
+  - `DELETE /api/admin/embedder/chunks`
+
+### Media embedder (files)
+
+- Service: `app/services/media_embedder.py`
+- Writes to `media_chunks` only (separate from `message_chunks`).
+- Uses the same token pool/cooldown rotation as text embedding (via the shared embedding queue).
+- Admin API:
+  - `GET /api/admin/media-embedder/status`
+  - `POST /api/admin/media-embedder/start` with JSON `{ "types": ["document","photo","voice", ...] }`
+  - `POST /api/admin/media-embedder/stop`
+  - `DELETE /api/admin/media-embedder/chunks`
+
+### RAG search
+
+`rag_search` searches both `message_chunks` and `media_chunks`, merges results by vector distance, and passes them to rerank/answer as a single chunk list.
 
 ---
 

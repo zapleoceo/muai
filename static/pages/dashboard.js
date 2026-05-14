@@ -16,6 +16,22 @@ function _updateEmbedderBtn(running) {
   }
 }
 
+function _updateMediaEmbedderBtn(running) {
+  const btn = document.getElementById('media-embedder-toggle-btn');
+  if (!btn) return;
+  if (running) {
+    btn.textContent = '■';
+    btn.title = 'Остановить эмбеддинг файлов';
+    btn.dataset.running = '1';
+    btn.style.color = '#ef4444';
+  } else {
+    btn.textContent = '▶';
+    btn.title = 'Запустить эмбеддинг файлов';
+    btn.dataset.running = '0';
+    btn.style.color = '';
+  }
+}
+
 export async function loadStats() {
   const r = await apiFetch('/api/admin/stats');
   if (r.status === 401) {
@@ -40,7 +56,8 @@ export async function loadStats() {
       <div class="value">${fmt(t.users)}</div>
     </div>
     <div class="card"><div class="label">Размер БД</div><div class="value" style="font-size:1.3rem">${t.db_size || '—'}</div><div class="sub">сообщения: ${t.messages_size || '—'}</div></div>
-    <div class="card"><div class="label">Чанков (мозг)</div><div class="value">${fmt(t.chunks || 0)}</div><div class="sub">в ${fmt(t.embedded_chats || 0)} чатах</div></div>
+    <div class="card"><div class="label">Чанки (текст)</div><div class="value">${fmt(t.chunks || 0)}</div><div class="sub">в ${fmt(t.embedded_chats || 0)} чатах</div></div>
+    <div class="card"><div class="label">Чанки (файлы)</div><div class="value">${fmt(t.media_chunks || 0)}</div><div class="sub">в ${fmt(t.media_embedded_chats || 0)} чатах</div></div>
     <div class="card">
       <div class="label">Сообщений за 7 дней</div>
       <div class="day-chart" id="daily-chart"></div>
@@ -137,6 +154,80 @@ export async function loadEmbedder() {
     </div>
     <div style="font-size:.9rem;color:#94a3b8">Очередь чанкования</div>
     ${queueHtml}
+    ${errHtml}`;
+}
+
+function _selectedMediaTypes() {
+  const box = document.getElementById('media-embedder-types');
+  if (!box) return [];
+  return Array.from(box.querySelectorAll('input[type=checkbox]'))
+    .filter(x => x.checked)
+    .map(x => x.value);
+}
+
+export async function clearMediaChunks() {
+  const ok = confirm(
+    '⚠️ Очистка базы файловых чанков\n\n' +
+    'Будут удалены ВСЕ чанки файлов.\n\n' +
+    'Продолжить?'
+  );
+  if (!ok) return;
+  const r = await apiFetch('/api/admin/media-embedder/chunks', { method: 'DELETE' });
+  if (r.ok) {
+    const d = await r.json();
+    await loadMediaEmbedder();
+    alert(`Удалено ${d.deleted} файловых чанков.`);
+  }
+}
+
+export async function toggleMediaEmbedder() {
+  const btn = document.getElementById('media-embedder-toggle-btn');
+  const running = btn.dataset.running === '1';
+  if (running) {
+    await apiFetch('/api/admin/media-embedder/stop', { method: 'POST' });
+  } else {
+    const types = _selectedMediaTypes();
+    if (!types.length) {
+      alert('Выбери хотя бы один тип файла');
+      return;
+    }
+    await apiFetch('/api/admin/media-embedder/start', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ types }),
+    });
+  }
+  await loadMediaEmbedder();
+}
+
+export async function loadMediaEmbedder() {
+  const box = document.getElementById('media-embedder-status');
+  if (!box) return;
+  const r = await apiFetch('/api/admin/media-embedder/status');
+  if (!r.ok) {
+    box.innerHTML = '<span style="color:#ef4444">Ошибка загрузки</span>';
+    return;
+  }
+  const d = await r.json();
+  _updateMediaEmbedderBtn(d.running);
+  const runBadge = d.running
+    ? `<span class="badge badge-active">⚙️ работает</span> <b>${esc(d.current_item || '')}</b>`
+    : `<span class="badge badge-disabled">⏸ ожидание</span>`;
+  const lastRunHtml = d.last_run
+    ? `<div>Последний запуск: <b>${new Date(d.last_run).toLocaleString('ru')}</b></div>`
+    : '';
+  const errHtml = d.last_errors?.length
+    ? `<div style="margin-top:8px;color:#ef4444;font-size:.85rem">Последние ошибки:<br>${d.last_errors.map(e => `• ${esc(e)}`).join('<br>')}</div>`
+    : '';
+  box.innerHTML = `
+    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+      <div>${runBadge}</div>
+      <div>Обработано: <b>${fmt(d.items_done || 0)}</b></div>
+      <div>Добавлено чанков: <b>${fmt(d.chunks_added || 0)}</b></div>
+      <div>Всего: <b>${fmt(d.total_chunks || 0)}</b></div>
+      <div>Ожидают: <b style="color:${d.pending > 0 ? '#fbbf24' : '#4ade80'}">${fmt(d.pending ?? '—')}</b></div>
+      ${lastRunHtml}
+    </div>
     ${errHtml}`;
 }
 
