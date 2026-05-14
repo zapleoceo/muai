@@ -87,6 +87,7 @@ async function bootstrap() {
   window.toggleToken = settings.toggleToken;
   window.toggleTokenCapsEditor = settings.toggleTokenCapsEditor;
   window.saveTokenCaps = settings.saveTokenCaps;
+  window.onProviderChange = settings.onProviderChange;
 
   window.loadImprovements = improvements.loadImprovements;
   window.onImprovementStatus = improvements.onImprovementStatus;

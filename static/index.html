@@ -191,11 +191,12 @@
       </div>
       <div id="tokens-list">Загрузка…</div>
       <div class="token-add">
-        <select class="inp" id="inp-token-provider" style="flex:0 0 auto">
+        <select class="inp" id="inp-token-provider" style="flex:0 0 auto" onchange="onProviderChange()">
           <option value="gemini">Gemini</option>
           <option value="deepseek">DeepSeek</option>
           <option value="openai">OpenAI</option>
           <option value="groq">Groq</option>
+          <option value="voyage">Voyage AI (embed)</option>
         </select>
         <input class="inp inp-token" id="inp-token" type="password" placeholder="API ключ" autocomplete="off">
         <input class="inp inp-label" id="inp-token-label" type="text" placeholder="Метка (необязательно)">
@@ -213,7 +214,8 @@
       </div>
       <p style="font-size:0.72rem;color:#475569;margin-top:8px">
         Gemini: при 429 токен уходит на cooldown 60 сек, система переходит на следующий.<br>
-        DeepSeek: при 429 токен уходит на cooldown 60 сек, система переходит на следующий (требует <code>LLM_PROVIDER=deepseek</code> в .env).
+        DeepSeek: при 429 токен уходит на cooldown 60 сек, система переходит на следующий (требует <code>LLM_PROVIDER=deepseek</code> в .env).<br>
+        Voyage AI: только эмбеддинг, 200M токенов/месяц бесплатно, без суточного лимита. <a href="https://www.voyageai.com/" target="_blank" style="color:#7c3aed">voyageai.com</a>
       </p>
     </div>
   </div>

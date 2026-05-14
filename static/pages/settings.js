@@ -81,15 +81,21 @@ export async function saveSettings() {
   }
 }
 
-function syncTokenCapsDefaults() {
+export function onProviderChange() {
   const provider = document.getElementById('inp-token-provider').value;
   const chat = document.getElementById('cap-chat');
   const embed = document.getElementById('cap-embed');
+  if (provider === 'voyage') {
+    chat.checked = false;
+    embed.checked = true;
+    return;
+  }
   if (provider === 'gemini' || provider === 'openai') {
     chat.checked = true;
     embed.checked = true;
     return;
   }
+  // groq, deepseek — chat only
   chat.checked = true;
   embed.checked = false;
 }
