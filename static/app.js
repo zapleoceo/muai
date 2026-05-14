@@ -73,6 +73,7 @@ async function bootstrap() {
   window.toggleSync = chats.toggleSync;
   window.pollSync = chats.pollSync;
   window.onSyncTypeChange = chats.onSyncTypeChange;
+  window.approvePending = chats.approvePending;
 
   window.loadSettings = settings.loadSettings;
   window.saveSettings = settings.saveSettings;

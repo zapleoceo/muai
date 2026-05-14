@@ -53,3 +53,7 @@ async def delete_chat_messages(chat_id: int) -> int:
 
 async def auto_approve_existing_chats() -> int:
     return await _config.auto_approve_existing_chats()
+
+
+async def approve_all_pending(types: list[str] | None = None, depth_days: int | None = None) -> int:
+    return await _config.approve_all_pending(types=types, depth_days=depth_days)

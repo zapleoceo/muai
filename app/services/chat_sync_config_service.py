@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert
 
 from app.db.database import AsyncSessionLocal
@@ -71,6 +71,28 @@ class ChatSyncConfigService:
             )
             await session.execute(stmt)
             await session.commit()
+
+    async def approve_all_pending(self, types: list[str] | None = None, depth_days: int | None = None) -> int:
+        now = datetime.now(tz=timezone.utc)
+        async with AsyncSessionLocal() as session:
+            q = (
+                select(ChatSyncConfig.chat_id)
+                .join(Chat, Chat.id == ChatSyncConfig.chat_id)
+                .where(ChatSyncConfig.enabled.is_(False))
+                .where(ChatSyncConfig.approved_at.is_(None))
+            )
+            if types:
+                q = q.where(Chat.type.in_(types))
+            ids = (await session.execute(q)).scalars().all()
+            if not ids:
+                return 0
+            await session.execute(
+                update(ChatSyncConfig)
+                .where(ChatSyncConfig.chat_id.in_(ids))
+                .values(enabled=True, approved_at=now, depth_days=depth_days, skip_reason=None)
+            )
+            await session.commit()
+            return len(ids)
 
     async def auto_approve_existing_chats(self) -> int:
         async with AsyncSessionLocal() as session:

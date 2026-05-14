@@ -405,6 +405,23 @@ async function _refreshStatus() {
   _syncWasRunning = s.running;
 }
 
+export async function approvePending(btn) {
+  const pendingCount = _allChats.filter(c => c.status === 'pending').length;
+  if (!pendingCount) { alert('Нет чатов в статусе «ожидает»'); return; }
+  if (!confirm(`Одобрить ${pendingCount} чатов для синхронизации?`)) return;
+  await withBtn(btn, async () => {
+    const r = await apiFetch('/api/admin/chats/approve-pending', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    if (!r.ok) { alert('Ошибка: ' + r.status); return; }
+    const d = await r.json();
+    await loadChats();
+    alert(`Одобрено ${d.approved} чатов`);
+  });
+}
+
 export async function pollSync() {
   clearInterval(_syncPollTimer);
   await _refreshStatus();

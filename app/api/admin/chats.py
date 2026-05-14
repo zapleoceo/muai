@@ -112,6 +112,17 @@ async def delete_messages(chat_id: int, _uid: int = Depends(require_owner)) -> d
     return {"deleted": deleted, "chat_id": chat_id}
 
 
+class ApprovePendingBody(BaseModel):
+    types: list[str] = []
+    depth_days: int | None = None
+
+
+@router.post("/admin/chats/approve-pending")
+async def approve_pending(body: ApprovePendingBody, _uid: int = Depends(require_owner)) -> dict:
+    count = await cs.approve_all_pending(types=body.types or None, depth_days=body.depth_days)
+    return {"ok": True, "approved": count}
+
+
 @router.post("/admin/chats/sync-folders")
 async def sync_folders(_uid: int = Depends(require_owner)) -> dict:
     try:
