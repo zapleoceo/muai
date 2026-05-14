@@ -261,6 +261,58 @@ async def tool_sql_stats_by_date(
     return {"messages": int(total)}, {"from_utc": resolved.from_utc.isoformat(), "to_utc": resolved.to_utc.isoformat()}
 
 
+async def tool_sql_active_chats_by_date(
+    *,
+    chat_id: int,
+    scope: PlanScope,
+    chat_types: list[PlanChatType] | None,
+    chat_ids: list[int] | None,
+    resolved: ResolvedRange,
+    limit: int = 50,
+) -> tuple[list[dict], dict]:
+    async with AsyncSessionLocal() as session:
+        await session.execute(text("SET TRANSACTION READ ONLY"))
+        q = (
+            select(
+                Chat.id.label("chat_id"),
+                Chat.type.label("chat_type"),
+                Chat.title.label("chat_title"),
+                Chat.username.label("chat_username"),
+                func.count(Message.id).label("message_count"),
+                func.max(Message.date_utc).label("last_date_utc"),
+            )
+            .join(Message, Message.chat_id == Chat.id)
+            .where(Message.date_utc >= resolved.from_utc, Message.date_utc < resolved.to_utc)
+        )
+        if chat_types:
+            q = q.where(Chat.type.in_([ct.value for ct in chat_types]))
+        if scope == PlanScope.CURRENT_CHAT:
+            q = q.where(Chat.id == chat_id)
+        elif chat_ids:
+            q = q.where(Chat.id.in_(chat_ids))
+        q = q.group_by(Chat.id, Chat.type, Chat.title, Chat.username).order_by(func.count(Message.id).desc()).limit(limit)
+        rows = (await session.execute(q)).all()
+
+    items = []
+    for r in rows:
+        items.append(
+            {
+                "chat_id": int(r.chat_id),
+                "type": str(r.chat_type),
+                "title": r.chat_title,
+                "username": r.chat_username,
+                "message_count": int(r.message_count or 0),
+                "last_date_utc": r.last_date_utc.isoformat() if r.last_date_utc else None,
+            }
+        )
+    return items, {
+        "count": len(items),
+        "limit": int(limit),
+        "from_utc": resolved.from_utc.isoformat(),
+        "to_utc": resolved.to_utc.isoformat(),
+    }
+
+
 async def tool_rag_search(
     *,
     chat_id: int,
@@ -995,8 +1047,8 @@ async def tool_sql_messages_by_folder_and_date(
 _ALLOWED_TOOLS: dict[str, set[str]] = {
     "INFO_ONLY": {"get_recent_dialog"},
     "RAG_SEMANTIC": {"get_recent_dialog", "rag_search", "sql_search_messages", "sql_find_chats", "sql_lex_search_messages"},
-    "SQL_DATE_SUMMARY": {"get_recent_dialog", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date", "sql_stats_by_date", "sql_search_messages", "sql_search_messages_by_date", "sql_find_chats", "sql_lex_search_messages", "sql_message_by_tg_ref", "sql_recent_messages_by_chat_query", "sql_media_messages_by_chat_query"},
-    "HYBRID": {"get_recent_dialog", "rag_search", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date", "sql_stats_by_date", "sql_search_messages", "sql_search_messages_by_date", "sql_find_chats", "sql_lex_search_messages", "sql_message_by_tg_ref", "sql_recent_messages_by_chat_query", "sql_media_messages_by_chat_query"},
+    "SQL_DATE_SUMMARY": {"get_recent_dialog", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date", "sql_stats_by_date", "sql_active_chats_by_date", "sql_search_messages", "sql_search_messages_by_date", "sql_find_chats", "sql_lex_search_messages", "sql_message_by_tg_ref", "sql_recent_messages_by_chat_query", "sql_media_messages_by_chat_query"},
+    "HYBRID": {"get_recent_dialog", "rag_search", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date", "sql_stats_by_date", "sql_active_chats_by_date", "sql_search_messages", "sql_search_messages_by_date", "sql_find_chats", "sql_lex_search_messages", "sql_message_by_tg_ref", "sql_recent_messages_by_chat_query", "sql_media_messages_by_chat_query"},
     "COMMAND": set(),
 }
 
@@ -1085,6 +1137,29 @@ async def execute_plan(
                     resolved=resolved,
                 )
                 ctx.stats.update(stats)
+                ctx.tool_runs.append(ToolRun(name=name, ok=True, meta=meta))
+                continue
+
+            if name == "sql_active_chats_by_date":
+                if not resolved:
+                    raise ValueError("time_range required")
+                scope = PlanScope(tc.args.get("scope", plan.scope.value))
+                chat_types = tc.args.get("chat_types", plan.chat_types)
+                if chat_types:
+                    chat_types = [PlanChatType(x) for x in chat_types]
+                chat_ids = tc.args.get("chat_ids", plan.chat_ids)
+                if chat_ids:
+                    chat_ids = [int(x) for x in chat_ids]
+                lim = int(tc.args.get("limit", 50))
+                items, meta = await tool_sql_active_chats_by_date(
+                    chat_id=chat_id,
+                    scope=scope,
+                    chat_types=chat_types,
+                    chat_ids=chat_ids,
+                    resolved=resolved,
+                    limit=lim,
+                )
+                ctx.meta["active_chats"] = items
                 ctx.tool_runs.append(ToolRun(name=name, ok=True, meta=meta))
                 continue
 

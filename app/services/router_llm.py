@@ -560,6 +560,22 @@ _QUERY_FEWSHOTS: list[tuple[str, dict]] = [
             "notes": None,
         },
     ),
+    (
+        "а есть чаты в базе за вчера?",
+        {
+            "output_shape": "ANALYTICS",
+            "operation": "SEARCH",
+            "need_proof": False,
+            "precision_bias": "BALANCED",
+            "constraints": {"scope": "ALL_CHATS", "time_range": "YESTERDAY", "limit": 50},
+            "query_variants": [],
+            "subqueries": [],
+            "clarify_question": None,
+            "max_steps": 2,
+            "on_empty": "RETRY",
+            "notes": None,
+        },
+    ),
 ]
 
 _FEWSHOTS = _QUERY_FEWSHOTS
@@ -994,20 +1010,39 @@ def _compile_query_model_to_plan(*, query_model: QueryModel, query: str) -> Plan
         return plan
 
     if query_model.output_shape == QueryOutputShape.ANALYTICS:
-        cq = "Что именно нужно посчитать (какой показатель), по каким чатам и за какой период?"
+        tr = time_range
+        if tr.value == "NONE":
+            tr = PlanTimeRange.LAST_7_DAYS
+            explicit_from = None
+            explicit_to = None
         plan = Plan(
-            strategy=PlanStrategy.INFO_ONLY,
-            tools=base_tools,
-            time_range=PlanTimeRange.NONE,
-            scope=PlanScope.CURRENT_CHAT,
-            chat_types=None,
-            chat_ids=None,
-            explicit_from=None,
-            explicit_to=None,
-            clarify_question=cq,
-            max_steps=1,
-            on_empty=PlanOnEmpty.ASK_CLARIFY,
-            notes="compiled:analytics_clarify",
+            strategy=PlanStrategy.SQL_DATE_SUMMARY,
+            tools=base_tools
+            + [
+                PlanToolCall(
+                    name="sql_active_chats_by_date",
+                    args={
+                        "scope": c.scope.value,
+                        "limit": int(c.limit or 50),
+                        "chat_types": [ct.value for ct in (chat_types or [])] or None,
+                        "chat_ids": c.chat_ids,
+                    },
+                ),
+                PlanToolCall(
+                    name="sql_stats_by_date",
+                    args={"scope": c.scope.value, "chat_types": [ct.value for ct in (chat_types or [])] or None, "chat_ids": c.chat_ids},
+                ),
+            ],
+            time_range=tr,
+            scope=c.scope,
+            chat_types=chat_types,
+            chat_ids=c.chat_ids,
+            explicit_from=explicit_from,
+            explicit_to=explicit_to,
+            clarify_question=None,
+            max_steps=max(2, int(query_model.max_steps or 2)),
+            on_empty=PlanOnEmpty.RETRY,
+            notes="compiled:analytics",
         )
         _validate_plan_invariants(plan)
         return plan
