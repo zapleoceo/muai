@@ -202,6 +202,7 @@ async def execute_plan(
                     scope=PlanScope(tc.args.get("scope", plan.scope.value)),
                     chat_types=_coerce_chat_types(tc.args.get("chat_types", plan.chat_types)),
                     chat_ids=_coerce_chat_ids(tc.args.get("chat_ids", plan.chat_ids)),
+                    chat_query=str(tc.args["chat_query"]) if tc.args.get("chat_query") else None,
                     query=str(tc.args.get("query") or query),
                     limit=int(tc.args.get("limit", 50)),
                     resolved=resolved if (use_time and resolved) else None,

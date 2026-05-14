@@ -567,6 +567,7 @@ async def tool_sql_lex_search_messages(
     scope: PlanScope,
     chat_types: list[PlanChatType] | None,
     chat_ids: list[int] | None,
+    chat_query: str | None = None,
     query: str,
     limit: int,
     resolved: ResolvedRange | None = None,
@@ -574,6 +575,19 @@ async def tool_sql_lex_search_messages(
     q_raw = str(query or "").strip()
     if not q_raw:
         return [], {"count": 0, "error": "empty_query"}
+
+    # Resolve chat_query string to numeric chat_id (overrides chat_ids)
+    resolved_chat_ids = list(chat_ids or [])
+    selected_chat_title: str | None = None
+    if chat_query and scope != PlanScope.CURRENT_CHAT:
+        q_norm = str(chat_query).strip().strip('"').strip("'").lstrip("@")
+        async with AsyncSessionLocal() as _s:
+            await _s.execute(text("SET TRANSACTION READ ONLY"))
+            row = (await _s.execute(_find_chat_by_query(q_norm, chat_types))).first()
+        if not row:
+            return [], {"count": 0, "chat_query": q_norm, "error": "chat_not_found"}
+        resolved_chat_ids = [int(row[0].id)]
+        selected_chat_title = row[0].title
 
     use_ru = _has_cyrillic(q_raw)
     use_en = _has_latin(q_raw)
@@ -592,9 +606,9 @@ async def tool_sql_lex_search_messages(
     if scope == PlanScope.CURRENT_CHAT:
         where.append("m.chat_id = :chat_id")
         params["chat_id"] = int(chat_id)
-    elif chat_ids:
+    elif resolved_chat_ids:
         where.append("m.chat_id = ANY(CAST(:chat_ids AS bigint[]))")
-        params["chat_ids"] = [int(x) for x in chat_ids]
+        params["chat_ids"] = [int(x) for x in resolved_chat_ids]
 
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
 
@@ -650,7 +664,10 @@ async def tool_sql_lex_search_messages(
         }
         for r in rows
     ]
-    return items, {"count": len(items), "limit": int(limit), "query": q_raw, "use_ru": bool(use_ru), "use_en": bool(use_en)}
+    meta: dict = {"count": len(items), "limit": int(limit), "query": q_raw, "use_ru": bool(use_ru), "use_en": bool(use_en)}
+    if selected_chat_title:
+        meta["selected_chat"] = selected_chat_title
+    return items, meta
 
 
 async def tool_sql_message_by_tg_ref(

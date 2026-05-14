@@ -130,6 +130,33 @@ QUERY_FEWSHOTS: list[tuple[str, dict]] = [
          "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
     ),
     (
+        "а чат levaromat? там тоже было про сайт",
+        {"output_shape": "LIST", "operation": "SEARCH", "need_proof": True, "precision_bias": "PRECISION",
+         "constraints": {"scope": "ALL_CHATS", "chat_query": "levaromat", "time_range": "ALL_TIME", "limit": 30},
+         "query_variants": ["сайт", "сделал сайт", "разработка сайта"],
+         "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
+    ),
+    (
+        "lec-telecom - в нем есть про сайт что?",
+        {"output_shape": "LIST", "operation": "SEARCH", "need_proof": True, "precision_bias": "PRECISION",
+         "constraints": {"scope": "ALL_CHATS", "chat_query": "lec-telecom", "time_range": "ALL_TIME", "limit": 30},
+         "query_variants": ["сайт", "сделал сайт", "разработка"],
+         "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
+    ),
+    (
+        "lec-telecom есть такой чат в базе?",
+        {"output_shape": "ANSWER", "operation": "SEARCH", "need_proof": False, "precision_bias": "PRECISION",
+         "constraints": {"scope": "ALL_CHATS", "chat_query": "lec-telecom", "time_range": "NONE"},
+         "query_variants": [], "subqueries": [], "clarify_question": None, "max_steps": 1, "on_empty": "ASK_CLARIFY", "notes": None},
+    ),
+    (
+        "о чем я говорил в чате Анна Шелест?",
+        {"output_shape": "SUMMARY", "operation": "SEARCH", "need_proof": False, "precision_bias": "BALANCED",
+         "constraints": {"scope": "ALL_CHATS", "chat_query": "Анна Шелест", "time_range": "LAST_30_DAYS"},
+         "query_variants": ["о чём говорили", "итоги переписки"],
+         "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
+    ),
+    (
         "В каких чатах обсуждали оплату?",
         {"output_shape": "ANALYTICS", "operation": "DYNAMIC_QUERY", "need_proof": False, "precision_bias": "BALANCED",
          "constraints": {"scope": "ALL_CHATS", "time_range": "ALL_TIME"},
