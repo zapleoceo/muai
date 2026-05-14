@@ -7,8 +7,8 @@ let _tokens = [];
 export function initSettingsPage() {
   const providerSelect = document.getElementById('inp-token-provider');
   if (providerSelect) {
-    providerSelect.addEventListener('change', syncTokenCapsDefaults);
-    syncTokenCapsDefaults();
+    providerSelect.addEventListener('change', onProviderChange);
+    onProviderChange();
   }
 }
 
