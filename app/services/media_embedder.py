@@ -110,7 +110,8 @@ class MediaEmbedderManager:
                             JOIN chats c ON c.id = m.chat_id
                             LEFT JOIN media_chunks mc
                               ON mc.chat_id = m.chat_id AND mc.source_tg_msg_id = m.telegram_msg_id
-                            WHERE m.media_type IS NOT NULL
+                            WHERE m.telegram_msg_id IS NOT NULL
+                              AND m.media_type IS NOT NULL
                               AND m.media_type = ANY(CAST(:types AS text[]))
                               AND c.type = ANY(CAST(:allowed_chat_types AS text[]))
                               AND NOT (m.chat_id = ANY(CAST(:bl_ids AS bigint[])))
@@ -240,6 +241,7 @@ class MediaEmbedderManager:
                         LEFT JOIN media_chunks mc
                           ON mc.chat_id = m.chat_id AND mc.source_tg_msg_id = m.telegram_msg_id
                         WHERE mc.id IS NULL
+                          AND m.telegram_msg_id IS NOT NULL
                           AND m.media_type IS NOT NULL
                           AND m.media_type = ANY(CAST(:types AS text[]))
                           AND c.type = ANY(CAST(:allowed_chat_types AS text[]))

@@ -32,11 +32,18 @@ def verify_token(token: str) -> int | None:
         return None
 
 
+_WIDGET_MAX_AGE = 86400  # Telegram requirement: auth_date must be < 24h old
+
+
 def verify_telegram_widget(data: dict) -> bool:
-    """Validate Telegram Login Widget payload using HMAC-SHA256(bot_token)."""
     bot_token = get_settings().telegram_bot_token.encode()
-    received_hash = data.pop("hash", "")
-    check_string = "\n".join(sorted(f"{k}={v}" for k, v in data.items() if v))
+    received_hash = data.get("hash", "")
+    auth_date = int(data.get("auth_date", 0))
+    if time.time() - auth_date > _WIDGET_MAX_AGE:
+        return False
+    check_string = "\n".join(
+        sorted(f"{k}={v}" for k, v in data.items() if k != "hash" and v)
+    )
     secret_key = hashlib.sha256(bot_token).digest()
     computed = hmac.new(secret_key, check_string.encode(), hashlib.sha256).hexdigest()
     return hmac.compare_digest(computed, received_hash)

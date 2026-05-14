@@ -52,12 +52,14 @@ async def set_feedback(
 
 async def list_interactions(
     *,
-    feedback: str | None = None,
+    feedback: str | None = None,  # None = all, "none" = no feedback, "like"/"dislike" = specific
     limit: int = 100,
     offset: int = 0,
 ) -> list[Interaction]:
     q = select(Interaction).order_by(Interaction.created_at.desc())
-    if feedback and feedback != "all":
+    if feedback == "none":
+        q = q.where(Interaction.feedback.is_(None))
+    elif feedback and feedback != "all":
         q = q.where(Interaction.feedback == feedback)
     q = q.limit(limit).offset(offset)
     async with AsyncSessionLocal() as session:

@@ -32,10 +32,8 @@ async def get_interactions(
 ) -> list[InteractionOut]:
     if feedback not in _VALID_FEEDBACK:
         raise HTTPException(status_code=400, detail="Invalid feedback")
-    f = None if feedback == "all" else None if feedback == "none" else feedback
+    f = None if feedback == "all" else feedback
     rows = await list_interactions(feedback=f, limit=limit, offset=offset)
-    if feedback == "none":
-        rows = [r for r in rows if r.feedback is None]
     return [
         InteractionOut(
             id=int(r.id),

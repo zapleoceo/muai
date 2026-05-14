@@ -128,10 +128,9 @@ async def _embed_gemini(mgr: Any, *, token_id: int, token: str, text: str, task_
         "taskType": task_type,
         "outputDimensionality": _DIMS,
     }
-    url = f"{_BASE_URL}?key={token}"
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
-            resp = await client.post(url, json=payload)
+            resp = await client.post(_BASE_URL, json=payload, headers={"x-goog-api-key": token})
         if resp.status_code == 429:
             if _is_gemini_prepay_depleted(resp):
                 await mgr.on_error(token_id)
@@ -160,10 +159,10 @@ async def _embed_gemini_batch(mgr: Any, *, token_id: int, token: str, texts: lis
             for t in texts
         ]
     }
-    url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents?key=" + token
+    _BATCH_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:batchEmbedContents"
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
-            resp = await client.post(url, json=payload)
+            resp = await client.post(_BATCH_URL, json=payload, headers={"x-goog-api-key": token})
         if resp.status_code == 429:
             if _is_gemini_prepay_depleted(resp):
                 await mgr.on_error(token_id)
@@ -199,10 +198,9 @@ async def _embed_gemini_v2(
         "content": {"parts": parts},
         "outputDimensionality": int(output_dimensionality),
     }
-    url = f"{_BASE_URL_V2}?key={token}"
     try:
         async with httpx.AsyncClient(timeout=httpx.Timeout(90.0)) as client:
-            resp = await client.post(url, json=payload)
+            resp = await client.post(_BASE_URL_V2, json=payload, headers={"x-goog-api-key": token})
         if resp.status_code == 429:
             if _is_gemini_prepay_depleted(resp):
                 await mgr.on_error(token_id)

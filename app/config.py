@@ -25,9 +25,9 @@ class Settings(BaseSettings):
     sync_history_days: int = 2
 
     # Auth & deploy
-    session_secret: str = "change-me-session-secret"
+    session_secret: str  # required — no default, must be set in .env
     deploy_secret: str = ""
-    owner_telegram_id: int = 169510539
+    owner_telegram_id: int  # required — your Telegram user ID
 
     bot_mode: str = "manual"
     log_level: str = "INFO"

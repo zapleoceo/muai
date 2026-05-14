@@ -3,7 +3,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import select, text
 
@@ -273,7 +273,7 @@ async def embed_chat(chat_id: int, chat_title: str, chat_type: str,
                 vectors = await embed_texts(texts)
             except RuntimeError as exc:
                 logger.warning("Embed failed chat=%d batch=%d: %s", chat_id, i, exc)
-                ts = datetime.now().strftime("%H:%M:%S")
+                ts = datetime.now(tz=timezone.utc).strftime("%H:%M:%S")
                 _status.errors.append(f"[{ts}] {chat_title}: {exc}")
                 await asyncio.sleep(5)
                 continue
@@ -360,7 +360,7 @@ async def embed_all_chats() -> None:
             raise
         except Exception as exc:
             logger.exception("Embedder: failed for chat %s", chat.title)
-            ts = datetime.now().strftime("%H:%M:%S")
+            ts = datetime.now(tz=timezone.utc).strftime("%H:%M:%S")
             _status.errors.append(f"[{ts}] {chat.title}: {exc}")
         _status.chats_done += 1
 
@@ -370,7 +370,7 @@ async def embed_all_chats() -> None:
     _status.messages_pending = stats["messages_pending"]
     _status.running = False
     _status.current_chat = ""
-    _status.last_run = datetime.now()
+    _status.last_run = datetime.now(tz=timezone.utc)
     logger.info("Embedder: pass done — %d total chunks, %d pending", _status.total_chunks, _status.messages_pending)
 
 

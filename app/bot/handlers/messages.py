@@ -64,9 +64,9 @@ async def _llm_respond(msg: Message, question: str | None = None) -> None:
         else:
             await thinking.edit_text(f"❌ Неизвестная ошибка: <code>{err[:150]}</code>")
         return
-    except Exception as exc:
+    except Exception:
         logger.exception("Unexpected LLM error chat=%s", msg.chat.id)
-        await thinking.edit_text(f"❌ Неожиданная ошибка: <code>{str(exc)[:150]}</code>")
+        await thinking.edit_text("❌ Произошла непредвиденная ошибка. Попробуй позже.")
         return
 
     markup = _feedback_kb(res.interaction_id) if res.interaction_id else None

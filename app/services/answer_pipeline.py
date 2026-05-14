@@ -47,7 +47,8 @@ async def run_answer_pipeline(
     final_router_raw = router_raw
 
     step = 0
-    while True:
+    _HARD_LIMIT = 10  # absolute cap regardless of max_steps or grader verdicts
+    while step < _HARD_LIMIT:
         retrieved = await execute_plan(plan=final_plan, chat_id=chat_id, query=query, timezone_name=timezone_name)
 
         summary = {

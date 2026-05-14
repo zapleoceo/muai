@@ -11,7 +11,15 @@ from app.userbot import folders as folders_svc
 
 router = APIRouter()
 
-_avatar_cache: dict[int, bytes | None] = {}
+_MAX_AVATAR_CACHE = 500
+_avatar_cache: dict[int, bytes | None] = {}  # evict oldest when over limit
+
+
+def _cache_avatar(chat_id: int, data: bytes | None) -> None:
+    if len(_avatar_cache) >= _MAX_AVATAR_CACHE:
+        # evict oldest entry
+        _avatar_cache.pop(next(iter(_avatar_cache)))
+    _avatar_cache[chat_id] = data
 
 
 @router.get("/admin/chats")
@@ -28,9 +36,9 @@ async def chat_avatar(chat_id: int, _uid: int = Depends(require_owner)) -> Respo
             buf = io.BytesIO()
             await client.download_profile_photo(chat_id, file=buf)
             data = buf.getvalue()
-            _avatar_cache[chat_id] = data if data else None
+            _cache_avatar(chat_id, data if data else None)
         except Exception:
-            _avatar_cache[chat_id] = None
+            _cache_avatar(chat_id, None)
     data = _avatar_cache.get(chat_id)
     if not data:
         raise HTTPException(status_code=404)
