@@ -211,11 +211,15 @@
           <input type="checkbox" id="cap-embed">
           <span>embed</span>
         </label>
+        <label style="display:flex;gap:6px;align-items:center">
+          <input type="checkbox" id="cap-embed-media">
+          <span>embed_media</span>
+        </label>
       </div>
       <p style="font-size:0.72rem;color:#475569;margin-top:8px">
-        Gemini: при 429 токен уходит на cooldown 60 сек, система переходит на следующий.<br>
-        DeepSeek: при 429 токен уходит на cooldown 60 сек, система переходит на следующий (требует <code>LLM_PROVIDER=deepseek</code> в .env).<br>
-        Voyage AI: только эмбеддинг, 200M токенов/месяц бесплатно, без суточного лимита. <a href="https://www.voyageai.com/" target="_blank" style="color:#7c3aed">voyageai.com</a>
+        <b>chat</b> — генерация ответов. <b>embed</b> — эмбеддинг текста (Voyage приоритет). <b>embed_media</b> — мультимодальный эмбеддинг файлов (только Gemini).<br>
+        Gemini: при 429 уходит на cooldown 60 сек. DeepSeek: требует <code>LLM_PROVIDER=deepseek</code> в .env.<br>
+        Voyage AI: только <b>embed</b>, 200M токенов/месяц бесплатно, лимит 3 RPM на free tier. <a href="https://www.voyageai.com/" target="_blank" style="color:#7c3aed">voyageai.com</a>
       </p>
     </div>
   </div>

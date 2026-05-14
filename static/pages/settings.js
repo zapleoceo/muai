@@ -85,19 +85,29 @@ export function onProviderChange() {
   const provider = document.getElementById('inp-token-provider').value;
   const chat = document.getElementById('cap-chat');
   const embed = document.getElementById('cap-embed');
+  const embedMedia = document.getElementById('cap-embed-media');
   if (provider === 'voyage') {
     chat.checked = false;
     embed.checked = true;
+    embedMedia.checked = false;
     return;
   }
-  if (provider === 'gemini' || provider === 'openai') {
+  if (provider === 'gemini') {
     chat.checked = true;
     embed.checked = true;
+    embedMedia.checked = true;
+    return;
+  }
+  if (provider === 'openai') {
+    chat.checked = true;
+    embed.checked = true;
+    embedMedia.checked = false;
     return;
   }
   // groq, deepseek — chat only
   chat.checked = true;
   embed.checked = false;
+  embedMedia.checked = false;
 }
 
 export async function loadTokens() {
@@ -120,6 +130,7 @@ export async function loadTokens() {
     const capsText = (t.capabilities && t.capabilities.length) ? t.capabilities.join(',') : '—';
     const hasChat = t.capabilities && t.capabilities.includes('chat');
     const hasEmbed = t.capabilities && t.capabilities.includes('embed');
+    const hasEmbedMedia = t.capabilities && t.capabilities.includes('embed_media');
     return `
     <div class=\"token-row\" id=\"tr-${t.id}\">
       <span class=\"status-dot status-${t.status === 'daily_limit' ? 'inactive' : t.status}\"></span>
@@ -148,6 +159,10 @@ export async function loadTokens() {
           <input type=\"checkbox\" id=\"caprow-embed-${t.id}\" ${hasEmbed ? 'checked' : ''}>
           <span>embed</span>
         </label>
+        <label style=\"display:flex;gap:6px;align-items:center\">
+          <input type=\"checkbox\" id=\"caprow-embed-media-${t.id}\" ${hasEmbedMedia ? 'checked' : ''}>
+          <span>embed_media</span>
+        </label>
         <button class=\"btn btn-sm\" onclick=\"saveTokenCaps(${t.id})\">Сохранить</button>
         <button class=\"btn btn-sm btn-ghost\" onclick=\"toggleTokenCapsEditor(${t.id})\">Закрыть</button>
       </div>
@@ -165,9 +180,11 @@ export function toggleTokenCapsEditor(id) {
 export async function saveTokenCaps(id) {
   const chat = document.getElementById(`caprow-chat-${id}`);
   const embed = document.getElementById(`caprow-embed-${id}`);
+  const embedMedia = document.getElementById(`caprow-embed-media-${id}`);
   const caps = [];
   if (chat && chat.checked) caps.push('chat');
   if (embed && embed.checked) caps.push('embed');
+  if (embedMedia && embedMedia.checked) caps.push('embed_media');
   if (!caps.length) { alert('Выбери хотя бы одну capability'); return; }
   const r = await apiFetch(`/api/admin/tokens/${id}/capabilities`, {
     method: 'PATCH',
@@ -185,6 +202,7 @@ export async function addToken() {
   const caps = [];
   if (document.getElementById('cap-chat').checked) caps.push('chat');
   if (document.getElementById('cap-embed').checked) caps.push('embed');
+  if (document.getElementById('cap-embed-media').checked) caps.push('embed_media');
   if (!caps.length) { alert('Выбери хотя бы одну capability'); return; }
   if (!token) { alert('Введите токен'); return; }
   const r = await apiFetch('/api/admin/tokens', {

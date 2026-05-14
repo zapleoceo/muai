@@ -120,9 +120,14 @@ async def embed_gemini_multimodal(
     async def _job() -> list[float]:
         from app.services.tokens import get_token_manager
         mgr = get_token_manager()
-        lease = await mgr.next_token("embed", provider="gemini")
+        # Request embed_media specifically — lets users designate dedicated Gemini keys
+        # for file/multimodal embedding, separate from text-embed quota.
+        lease = await mgr.next_token("embed_media", provider="gemini")
         if not lease:
-            raise RuntimeError("No Gemini tokens with embed capability. Add one in Settings → API токены.")
+            # Fall back to any Gemini embed key if no embed_media-specific key exists.
+            lease = await mgr.next_token("embed", provider="gemini")
+        if not lease:
+            raise RuntimeError("No Gemini tokens with embed_media capability. Add one in Settings → API токены.")
         return await _embed_gemini_v2(mgr, token_id=lease.id, token=lease.token, parts=parts, output_dimensionality=output_dimensionality)
 
     return await _get_queue().submit(_job())

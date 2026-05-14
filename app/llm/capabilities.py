@@ -1,13 +1,14 @@
 CAP_CHAT = "chat"
 CAP_EMBED = "embed"
+CAP_EMBED_MEDIA = "embed_media"  # multimodal file embedding — Gemini-only
 
 
 PROVIDER_CAPABILITIES: dict[str, set[str]] = {
-    "gemini": {CAP_CHAT, CAP_EMBED},
-    "openai": {CAP_CHAT, CAP_EMBED},
-    "groq": {CAP_CHAT},
+    "gemini":   {CAP_CHAT, CAP_EMBED, CAP_EMBED_MEDIA},
+    "openai":   {CAP_CHAT, CAP_EMBED},
+    "groq":     {CAP_CHAT},
     "deepseek": {CAP_CHAT},
-    "voyage": {CAP_EMBED},  # embed-only; 200M free tokens/month, no daily limit
+    "voyage":   {CAP_EMBED},  # text embed only; 200M free tokens/month, 3 RPM free tier
 }
 
 
