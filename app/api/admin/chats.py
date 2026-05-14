@@ -49,6 +49,31 @@ class ApproveBody(BaseModel):
     depth_days: int | None = None
 
 
+@router.get("/admin/chats/{chat_id}/resolve")
+async def resolve_chat(chat_id: int, _uid: int = Depends(require_owner)) -> dict:
+    from app.userbot.client import get_client
+    from app.db.database import AsyncSessionLocal
+    from sqlalchemy import update
+    from app.db.models import Chat, TgUser
+    client = get_client()
+    try:
+        entity = await client.get_entity(chat_id)
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail=str(exc))
+    first_name = getattr(entity, "first_name", None) or ""
+    last_name = getattr(entity, "last_name", None) or ""
+    username = getattr(entity, "username", None)
+    title = (f"{first_name} {last_name}".strip()) or getattr(entity, "title", None) or str(chat_id)
+    async with AsyncSessionLocal() as session:
+        await session.execute(update(Chat).where(Chat.id == chat_id).values(title=title, username=username))
+        await session.execute(update(TgUser).where(TgUser.id == chat_id).values(
+            first_name=first_name or None, last_name=last_name or None, username=username,
+        ))
+        await session.commit()
+    return {"chat_id": chat_id, "title": title, "username": username,
+            "first_name": first_name or None, "last_name": last_name or None}
+
+
 @router.post("/admin/chats/{chat_id}/approve")
 async def approve_chat(
     chat_id: int,
