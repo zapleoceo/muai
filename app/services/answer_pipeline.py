@@ -1,8 +1,21 @@
+import json
+
 from app.services.answer_llm import answer_from_context, summarize_large_history
-from app.services.answering_types import ReplyResult
+from app.services.answering_types import (
+    DynamicToolSpec,
+    PlanOnEmpty,
+    PlanStrategy,
+    PlanToolCall,
+    PlanTimeRange,
+    QueryConstraints,
+    QueryModel,
+    QueryOperation,
+    QueryOutputShape,
+    ReplyResult,
+)
 from app.services.interactions import create_interaction
 from app.services.plan_executor import execute_plan, tool_get_recent_dialog
-from app.services.router_llm import grade_context, rerank_context, route_query
+from app.services.router_llm import compile_query_model_to_plan, grade_context, rerank_context, route_query
 
 
 async def run_answer_pipeline(
@@ -55,6 +68,37 @@ async def run_answer_pipeline(
         if str(final_plan.on_empty.value) != "RETRY":
             break
 
+        if (len(retrieved.messages) + len(retrieved.chunks)) == 0 and final_plan.time_range != PlanTimeRange.NONE:
+            coverage_plan = final_plan.model_copy(
+                update={
+                    "strategy": PlanStrategy.SQL_DATE_SUMMARY,
+                    "tools": [
+                        PlanToolCall(
+                            name="sql_stats_by_date",
+                            args={
+                                "scope": final_plan.scope.value,
+                                "chat_types": [ct.value for ct in (final_plan.chat_types or [])] or None,
+                                "chat_ids": final_plan.chat_ids,
+                            },
+                        ),
+                        PlanToolCall(
+                            name="sql_active_chats_by_date",
+                            args={
+                                "scope": final_plan.scope.value,
+                                "limit": 5,
+                                "chat_types": [ct.value for ct in (final_plan.chat_types or [])] or None,
+                                "chat_ids": final_plan.chat_ids,
+                            },
+                        ),
+                    ],
+                    "max_steps": 1,
+                    "on_empty": PlanOnEmpty.ASK_CLARIFY,
+                    "notes": "coverage_check",
+                }
+            )
+            coverage_ctx = await execute_plan(plan=coverage_plan, chat_id=chat_id, query=query, timezone_name=timezone_name)
+            summary["coverage"] = {"stats": coverage_ctx.stats, "meta": coverage_ctx.meta}
+
         decision, grade_raw = await grade_context(query=query, plan=final_plan, retrieved_summary=summary, language=language)
         grade_attempts.append({"raw": grade_raw, "decision": decision})
 
@@ -68,6 +112,39 @@ async def run_answer_pipeline(
             break
         if verdict != "RETRY":
             break
+
+        propose_dynamic = decision.get("propose_dynamic_tool")
+        if propose_dynamic and isinstance(propose_dynamic, dict):
+            try:
+                spec = DynamicToolSpec.model_validate(propose_dynamic)
+                if spec.limit > 20:
+                    spec = spec.model_copy(update={"limit": 20})
+                c = QueryConstraints(
+                    scope=final_plan.scope,
+                    chat_types=final_plan.chat_types,
+                    chat_ids=final_plan.chat_ids,
+                    time_range=final_plan.time_range,
+                    explicit_from=final_plan.explicit_from,
+                    explicit_to=final_plan.explicit_to,
+                    limit=spec.limit,
+                )
+                qm = QueryModel(
+                    output_shape=QueryOutputShape.ANALYTICS,
+                    operation=QueryOperation.DYNAMIC_QUERY,
+                    need_proof=False,
+                    constraints=c,
+                    dynamic_tool=spec,
+                    max_steps=2,
+                    on_empty=PlanOnEmpty.RETRY,
+                    notes="grade:proposed_dynamic_tool",
+                )
+                final_plan = compile_query_model_to_plan(query_model=qm, query=query)
+                final_router_raw = json.dumps(qm.model_dump(), ensure_ascii=False)
+                router_attempts.append({"raw": final_router_raw, "plan": final_plan.model_dump()})
+                step += 1
+                continue
+            except Exception:
+                pass
 
         expand_to = decision.get("expand_time_range_to")
         force_time_range = None

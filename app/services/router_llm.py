@@ -646,12 +646,18 @@ _GRADER_SYSTEM_PROMPT = (
     '"reason":"string|null",'
     '"clarify_question":"string|null",'
     '"router_hint":"string|null",'
-    '"expand_time_range_to":"NONE|LAST_7_DAYS|LAST_30_DAYS|ALL_TIME|null"'
+    '"expand_time_range_to":"NONE|LAST_7_DAYS|LAST_30_DAYS|ALL_TIME|null",'
+    '"propose_dynamic_tool":"object|null"'
     "}. "
     "RETRY выбирай, если похоже, что retrieval был неверно выбран (не тот чат/папка/тип чатов/период/инструмент) "
     "и можно улучшить план вторым заходом. "
     "В router_hint кратко опиши, какие инструменты/ограничения стоит применить (sql_find_chats, sql_messages_by_date, sql_lex_search_messages, sql_search_messages_by_date, rag_search). "
     "Если проблема в том, что период слишком узкий — заполни expand_time_range_to более широким окном (LAST_30_DAYS или ALL_TIME). "
+    "Если в retrieved_summary.coverage видно, что данные в периоде есть, но текущий план нашёл 0, "
+    "и запрос выглядит как нестандартная выборка/отчёт (например: 'с кем общался', 'какие чаты были активны', 'топ по типам/медиа', 'есть ли данные'), "
+    "то при verdict=RETRY заполни propose_dynamic_tool безопасной спецификацией DynamicToolSpec (select/filters/group_by/order_by/limit/require_time_range). "
+    "DynamicToolSpec может использовать только поля: message_id, chat_id, date_utc, direction, media_type, text_any, chat_type, chat_title, chat_username, folder. "
+    "Всегда ставь limit <= 50 и require_time_range=true для propose_dynamic_tool. "
     "Если нужно уточнение у пользователя, выбери CLARIFY и заполни clarify_question."
 )
 
@@ -809,7 +815,7 @@ def _validate_plan_invariants(plan: Plan) -> None:
             raise ValueError("COMMAND: on_empty должен быть 'ASK_CLARIFY'")
 
 
-def _compile_query_model_to_plan(*, query_model: QueryModel, query: str) -> Plan:
+def compile_query_model_to_plan(*, query_model: QueryModel, query: str) -> Plan:
     c = query_model.constraints
 
     if query_model.clarify_question:
@@ -1221,7 +1227,7 @@ async def route_query(
         if forced_time_range:
             if _time_range_rank(forced_time_range) > _time_range_rank(qm.constraints.time_range.value):
                 qm = qm.model_copy(update={"constraints": qm.constraints.model_copy(update={"time_range": forced_time_range, "explicit_from": None, "explicit_to": None})})
-        plan = _compile_query_model_to_plan(query_model=qm, query=query)
+        plan = compile_query_model_to_plan(query_model=qm, query=query)
         return plan, raw
     except Exception as exc:
         repair_prompt = (
@@ -1237,7 +1243,7 @@ async def route_query(
             if forced_time_range:
                 if _time_range_rank(forced_time_range) > _time_range_rank(qm2.constraints.time_range.value):
                     qm2 = qm2.model_copy(update={"constraints": qm2.constraints.model_copy(update={"time_range": forced_time_range, "explicit_from": None, "explicit_to": None})})
-            plan2 = _compile_query_model_to_plan(query_model=qm2, query=query)
+            plan2 = compile_query_model_to_plan(query_model=qm2, query=query)
             return plan2, raw2
         except Exception as exc2:
             qm_fallback = QueryModel(
@@ -1252,5 +1258,5 @@ async def route_query(
                 on_empty=PlanOnEmpty.ASK_CLARIFY,
                 notes=f"router_fallback:{str(exc2)[:120]}",
             )
-            plan3 = _compile_query_model_to_plan(query_model=qm_fallback, query=query)
+            plan3 = compile_query_model_to_plan(query_model=qm_fallback, query=query)
             return plan3, json.dumps(qm_fallback.model_dump(), ensure_ascii=False)
