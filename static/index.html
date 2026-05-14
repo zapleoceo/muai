@@ -97,7 +97,20 @@
           <button class="btn btn-sm btn-ghost" onclick="event.preventDefault();event.stopPropagation();loadLogs()">Обновить</button>
         </div>
       </summary>
-      <div id="logs-box">Загрузка…</div>
+      <div class="logs-split">
+        <div class="logs-panel">
+          <div class="logs-title">Эмбеддинг</div>
+          <div class="logs-box" id="logs-embedder">Загрузка…</div>
+        </div>
+        <div class="logs-panel">
+          <div class="logs-title">Бот</div>
+          <div class="logs-box" id="logs-bot">Загрузка…</div>
+        </div>
+        <div class="logs-panel">
+          <div class="logs-title">Другое</div>
+          <div class="logs-box" id="logs-other">Загрузка…</div>
+        </div>
+      </div>
     </details>
   </div>
 

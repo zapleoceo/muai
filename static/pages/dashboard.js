@@ -311,14 +311,26 @@ document.addEventListener('visibilitychange', () => {
 });
 
 export async function loadLogs() {
-  const box = document.getElementById('logs-box');
-  box.textContent = 'Загрузка…';
-  const r = await apiFetch('/api/admin/logs?lines=150');
+  const b1 = document.getElementById('logs-embedder');
+  const b2 = document.getElementById('logs-bot');
+  const b3 = document.getElementById('logs-other');
+  if (!b1 || !b2 || !b3) return;
+  b1.textContent = 'Загрузка…';
+  b2.textContent = 'Загрузка…';
+  b3.textContent = 'Загрузка…';
+  const r = await apiFetch('/api/admin/logs?lines=200&split=1');
   if (!r.ok) {
-    box.textContent = 'Ошибка загрузки логов';
+    const msg = 'Ошибка загрузки логов';
+    b1.textContent = msg;
+    b2.textContent = msg;
+    b3.textContent = msg;
     return;
   }
   const d = await r.json();
-  box.textContent = d.logs;
-  box.scrollTop = box.scrollHeight;
+  b1.textContent = d.embedder || '';
+  b2.textContent = d.bot || '';
+  b3.textContent = d.other || '';
+  b1.scrollTop = b1.scrollHeight;
+  b2.scrollTop = b2.scrollHeight;
+  b3.scrollTop = b3.scrollHeight;
 }
