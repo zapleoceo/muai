@@ -4,11 +4,11 @@ import logging
 from dataclasses import dataclass, field
 from datetime import datetime
 from hashlib import sha256
+from typing import Any
 
 from sqlalchemy import text
 
 from app.db.database import AsyncSessionLocal
-from app.db.repository import MessageRepo
 from app.llm.embedding import embed_gemini_multimodal, embed_text, inline_data_part
 from app.services.chat_sync_settings_service import ChatSyncSettingsService
 from app.services.plan_executor import build_message_link
@@ -77,6 +77,27 @@ class MediaEmbedderManager:
         return int(res.rowcount or 0)
 
     async def get_stats(self) -> dict:
+        settings_svc = ChatSyncSettingsService()
+        sync_settings = await settings_svc.get()
+        allowed_chat_types = list(sync_settings.get("allowed_types") or [])
+        bl_raw = list(sync_settings.get("blacklist") or [])
+        bl_ids: list[int] = []
+        bl_usernames: list[str] = []
+        for x in bl_raw:
+            if isinstance(x, int):
+                bl_ids.append(int(x))
+                continue
+            if isinstance(x, str):
+                s = x.strip()
+                if not s:
+                    continue
+                if s.isdigit():
+                    bl_ids.append(int(s))
+                    continue
+                if s.startswith("@"):
+                    s = s[1:]
+                bl_usernames.append(s)
+
         async with AsyncSessionLocal() as session:
             total = (await session.execute(text("SELECT COUNT(*) FROM media_chunks"))).scalar() or 0
             pending = (await session.execute(
@@ -88,10 +109,14 @@ class MediaEmbedderManager:
                     LEFT JOIN media_chunks mc
                       ON mc.chat_id = m.chat_id AND mc.source_tg_msg_id = m.telegram_msg_id
                     WHERE m.media_type IS NOT NULL
+                      AND m.media_type = ANY(CAST(:types AS text[]))
+                      AND c.type = ANY(CAST(:allowed_chat_types AS text[]))
+                      AND NOT (m.chat_id = ANY(CAST(:bl_ids AS bigint[])))
+                      AND NOT (c.username = ANY(CAST(:bl_usernames AS text[])))
                       AND mc.id IS NULL
                     """
                 )
-            )).scalar() or 0
+            ), {"types": self.status.types or [], "allowed_chat_types": allowed_chat_types, "bl_ids": bl_ids, "bl_usernames": bl_usernames})).scalar() or 0
         self.status.total_chunks = int(total)
         self.status.pending = int(pending)
         return {"total_chunks": int(total), "pending": int(pending)}
@@ -125,7 +150,19 @@ class MediaEmbedderManager:
 
             if not self.status.enabled:
                 continue
-            self.status.enabled = False
+
+            if not self.status.types:
+                self.status.enabled = False
+                self.status.running = False
+                self.status.errors.append("Не выбраны типы файлов для обработки.")
+                continue
+
+            if self.status.pending <= 0:
+                self.status.enabled = False
+                self.status.running = False
+                continue
+
+            await asyncio.sleep(0.5)
 
     async def _run_once(self) -> None:
         self.status.running = True
@@ -136,6 +173,24 @@ class MediaEmbedderManager:
 
         settings_svc = ChatSyncSettingsService()
         sync_settings = await settings_svc.get()
+        allowed_chat_types = list(sync_settings.get("allowed_types") or [])
+        bl_raw = list(sync_settings.get("blacklist") or [])
+        bl_ids: list[int] = []
+        bl_usernames: list[str] = []
+        for x in bl_raw:
+            if isinstance(x, int):
+                bl_ids.append(int(x))
+                continue
+            if isinstance(x, str):
+                s = x.strip()
+                if not s:
+                    continue
+                if s.isdigit():
+                    bl_ids.append(int(s))
+                    continue
+                if s.startswith("@"):
+                    s = s[1:]
+                bl_usernames.append(s)
 
         insert_sql = text(
             "INSERT INTO media_chunks "
@@ -147,6 +202,12 @@ class MediaEmbedderManager:
         client = get_client()
 
         while True:
+            if not self.status.enabled:
+                break
+            if not self.status.types:
+                self.status.errors.append("Не выбраны типы файлов для обработки.")
+                break
+
             async with AsyncSessionLocal() as session:
                 rows = (await session.execute(
                     text(
@@ -170,11 +231,14 @@ class MediaEmbedderManager:
                         WHERE mc.id IS NULL
                           AND m.media_type IS NOT NULL
                           AND m.media_type = ANY(CAST(:types AS text[]))
+                          AND c.type = ANY(CAST(:allowed_chat_types AS text[]))
+                          AND NOT (m.chat_id = ANY(CAST(:bl_ids AS bigint[])))
+                          AND NOT (c.username = ANY(CAST(:bl_usernames AS text[])))
                         ORDER BY m.id ASC
                         LIMIT :lim
                         """
                     ),
-                    {"types": self.status.types, "lim": _PAGE_SIZE},
+                    {"types": self.status.types, "allowed_chat_types": allowed_chat_types, "bl_ids": bl_ids, "bl_usernames": bl_usernames, "lim": _PAGE_SIZE},
                 )).mappings().all()
 
             if not rows:
@@ -187,19 +251,15 @@ class MediaEmbedderManager:
 
             pending_db: list[dict] = []
             for chat_id, items in grouped.items():
-                if settings_svc.is_blacklisted(int(chat_id), items[0].get("chat_username"), sync_settings):
-                    continue
-                if not settings_svc.type_allowed(str(items[0].get("chat_type") or ""), sync_settings):
-                    continue
-
+                entity: Any | None = None
                 try:
                     entity = await client.get_entity(chat_id)
                 except Exception:
-                    continue
+                    entity = None
 
                 ids = [int(i["tg_msg_id"]) for i in items if i.get("tg_msg_id")]
                 tg_msgs = []
-                if ids:
+                if ids and entity is not None:
                     try:
                         tg_msgs = await client.get_messages(entity, ids=ids)
                     except Exception:
@@ -256,7 +316,14 @@ class MediaEmbedderManager:
                             meta["download_error"] = str(exc)[:200]
 
                     if emb is None:
-                        emb = await embed_text(chunk_text, task_type="RETRIEVAL_DOCUMENT")
+                        try:
+                            emb = await embed_text(chunk_text, task_type="RETRIEVAL_DOCUMENT")
+                        except Exception as exc:
+                            meta["embed_text_error"] = str(exc)[:200]
+                            self.status.errors.append(str(exc)[:200])
+                            if "rate-limited" in str(exc).lower():
+                                break
+                            continue
 
                     vec_str = "[" + ",".join(str(x) for x in emb) + "]"
                     pending_db.append(
@@ -276,10 +343,18 @@ class MediaEmbedderManager:
                     self.status.items_done += 1
 
             if pending_db:
-                async with AsyncSessionLocal() as session:
-                    await session.execute(insert_sql, pending_db)
-                    await session.commit()
-                self.status.chunks_added += len(pending_db)
+                try:
+                    async with AsyncSessionLocal() as session:
+                        await session.execute(insert_sql, pending_db)
+                        await session.commit()
+                    self.status.chunks_added += len(pending_db)
+                except Exception as exc:
+                    logger.exception("MediaEmbedder: failed to insert chunks")
+                    self.status.errors.append(f"db_insert_error: {str(exc)[:200]}")
+                    if "rate-limited" in str(exc).lower():
+                        break
+                    await asyncio.sleep(2.0)
+                    continue
 
         self.status.running = False
         self.status.current_item = ""
@@ -293,4 +368,3 @@ def get_media_embedder_manager() -> MediaEmbedderManager:
     if _manager is None:
         _manager = MediaEmbedderManager()
     return _manager
-
