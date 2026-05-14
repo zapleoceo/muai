@@ -29,6 +29,13 @@ class MediaEmbedderStatus:
     current_item: str = ""
     items_done: int = 0
     chunks_added: int = 0
+    embed_ok: int = 0
+    embed_failed: int = 0
+    embed_multimodal_ok: int = 0
+    embed_multimodal_failed: int = 0
+    embed_text_ok: int = 0
+    insert_ok: int = 0
+    insert_conflict: int = 0
     total_chunks: int = 0
     pending: int = 0
     last_run: datetime | None = None
@@ -183,6 +190,13 @@ class MediaEmbedderManager:
         self.status.current_item = ""
         self.status.items_done = 0
         self.status.chunks_added = 0
+        self.status.embed_ok = 0
+        self.status.embed_failed = 0
+        self.status.embed_multimodal_ok = 0
+        self.status.embed_multimodal_failed = 0
+        self.status.embed_text_ok = 0
+        self.status.insert_ok = 0
+        self.status.insert_conflict = 0
         self.status.errors = []
 
         settings_svc = ChatSyncSettingsService()
@@ -210,7 +224,8 @@ class MediaEmbedderManager:
             "INSERT INTO media_chunks "
             "(chat_id, chat_title, chat_username, source_msg_id, source_tg_msg_id, media_type, date_utc, chunk_text, embedding, meta) "
             "VALUES (:chat_id, :chat_title, :chat_username, :source_msg_id, :source_tg_msg_id, :media_type, :date_utc, :chunk_text, CAST(:emb AS vector(512)), CAST(:meta AS jsonb)) "
-            "ON CONFLICT (chat_id, source_tg_msg_id) DO NOTHING"
+            "ON CONFLICT (chat_id, source_tg_msg_id) DO NOTHING "
+            "RETURNING 1"
         )
 
         client = get_client()
@@ -325,33 +340,34 @@ class MediaEmbedderManager:
                                 parts.append(inline_data_part(mime_type=mime, data=bytes(data)))
                                 try:
                                     emb = await embed_gemini_multimodal(parts=parts)
+                                    if isinstance(emb, list) and len(emb) == _EMBED_DIMS and all(isinstance(x, (int, float)) and math.isfinite(float(x)) for x in emb):
+                                        self.status.embed_multimodal_ok += 1
+                                        self.status.embed_ok += 1
                                 except Exception as exc:
+                                    self.status.embed_multimodal_failed += 1
                                     meta["embed_error"] = str(exc)[:200]
                         except Exception as exc:
                             meta["download_error"] = str(exc)[:200]
 
-                    if emb is None:
+                    if emb is None or not isinstance(emb, list) or len(emb) != _EMBED_DIMS or not all(isinstance(x, (int, float)) and math.isfinite(float(x)) for x in emb):
                         try:
                             emb = await embed_text(chunk_text, task_type="RETRIEVAL_DOCUMENT")
+                            if isinstance(emb, list) and len(emb) == _EMBED_DIMS and all(isinstance(x, (int, float)) and math.isfinite(float(x)) for x in emb):
+                                self.status.embed_text_ok += 1
+                                self.status.embed_ok += 1
                         except Exception as exc:
                             meta["embed_text_error"] = str(exc)[:200]
-                            self.status.errors.append(str(exc)[:200])
+                            self.status.embed_failed += 1
+                            self.status.errors.append(f"embed_fail chat={chat_title} msg={tg_msg_id or msg_id}: {str(exc)[:200]}")
                             if "rate-limited" in str(exc).lower():
                                 break
-                            continue
-
-                    if not isinstance(emb, list) or len(emb) != _EMBED_DIMS or not all(isinstance(x, (int, float)) and math.isfinite(float(x)) for x in emb):
-                        try:
-                            emb = await embed_text(chunk_text, task_type="RETRIEVAL_DOCUMENT")
-                        except Exception as exc:
-                            meta["embed_text_error"] = str(exc)[:200]
-                            self.status.errors.append(str(exc)[:200])
-                            if "rate-limited" in str(exc).lower():
-                                break
+                            self.status.items_done += 1
                             continue
 
                     if not isinstance(emb, list) or len(emb) != _EMBED_DIMS:
-                        self.status.errors.append(f"bad_embedding_dim:{len(emb) if isinstance(emb, list) else 'none'}")
+                        self.status.embed_failed += 1
+                        self.status.errors.append(f"bad_embedding_dim chat={chat_title} msg={tg_msg_id or msg_id}: {len(emb) if isinstance(emb, list) else 'none'}")
+                        self.status.items_done += 1
                         continue
 
                     vec_str = "[" + ",".join(str(x) for x in emb) + "]"
@@ -374,12 +390,19 @@ class MediaEmbedderManager:
             if pending_db:
                 try:
                     async with AsyncSessionLocal() as session:
-                        res = await session.execute(insert_sql, pending_db)
+                        inserted = 0
+                        conflicts = 0
+                        for row in pending_db:
+                            res = await session.execute(insert_sql, row)
+                            ok = res.scalar_one_or_none()
+                            if ok:
+                                inserted += 1
+                            else:
+                                conflicts += 1
                         await session.commit()
-                    added = int(res.rowcount or 0)
-                    if added < 0:
-                        added = 0
-                    self.status.chunks_added += added
+                    self.status.chunks_added += inserted
+                    self.status.insert_ok += inserted
+                    self.status.insert_conflict += conflicts
                 except Exception as exc:
                     logger.exception("MediaEmbedder: failed to insert chunks")
                     self.status.errors.append(f"db_insert_error: {str(exc)[:200]}")
