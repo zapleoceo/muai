@@ -102,6 +102,7 @@ function _renderEmbedder(d) {
   const box = document.getElementById('embedder-status');
   if (!box) return;
   _updateEmbedderBtn(d.running);
+  if (d.chat_types) _syncTextTypeCheckboxes(d.chat_types);
   const runBadge = d.running
     ? `<span class="badge badge-active">⚙️ работает</span> чат: <b>${esc(d.current_chat)}</b>`
     : `<span class="badge badge-disabled">⏸ ожидание</span>`;
@@ -231,7 +232,17 @@ export async function clearChunks() {
 export async function toggleEmbedder() {
   const btn = document.getElementById('embedder-toggle-btn');
   const running = btn.dataset.running === '1';
-  await apiFetch(`/api/admin/embedder/${running ? 'stop' : 'restart'}`, { method: 'POST' });
+  if (running) {
+    await apiFetch('/api/admin/embedder/stop', { method: 'POST' });
+  } else {
+    const types = _selectedTextTypes();
+    if (!types.length) { alert('Выбери хотя бы один тип чата'); return; }
+    await apiFetch('/api/admin/embedder/restart', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ chat_types: types }),
+    });
+  }
   await loadEmbedder();
 }
 
@@ -254,6 +265,22 @@ function _selectedMediaTypes() {
   return Array.from(box.querySelectorAll('input[type=checkbox]'))
     .filter(x => x.checked)
     .map(x => x.value);
+}
+
+function _selectedTextTypes() {
+  const box = document.getElementById('text-embedder-types');
+  if (!box) return ['private', 'group'];
+  return Array.from(box.querySelectorAll('input[type=checkbox]'))
+    .filter(x => x.checked)
+    .map(x => x.value);
+}
+
+function _syncTextTypeCheckboxes(types) {
+  const box = document.getElementById('text-embedder-types');
+  if (!box) return;
+  box.querySelectorAll('input[type=checkbox]').forEach(cb => {
+    cb.checked = types.includes(cb.value);
+  });
 }
 
 export async function clearMediaChunks() {

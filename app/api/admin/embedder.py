@@ -5,7 +5,7 @@ from sqlalchemy import text
 from app.api.auth import require_owner
 from app.db.database import AsyncSessionLocal
 from app.db.repository import MessageRepo
-from app.services.embedder import get_embedder_status, start_embedder, stop_embedder
+from app.services.embedder import _DEFAULT_CHAT_TYPES, get_embedder_status, start_embedder, stop_embedder
 from app.services.media_embedder import get_media_embedder_manager
 
 router = APIRouter()
@@ -18,10 +18,14 @@ async def embedder_status(_uid: int = Depends(require_owner)) -> dict:
     return {**get_embedder_status(), **stats}
 
 
+class EmbedderStartBody(BaseModel):
+    chat_types: list[str] = list(_DEFAULT_CHAT_TYPES)
+
+
 @router.post("/admin/embedder/restart")
-async def embedder_restart(_uid: int = Depends(require_owner)) -> dict:
-    start_embedder()
-    return {"status": "started"}
+async def embedder_restart(body: EmbedderStartBody = EmbedderStartBody(), _uid: int = Depends(require_owner)) -> dict:
+    start_embedder(chat_types=body.chat_types)
+    return {"status": "started", "chat_types": body.chat_types}
 
 
 @router.post("/admin/embedder/stop")

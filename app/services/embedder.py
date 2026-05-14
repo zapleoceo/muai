@@ -27,6 +27,8 @@ _MIN_CHAT_MESSAGES = 50   # skip tiny chats — not worth embedding (noise)
 
 # ── status singleton ──────────────────────────────────────────────────────────
 
+_DEFAULT_CHAT_TYPES = ["private", "group"]
+
 @dataclass
 class EmbedderStatus:
     running: bool = False
@@ -38,6 +40,7 @@ class EmbedderStatus:
     last_run: datetime | None = None
     errors: list[str] = field(default_factory=list)
     enabled: bool = True
+    chat_types: list[str] = field(default_factory=lambda: list(_DEFAULT_CHAT_TYPES))
 
 
 _status = EmbedderStatus()
@@ -54,6 +57,7 @@ def get_embedder_status() -> dict:
         "messages_pending": _status.messages_pending,
         "last_run": _status.last_run.isoformat() if _status.last_run else None,
         "last_errors": _status.errors[-5:],
+        "chat_types": list(_status.chat_types),
     }
 
 
@@ -344,12 +348,13 @@ async def embed_all_chats() -> None:
             chat._embed_enabled = bool(r.enabled)      # type: ignore[attr-defined]
             chats.append(chat)
 
+    allowed_types = set(_status.chat_types) if _status.chat_types else set(_DEFAULT_CHAT_TYPES)
     for chat in chats:
         if not getattr(chat, "_embed_enabled", False):
             continue
         if settings_svc.is_blacklisted(int(chat.id), getattr(chat, "username", None), sync_settings):
             continue
-        if not settings_svc.type_allowed(str(chat.type or ""), sync_settings):
+        if str(chat.type or "") not in allowed_types:
             continue
         # skip tiny chats — likely noise, not worth the API quota
         if getattr(chat, "_embed_pending", 0) < _MIN_CHAT_MESSAGES:
@@ -465,7 +470,9 @@ def get_text_embedder_manager() -> TextEmbedderManager:
     return _text_embedder_manager
 
 
-def start_embedder() -> None:
+def start_embedder(chat_types: list[str] | None = None) -> None:
+    if chat_types is not None:
+        _status.chat_types = list(chat_types)
     get_text_embedder_manager().start()
 
 
