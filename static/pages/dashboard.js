@@ -1,5 +1,9 @@
 import { apiFetch, esc, fmt, pct } from '../api.js';
 
+let _stream = null;
+let _streamRetry = null;
+let _streamBackoffMs = 2000;
+
 function _updateEmbedderBtn(running) {
   const btn = document.getElementById('embedder-toggle-btn');
   if (!btn) return;
@@ -32,15 +36,12 @@ function _updateMediaEmbedderBtn(running) {
   }
 }
 
-export async function loadStats() {
-  const r = await apiFetch('/api/admin/stats');
-  if (r.status === 401) {
-    document.getElementById('login').style.display = 'flex';
-    document.getElementById('app').style.display = 'none';
-    return;
-  }
-  const d = await r.json();
+function _isDashboardActive() {
+  const tab = document.getElementById('tab-dashboard');
+  return Boolean(tab && tab.classList.contains('active'));
+}
 
+function _renderStats(d) {
   const t = d.totals;
   document.getElementById('totals').innerHTML = `
     <div class="card">
@@ -97,38 +98,9 @@ export async function loadStats() {
   `).join('');
 }
 
-export async function clearChunks() {
-  const ok = confirm(
-    '⚠️ Очистка векторной базы\n\n' +
-    'Будут удалены ВСЕ чанки — весь «мозг» бота.\n' +
-    'Бот перестанет находить контекст из истории чатов до окончания повторного чанкования.\n\n' +
-    'Повторное чанкование запускается вручную кнопкой ▶ и займёт длительное время.\n\n' +
-    'Продолжить?'
-  );
-  if (!ok) return;
-  const r = await apiFetch('/api/admin/embedder/chunks', { method: 'DELETE' });
-  if (r.ok) {
-    const d = await r.json();
-    await loadEmbedder();
-    alert(`Удалено ${d.deleted} чанков. Запусти эмбеддер кнопкой ▶ для повторного чанкования.`);
-  }
-}
-
-export async function toggleEmbedder() {
-  const btn = document.getElementById('embedder-toggle-btn');
-  const running = btn.dataset.running === '1';
-  await apiFetch(`/api/admin/embedder/${running ? 'stop' : 'restart'}`, { method: 'POST' });
-  await loadEmbedder();
-}
-
-export async function loadEmbedder() {
+function _renderEmbedder(d) {
   const box = document.getElementById('embedder-status');
-  const r = await apiFetch('/api/admin/embedder/status');
-  if (!r.ok) {
-    box.innerHTML = '<span style="color:#ef4444">Ошибка загрузки</span>';
-    return;
-  }
-  const d = await r.json();
+  if (!box) return;
   _updateEmbedderBtn(d.running);
   const runBadge = d.running
     ? `<span class="badge badge-active">⚙️ работает</span> чат: <b>${esc(d.current_chat)}</b>`
@@ -161,6 +133,119 @@ export async function loadEmbedder() {
     <div style="font-size:.9rem;color:#94a3b8">Очередь чанкования</div>
     ${queueHtml}
     ${errHtml}`;
+}
+
+function _renderMediaEmbedder(d) {
+  const box = document.getElementById('media-embedder-status');
+  if (!box) return;
+  _updateMediaEmbedderBtn(d.running);
+  const runBadge = d.running
+    ? `<span class="badge badge-active">⚙️ работает</span> <b>${esc(d.current_item || '')}</b>`
+    : `<span class="badge badge-disabled">⏸ ожидание</span>`;
+  const lastRunHtml = d.last_run
+    ? `<div>Последний запуск: <b>${new Date(d.last_run).toLocaleString('ru')}</b></div>`
+    : '';
+  const errHtml = d.last_errors?.length
+    ? `<div style="margin-top:8px;color:#ef4444;font-size:.85rem">Последние ошибки:<br>${d.last_errors.map(e => `• ${esc(e)}`).join('<br>')}</div>`
+    : '';
+  box.innerHTML = `
+    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
+      <div>${runBadge}</div>
+      <div>Обработано: <b>${fmt(d.items_done || 0)}</b></div>
+      <div>Добавлено чанков: <b>${fmt(d.chunks_added || 0)}</b></div>
+      <div>Всего: <b>${fmt(d.total_chunks || 0)}</b></div>
+      <div>Ожидают: <b style="color:${d.pending > 0 ? '#fbbf24' : '#4ade80'}">${fmt(d.pending ?? '—')}</b></div>
+      ${lastRunHtml}
+    </div>
+    ${errHtml}`;
+}
+
+function _stopStream() {
+  if (_streamRetry) {
+    clearTimeout(_streamRetry);
+    _streamRetry = null;
+  }
+  if (_stream) {
+    try { _stream.close(); } catch (e) {}
+    _stream = null;
+  }
+}
+
+function _startStreamIfNeeded() {
+  if (_stream || _streamRetry) return;
+  if (!_isDashboardActive()) return;
+  if (document.visibilityState !== 'visible') return;
+  _stream = new EventSource('/api/admin/stream');
+  _stream.onmessage = (ev) => {
+    if (!_isDashboardActive()) return;
+    try {
+      const payload = JSON.parse(ev.data || '{}');
+      if (payload.stats) _renderStats(payload.stats);
+      if (payload.embedder) _renderEmbedder(payload.embedder);
+      if (payload.media_embedder) _renderMediaEmbedder(payload.media_embedder);
+    } catch (e) {}
+  };
+  _stream.onerror = () => {
+    _stopStream();
+    if (_isDashboardActive() && document.visibilityState === 'visible') {
+      const wait = _streamBackoffMs;
+      _streamBackoffMs = Math.min(_streamBackoffMs * 2, 60000);
+      _streamRetry = setTimeout(() => {
+        _streamRetry = null;
+        _startStreamIfNeeded();
+      }, wait);
+    }
+  };
+}
+
+export async function loadStats() {
+  const r = await apiFetch('/api/admin/stats');
+  if (r.status === 401) {
+    document.getElementById('login').style.display = 'flex';
+    document.getElementById('app').style.display = 'none';
+    return;
+  }
+  const d = await r.json();
+  _renderStats(d);
+  _streamBackoffMs = 2000;
+  _startStreamIfNeeded();
+}
+
+export async function clearChunks() {
+  const ok = confirm(
+    '⚠️ Очистка векторной базы\n\n' +
+    'Будут удалены ВСЕ чанки — весь «мозг» бота.\n' +
+    'Бот перестанет находить контекст из истории чатов до окончания повторного чанкования.\n\n' +
+    'Повторное чанкование запускается вручную кнопкой ▶ и займёт длительное время.\n\n' +
+    'Продолжить?'
+  );
+  if (!ok) return;
+  const r = await apiFetch('/api/admin/embedder/chunks', { method: 'DELETE' });
+  if (r.ok) {
+    const d = await r.json();
+    await loadEmbedder();
+    alert(`Удалено ${d.deleted} чанков. Запусти эмбеддер кнопкой ▶ для повторного чанкования.`);
+  }
+}
+
+export async function toggleEmbedder() {
+  const btn = document.getElementById('embedder-toggle-btn');
+  const running = btn.dataset.running === '1';
+  await apiFetch(`/api/admin/embedder/${running ? 'stop' : 'restart'}`, { method: 'POST' });
+  await loadEmbedder();
+}
+
+export async function loadEmbedder() {
+  const box = document.getElementById('embedder-status');
+  const r = await apiFetch('/api/admin/embedder/status');
+  if (!r.ok) {
+    box.innerHTML = '<span style="color:#ef4444">Ошибка загрузки</span>';
+    return;
+  }
+  const d = await r.json();
+  _renderEmbedder(d);
+  _streamBackoffMs = 2000;
+  _startStreamIfNeeded();
 }
 
 function _selectedMediaTypes() {
@@ -215,27 +300,15 @@ export async function loadMediaEmbedder() {
     return;
   }
   const d = await r.json();
-  _updateMediaEmbedderBtn(d.running);
-  const runBadge = d.running
-    ? `<span class="badge badge-active">⚙️ работает</span> <b>${esc(d.current_item || '')}</b>`
-    : `<span class="badge badge-disabled">⏸ ожидание</span>`;
-  const lastRunHtml = d.last_run
-    ? `<div>Последний запуск: <b>${new Date(d.last_run).toLocaleString('ru')}</b></div>`
-    : '';
-  const errHtml = d.last_errors?.length
-    ? `<div style="margin-top:8px;color:#ef4444;font-size:.85rem">Последние ошибки:<br>${d.last_errors.map(e => `• ${esc(e)}`).join('<br>')}</div>`
-    : '';
-  box.innerHTML = `
-    <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
-      <div>${runBadge}</div>
-      <div>Обработано: <b>${fmt(d.items_done || 0)}</b></div>
-      <div>Добавлено чанков: <b>${fmt(d.chunks_added || 0)}</b></div>
-      <div>Всего: <b>${fmt(d.total_chunks || 0)}</b></div>
-      <div>Ожидают: <b style="color:${d.pending > 0 ? '#fbbf24' : '#4ade80'}">${fmt(d.pending ?? '—')}</b></div>
-      ${lastRunHtml}
-    </div>
-    ${errHtml}`;
+  _renderMediaEmbedder(d);
+  _streamBackoffMs = 2000;
+  _startStreamIfNeeded();
 }
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'visible') _startStreamIfNeeded();
+  else _stopStream();
+});
 
 export async function loadLogs() {
   const box = document.getElementById('logs-box');
