@@ -376,7 +376,10 @@ class MediaEmbedderManager:
                     async with AsyncSessionLocal() as session:
                         res = await session.execute(insert_sql, pending_db)
                         await session.commit()
-                    self.status.chunks_added += int(res.rowcount or 0)
+                    added = int(res.rowcount or 0)
+                    if added < 0:
+                        added = 0
+                    self.status.chunks_added += added
                 except Exception as exc:
                     logger.exception("MediaEmbedder: failed to insert chunks")
                     self.status.errors.append(f"db_insert_error: {str(exc)[:200]}")
