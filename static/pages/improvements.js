@@ -1,4 +1,5 @@
-import { apiFetch, esc } from '../api.js';
+const _v = window.APP_VERSION ? `?v=${window.APP_VERSION}` : '';
+const { apiFetch, esc } = await import(`../api.js${_v}`);
 
 let _status = 'new';
 

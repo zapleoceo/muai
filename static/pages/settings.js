@@ -1,4 +1,5 @@
-import { apiFetch, withBtn } from '../api.js';
+const _v = window.APP_VERSION ? `?v=${window.APP_VERSION}` : '';
+const { apiFetch, withBtn } = await import(`../api.js${_v}`);
 
 const TYPE_LABELS = { private: 'Личные', group: 'Группы', supergroup: 'Супергруппы', channel: 'Каналы' };
 let _settings = {};

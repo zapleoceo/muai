@@ -1,4 +1,5 @@
-import { apiFetch, esc, fmt, withBtn } from '../api.js';
+const _v = window.APP_VERSION ? `?v=${window.APP_VERSION}` : '';
+const { apiFetch, esc, fmt, withBtn } = await import(`../api.js${_v}`);
 
 const PAGE_SIZE = 50;
 let _allChats = [];

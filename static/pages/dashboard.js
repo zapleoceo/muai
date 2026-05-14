@@ -1,4 +1,5 @@
-import { apiFetch, esc, fmt, pct, withBtn } from '../api.js';
+const _v = window.APP_VERSION ? `?v=${window.APP_VERSION}` : '';
+const { apiFetch, esc, fmt, pct, withBtn } = await import(`../api.js${_v}`);
 
 let _stream = null;
 let _streamRetry = null;
