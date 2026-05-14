@@ -11,6 +11,7 @@ let _sortDir = 1;
 let _page = 0;
 let _syncPollTimer = null;
 let _syncingIds = new Set();
+let _syncWasRunning = false;
 
 export function initChatsPage() {
   document.addEventListener('click', async e => {
@@ -399,6 +400,9 @@ async function _refreshStatus() {
     syncingBtn.textContent = n ? `Синкаются (${n})` : 'Синкаются';
   }
   if (_filter === 'syncing') renderChats();
+  // reload chats when global sync finishes so message counts update
+  if (_syncWasRunning && !s.running) loadChats();
+  _syncWasRunning = s.running;
 }
 
 export async function pollSync() {

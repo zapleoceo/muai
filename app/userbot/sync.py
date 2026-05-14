@@ -94,6 +94,15 @@ async def sync_history(client: TelegramClient, days: int = 2) -> None:
 
             cfg = cfg_cache.get(int(chat_id))
             if cfg is None:
+                # upsert chat first so FK constraint is satisfied
+                async with AsyncSessionLocal() as session:
+                    await MessageRepo(session).upsert_chat_raw(
+                        id=chat_id,
+                        type=ctype,
+                        title=ctitle,
+                        username=getattr(dialog.entity, "username", None),
+                    )
+                    await session.commit()
                 await create_pending(chat_id)
                 logger.info("Sync: new chat queued as pending: %s", ctitle)
                 continue
