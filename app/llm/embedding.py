@@ -67,11 +67,13 @@ def _get_queue() -> _EmbeddingQueue:
     return _queue
 
 
-async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> list[float]:
+async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT", provider: str | None = None) -> list[float]:
     async def _job() -> list[float]:
         from app.services.tokens import get_token_manager
         mgr = get_token_manager()
-        lease = await mgr.next_token("embed")
+        lease = await mgr.next_token("embed", provider=provider) if provider else None
+        if lease is None:
+            lease = await mgr.next_token("embed")
         if not lease:
             raise RuntimeError("No tokens with embed capability. Add one in Settings → API токены.")
 
