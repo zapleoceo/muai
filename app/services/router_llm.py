@@ -297,6 +297,28 @@ _FEWSHOTS: list[tuple[str, dict]] = [
         },
     ),
     (
+        "Покажи голосовые в чате Евочка Моя",
+        {
+            "strategy": "SQL_DATE_SUMMARY",
+            "tools": [
+                {"name": "get_recent_dialog", "args": {"limit": 20}},
+                {
+                    "name": "sql_media_messages_by_chat_query",
+                    "args": {"scope": "ALL_CHATS", "chat_types": ["private"], "chat_query": "Евочка Моя", "media_type": "voice", "limit": 20, "use_time_range": True},
+                },
+            ],
+            "time_range": "LAST_30_DAYS",
+            "scope": "ALL_CHATS",
+            "chat_types": ["private"],
+            "chat_ids": None,
+            "explicit_from": None,
+            "explicit_to": None,
+            "clarify_question": None,
+            "max_steps": 2,
+            "on_empty": "RETRY",
+        },
+    ),
+    (
         "Саммари по чати с Евочкой ?",
         {
             "strategy": "SQL_DATE_SUMMARY",
