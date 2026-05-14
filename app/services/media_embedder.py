@@ -351,8 +351,9 @@ class MediaEmbedderManager:
 
                     if emb is None or not isinstance(emb, list) or len(emb) != _EMBED_DIMS or not all(isinstance(x, (int, float)) and math.isfinite(float(x)) for x in emb):
                         try:
-                            # prefer gemini for text fallback — voyage quota is reserved for text embedder
-                            emb = await embed_text(chunk_text, task_type="RETRIEVAL_DOCUMENT", provider="gemini")
+                            # use embed_media tokens for fallback — respects capability checkboxes
+                            # falls back to any embed token if no embed_media token available
+                            emb = await embed_text(chunk_text, task_type="RETRIEVAL_DOCUMENT", capability="embed_media")
                             if isinstance(emb, list) and len(emb) == _EMBED_DIMS and all(isinstance(x, (int, float)) and math.isfinite(float(x)) for x in emb):
                                 self.status.embed_text_ok += 1
                                 self.status.embed_ok += 1
