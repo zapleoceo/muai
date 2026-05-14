@@ -11,7 +11,17 @@ from app.db.database import AsyncSessionLocal
 from app.db.models import Chat, Message
 from app.db.repository import MessageRepo
 from app.llm.embedding import embed_text
-from app.services.answering_types import Plan, PlanChatType, PlanScope, PlanTimeRange, RetrievedContext, ToolRun
+from app.services.answering_types import (
+    DynamicFilterOp,
+    DynamicSelectAgg,
+    DynamicToolSpec,
+    Plan,
+    PlanChatType,
+    PlanScope,
+    PlanTimeRange,
+    RetrievedContext,
+    ToolRun,
+)
 
 
 @dataclass(frozen=True)
@@ -310,6 +320,155 @@ async def tool_sql_active_chats_by_date(
         "limit": int(limit),
         "from_utc": resolved.from_utc.isoformat(),
         "to_utc": resolved.to_utc.isoformat(),
+    }
+
+
+async def tool_sql_dynamic_query(
+    *,
+    chat_id: int,
+    scope: PlanScope,
+    chat_types: list[PlanChatType] | None,
+    chat_ids: list[int] | None,
+    resolved: ResolvedRange | None,
+    spec: DynamicToolSpec,
+) -> tuple[list[dict], dict]:
+    def _field_expr(name: str):
+        m = {
+            "message_id": Message.id,
+            "chat_id": Message.chat_id,
+            "user_id": Message.user_id,
+            "telegram_msg_id": Message.telegram_msg_id,
+            "direction": Message.direction,
+            "media_type": Message.media_type,
+            "date_utc": Message.date_utc,
+            "text": Message.text,
+            "caption": Message.caption,
+            "chat_type": Chat.type,
+            "chat_title": Chat.title,
+            "chat_username": Chat.username,
+            "folder": Chat.folder,
+        }
+        if name == "text_any":
+            return func.coalesce(Message.text, "") + " " + func.coalesce(Message.caption, "")
+        return m.get(name)
+
+    if spec.require_time_range and resolved is None:
+        return [], {"count": 0, "error": "time_range_required"}
+
+    async with AsyncSessionLocal() as session:
+        await session.execute(text("SET TRANSACTION READ ONLY"))
+
+        cols = []
+        keys = []
+        for s in spec.select:
+            expr = _field_expr(s.field)
+            if expr is None:
+                raise ValueError(f"unsupported_field:{s.field}")
+            if s.agg:
+                if s.agg == DynamicSelectAgg.COUNT:
+                    expr2 = func.count(expr)
+                elif s.agg == DynamicSelectAgg.COUNT_DISTINCT:
+                    expr2 = func.count(expr.distinct())
+                elif s.agg == DynamicSelectAgg.MAX:
+                    expr2 = func.max(expr)
+                elif s.agg == DynamicSelectAgg.MIN:
+                    expr2 = func.min(expr)
+                else:
+                    raise ValueError(f"unsupported_agg:{s.agg}")
+                expr = expr2
+            key = s.as_name or (f"{s.agg.value.lower()}_{s.field}" if s.agg else s.field)
+            cols.append(expr.label(key))
+            keys.append(key)
+
+        q = select(*cols).select_from(Message).join(Chat, Chat.id == Message.chat_id)
+
+        where = []
+        if resolved is not None:
+            where.append(Message.date_utc >= resolved.from_utc)
+            where.append(Message.date_utc < resolved.to_utc)
+
+        if chat_types:
+            where.append(Chat.type.in_([ct.value for ct in chat_types]))
+
+        if scope == PlanScope.CURRENT_CHAT:
+            where.append(Message.chat_id == chat_id)
+        elif chat_ids:
+            where.append(Message.chat_id.in_(chat_ids))
+
+        for f in spec.filters:
+            expr = _field_expr(f.field)
+            if expr is None:
+                raise ValueError(f"unsupported_field:{f.field}")
+            if f.op == DynamicFilterOp.EQ:
+                where.append(expr == f.value)
+            elif f.op == DynamicFilterOp.ILIKE:
+                v = str(f.value or "").strip()
+                where.append(expr.ilike(f"%{v}%"))
+            elif f.op == DynamicFilterOp.IN:
+                if not isinstance(f.value, list):
+                    raise ValueError("IN requires list value")
+                where.append(expr.in_(f.value))
+            elif f.op == DynamicFilterOp.BETWEEN:
+                if f.value is None or f.value_to is None:
+                    raise ValueError("BETWEEN requires value and value_to")
+                where.append(expr >= f.value)
+                where.append(expr <= f.value_to)
+            elif f.op == DynamicFilterOp.IS_NOT_NULL:
+                where.append(expr.isnot(None))
+            else:
+                raise ValueError(f"unsupported_op:{f.op}")
+
+        if where:
+            q = q.where(*where)
+
+        if spec.group_by:
+            group_exprs = []
+            for g in spec.group_by:
+                expr = _field_expr(g)
+                if expr is None:
+                    raise ValueError(f"unsupported_field:{g}")
+                group_exprs.append(expr)
+            q = q.group_by(*group_exprs)
+
+        if spec.order_by:
+            order_exprs = []
+            for o in spec.order_by:
+                expr = _field_expr(o.field)
+                if expr is None:
+                    raise ValueError(f"unsupported_field:{o.field}")
+                order_exprs.append(expr.desc() if o.desc else expr.asc())
+            q = q.order_by(*order_exprs)
+
+        q = q.limit(int(spec.limit))
+        rows = (await session.execute(q)).all()
+
+    items = []
+    for r in rows:
+        if hasattr(r, "_mapping"):
+            d = dict(r._mapping)
+        else:
+            d = {k: v for (k, v) in zip(keys, r, strict=False)}
+        if "date_utc" in d and isinstance(d["date_utc"], datetime):
+            d["date_utc"] = d["date_utc"].isoformat()
+        if "last_date_utc" in d and isinstance(d["last_date_utc"], datetime):
+            d["last_date_utc"] = d["last_date_utc"].isoformat()
+        if "telegram_msg_id" in d and d.get("telegram_msg_id") and ("chat_id" in d or d.get("chat_id")):
+            link = build_message_link(
+                chat_id=int(d.get("chat_id") or 0),
+                chat_type=d.get("chat_type"),
+                chat_username=d.get("chat_username"),
+                telegram_msg_id=int(d.get("telegram_msg_id") or 0),
+            )
+            if link:
+                d["link"] = link
+        items.append(d)
+
+    return items, {
+        "count": len(items),
+        "limit": int(spec.limit),
+        "group_by": spec.group_by,
+        "from_utc": resolved.from_utc.isoformat() if resolved else None,
+        "to_utc": resolved.to_utc.isoformat() if resolved else None,
     }
 
 
@@ -1047,8 +1206,8 @@ async def tool_sql_messages_by_folder_and_date(
 _ALLOWED_TOOLS: dict[str, set[str]] = {
     "INFO_ONLY": {"get_recent_dialog"},
     "RAG_SEMANTIC": {"get_recent_dialog", "rag_search", "sql_search_messages", "sql_find_chats", "sql_lex_search_messages"},
-    "SQL_DATE_SUMMARY": {"get_recent_dialog", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date", "sql_stats_by_date", "sql_active_chats_by_date", "sql_search_messages", "sql_search_messages_by_date", "sql_find_chats", "sql_lex_search_messages", "sql_message_by_tg_ref", "sql_recent_messages_by_chat_query", "sql_media_messages_by_chat_query"},
-    "HYBRID": {"get_recent_dialog", "rag_search", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date", "sql_stats_by_date", "sql_active_chats_by_date", "sql_search_messages", "sql_search_messages_by_date", "sql_find_chats", "sql_lex_search_messages", "sql_message_by_tg_ref", "sql_recent_messages_by_chat_query", "sql_media_messages_by_chat_query"},
+    "SQL_DATE_SUMMARY": {"get_recent_dialog", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date", "sql_stats_by_date", "sql_active_chats_by_date", "sql_dynamic_query", "sql_search_messages", "sql_search_messages_by_date", "sql_find_chats", "sql_lex_search_messages", "sql_message_by_tg_ref", "sql_recent_messages_by_chat_query", "sql_media_messages_by_chat_query"},
+    "HYBRID": {"get_recent_dialog", "rag_search", "sql_messages_by_date", "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date", "sql_stats_by_date", "sql_active_chats_by_date", "sql_dynamic_query", "sql_search_messages", "sql_search_messages_by_date", "sql_find_chats", "sql_lex_search_messages", "sql_message_by_tg_ref", "sql_recent_messages_by_chat_query", "sql_media_messages_by_chat_query"},
     "COMMAND": set(),
 }
 
@@ -1160,6 +1319,28 @@ async def execute_plan(
                     limit=lim,
                 )
                 ctx.meta["active_chats"] = items
+                ctx.tool_runs.append(ToolRun(name=name, ok=True, meta=meta))
+                continue
+
+            if name == "sql_dynamic_query":
+                scope = PlanScope(tc.args.get("scope", plan.scope.value))
+                chat_types = tc.args.get("chat_types", plan.chat_types)
+                if chat_types:
+                    chat_types = [PlanChatType(x) for x in chat_types]
+                chat_ids = tc.args.get("chat_ids", plan.chat_ids)
+                if chat_ids:
+                    chat_ids = [int(x) for x in chat_ids]
+                spec_raw = tc.args.get("spec") or {}
+                spec = DynamicToolSpec.model_validate(spec_raw)
+                items, meta = await tool_sql_dynamic_query(
+                    chat_id=chat_id,
+                    scope=scope,
+                    chat_types=chat_types,
+                    chat_ids=chat_ids,
+                    resolved=resolved,
+                    spec=spec,
+                )
+                ctx.meta.setdefault("dynamic_rows", []).extend(items)
                 ctx.tool_runs.append(ToolRun(name=name, ok=True, meta=meta))
                 continue
 

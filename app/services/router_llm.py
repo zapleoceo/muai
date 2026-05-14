@@ -47,6 +47,7 @@ _ROUTER_POLICIES = (
     "   LAST_7_DAYS → LAST_30_DAYS → ALL_TIME.\n"
     "   Если в state.grade есть expand_time_range_to — используй его.\n"
     "7) Генерируй 2–4 query_variants для retrieval (синонимы, транслит, RU/EN), особенно для SEARCH.\n"
+    "8) Если нужен нестандартный отчёт/выборка, которую нельзя выразить как RECENT_MESSAGES/MEDIA_MESSAGES/SUMMARY/active_chats, используй operation=DYNAMIC_QUERY и заполни dynamic_tool.\n"
 )
 
 
@@ -58,7 +59,7 @@ def _router_tool_catalog() -> str:
     return (
         "QUERY_MODEL:\n"
         "- output_shape: ANSWER | LIST | SUMMARY | ANALYTICS\n"
-        "- operation: SEARCH | RECENT_MESSAGES | MEDIA_MESSAGES\n"
+        "- operation: SEARCH | RECENT_MESSAGES | MEDIA_MESSAGES | DYNAMIC_QUERY\n"
         "- need_proof: true/false (нужны ли ссылки/цитаты)\n"
         "- constraints:\n"
         "  - scope: CURRENT_CHAT | ALL_CHATS\n"
@@ -72,6 +73,7 @@ def _router_tool_catalog() -> str:
         "  - limit: int|null\n"
         "- query_variants: [string]\n"
         "- subqueries: [string]\n"
+        "- dynamic_tool: object|null (только для operation=DYNAMIC_QUERY)\n"
         "- clarify_question: string|null\n"
         "- max_steps: 1..3\n"
         "- on_empty: ASK_CLARIFY | RETRY\n"
@@ -763,6 +765,7 @@ def _validate_plan_invariants(plan: Plan) -> None:
                 "sql_message_by_tg_ref",
                 "sql_recent_messages_by_chat_query",
                 "sql_media_messages_by_chat_query",
+                "sql_dynamic_query",
                 "sql_messages_by_chat_query_and_date",
                 "sql_messages_by_folder_and_date",
             )
@@ -786,6 +789,7 @@ def _validate_plan_invariants(plan: Plan) -> None:
                 "sql_message_by_tg_ref",
                 "sql_recent_messages_by_chat_query",
                 "sql_media_messages_by_chat_query",
+                "sql_dynamic_query",
                 "sql_messages_by_chat_query_and_date",
                 "sql_messages_by_folder_and_date",
             )
@@ -895,6 +899,37 @@ def _compile_query_model_to_plan(*, query_model: QueryModel, query: str) -> Plan
             max_steps=max(2, int(query_model.max_steps or 2)),
             on_empty=PlanOnEmpty.RETRY,
             notes="compiled:media_messages",
+        )
+        _validate_plan_invariants(plan)
+        return plan
+
+    if query_model.operation == QueryOperation.DYNAMIC_QUERY:
+        if query_model.dynamic_tool is None:
+            raise ValueError("dynamic_tool required")
+        plan = Plan(
+            strategy=PlanStrategy.SQL_DATE_SUMMARY,
+            tools=base_tools
+            + [
+                PlanToolCall(
+                    name="sql_dynamic_query",
+                    args={
+                        "scope": c.scope.value,
+                        "chat_types": [ct.value for ct in (chat_types or [])] or None,
+                        "chat_ids": c.chat_ids,
+                        "spec": query_model.dynamic_tool.model_dump(),
+                    },
+                )
+            ],
+            time_range=time_range,
+            scope=c.scope,
+            chat_types=chat_types,
+            chat_ids=c.chat_ids,
+            explicit_from=explicit_from,
+            explicit_to=explicit_to,
+            clarify_question=None,
+            max_steps=max(2, int(query_model.max_steps or 2)),
+            on_empty=PlanOnEmpty.RETRY,
+            notes="compiled:dynamic_query",
         )
         _validate_plan_invariants(plan)
         return plan
@@ -1147,7 +1182,7 @@ async def route_query(
         "catalog": _router_tool_catalog(),
         "schema_hint": {
             "output_shape": "ANSWER|LIST|SUMMARY|ANALYTICS",
-            "operation": "SEARCH|RECENT_MESSAGES|MEDIA_MESSAGES",
+            "operation": "SEARCH|RECENT_MESSAGES|MEDIA_MESSAGES|DYNAMIC_QUERY",
             "need_proof": "true|false",
             "constraints": {
                 "scope": "CURRENT_CHAT|ALL_CHATS",
@@ -1163,6 +1198,14 @@ async def route_query(
             },
             "query_variants": ["string"],
             "subqueries": ["string"],
+            "dynamic_tool": {
+                "select": [{"field": "chat_id|chat_type|chat_title|date_utc|text_any|media_type", "as_name": "optional", "agg": "COUNT|COUNT_DISTINCT|MAX|MIN|null"}],
+                "filters": [{"field": "chat_id|chat_type|chat_title|date_utc|text_any|media_type", "op": "EQ|ILIKE|IN|BETWEEN|IS_NOT_NULL", "value": "any", "value_to": "any|null"}],
+                "group_by": ["field"],
+                "order_by": [{"field": "field", "desc": "bool"}],
+                "limit": "1..200",
+                "require_time_range": "bool",
+            },
             "clarify_question": "string|null",
             "max_steps": "1..3",
             "on_empty": "ASK_CLARIFY|RETRY",

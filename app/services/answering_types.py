@@ -54,6 +54,7 @@ class QueryOperation(str, Enum):
     SEARCH = "SEARCH"
     RECENT_MESSAGES = "RECENT_MESSAGES"
     MEDIA_MESSAGES = "MEDIA_MESSAGES"
+    DYNAMIC_QUERY = "DYNAMIC_QUERY"
 
 
 class QueryActor(str, Enum):
@@ -66,6 +67,58 @@ class QueryPrecisionBias(str, Enum):
     BALANCED = "BALANCED"
     PRECISION = "PRECISION"
     RECALL = "RECALL"
+
+
+class DynamicFilterOp(str, Enum):
+    EQ = "EQ"
+    ILIKE = "ILIKE"
+    IN = "IN"
+    BETWEEN = "BETWEEN"
+    IS_NOT_NULL = "IS_NOT_NULL"
+
+
+class DynamicSelectAgg(str, Enum):
+    COUNT = "COUNT"
+    COUNT_DISTINCT = "COUNT_DISTINCT"
+    MAX = "MAX"
+    MIN = "MIN"
+
+
+class DynamicSelect(BaseModel):
+    field: str
+    as_name: str | None = None
+    agg: DynamicSelectAgg | None = None
+
+
+class DynamicFilter(BaseModel):
+    field: str
+    op: DynamicFilterOp
+    value: str | int | list[str] | list[int] | None = None
+    value_to: str | int | None = None
+
+
+class DynamicOrder(BaseModel):
+    field: str
+    desc: bool = True
+
+
+class DynamicToolSpec(BaseModel):
+    select: list[DynamicSelect] = Field(default_factory=list)
+    filters: list[DynamicFilter] = Field(default_factory=list)
+    group_by: list[str] = Field(default_factory=list)
+    order_by: list[DynamicOrder] = Field(default_factory=list)
+    limit: int = 50
+    require_time_range: bool = True
+
+    @model_validator(mode="after")
+    def _validate(self) -> "DynamicToolSpec":
+        if self.limit < 1:
+            raise ValueError("limit must be >= 1")
+        if self.limit > 200:
+            raise ValueError("limit must be <= 200")
+        if not self.select:
+            raise ValueError("select must not be empty")
+        return self
 
 
 class QueryConstraints(BaseModel):
@@ -100,6 +153,7 @@ class QueryModel(BaseModel):
 
     query_variants: list[str] = Field(default_factory=list)
     subqueries: list[str] = Field(default_factory=list)
+    dynamic_tool: DynamicToolSpec | None = None
 
     clarify_question: str | None = None
     max_steps: int = 1
@@ -118,6 +172,9 @@ class QueryModel(BaseModel):
         if self.operation == QueryOperation.MEDIA_MESSAGES:
             if not (self.constraints.media_type or self.constraints.media_type == ""):
                 raise ValueError("MEDIA_MESSAGES requires constraints.media_type")
+        if self.operation == QueryOperation.DYNAMIC_QUERY:
+            if self.dynamic_tool is None:
+                raise ValueError("DYNAMIC_QUERY requires dynamic_tool")
         return self
 
 
