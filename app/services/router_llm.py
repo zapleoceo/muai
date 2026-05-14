@@ -4,52 +4,49 @@ from datetime import datetime
 
 from app.llm.base import LLMMessage
 from app.llm.factory import get_llm_provider
-from app.services.answering_types import Plan
+from app.services.answering_types import (
+    Plan,
+    PlanChatType,
+    PlanOnEmpty,
+    PlanScope,
+    PlanStrategy,
+    PlanTimeRange,
+    PlanToolCall,
+    QueryModel,
+    QueryOperation,
+    QueryOutputShape,
+)
 
 
 _BASE_ROUTER_PROMPT = (
     "Ты RouterLLM для Telegram-ассистента. "
-    "Твоя задача: выбрать стратегию ответа и список инструментов, "
-    "вернуть только валидный JSON по схеме Plan. "
+    "Твоя задача: понять тип запроса (форму ответа), ограничения (чаты/период/типы/медиа), "
+    "и вернуть только валидный JSON по схеме QueryModel. "
     "Никакого текста вокруг JSON. "
     "Не вычисляй конкретные timestamps: используй time_range enum. "
-    "Вход может содержать state (предыдущий план, краткое резюме retrieval и подсказку от grader) — используй state, чтобы улучшить план. "
+    "Вход может содержать state (предыдущий план, краткое резюме retrieval и подсказку от grader) — используй state, чтобы улучшить решение. "
     "Твоя сильная сторона — переформулировка запроса для retrieval: подбирай 2–4 варианта (синонимы, транслит, RU/EN), а не один-единственный keyword. "
-    "Если не уверен — задай clarify_question и используй стратегию INFO_ONLY."
+    "Если не уверен — задай clarify_question."
 )
 
 _ROUTER_POLICIES = (
     "Правила:\n"
-    "1) Для большинства стратегий, кроме COMMAND, включай get_recent_dialog(limit=20) для CURRENT_CHAT.\n"
-    "   Если в state есть recent_dialog — используй его как контекст и можешь НЕ дублировать get_recent_dialog.\n"
-    "2) Если пользователь явно ограничивает тип чатов:\n"
-    "   - только личные → chat_types=['private'], scope='ALL_CHATS'\n"
-    "   - только группы → chat_types=['group','supergroup'], scope='ALL_CHATS'\n"
-    "   - только каналы → chat_types=['channel'], scope='ALL_CHATS'\n"
-    "3) Если пользователь спрашивает 'о чём' с конкретным человеком/чатом — по умолчанию предполагай личный чат:\n"
-    "   chat_types=['private'], scope='ALL_CHATS'\n"
-    "4) Если пользователь просит ссылку/пруф/исходник — используй инструменты, которые возвращают link (sql_lex_search_messages или sql_search_messages).\n"
-    "5) Если в вопросе явно указан чат/человек и есть time_range — предпочитай sql_messages_by_chat_query_and_date, чтобы не тянуть лишнее.\n"
-    "6) Если пользователь просит выборку/саммари по папке (folder) — используй sql_messages_by_folder_and_date.\n"
-    "7) Если вопрос про поиск по базе (включая расплывчатые формулировки) — предпочитай sql_lex_search_messages (он сочетает FTS+trgm).\n"
-    "   Если нужен период, включи use_time_range=true, но делай 2–4 tool-calls с разными query-variant.\n"
-    "   Если лексика не даёт результата — добавь rag_search как второй канал.\n"
-    "   - добавляй синонимы (например: анонс/афиша/расписание; кино/фильм/сеанс; встреча/ивент/event)\n"
-    "   - добавляй RU/EN варианты и транслит (веранда/veranda)\n"
-    "   - добавляй 'якоря' формата (например: '📍', '🕖', 'вход', диапазон дат '11.05-17.05')\n"
-    "8) Если пользователь прислал ссылку t.me/.../MSG_ID — это точный идентификатор. Используй sql_message_by_tg_ref(chat_username или chat_id, telegram_msg_id) и верни найденное сообщение.\n"
-    "9) Если в запросе упоминается чат/папка/место, но непонятно какой именно чат нужен — сначала используй sql_find_chats.\n"
-    "   Если запрос может быть в RU, а чат назван в EN (или наоборот) — вызови sql_find_chats 2 раза с query-variant (например: 'веранда' и 'veranda').\n"
-    "   Если после sql_find_chats есть кандидаты — во втором шаге ограничь chat_ids выбранными кандидатами.\n"
-    "10) Для стратегий SQL_DATE_SUMMARY и HYBRID ставь max_steps=2 и on_empty='RETRY', чтобы можно было сделать второй заход retrieval.\n"
-    "11) Не привязывайся к одному дню, если пользователь спрашивает про недельное расписание/афишу: пост часто публикуют накануне. Используй LAST_7_DAYS или более широкий EXPLICIT.\n"
-    "12) Если пользователь просит 'последнее сообщение/крайний текст' в конкретном чате — используй sql_recent_messages_by_chat_query (limit 1..5) и не проси подтверждений.\n"
-    "12.1) Если пользователь просит показать медиа определённого типа (например: голосовые/voice, фото/photo, документы/document) в конкретном чате — используй sql_media_messages_by_chat_query.\n"
-    "13) Не используй стратегию COMMAND в этом проекте. Если нужны уточнения — используй INFO_ONLY + clarify_question.\n"
-    "14) Если пользователь просит саммари/поиск по всей истории ('вся история', 'за всё время') — используй time_range=ALL_TIME.\n"
-    "15) Для лучших ответов по умолчанию начинай с более узкого окна и расширяй его только если данных не хватило:\n"
-    "   - LAST_7_DAYS → LAST_30_DAYS → ALL_TIME.\n"
-    "   Решение о расширении бери из state.grade.expand_time_range_to, если оно есть.\n"
+    "1) Выбирай output_shape по форме ожидаемого результата:\n"
+    "   - LIST: пользователь хочет список сообщений/объектов (медиа, документы, ссылки, последние сообщения).\n"
+    "   - SUMMARY: пользователь хочет сжатое резюме/итоги за период/всю историю.\n"
+    "   - ANALYTICS: пользователь хочет подсчёты/топы/сравнения.\n"
+    "   - ANSWER: обычный ответ/поиск факта.\n"
+    "2) Выбирай operation:\n"
+    "   - RECENT_MESSAGES: последние сообщения в выбранном чате.\n"
+    "   - MEDIA_MESSAGES: список сообщений определённого media_type (voice/document/photo/audio/video).\n"
+    "   - SEARCH: поиск/саммари по базе.\n"
+    "3) need_proof=true, если нужны ссылки/цитаты/пруф или есть риск путаницы (имена/точные формулировки).\n"
+    "4) Заполняй constraints (scope/chat_types/chat_ids/chat_query/folder/time_range).\n"
+    "5) Если пользователь просит 'вся история/за всё время' — time_range=ALL_TIME.\n"
+    "6) По умолчанию начинай с более узкого окна и расширяй его только если данных не хватило:\n"
+    "   LAST_7_DAYS → LAST_30_DAYS → ALL_TIME.\n"
+    "   Если в state.grade есть expand_time_range_to — используй его.\n"
+    "7) Генерируй 2–4 query_variants для retrieval (синонимы, транслит, RU/EN), особенно для SEARCH.\n"
 )
 
 
@@ -59,26 +56,25 @@ def _router_system_prompt() -> str:
 
 def _router_tool_catalog() -> str:
     return (
-        "STRATEGIES:\n"
-        "- INFO_ONLY: общий ответ + свежий контекст текущего чата.\n"
-        "- RAG_SEMANTIC: семантический поиск по векторным чанкам.\n"
-        "- SQL_DATE_SUMMARY: выборка сообщений по датам/периоду и последующее суммирование.\n"
-        "- HYBRID: и SQL по датам, и RAG.\n"
-        "- COMMAND: только явные команды, опасно.\n\n"
-        "TOOLS:\n"
-        "- get_recent_dialog(chat_id, limit)\n"
-        "- rag_search(scope, query, top_k)  # ищет по векторным чанкам текста и файлов (message_chunks + media_chunks)\n"
-        "- sql_find_chats(query, limit, chat_types?)\n"
-        "- sql_lex_search_messages(scope, query, limit, chat_types?, chat_ids?, use_time_range?)\n"
-        "- sql_search_messages(scope, query, limit, chat_types?, chat_ids?)\n"
-        "- sql_search_messages_by_date(scope, time_range, query, limit, chat_types?, chat_ids?)\n"
-        "- sql_message_by_tg_ref(chat_username?, chat_id?, telegram_msg_id)\n"
-        "- sql_recent_messages_by_chat_query(scope, chat_query, limit, chat_types?)\n"
-        "- sql_media_messages_by_chat_query(scope, chat_query?, media_type, limit, chat_types?, use_time_range?)\n"
-        "- sql_messages_by_chat_query_and_date(scope, time_range, chat_query, max_rows, chat_types?)\n"
-        "- sql_messages_by_folder_and_date(scope, time_range, folder, max_rows, chat_types?)\n"
-        "- sql_messages_by_date(scope, time_range, explicit_from?, explicit_to?, max_rows, chat_types?, chat_ids?)\n"
-        "- sql_stats_by_date(scope, time_range, explicit_from?, explicit_to?, chat_types?, chat_ids?)\n"
+        "QUERY_MODEL:\n"
+        "- output_shape: ANSWER | LIST | SUMMARY | ANALYTICS\n"
+        "- operation: SEARCH | RECENT_MESSAGES | MEDIA_MESSAGES\n"
+        "- need_proof: true/false (нужны ли ссылки/цитаты)\n"
+        "- constraints:\n"
+        "  - scope: CURRENT_CHAT | ALL_CHATS\n"
+        "  - chat_types: [private|group|supergroup|channel] | null\n"
+        "  - chat_ids: [int] | null\n"
+        "  - chat_query: string|null (имя/юзернейм чата для выбора конкретного чата)\n"
+        "  - folder: string|null\n"
+        "  - time_range: NONE|YESTERDAY|TODAY|LAST_7_DAYS|LAST_30_DAYS|ALL_TIME|EXPLICIT\n"
+        "  - explicit_from/explicit_to: string|null (только если time_range=EXPLICIT)\n"
+        "  - media_type: string|null (например: voice/document/photo)\n"
+        "  - limit: int|null\n"
+        "- query_variants: [string]\n"
+        "- subqueries: [string]\n"
+        "- clarify_question: string|null\n"
+        "- max_steps: 1..3\n"
+        "- on_empty: ASK_CLARIFY | RETRY\n"
     )
 
 
@@ -483,6 +479,91 @@ _FEWSHOTS: list[tuple[str, dict]] = [
     ),
 ]
 
+_QUERY_FEWSHOTS: list[tuple[str, dict]] = [
+    (
+        "Саммари за вчера?",
+        {
+            "output_shape": "SUMMARY",
+            "operation": "SEARCH",
+            "need_proof": False,
+            "precision_bias": "BALANCED",
+            "constraints": {"scope": "ALL_CHATS", "time_range": "YESTERDAY"},
+            "query_variants": ["саммари за вчера", "итоги за вчера"],
+            "subqueries": [],
+            "clarify_question": None,
+            "max_steps": 2,
+            "on_empty": "RETRY",
+            "notes": None,
+        },
+    ),
+    (
+        "О чем с Евочкой говорили вчера?",
+        {
+            "output_shape": "SUMMARY",
+            "operation": "SEARCH",
+            "need_proof": False,
+            "precision_bias": "BALANCED",
+            "constraints": {"scope": "ALL_CHATS", "chat_types": ["private"], "chat_query": "Евочка", "time_range": "YESTERDAY"},
+            "query_variants": ["о чём говорили", "итоги переписки"],
+            "subqueries": [],
+            "clarify_question": None,
+            "max_steps": 2,
+            "on_empty": "RETRY",
+            "notes": None,
+        },
+    ),
+    (
+        "В чате Евочка Моя какое последнее сообщение есть?",
+        {
+            "output_shape": "LIST",
+            "operation": "RECENT_MESSAGES",
+            "need_proof": True,
+            "precision_bias": "PRECISION",
+            "constraints": {"scope": "ALL_CHATS", "chat_types": ["private"], "chat_query": "Евочка Моя", "time_range": "NONE", "limit": 3},
+            "query_variants": [],
+            "subqueries": [],
+            "clarify_question": None,
+            "max_steps": 2,
+            "on_empty": "RETRY",
+            "notes": None,
+        },
+    ),
+    (
+        "Покажи голосовые в чате Евочка Моя",
+        {
+            "output_shape": "LIST",
+            "operation": "MEDIA_MESSAGES",
+            "need_proof": True,
+            "precision_bias": "PRECISION",
+            "constraints": {"scope": "ALL_CHATS", "chat_types": ["private"], "chat_query": "Евочка Моя", "media_type": "voice", "time_range": "LAST_30_DAYS", "limit": 20},
+            "query_variants": [],
+            "subqueries": [],
+            "clarify_question": None,
+            "max_steps": 2,
+            "on_empty": "RETRY",
+            "notes": None,
+        },
+    ),
+    (
+        "Найди афишу на эту неделю на веранде",
+        {
+            "output_shape": "ANSWER",
+            "operation": "SEARCH",
+            "need_proof": True,
+            "precision_bias": "BALANCED",
+            "constraints": {"scope": "ALL_CHATS", "time_range": "LAST_7_DAYS"},
+            "query_variants": ["афиша веранда", "расписание веранда", "veranda schedule", "афиша veranda"],
+            "subqueries": [],
+            "clarify_question": None,
+            "max_steps": 2,
+            "on_empty": "RETRY",
+            "notes": None,
+        },
+    ),
+]
+
+_FEWSHOTS = _QUERY_FEWSHOTS
+
 
 def _extract_json(text: str) -> dict:
     s = text.strip()
@@ -708,6 +789,288 @@ def _validate_plan_invariants(plan: Plan) -> None:
             raise ValueError("COMMAND: on_empty должен быть 'ASK_CLARIFY'")
 
 
+def _compile_query_model_to_plan(*, query_model: QueryModel, query: str) -> Plan:
+    c = query_model.constraints
+
+    if query_model.clarify_question:
+        plan = Plan(
+            strategy=PlanStrategy.INFO_ONLY,
+            tools=[PlanToolCall(name="get_recent_dialog", args={"limit": 20})],
+            time_range=PlanTimeRange.NONE,
+            scope=PlanScope.CURRENT_CHAT,
+            chat_types=None,
+            chat_ids=None,
+            explicit_from=None,
+            explicit_to=None,
+            clarify_question=query_model.clarify_question,
+            max_steps=1,
+            on_empty=PlanOnEmpty.ASK_CLARIFY,
+            notes="compiled:clarify",
+        )
+        _validate_plan_invariants(plan)
+        return plan
+
+    chat_types = c.chat_types
+    if chat_types:
+        chat_types = [PlanChatType(x) for x in chat_types]
+
+    base_tools: list[PlanToolCall] = [PlanToolCall(name="get_recent_dialog", args={"limit": 20})]
+
+    time_range = c.time_range
+    explicit_from = c.explicit_from
+    explicit_to = c.explicit_to
+
+    if query_model.operation == QueryOperation.RECENT_MESSAGES:
+        lim = int(c.limit or 5)
+        plan = Plan(
+            strategy=PlanStrategy.SQL_DATE_SUMMARY,
+            tools=base_tools
+            + [
+                PlanToolCall(
+                    name="sql_recent_messages_by_chat_query",
+                    args={
+                        "scope": c.scope.value,
+                        "chat_query": str(c.chat_query or ""),
+                        "limit": lim,
+                        "chat_types": [ct.value for ct in (chat_types or [])] or None,
+                    },
+                )
+            ],
+            time_range=PlanTimeRange.NONE,
+            scope=c.scope,
+            chat_types=chat_types,
+            chat_ids=c.chat_ids,
+            explicit_from=None,
+            explicit_to=None,
+            clarify_question=None,
+            max_steps=max(2, int(query_model.max_steps or 2)),
+            on_empty=PlanOnEmpty.RETRY,
+            notes="compiled:recent_messages",
+        )
+        _validate_plan_invariants(plan)
+        return plan
+
+    if query_model.operation == QueryOperation.MEDIA_MESSAGES:
+        lim = int(c.limit or 30)
+        use_time_range = bool(time_range.value != "NONE")
+        plan = Plan(
+            strategy=PlanStrategy.SQL_DATE_SUMMARY,
+            tools=base_tools
+            + [
+                PlanToolCall(
+                    name="sql_media_messages_by_chat_query",
+                    args={
+                        "scope": c.scope.value,
+                        "chat_query": c.chat_query,
+                        "media_type": str(c.media_type or ""),
+                        "limit": lim,
+                        "chat_types": [ct.value for ct in (chat_types or [])] or None,
+                        "use_time_range": use_time_range,
+                    },
+                )
+            ],
+            time_range=time_range,
+            scope=c.scope,
+            chat_types=chat_types,
+            chat_ids=c.chat_ids,
+            explicit_from=explicit_from,
+            explicit_to=explicit_to,
+            clarify_question=None,
+            max_steps=max(2, int(query_model.max_steps or 2)),
+            on_empty=PlanOnEmpty.RETRY,
+            notes="compiled:media_messages",
+        )
+        _validate_plan_invariants(plan)
+        return plan
+
+    if query_model.output_shape == QueryOutputShape.SUMMARY:
+        tr = time_range
+        if tr.value == "NONE":
+            tr = PlanTimeRange.LAST_7_DAYS
+            explicit_from = None
+            explicit_to = None
+
+        if c.folder:
+            main_tool = PlanToolCall(
+                name="sql_messages_by_folder_and_date",
+                args={
+                    "scope": c.scope.value,
+                    "max_rows": 2000,
+                    "folder": str(c.folder),
+                    "chat_types": [ct.value for ct in (chat_types or [])] or None,
+                },
+            )
+        elif c.chat_query:
+            main_tool = PlanToolCall(
+                name="sql_messages_by_chat_query_and_date",
+                args={
+                    "scope": c.scope.value,
+                    "max_rows": 2000,
+                    "chat_query": str(c.chat_query),
+                    "chat_types": [ct.value for ct in (chat_types or [])] or None,
+                },
+            )
+        else:
+            main_tool = PlanToolCall(
+                name="sql_messages_by_date",
+                args={
+                    "scope": c.scope.value,
+                    "max_rows": 2000,
+                    "chat_types": [ct.value for ct in (chat_types or [])] or None,
+                    "chat_ids": c.chat_ids,
+                },
+            )
+
+        plan = Plan(
+            strategy=PlanStrategy.SQL_DATE_SUMMARY,
+            tools=base_tools
+            + [
+                main_tool,
+                PlanToolCall(
+                    name="sql_stats_by_date",
+                    args={"scope": c.scope.value, "chat_types": [ct.value for ct in (chat_types or [])] or None, "chat_ids": c.chat_ids},
+                ),
+            ],
+            time_range=tr,
+            scope=c.scope,
+            chat_types=chat_types,
+            chat_ids=c.chat_ids,
+            explicit_from=explicit_from,
+            explicit_to=explicit_to,
+            clarify_question=None,
+            max_steps=max(2, int(query_model.max_steps or 2)),
+            on_empty=PlanOnEmpty.RETRY,
+            notes="compiled:summary",
+        )
+        _validate_plan_invariants(plan)
+        return plan
+
+    if query_model.output_shape == QueryOutputShape.LIST:
+        lim = int(c.limit or 30)
+        q = (query_model.query_variants[0] if query_model.query_variants else query) or query
+        tools = list(base_tools)
+        if time_range.value != "NONE":
+            tools.append(
+                PlanToolCall(
+                    name="sql_search_messages_by_date",
+                    args={
+                        "scope": c.scope.value,
+                        "query": q,
+                        "limit": lim,
+                        "chat_types": [ct.value for ct in (chat_types or [])] or None,
+                        "chat_ids": c.chat_ids,
+                    },
+                )
+            )
+        else:
+            tools.append(
+                PlanToolCall(
+                    name="sql_search_messages",
+                    args={
+                        "scope": c.scope.value,
+                        "query": q,
+                        "limit": lim,
+                        "chat_types": [ct.value for ct in (chat_types or [])] or None,
+                        "chat_ids": c.chat_ids,
+                    },
+                )
+            )
+
+        plan = Plan(
+            strategy=PlanStrategy.SQL_DATE_SUMMARY,
+            tools=tools,
+            time_range=time_range,
+            scope=c.scope,
+            chat_types=chat_types,
+            chat_ids=c.chat_ids,
+            explicit_from=explicit_from,
+            explicit_to=explicit_to,
+            clarify_question=None,
+            max_steps=max(2, int(query_model.max_steps or 2)),
+            on_empty=PlanOnEmpty.RETRY,
+            notes="compiled:list",
+        )
+        _validate_plan_invariants(plan)
+        return plan
+
+    if query_model.output_shape == QueryOutputShape.ANALYTICS:
+        cq = "Что именно нужно посчитать (какой показатель), по каким чатам и за какой период?"
+        plan = Plan(
+            strategy=PlanStrategy.INFO_ONLY,
+            tools=base_tools,
+            time_range=PlanTimeRange.NONE,
+            scope=PlanScope.CURRENT_CHAT,
+            chat_types=None,
+            chat_ids=None,
+            explicit_from=None,
+            explicit_to=None,
+            clarify_question=cq,
+            max_steps=1,
+            on_empty=PlanOnEmpty.ASK_CLARIFY,
+            notes="compiled:analytics_clarify",
+        )
+        _validate_plan_invariants(plan)
+        return plan
+
+    need_proof = bool(query_model.need_proof)
+    tr = time_range
+    if need_proof:
+        tools: list[PlanToolCall] = list(base_tools)
+        variants = [v for v in (query_model.query_variants or []) if str(v).strip()]
+        if not variants:
+            variants = [str(query).strip()]
+        variants = variants[:3]
+        use_time_range = bool(tr.value != "NONE")
+        for v in variants:
+            tools.append(
+                PlanToolCall(
+                    name="sql_lex_search_messages",
+                    args={
+                        "scope": c.scope.value,
+                        "query": v,
+                        "limit": 60,
+                        "chat_types": [ct.value for ct in (chat_types or [])] or None,
+                        "chat_ids": c.chat_ids,
+                        "use_time_range": use_time_range,
+                    },
+                )
+            )
+        tools.append(PlanToolCall(name="rag_search", args={"scope": c.scope.value, "query": str(query), "top_k": 10, "chat_ids": c.chat_ids}))
+        plan = Plan(
+            strategy=PlanStrategy.HYBRID,
+            tools=tools,
+            time_range=tr,
+            scope=c.scope,
+            chat_types=chat_types,
+            chat_ids=c.chat_ids,
+            explicit_from=explicit_from,
+            explicit_to=explicit_to,
+            clarify_question=None,
+            max_steps=max(2, int(query_model.max_steps or 2)),
+            on_empty=PlanOnEmpty.RETRY,
+            notes="compiled:hybrid",
+        )
+        _validate_plan_invariants(plan)
+        return plan
+
+    plan = Plan(
+        strategy=PlanStrategy.RAG_SEMANTIC,
+        tools=base_tools + [PlanToolCall(name="rag_search", args={"scope": c.scope.value, "query": str(query), "top_k": 12, "chat_ids": c.chat_ids})],
+        time_range=tr,
+        scope=c.scope,
+        chat_types=chat_types,
+        chat_ids=c.chat_ids,
+        explicit_from=explicit_from,
+        explicit_to=explicit_to,
+        clarify_question=None,
+        max_steps=1,
+        on_empty=PlanOnEmpty.ASK_CLARIFY,
+        notes="compiled:rag",
+    )
+    _validate_plan_invariants(plan)
+    return plan
+
+
 async def route_query(
     *,
     query: str,
@@ -748,35 +1111,43 @@ async def route_query(
         "state": state,
         "catalog": _router_tool_catalog(),
         "schema_hint": {
-            "strategy": "INFO_ONLY|RAG_SEMANTIC|SQL_DATE_SUMMARY|HYBRID|COMMAND",
-            "tools": [{"name": "tool_name", "args": {"k": "v"}}],
-            "time_range": "NONE|YESTERDAY|TODAY|LAST_7_DAYS|LAST_30_DAYS|ALL_TIME|EXPLICIT",
-            "scope": "CURRENT_CHAT|ALL_CHATS",
-            "chat_types": ["private|group|supergroup|channel"],
-            "chat_ids": [123],
-            "explicit_from": "ISO date/datetime | null",
-            "explicit_to": "ISO date/datetime | null",
-            "clarify_question": "string | null",
+            "output_shape": "ANSWER|LIST|SUMMARY|ANALYTICS",
+            "operation": "SEARCH|RECENT_MESSAGES|MEDIA_MESSAGES",
+            "need_proof": "true|false",
+            "constraints": {
+                "scope": "CURRENT_CHAT|ALL_CHATS",
+                "chat_types": ["private|group|supergroup|channel"],
+                "chat_ids": [123],
+                "chat_query": "string|null",
+                "folder": "string|null",
+                "time_range": "NONE|YESTERDAY|TODAY|LAST_7_DAYS|LAST_30_DAYS|ALL_TIME|EXPLICIT",
+                "explicit_from": "ISO date/datetime | null",
+                "explicit_to": "ISO date/datetime | null",
+                "media_type": "string|null",
+                "limit": "int|null",
+            },
+            "query_variants": ["string"],
+            "subqueries": ["string"],
+            "clarify_question": "string|null",
             "max_steps": "1..3",
             "on_empty": "ASK_CLARIFY|RETRY",
         },
-        "few_shots": [{"q": q, "plan": p} for (q, p) in _FEWSHOTS],
+        "few_shots": [{"q": q, "query_model": p} for (q, p) in _FEWSHOTS],
     }
 
     messages = [LLMMessage(role="user", content=json.dumps(input_block, ensure_ascii=False))]
 
     raw = await provider.complete(messages, system_prompt=_router_system_prompt())
     try:
-        plan = Plan.model_validate(_extract_json(raw))
-        _validate_plan_invariants(plan)
-        if forced_time_range and plan.strategy.value not in ("INFO_ONLY", "COMMAND"):
-            if _time_range_rank(forced_time_range) > _time_range_rank(plan.time_range.value):
-                plan = plan.model_copy(update={"time_range": forced_time_range, "explicit_from": None, "explicit_to": None})
-                _validate_plan_invariants(plan)
+        qm = QueryModel.model_validate(_extract_json(raw))
+        if forced_time_range:
+            if _time_range_rank(forced_time_range) > _time_range_rank(qm.constraints.time_range.value):
+                qm = qm.model_copy(update={"constraints": qm.constraints.model_copy(update={"time_range": forced_time_range, "explicit_from": None, "explicit_to": None})})
+        plan = _compile_query_model_to_plan(query_model=qm, query=query)
         return plan, raw
     except Exception as exc:
         repair_prompt = (
-            "Исправь вывод: верни только валидный JSON объекта Plan, без текста. "
+            "Исправь вывод: верни только валидный JSON объекта QueryModel, без текста. "
             f"Ошибка валидации: {str(exc)[:300]}"
         )
         raw2 = await provider.complete(
@@ -784,31 +1155,24 @@ async def route_query(
             system_prompt=_router_system_prompt(),
         )
         try:
-            plan2 = Plan.model_validate(_extract_json(raw2))
-            _validate_plan_invariants(plan2)
-            if forced_time_range and plan2.strategy.value not in ("INFO_ONLY", "COMMAND"):
-                if _time_range_rank(forced_time_range) > _time_range_rank(plan2.time_range.value):
-                    plan2 = plan2.model_copy(update={"time_range": forced_time_range, "explicit_from": None, "explicit_to": None})
-                    _validate_plan_invariants(plan2)
+            qm2 = QueryModel.model_validate(_extract_json(raw2))
+            if forced_time_range:
+                if _time_range_rank(forced_time_range) > _time_range_rank(qm2.constraints.time_range.value):
+                    qm2 = qm2.model_copy(update={"constraints": qm2.constraints.model_copy(update={"time_range": forced_time_range, "explicit_from": None, "explicit_to": None})})
+            plan2 = _compile_query_model_to_plan(query_model=qm2, query=query)
             return plan2, raw2
         except Exception as exc2:
-            fallback = {
-                "strategy": "INFO_ONLY",
-                "tools": [{"name": "get_recent_dialog", "args": {"limit": 20}}],
-                "time_range": "NONE",
-                "scope": "CURRENT_CHAT",
-                "chat_types": None,
-                "chat_ids": None,
-                "explicit_from": None,
-                "explicit_to": None,
-                "clarify_question": (
+            qm_fallback = QueryModel(
+                output_shape=QueryOutputShape.ANSWER,
+                operation=QueryOperation.SEARCH,
+                need_proof=False,
+                clarify_question=(
                     "Не смог корректно разобрать запрос для поиска по базе. "
                     "Уточни, пожалуйста: какой чат/период/что именно нужно найти."
                 ),
-                "max_steps": 1,
-                "on_empty": "ASK_CLARIFY",
-                "notes": f"router_fallback:{str(exc2)[:120]}",
-            }
-            plan3 = Plan.model_validate(fallback)
-            _validate_plan_invariants(plan3)
-            return plan3, json.dumps(fallback, ensure_ascii=False)
+                max_steps=1,
+                on_empty=PlanOnEmpty.ASK_CLARIFY,
+                notes=f"router_fallback:{str(exc2)[:120]}",
+            )
+            plan3 = _compile_query_model_to_plan(query_model=qm_fallback, query=query)
+            return plan3, json.dumps(qm_fallback.model_dump(), ensure_ascii=False)
