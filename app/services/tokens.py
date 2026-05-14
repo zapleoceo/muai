@@ -128,6 +128,12 @@ class TokenManager:
                     return None
                 available = [s for s in slots if s.available()]
                 if available:
+                    # For embed without explicit provider: prefer voyage (no daily/RPM limit)
+                    # over gemini/openai to avoid burning limited quota on bulk embedding.
+                    if provider is None and capability == "embed":
+                        voyage = [s for s in available if s.provider == "voyage"]
+                        if voyage:
+                            available = voyage
                     idx = self._rr_idx.get(key, 0)
                     slot = available[idx % len(available)]
                     self._rr_idx[key] = (idx + 1) % len(available)
