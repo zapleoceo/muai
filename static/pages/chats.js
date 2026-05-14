@@ -125,12 +125,39 @@ export function initChatsPage() {
 }
 
 export async function loadChats() {
-  const r = await apiFetch('/api/admin/chats');
-  if (!r.ok) return;
-  _allChats = await r.json();
+  const [cr, sr] = await Promise.all([
+    apiFetch('/api/admin/chats'),
+    apiFetch('/api/admin/settings/sync'),
+  ]);
+  if (!cr.ok) return;
+  _allChats = await cr.json();
+  if (sr.ok) {
+    const s = await sr.json();
+    _applySyncTypeSettings(s.allowed_types || []);
+  }
   _page = 0;
   updateFolderDropdown();
   renderChats();
+}
+
+function _applySyncTypeSettings(types) {
+  const box = document.getElementById('sync-type-filter');
+  if (!box) return;
+  box.querySelectorAll('input[type=checkbox]').forEach(cb => {
+    cb.checked = types.includes(cb.value);
+  });
+}
+
+export async function onSyncTypeChange() {
+  const box = document.getElementById('sync-type-filter');
+  if (!box) return;
+  const types = Array.from(box.querySelectorAll('input[type=checkbox]'))
+    .filter(x => x.checked).map(x => x.value);
+  await apiFetch('/api/admin/settings/sync', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ allowed_types: types }),
+  });
 }
 
 function updateFolderDropdown() {
@@ -316,8 +343,14 @@ export function renderChats() {
 export async function toggleSync() {
   const btn = document.getElementById('sync-toggle-btn');
   const running = btn.dataset.running === '1';
-  if (running) await apiFetch('/api/admin/sync/stop', { method: 'POST' });
-  else await apiFetch('/api/admin/sync/start', { method: 'POST' });
+  btn.disabled = true;
+  if (running) {
+    await apiFetch('/api/admin/sync/stop', { method: 'POST' });
+  } else {
+    await apiFetch('/api/admin/sync/start', { method: 'POST' });
+  }
+  btn.disabled = false;
+  await pollSync();
 }
 
 function _updateSyncBtn(running) {

@@ -133,6 +133,13 @@
         </div>
       </div>
 
+      <div class="media-type-list" id="sync-type-filter" style="margin-bottom:10px">
+        <label><input type="checkbox" value="private" onchange="onSyncTypeChange()">личные</label>
+        <label><input type="checkbox" value="group" onchange="onSyncTypeChange()">группы</label>
+        <label><input type="checkbox" value="supergroup" onchange="onSyncTypeChange()">супергруппы</label>
+        <label><input type="checkbox" value="channel" onchange="onSyncTypeChange()">каналы</label>
+      </div>
+
       <div class="sync-status-bar" id="sync-bar">
         <div class="spinner"></div>
         <span id="sync-bar-text">Синхронизация…</span>
