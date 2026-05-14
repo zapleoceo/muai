@@ -153,13 +153,25 @@ def compile_query_model_to_plan(*, query_model: QueryModel, query: str) -> Plan:
         return plan
 
     if query_model.output_shape == QueryOutputShape.LIST:
-        lim = int(c.limit or 30)
-        q = (query_model.query_variants[0] if query_model.query_variants else query) or query
+        lim = int(c.limit or 50)
+        variants = [v for v in (query_model.query_variants or []) if str(v).strip()][:4] or [str(query).strip()]
+        use_time_range = time_range.value != "NONE"
         tools = list(base_tools)
-        tool_name = "sql_search_messages_by_date" if time_range.value != "NONE" else "sql_search_messages"
-        tools.append(PlanToolCall(name=tool_name, args={"scope": c.scope.value, "query": q, "limit": lim, "chat_types": [ct.value for ct in (chat_types or [])] or None, "chat_ids": c.chat_ids}))
+        for v in variants:
+            tools.append(PlanToolCall(
+                name="sql_lex_search_messages",
+                args={"scope": c.scope.value, "query": v, "limit": lim,
+                      "chat_types": [ct.value for ct in (chat_types or [])] or None,
+                      "chat_ids": c.chat_ids, "use_time_range": use_time_range},
+            ))
+        if bool(query_model.need_proof):
+            tools.append(PlanToolCall(
+                name="rag_search",
+                args={"scope": c.scope.value, "query": str(query), "top_k": 10, "chat_ids": c.chat_ids},
+            ))
+        strategy = PlanStrategy.HYBRID if bool(query_model.need_proof) else PlanStrategy.SQL_DATE_SUMMARY
         plan = Plan(
-            strategy=PlanStrategy.SQL_DATE_SUMMARY, tools=tools,
+            strategy=strategy, tools=tools,
             time_range=time_range, scope=c.scope, chat_types=chat_types, chat_ids=c.chat_ids,
             explicit_from=explicit_from, explicit_to=explicit_to, clarify_question=None,
             max_steps=max(2, int(query_model.max_steps or 2)), on_empty=PlanOnEmpty.RETRY, notes="compiled:list",

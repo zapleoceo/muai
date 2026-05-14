@@ -249,10 +249,22 @@ async def execute_plan(
             return {"name": name, "ok": False, "tool_meta": {"error": str(exc)[:200]}}
 
     results = await asyncio.gather(*[_run_tool(tc) for tc in plan.tools])
+    _seen_msg_ids: set[int] = set()
+    _seen_chunk_ids: set[int] = set()
     for r in results:
         for m in (r.get("messages") or []):
+            mid = int(m.get("message_id") or 0)
+            if mid and mid in _seen_msg_ids:
+                continue
+            if mid:
+                _seen_msg_ids.add(mid)
             ctx.messages.append(m)
         for c in (r.get("chunks") or []):
+            cid = int(c.get("chunk_id") or 0)
+            if cid and cid in _seen_chunk_ids:
+                continue
+            if cid:
+                _seen_chunk_ids.add(cid)
             ctx.chunks.append(c)
         if r.get("stats"):
             ctx.stats.update(r["stats"])
