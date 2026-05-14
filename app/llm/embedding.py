@@ -46,6 +46,15 @@ class _EmbeddingQueue:
         return await fut
 
 
+def _is_gemini_prepay_depleted(resp: httpx.Response) -> bool:
+    try:
+        data = resp.json()
+        msg = (((data.get("error") or {}).get("message")) or "").lower()
+        return "prepayment credits are depleted" in msg or "billing" in msg and "ai.studio" in msg
+    except Exception:
+        return False
+
+
 _queue: _EmbeddingQueue | None = None
 
 
@@ -124,6 +133,9 @@ async def _embed_gemini(mgr: Any, *, token_id: int, token: str, text: str, task_
         async with httpx.AsyncClient(timeout=httpx.Timeout(30.0)) as client:
             resp = await client.post(url, json=payload)
         if resp.status_code == 429:
+            if _is_gemini_prepay_depleted(resp):
+                await mgr.on_error(token_id)
+                raise RuntimeError("Embedding API error 429: billing/prepayment credits depleted")
             await mgr.on_rate_limit(token_id)
             raise RuntimeError("Embedding API error 429: rate-limited")
         if resp.status_code >= 400:
@@ -153,6 +165,9 @@ async def _embed_gemini_batch(mgr: Any, *, token_id: int, token: str, texts: lis
         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
             resp = await client.post(url, json=payload)
         if resp.status_code == 429:
+            if _is_gemini_prepay_depleted(resp):
+                await mgr.on_error(token_id)
+                raise RuntimeError("Embedding API error 429: billing/prepayment credits depleted")
             await mgr.on_rate_limit(token_id)
             raise RuntimeError("Embedding API error 429: rate-limited")
         if resp.status_code >= 400:
@@ -189,6 +204,9 @@ async def _embed_gemini_v2(
         async with httpx.AsyncClient(timeout=httpx.Timeout(90.0)) as client:
             resp = await client.post(url, json=payload)
         if resp.status_code == 429:
+            if _is_gemini_prepay_depleted(resp):
+                await mgr.on_error(token_id)
+                raise RuntimeError("Embedding API error 429: billing/prepayment credits depleted")
             await mgr.on_rate_limit(token_id)
             raise RuntimeError("Embedding API error 429: rate-limited")
         if resp.status_code >= 400:
