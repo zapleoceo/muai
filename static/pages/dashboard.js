@@ -56,8 +56,14 @@ export async function loadStats() {
       <div class="value">${fmt(t.users)}</div>
     </div>
     <div class="card"><div class="label">Размер БД</div><div class="value" style="font-size:1.3rem">${t.db_size || '—'}</div><div class="sub">сообщения: ${t.messages_size || '—'}</div></div>
-    <div class="card"><div class="label">Чанки (текст)</div><div class="value">${fmt(t.chunks || 0)}</div><div class="sub">в ${fmt(t.embedded_chats || 0)} чатах</div></div>
-    <div class="card"><div class="label">Чанки (файлы)</div><div class="value">${fmt(t.media_chunks || 0)}</div><div class="sub">в ${fmt(t.media_embedded_chats || 0)} чатах</div></div>
+    <div class="card">
+      <div class="label">Чанки (таблица)</div>
+      <div class="mini-table">
+        <div></div><div class="mt-h">Чанки</div><div class="mt-h">Чаты</div>
+        <div class="mt-k">Текст чатов</div><div class="mt-v">${fmt(t.chunks || 0)}</div><div class="mt-v">${fmt(t.embedded_chats || 0)}</div>
+        <div class="mt-k">Файлов</div><div class="mt-v">${fmt(t.media_chunks || 0)}</div><div class="mt-v">${fmt(t.media_embedded_chats || 0)}</div>
+      </div>
+    </div>
     <div class="card">
       <div class="label">Сообщений за 7 дней</div>
       <div class="day-chart" id="daily-chart"></div>
