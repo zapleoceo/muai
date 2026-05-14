@@ -1,4 +1,4 @@
-import { apiFetch } from '../api.js';
+import { apiFetch, withBtn } from '../api.js';
 
 const TYPE_LABELS = { private: 'Личные', group: 'Группы', supergroup: 'Супергруппы', channel: 'Каналы' };
 let _settings = {};
@@ -65,20 +65,21 @@ export function removeBlacklist(i) {
   renderBlacklist();
 }
 
-export async function saveSettings() {
-  _settings.default_depth_days = parseInt(document.getElementById('inp-depth').value) || 7;
-  const r = await apiFetch('/api/admin/settings/sync', {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(_settings),
+export async function saveSettings(btn) {
+  await withBtn(btn, async () => {
+    _settings.default_depth_days = parseInt(document.getElementById('inp-depth').value) || 7;
+    const r = await apiFetch('/api/admin/settings/sync', {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(_settings),
+    });
+    if (r.ok) {
+      _settings = await r.json();
+      renderSettings();
+    } else {
+      alert('Ошибка сохранения');
+    }
   });
-  if (r.ok) {
-    _settings = await r.json();
-    renderSettings();
-    alert('Сохранено');
-  } else {
-    alert('Ошибка сохранения');
-  }
 }
 
 export function onProviderChange() {
@@ -110,16 +111,17 @@ export function onProviderChange() {
   embedMedia.checked = false;
 }
 
-export async function loadTokens() {
+export async function loadTokens(btn) {
   const box = document.getElementById('tokens-list');
-  const r = await apiFetch('/api/admin/tokens');
-  if (!r.ok) { box.textContent = 'Ошибка загрузки'; return; }
-  _tokens = await r.json();
-  if (!_tokens.length) {
-    box.innerHTML = '<p style=\"color:#475569;font-size:0.85rem\">Нет токенов. Добавьте первый ниже.</p>';
-    return;
-  }
-  box.innerHTML = _tokens.map(t => {
+  await withBtn(btn, async () => {
+    const r = await apiFetch('/api/admin/tokens');
+    if (!r.ok) { box.textContent = 'Ошибка загрузки'; return; }
+    _tokens = await r.json();
+    if (!_tokens.length) {
+      box.innerHTML = '<p style=\"color:#475569;font-size:0.85rem\">Нет токенов. Добавьте первый ниже.</p>';
+      return;
+    }
+    box.innerHTML = _tokens.map(t => {
     const hasLimit = t.daily_limit && t.daily_limit > 0;
     const pct2 = hasLimit ? Math.round(t.requests_today / t.daily_limit * 100) : 0;
     const pctClamped = Math.min(Math.max(pct2, 0), 100);
@@ -146,8 +148,8 @@ export async function loadTokens() {
         </div>
       </div>
       <button class=\"btn btn-sm btn-ghost\" onclick=\"toggleTokenCapsEditor(${t.id})\">Права</button>
-      <button class=\"btn btn-sm btn-ghost\" onclick=\"toggleToken(${t.id})\">${t.is_active ? 'Выкл' : 'Вкл'}</button>
-      <button class=\"btn btn-sm btn-danger\" onclick=\"deleteToken(${t.id})\">✕</button>
+      <button class=\"btn btn-sm btn-ghost\" onclick=\"toggleToken(${t.id}, this)\">${t.is_active ? 'Выкл' : 'Вкл'}</button>
+      <button class=\"btn btn-sm btn-danger\" onclick=\"deleteToken(${t.id}, this)\">✕</button>
     </div>
     <div id=\"caps-${t.id}\" style=\"display:none;margin:6px 0 10px 26px;background:#0f1117;border-radius:10px;padding:10px\">
       <div style=\"display:flex;gap:14px;align-items:center;color:#94a3b8;font-size:0.85rem;flex-wrap:wrap\">
@@ -163,11 +165,12 @@ export async function loadTokens() {
           <input type=\"checkbox\" id=\"caprow-embed-media-${t.id}\" ${hasEmbedMedia ? 'checked' : ''}>
           <span>embed_media</span>
         </label>
-        <button class=\"btn btn-sm\" onclick=\"saveTokenCaps(${t.id})\">Сохранить</button>
+        <button class=\"btn btn-sm\" onclick=\"saveTokenCaps(${t.id}, this)\">Сохранить</button>
         <button class=\"btn btn-sm btn-ghost\" onclick=\"toggleTokenCapsEditor(${t.id})\">Закрыть</button>
       </div>
     </div>`;
-  }).join('');
+    }).join('');
+  });
 }
 
 export function toggleTokenCapsEditor(id) {
@@ -177,7 +180,7 @@ export function toggleTokenCapsEditor(id) {
   el.style.display = visible ? 'none' : 'block';
 }
 
-export async function saveTokenCaps(id) {
+export async function saveTokenCaps(id, btn) {
   const chat = document.getElementById(`caprow-chat-${id}`);
   const embed = document.getElementById(`caprow-embed-${id}`);
   const embedMedia = document.getElementById(`caprow-embed-media-${id}`);
@@ -186,16 +189,18 @@ export async function saveTokenCaps(id) {
   if (embed && embed.checked) caps.push('embed');
   if (embedMedia && embedMedia.checked) caps.push('embed_media');
   if (!caps.length) { alert('Выбери хотя бы одну capability'); return; }
-  const r = await apiFetch(`/api/admin/tokens/${id}/capabilities`, {
-    method: 'PATCH',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ capabilities: caps }),
+  await withBtn(btn, async () => {
+    const r = await apiFetch(`/api/admin/tokens/${id}/capabilities`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ capabilities: caps }),
+    });
+    if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+    loadTokens();
   });
-  if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
-  loadTokens();
 }
 
-export async function addToken() {
+export async function addToken(btn) {
   const token = document.getElementById('inp-token').value.trim();
   const label = document.getElementById('inp-token-label').value.trim();
   const provider = document.getElementById('inp-token-provider').value;
@@ -205,24 +210,30 @@ export async function addToken() {
   if (document.getElementById('cap-embed-media').checked) caps.push('embed_media');
   if (!caps.length) { alert('Выбери хотя бы одну capability'); return; }
   if (!token) { alert('Введите токен'); return; }
-  const r = await apiFetch('/api/admin/tokens', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ token, label, provider, capabilities: caps }),
+  await withBtn(btn, async () => {
+    const r = await apiFetch('/api/admin/tokens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, label, provider, capabilities: caps }),
+    });
+    if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+    document.getElementById('inp-token').value = '';
+    document.getElementById('inp-token-label').value = '';
+    loadTokens();
   });
-  if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
-  document.getElementById('inp-token').value = '';
-  document.getElementById('inp-token-label').value = '';
-  loadTokens();
 }
 
-export async function deleteToken(id) {
+export async function deleteToken(id, btn) {
   if (!confirm('Удалить токен?')) return;
-  await apiFetch(`/api/admin/tokens/${id}`, { method: 'DELETE' });
-  loadTokens();
+  await withBtn(btn, async () => {
+    await apiFetch(`/api/admin/tokens/${id}`, { method: 'DELETE' });
+    loadTokens();
+  });
 }
 
-export async function toggleToken(id) {
-  await apiFetch(`/api/admin/tokens/${id}/toggle`, { method: 'PATCH' });
-  loadTokens();
+export async function toggleToken(id, btn) {
+  await withBtn(btn, async () => {
+    await apiFetch(`/api/admin/tokens/${id}/toggle`, { method: 'PATCH' });
+    loadTokens();
+  });
 }

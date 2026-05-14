@@ -1,4 +1,4 @@
-import { apiFetch, esc, fmt } from '../api.js';
+import { apiFetch, esc, fmt, withBtn } from '../api.js';
 
 const PAGE_SIZE = 50;
 let _allChats = [];
@@ -9,6 +9,7 @@ let _sortCol = 'title';
 let _sortDir = 1;
 let _page = 0;
 let _syncPollTimer = null;
+let _queuePollTimer = null;
 let _queueIds = new Set();
 let _syncingIds = new Set();
 
@@ -125,19 +126,27 @@ export function initChatsPage() {
 }
 
 export async function loadChats() {
-  const [cr, sr] = await Promise.all([
-    apiFetch('/api/admin/chats'),
-    apiFetch('/api/admin/settings/sync'),
-  ]);
-  if (!cr.ok) return;
-  _allChats = await cr.json();
-  if (sr.ok) {
-    const s = await sr.json();
-    _applySyncTypeSettings(s.allowed_types || []);
+  const tbody = document.getElementById('chat-list');
+  if (tbody) tbody.innerHTML = '<tr><td colspan="8" style="text-align:center;color:#475569;padding:24px">⏳ Загрузка…</td></tr>';
+  const btn = document.querySelector('[onclick="loadChats()"]');
+  if (btn) { btn.disabled = true; }
+  try {
+    const [cr, sr] = await Promise.all([
+      apiFetch('/api/admin/chats'),
+      apiFetch('/api/admin/settings/sync'),
+    ]);
+    if (!cr.ok) return;
+    _allChats = await cr.json();
+    if (sr.ok) {
+      const s = await sr.json();
+      _applySyncTypeSettings(s.allowed_types || []);
+    }
+    _page = 0;
+    updateFolderDropdown();
+    renderChats();
+  } finally {
+    if (btn) { btn.disabled = false; }
   }
-  _page = 0;
-  updateFolderDropdown();
-  renderChats();
 }
 
 function _applySyncTypeSettings(types) {
@@ -169,15 +178,11 @@ function updateFolderDropdown() {
 }
 
 export async function syncFolders() {
-  const btn = document.querySelector('[onclick=\"syncFolders()\"]');
-  if (btn) btn.textContent = '⏳ Папки';
-  const r = await apiFetch('/api/admin/chats/sync-folders', { method: 'POST' });
-  if (btn) btn.textContent = '↻ Папки';
-  if (r.ok) {
-    const d = await r.json();
-    await loadChats();
-    alert(`Обновлено ${d.updated} чатов`);
-  }
+  const btn = document.querySelector('[onclick="syncFolders()"]');
+  await withBtn(btn, async () => {
+    const r = await apiFetch('/api/admin/chats/sync-folders', { method: 'POST' });
+    if (r.ok) { const d = await r.json(); await loadChats(); alert(`Обновлено ${d.updated} чатов`); }
+  });
 }
 
 export function showAvatar(src, name) {
@@ -190,14 +195,10 @@ export function showAvatar(src, name) {
 
 export async function syncTopics() {
   const btn = document.getElementById('sync-topics-btn');
-  if (btn) btn.textContent = '⏳ Ветки';
-  const r = await apiFetch('/api/admin/chats/sync-topics', { method: 'POST' });
-  if (btn) btn.textContent = '↻ Ветки';
-  if (r.ok) {
-    const d = await r.json();
-    await loadChats();
-    alert(`Обновлено ${d.updated} форум-групп`);
-  }
+  await withBtn(btn, async () => {
+    const r = await apiFetch('/api/admin/chats/sync-topics', { method: 'POST' });
+    if (r.ok) { const d = await r.json(); await loadChats(); alert(`Обновлено ${d.updated} форум-групп`); }
+  });
 }
 
 export function onSearch(val) {
@@ -369,60 +370,64 @@ function _updateSyncBtn(running) {
   }
 }
 
+async function _refreshStatus() {
+  const sr = await apiFetch('/api/admin/sync/status');
+  if (!sr.ok) return;
+  const s = await sr.json();
+  const bar = document.getElementById('sync-bar');
+  _updateSyncBtn(s.running);
+  if (s.running) {
+    bar.classList.add('visible');
+    document.getElementById('sync-bar-text').textContent =
+      `Синхронизация… чат: ${s.current_chat || '—'} | обработано: ${s.chats_done} чатов, ${s.messages_saved} сообщений`;
+  } else {
+    bar.classList.remove('visible');
+  }
+  _syncingIds = new Set((s.syncing_chat_ids || []).map(Number));
+  const syncingBtn = document.querySelector('.filter-btn[data-filter="syncing"]');
+  if (syncingBtn) {
+    const n = _syncingIds.size;
+    syncingBtn.textContent = n ? `Синкаются (${n})` : 'Синкаются';
+  }
+  if (_filter === 'syncing') renderChats();
+}
+
+async function _refreshQueue() {
+  const qr = await apiFetch('/api/admin/sync/queue');
+  if (!qr.ok) return;
+  const q = await qr.json();
+  _queueIds = new Set((q.queue || []).map(x => x.id).filter(Boolean));
+  const qBtn = document.querySelector('.filter-btn[data-filter="queue"]');
+  if (qBtn) {
+    const n = (q.queue || []).length;
+    qBtn.textContent = n ? `Ожидают (${n})` : 'Ожидают';
+    const titles = (q.queue || []).slice(0, 12).map(c => c.title).filter(Boolean);
+    qBtn.title = titles.length ? (`Очередь синхронизации:\n- ` + titles.join('\n- ')) : 'Очередь синхронизации пуста';
+  }
+  if (_filter === 'queue') renderChats();
+  const wrap = document.getElementById('sync-queue-wrap');
+  const list = document.getElementById('sync-queue-list');
+  const cnt = document.getElementById('sync-queue-count');
+  if (!wrap || !list || !cnt) return;
+  wrap.style.display = '';
+  cnt.textContent = q.queue.length;
+  list.innerHTML = q.queue.map(c => `
+    <div class="queue-item ${c.active ? 'queue-item-active' : ''}">
+      <span class="chat-type-badge">${esc(c.type)}</span>
+      ${c.active ? '<span class="spinner" style="width:10px;height:10px;border-width:2px"></span>' : ''}
+      <span>${esc(c.title)}</span>
+      <span style="margin-left:auto;color:#475569">${c.depth_days ? c.depth_days + 'д' : 'глоб.'}</span>
+    </div>`).join('');
+  if (q.running) {
+    const active = list.querySelector('.queue-item-active');
+    if (active) active.scrollIntoView({ block: 'nearest' });
+  }
+}
+
 export async function pollSync() {
   clearInterval(_syncPollTimer);
-  const refresh = async () => {
-    const [sr, qr] = await Promise.all([
-      apiFetch('/api/admin/sync/status'),
-      apiFetch('/api/admin/sync/queue'),
-    ]);
-    if (!sr.ok) return;
-    const s = await sr.json();
-    const bar = document.getElementById('sync-bar');
-    _updateSyncBtn(s.running);
-    if (s.running) {
-      bar.classList.add('visible');
-      document.getElementById('sync-bar-text').textContent =
-        `Синхронизация… чат: ${s.current_chat || '—'} | обработано: ${s.chats_done} чатов, ${s.messages_saved} сообщений`;
-    } else {
-      bar.classList.remove('visible');
-    }
-    _syncingIds = new Set((s.syncing_chat_ids || []).map(Number));
-    const syncingBtn = document.querySelector('.filter-btn[data-filter="syncing"]');
-    if (syncingBtn) {
-      const n = _syncingIds.size;
-      syncingBtn.textContent = n ? `Синкаются (${n})` : 'Синкаются';
-    }
-    if (_filter === 'syncing') renderChats();
-    if (qr.ok) {
-      const q = await qr.json();
-      _queueIds = new Set((q.queue || []).map(x => x.id).filter(Boolean));
-      const qBtn = document.querySelector('.filter-btn[data-filter="queue"]');
-      if (qBtn) {
-        const n = (q.queue || []).length;
-        qBtn.textContent = n ? `Ожидают (${n})` : 'Ожидают';
-        const titles = (q.queue || []).slice(0, 12).map(c => c.title).filter(Boolean);
-        qBtn.title = titles.length ? (`Очередь синхронизации:\n- ` + titles.join('\n- ')) : 'Очередь синхронизации пуста';
-      }
-      if (_filter === 'queue') renderChats();
-      const wrap = document.getElementById('sync-queue-wrap');
-      const list = document.getElementById('sync-queue-list');
-      const cnt = document.getElementById('sync-queue-count');
-      wrap.style.display = '';
-      cnt.textContent = q.queue.length;
-      list.innerHTML = q.queue.map(c => `
-        <div class=\"queue-item ${c.active ? 'queue-item-active' : ''}\">
-          <span class=\"chat-type-badge\">${esc(c.type)}</span>
-          ${c.active ? '<span class=\"spinner\" style=\"width:10px;height:10px;border-width:2px\"></span>' : ''}
-          <span>${esc(c.title)}</span>
-          <span style=\"margin-left:auto;color:#475569\">${c.depth_days ? c.depth_days + 'д' : 'глоб.'}</span>
-        </div>`).join('');
-      if (q.running) {
-        const active = list.querySelector('.queue-item-active');
-        if (active) active.scrollIntoView({ block: 'nearest' });
-      }
-    }
-  };
-  await refresh();
-  _syncPollTimer = setInterval(refresh, 3000);
+  clearInterval(_queuePollTimer);
+  await Promise.all([_refreshStatus(), _refreshQueue()]);
+  _syncPollTimer = setInterval(_refreshStatus, 3000);
+  _queuePollTimer = setInterval(_refreshQueue, 30000);
 }

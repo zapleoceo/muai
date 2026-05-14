@@ -51,7 +51,7 @@ async def stream_dashboard(_uid: int = Depends(require_owner)) -> StreamingRespo
             payload = {"stats": stats, "embedder": embedder, "media_embedder": media}
             data = json.dumps(payload, ensure_ascii=False)
             yield f"data: {data}\n\n"
-            await asyncio.sleep(10)
+            await asyncio.sleep(30)
 
     return StreamingResponse(
         _event_iter(),

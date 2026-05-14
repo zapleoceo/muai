@@ -191,7 +191,7 @@
     <div class="section settings-section">
       <div class="section-header">
         <h2>Настройки синхронизации</h2>
-        <button class="btn btn-sm" onclick="saveSettings()">Сохранить</button>
+        <button class="btn btn-sm" onclick="saveSettings(this)">Сохранить</button>
       </div>
 
       <div class="settings-section">
@@ -224,7 +224,7 @@
     <div class="section">
       <div class="section-header">
         <h2>API токены</h2>
-        <button class="btn btn-sm btn-ghost" onclick="loadTokens()">Обновить</button>
+        <button class="btn btn-sm btn-ghost" onclick="loadTokens(this)">Обновить</button>
       </div>
       <div id="tokens-list">Загрузка…</div>
 
@@ -238,7 +238,7 @@
         </select>
         <input class="inp inp-token" id="inp-token" type="password" placeholder="API ключ" autocomplete="off">
         <input class="inp inp-label" id="inp-token-label" type="text" placeholder="Метка (необязательно)">
-        <button class="btn btn-sm" onclick="addToken()">+ Добавить</button>
+        <button class="btn btn-sm" onclick="addToken(this)">+ Добавить</button>
       </div>
 
       <div class="token-caps-row">

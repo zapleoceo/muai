@@ -89,6 +89,9 @@ details.section[open] > summary.section-header { margin-bottom: 16px; }
 .btn-icon-green:hover { color: #4ade80; background: #1e293b; }
 .btn-success { background: #22c55e; }
 .btn-success:hover { background: #16a34a; }
+.btn:disabled, .btn-icon:disabled, .btn-ghost:disabled, .btn-sm:disabled {
+  opacity: 0.45; cursor: not-allowed; pointer-events: none; }
+.btn-spinner { font-style: normal; }
 
 /* ── Badges ── */
 .badge { display: inline-flex; align-items: center; gap: 4px; padding: 2px 8px;

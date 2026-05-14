@@ -1,4 +1,4 @@
-import { apiFetch, esc, fmt, pct } from '../api.js';
+import { apiFetch, esc, fmt, pct, withBtn } from '../api.js';
 
 let _stream = null;
 let _streamRetry = null;
@@ -222,29 +222,34 @@ export async function clearChunks() {
     'Продолжить?'
   );
   if (!ok) return;
-  const r = await apiFetch('/api/admin/embedder/chunks', { method: 'DELETE' });
-  if (r.ok) {
-    const d = await r.json();
-    await loadEmbedder();
-    alert(`Удалено ${d.deleted} чанков. Запусти эмбеддер кнопкой ▶ для повторного чанкования.`);
-  }
+  const btn = document.querySelector('[onclick="clearChunks()"]');
+  await withBtn(btn, async () => {
+    const r = await apiFetch('/api/admin/embedder/chunks', { method: 'DELETE' });
+    if (r.ok) {
+      const d = await r.json();
+      await loadEmbedder();
+      alert(`Удалено ${d.deleted} чанков. Запусти эмбеддер кнопкой ▶ для повторного чанкования.`);
+    }
+  });
 }
 
 export async function toggleEmbedder() {
   const btn = document.getElementById('embedder-toggle-btn');
   const running = btn.dataset.running === '1';
-  if (running) {
-    await apiFetch('/api/admin/embedder/stop', { method: 'POST' });
-  } else {
-    const types = _selectedTextTypes();
-    if (!types.length) { alert('Выбери хотя бы один тип чата'); return; }
-    await apiFetch('/api/admin/embedder/restart', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_types: types }),
-    });
-  }
-  await loadEmbedder();
+  await withBtn(btn, async () => {
+    if (running) {
+      await apiFetch('/api/admin/embedder/stop', { method: 'POST' });
+    } else {
+      const types = _selectedTextTypes();
+      if (!types.length) { alert('Выбери хотя бы один тип чата'); return; }
+      await apiFetch('/api/admin/embedder/restart', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_types: types }),
+      });
+    }
+    await loadEmbedder();
+  });
 }
 
 export async function loadEmbedder() {
@@ -291,32 +296,34 @@ export async function clearMediaChunks() {
     'Продолжить?'
   );
   if (!ok) return;
-  const r = await apiFetch('/api/admin/media-embedder/chunks', { method: 'DELETE' });
-  if (r.ok) {
-    const d = await r.json();
-    await loadMediaEmbedder();
-    alert(`Удалено ${d.deleted} файловых чанков.`);
-  }
+  const btn = document.querySelector('[onclick="clearMediaChunks()"]');
+  await withBtn(btn, async () => {
+    const r = await apiFetch('/api/admin/media-embedder/chunks', { method: 'DELETE' });
+    if (r.ok) {
+      const d = await r.json();
+      await loadMediaEmbedder();
+      alert(`Удалено ${d.deleted} файловых чанков.`);
+    }
+  });
 }
 
 export async function toggleMediaEmbedder() {
   const btn = document.getElementById('media-embedder-toggle-btn');
   const running = btn.dataset.running === '1';
-  if (running) {
-    await apiFetch('/api/admin/media-embedder/stop', { method: 'POST' });
-  } else {
-    const types = _selectedMediaTypes();
-    if (!types.length) {
-      alert('Выбери хотя бы один тип файла');
-      return;
+  await withBtn(btn, async () => {
+    if (running) {
+      await apiFetch('/api/admin/media-embedder/stop', { method: 'POST' });
+    } else {
+      const types = _selectedMediaTypes();
+      if (!types.length) { alert('Выбери хотя бы один тип файла'); return; }
+      await apiFetch('/api/admin/media-embedder/start', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ types }),
+      });
     }
-    await apiFetch('/api/admin/media-embedder/start', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ types }),
-    });
-  }
-  await loadMediaEmbedder();
+    await loadMediaEmbedder();
+  });
 }
 
 export async function loadMediaEmbedder() {
