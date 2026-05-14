@@ -13,3 +13,4 @@ sessions/
 *.session-journal
 _tools/
 .claude/settings.local.json
+.claude/session_log.txt
