@@ -109,7 +109,7 @@ async def sync_history(client: TelegramClient, days: int = 2) -> None:
 
             chat_depth = cfg.depth_days if cfg.depth_days is not None else default_depth
 
-            mgr.update_progress(ctitle, chats_done, messages_total)
+            mgr.update_progress(ctitle, chat_id, chats_done, messages_total)
 
             if _can_skip(cfg, chat_depth, dialog.date):
                 logger.debug("Sync: skip %s (up to date)", ctitle)
@@ -120,7 +120,7 @@ async def sync_history(client: TelegramClient, days: int = 2) -> None:
             saved = await _sync_entity(client, dialog.entity, chat_depth, chat_id, ctitle, since=effective)
             chats_done += 1
             messages_total += saved
-            mgr.update_progress(ctitle, chats_done, messages_total)
+            mgr.update_progress(ctitle, chat_id, chats_done, messages_total)
 
             if saved:
                 logger.info("  %s: +%d messages", ctitle, saved)

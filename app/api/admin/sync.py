@@ -80,11 +80,13 @@ async def start_sync(_uid: int = Depends(require_owner)) -> dict:
 
 @router.get("/admin/sync/status")
 async def sync_status(_uid: int = Depends(require_owner)) -> dict:
-    s = get_sync_manager().status
+    mgr = get_sync_manager()
+    s = mgr.status
     return {
         "running": s.running,
         "started_at": s.started_at.isoformat() if s.started_at else None,
         "current_chat": s.current_chat,
         "chats_done": s.chats_done,
         "messages_saved": s.messages_saved,
+        "syncing_chat_ids": list(mgr.get_syncing_chat_ids()),
     }

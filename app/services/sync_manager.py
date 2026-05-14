@@ -78,11 +78,20 @@ class SyncManager:
     def mark_done(self) -> None:
         self.status.running = False
         self.status.current_chat = None
+        self._current_global_chat_id: int | None = None
 
-    def update_progress(self, chat_name: str, chats_done: int, messages_saved: int) -> None:
+    def update_progress(self, chat_name: str, chat_id: int, chats_done: int, messages_saved: int) -> None:
         self.status.current_chat = chat_name
         self.status.chats_done = chats_done
         self.status.messages_saved = messages_saved
+        self._current_global_chat_id = chat_id
+
+    def get_syncing_chat_ids(self) -> set[int]:
+        ids: set[int] = set(self._single_tasks.keys())
+        gid = getattr(self, "_current_global_chat_id", None)
+        if gid is not None and self.is_running():
+            ids.add(gid)
+        return ids
 
 
 _manager: SyncManager | None = None

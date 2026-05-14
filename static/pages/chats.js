@@ -10,6 +10,7 @@ let _sortDir = 1;
 let _page = 0;
 let _syncPollTimer = null;
 let _queueIds = new Set();
+let _syncingIds = new Set();
 
 export function initChatsPage() {
   document.addEventListener('click', async e => {
@@ -215,6 +216,7 @@ function updateSortHeaders() {
 function getVisible() {
   let chats = _allChats;
   if (_filter === 'queue') chats = chats.filter(c => _queueIds.has(c.id));
+  else if (_filter === 'syncing') chats = chats.filter(c => _syncingIds.has(c.id));
   else if (_filter !== 'all') chats = chats.filter(c => c.status === _filter);
   if (_folderFilter) chats = chats.filter(c => (c.folder || '') === _folderFilter);
   if (_search) {
@@ -352,6 +354,13 @@ export async function pollSync() {
     } else {
       bar.classList.remove('visible');
     }
+    _syncingIds = new Set((s.syncing_chat_ids || []).map(Number));
+    const syncingBtn = document.querySelector('.filter-btn[data-filter="syncing"]');
+    if (syncingBtn) {
+      const n = _syncingIds.size;
+      syncingBtn.textContent = n ? `Синкаются (${n})` : 'Синкаются';
+    }
+    if (_filter === 'syncing') renderChats();
     if (qr.ok) {
       const q = await qr.json();
       _queueIds = new Set((q.queue || []).map(x => x.id).filter(Boolean));
