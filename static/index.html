@@ -35,50 +35,59 @@
       <div class="tab active" data-tab="dashboard">📊 Дашборд</div>
       <div class="tab" data-tab="chats">💬 Чаты</div>
       <div class="tab" data-tab="settings">⚙️ Настройки</div>
-        <div class="tab" data-tab="improvements">🧪 Улучшения</div>
     </div>
     <a class="topbar-logout" href="/auth/logout">Выйти</a>
   </div>
 
+  <!-- DASHBOARD -->
   <div class="page active" id="tab-dashboard">
     <div class="grid" id="totals"></div>
 
     <div class="section">
+      <div class="section-header">
+        <h2>🧠 База знаний</h2>
+        <div class="section-actions">
+          <button class="btn-icon" onclick="loadEmbedder();loadMediaEmbedder()" title="Обновить">↻</button>
+        </div>
+      </div>
+      <div class="knowledge-grid">
+
+        <div class="knowledge-panel">
+          <div class="knowledge-panel-header">
+            <span class="knowledge-panel-title">Текст — чанки сообщений</span>
+            <div style="display:flex;gap:4px">
+              <button class="btn-icon btn-icon-green" id="embedder-toggle-btn" onclick="toggleEmbedder()" title="Запустить/остановить чанкование">▶</button>
+              <button class="btn-icon" onclick="clearChunks()" title="Очистить все текстовые чанки" style="color:#ef4444">🗑</button>
+            </div>
+          </div>
+          <div id="embedder-status">Загрузка…</div>
+        </div>
+
+        <div class="knowledge-panel">
+          <div class="knowledge-panel-header">
+            <span class="knowledge-panel-title">Файлы — Gemini multimodal</span>
+            <div style="display:flex;gap:4px">
+              <button class="btn-icon btn-icon-green" id="media-embedder-toggle-btn" onclick="toggleMediaEmbedder()" title="Запустить/остановить эмбеддинг файлов">▶</button>
+              <button class="btn-icon" onclick="clearMediaChunks()" title="Очистить файловые чанки" style="color:#ef4444">🗑</button>
+            </div>
+          </div>
+          <div class="media-type-list" id="media-embedder-types">
+            <label><input type="checkbox" value="document">document</label>
+            <label><input type="checkbox" value="photo">photo</label>
+            <label><input type="checkbox" value="voice">voice</label>
+            <label><input type="checkbox" value="audio">audio</label>
+            <label><input type="checkbox" value="video">video</label>
+            <label><input type="checkbox" value="video_note">video_note</label>
+          </div>
+          <div id="media-embedder-status">Загрузка…</div>
+        </div>
+
+      </div>
+    </div>
+
+    <div class="section">
       <h2>Топ чатов (7 дней)</h2>
       <div id="top-chats"></div>
-    </div>
-
-    <div class="section">
-      <div class="section-header">
-        <h2>🧠 Мозг (векторные чанки)</h2>
-        <div class="section-actions">
-          <button class="btn-icon" onclick="loadEmbedder()" title="Обновить">↻</button>
-          <button class="btn-icon btn-icon-green" id="embedder-toggle-btn" onclick="toggleEmbedder()" title="Запустить чанкование">▶</button>
-          <button class="btn-icon" onclick="clearChunks()" title="Очистить все чанки" style="color:#ef4444">🗑</button>
-        </div>
-      </div>
-      <div id="embedder-status">Загрузка…</div>
-    </div>
-
-    <div class="section">
-      <div class="section-header">
-        <h2>📎 Файлы (эмбеддинг)</h2>
-        <div class="section-actions">
-          <button class="btn-icon" onclick="loadMediaEmbedder()" title="Обновить">↻</button>
-          <button class="btn-icon btn-icon-green" id="media-embedder-toggle-btn" onclick="toggleMediaEmbedder()" title="Запустить эмбеддинг файлов">▶</button>
-          <button class="btn-icon" onclick="clearMediaChunks()" title="Очистить файловые чанки" style="color:#ef4444">🗑</button>
-        </div>
-      </div>
-      <div style="margin-bottom:10px;color:#94a3b8;font-size:.9rem">Типы файлов для обработки</div>
-      <div id="media-embedder-types" style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">
-        <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" value="document">document</label>
-        <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" value="photo">photo</label>
-        <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" value="voice">voice</label>
-        <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" value="audio">audio</label>
-        <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" value="video">video</label>
-        <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" value="video_note">video_note</label>
-      </div>
-      <div id="media-embedder-status">Загрузка…</div>
     </div>
 
     <details class="section" id="logs-section">
@@ -92,6 +101,7 @@
     </details>
   </div>
 
+  <!-- CHATS -->
   <div class="page" id="tab-chats">
     <div class="section">
       <div class="section-header">
@@ -132,7 +142,6 @@
         <table class="chat-table">
           <thead>
             <tr>
-              <th style="width:36px"></th>
               <th onclick="sortBy('type')" id="th-type">Тип <span class="sort-arrow">↕</span></th>
               <th onclick="sortBy('title')" id="th-title" class="sorted">Название <span class="sort-arrow">↑</span></th>
               <th onclick="sortBy('folder')" id="th-folder">Папка <span class="sort-arrow">↕</span></th>
@@ -150,6 +159,7 @@
     </div>
   </div>
 
+  <!-- SETTINGS -->
   <div class="page" id="tab-settings">
     <div class="section settings-section">
       <div class="section-header">
@@ -190,6 +200,7 @@
         <button class="btn btn-sm btn-ghost" onclick="loadTokens()">Обновить</button>
       </div>
       <div id="tokens-list">Загрузка…</div>
+
       <div class="token-add">
         <select class="inp" id="inp-token-provider" style="flex:0 0 auto" onchange="onProviderChange()">
           <option value="gemini">Gemini</option>
@@ -202,44 +213,22 @@
         <input class="inp inp-label" id="inp-token-label" type="text" placeholder="Метка (необязательно)">
         <button class="btn btn-sm" onclick="addToken()">+ Добавить</button>
       </div>
-      <div style="display:flex;gap:14px;align-items:center;margin-top:10px;color:#94a3b8;font-size:0.85rem">
-        <label style="display:flex;gap:6px;align-items:center">
-          <input type="checkbox" id="cap-chat">
-          <span>chat</span>
-        </label>
-        <label style="display:flex;gap:6px;align-items:center">
-          <input type="checkbox" id="cap-embed">
-          <span>embed</span>
-        </label>
-        <label style="display:flex;gap:6px;align-items:center">
-          <input type="checkbox" id="cap-embed-media">
-          <span>embed_media</span>
-        </label>
-      </div>
-      <p style="font-size:0.72rem;color:#475569;margin-top:8px">
-        <b>chat</b> — генерация ответов. <b>embed</b> — эмбеддинг текста (Voyage приоритет). <b>embed_media</b> — мультимодальный эмбеддинг файлов (только Gemini).<br>
-        Gemini: при 429 уходит на cooldown 60 сек. DeepSeek: требует <code>LLM_PROVIDER=deepseek</code> в .env.<br>
-        Voyage AI: только <b>embed</b>, 200M токенов/месяц бесплатно, лимит 3 RPM на free tier. <a href="https://www.voyageai.com/" target="_blank" style="color:#7c3aed">voyageai.com</a>
-      </p>
-    </div>
-  </div>
 
-  <div class="page" id="tab-improvements">
-    <div class="section">
-      <div class="section-header">
-        <h2>Подтверждение улучшений логики</h2>
-        <div class="section-actions">
-          <select class="inp" id="impr-status" onchange="onImprovementStatus(this.value)" style="max-width:220px">
-            <option value="new">Новые</option>
-            <option value="approved">Одобрены</option>
-            <option value="rejected">Отклонены</option>
-            <option value="applied">Применены</option>
-            <option value="all">Все</option>
-          </select>
-          <button class="btn btn-sm btn-ghost" onclick="loadImprovements()">Обновить</button>
-        </div>
+      <div class="token-caps-row">
+        <label class="cap-label"><input type="checkbox" id="cap-chat"><span>chat</span></label>
+        <label class="cap-label"><input type="checkbox" id="cap-embed"><span>embed</span></label>
+        <label class="cap-label"><input type="checkbox" id="cap-embed-media"><span>embed_media</span></label>
       </div>
-      <div id="improvements-box">Загрузка…</div>
+
+      <p class="token-hint">
+        <b>chat</b> — генерация ответов.
+        <b>embed</b> — эмбеддинг текста (Voyage приоритет).
+        <b>embed_media</b> — мультимодальный эмбеддинг файлов (только Gemini).<br>
+        Gemini: при 429 уходит на cooldown 60 сек.
+        DeepSeek: требует <code>LLM_PROVIDER=deepseek</code> в .env.<br>
+        Voyage AI: только <b>embed</b>, 200M токенов/месяц бесплатно, лимит 3 RPM на free tier.
+        <a href="https://www.voyageai.com/" target="_blank" style="color:#7c3aed">voyageai.com</a>
+      </p>
     </div>
   </div>
 </div>

@@ -29,7 +29,6 @@ function initTabs() {
       if (tab.dataset.tab === 'dashboard') { loadStats(); loadEmbedder(); loadMediaEmbedder(); loadLogs(); }
       if (tab.dataset.tab === 'chats') { loadChats(); pollSync(); }
       if (tab.dataset.tab === 'settings') { loadSettings(); loadTokens(); }
-      if (tab.dataset.tab === 'improvements') { loadImprovements(); }
     });
   });
 }
@@ -39,7 +38,6 @@ async function bootstrap() {
   const dashboard = await import(`./pages/dashboard.js${v}`);
   const chats = await import(`./pages/chats.js${v}`);
   const settings = await import(`./pages/settings.js${v}`);
-  const improvements = await import(`./pages/improvements.js${v}`);
 
   initTabs();
   chats.initChatsPage();
@@ -88,11 +86,6 @@ async function bootstrap() {
   window.toggleTokenCapsEditor = settings.toggleTokenCapsEditor;
   window.saveTokenCaps = settings.saveTokenCaps;
   window.onProviderChange = settings.onProviderChange;
-
-  window.loadImprovements = improvements.loadImprovements;
-  window.onImprovementStatus = improvements.onImprovementStatus;
-  window.approveImprovement = improvements.approveImprovement;
-  window.rejectImprovement = improvements.rejectImprovement;
 
   apiFetch('/api/admin/stats').then(r => {
     if (!r.ok) return;

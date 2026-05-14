@@ -249,7 +249,7 @@ export function renderChats() {
   const SC = { active: 'cs-active', pending: 'cs-pending', disabled: 'cs-disabled', unknown: 'cs-unknown' };
 
   if (!slice.length) {
-    tbody.innerHTML = `<tr><td colspan=\"9\" style=\"color:#475569;padding:20px;text-align:center\">Нет чатов</td></tr>`;
+    tbody.innerHTML = `<tr><td colspan=\"8\" style=\"color:#475569;padding:20px;text-align:center\">Нет чатов</td></tr>`;
   } else {
     const rows = [];
     for (const c of slice) {
@@ -273,7 +273,6 @@ export function renderChats() {
         ? `<a href=\"${tgLink}\" target=\"_blank\" rel=\"noopener\" class=\"chat-title-link\" title=\"${esc(c.title)}\">${esc(c.title)}</a>`
         : `<span class=\"chat-title-text\" title=\"${esc(c.title)}\">${esc(c.title)}</span>`;
       rows.push(`<tr>
-        <td class=\"avatar-cell\"></td>
         <td><span class=\"chat-type-badge\">${esc(c.type)}</span></td>
         <td class=\"chat-name-cell\">${topicToggle}${titleEl}${uname}</td>
         <td style=\"color:#64748b;font-size:0.78rem\">${c.folder ? esc(c.folder) : '<span style=\"color:#334155\">—</span>'}</td>
@@ -287,7 +286,7 @@ export function renderChats() {
       </tr>`);
       for (const t of topics) {
         rows.push(`<tr class=\"topic-row\" data-parent=\"${c.id}\" style=\"display:none\">
-          <td></td><td></td>
+          <td></td>
           <td colspan=\"6\"><span class=\"topic-title${t.is_closed ? ' topic-closed' : ''}\">└ ${esc(t.title)}</span></td>
           <td></td>
         </tr>`);
