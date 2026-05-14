@@ -76,8 +76,13 @@ async def skip_chat(
 @router.post("/admin/chats/{chat_id}/sync-now")
 async def sync_chat_now(chat_id: int, _uid: int = Depends(require_owner)) -> dict:
     import asyncio
+    from app.services.sync_manager import get_sync_manager
     from app.userbot.sync import sync_single_chat
-    asyncio.create_task(sync_single_chat(chat_id))
+    mgr = get_sync_manager()
+    if mgr.is_single_running(chat_id):
+        return {"ok": False, "chat_id": chat_id, "reason": "already_running"}
+    task = asyncio.create_task(sync_single_chat(chat_id))
+    mgr.register_single_task(chat_id, task)
     return {"ok": True, "chat_id": chat_id}
 
 

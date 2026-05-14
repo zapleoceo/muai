@@ -213,16 +213,9 @@ async def sync_single_chat(chat_id: int) -> int:
 
     entity = await client.get_entity(chat_id)
     ctitle = chat_title(entity) or str(chat_id)
-
-    # Single-chat sync always starts from effective_since (respects incremental logic)
     since = _effective_since(cfg, depth)
 
-    mgr = get_sync_manager()
-    mgr.mark_single_started(ctitle)
-    try:
-        saved = await _sync_entity(client, entity, depth, chat_id, ctitle, since=since)
-    finally:
-        mgr.mark_single_done()
-
-    logger.info("sync_single_chat: %s → +%d messages (since %s)", ctitle, saved, since.date())
+    logger.info("sync_single_chat: start %s (since %s)", ctitle, since.date())
+    saved = await _sync_entity(client, entity, depth, chat_id, ctitle, since=since)
+    logger.info("sync_single_chat: done %s → +%d messages", ctitle, saved)
     return saved
