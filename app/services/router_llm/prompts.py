@@ -28,8 +28,14 @@ _ROUTER_POLICIES = (
     "   LAST_7_DAYS → LAST_30_DAYS → ALL_TIME.\n"
     "   Если в state.grade есть expand_time_range_to — используй его.\n"
     "7) Генерируй 2–4 query_variants для retrieval (синонимы, транслит, RU/EN), особенно для SEARCH.\n"
-    "8) Если нужен нестандартный отчёт/выборка, которую нельзя выразить как RECENT_MESSAGES/MEDIA_MESSAGES/SUMMARY/active_chats, "
-    "используй operation=DYNAMIC_QUERY и заполни dynamic_tool.\n"
+    "8) Если нужен нестандартный отчёт/выборка, используй operation=DYNAMIC_QUERY и заполни dynamic_tool:\n"
+    "   - 'в каких чатах я писал про X' → GROUP BY chat_id + ILIKE фильтр\n"
+    "   - 'сколько я отправил сообщений' → direction=out + COUNT\n"
+    "   - 'топ чатов по активности' → GROUP BY chat_id + COUNT + ORDER BY desc\n"
+    "   - любая агрегация/подсчёт/выборка с фильтром, недоступная через стандартные операции\n"
+    "   Доступные поля: message_id, chat_id, user_id, direction(in/out), text_any, media_type, date_utc, telegram_msg_id.\n"
+    "   Доступные агрегации: COUNT, MIN, MAX.\n"
+    "   Доступные операторы фильтра: EQ, NEQ, GT, GTE, LT, LTE, ILIKE, IS_NULL, IS_NOT_NULL.\n"
 )
 
 GRADER_SYSTEM_PROMPT = (
