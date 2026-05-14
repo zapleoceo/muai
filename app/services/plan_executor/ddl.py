@@ -7,31 +7,36 @@ _EMBEDDING_DIMS = 512
 
 
 async def _vector_dim(session, *, table: str, column: str) -> int | None:
-    dim = (await session.execute(
+    type_str = (await session.execute(
         text(
             """
-            SELECT a.atttypmod - 4 AS dim
+            SELECT format_type(a.atttypid, a.atttypmod) AS type_str
             FROM pg_attribute a
             JOIN pg_class c ON c.oid = a.attrelid
             JOIN pg_namespace n ON n.oid = c.relnamespace
-            JOIN pg_type t ON t.oid = a.atttypid
             WHERE n.nspname = current_schema()
               AND c.relname = :table
               AND a.attname = :col
               AND a.attnum > 0
               AND NOT a.attisdropped
-              AND t.typname = 'vector'
             LIMIT 1
             """
         ),
         {"table": table, "col": column},
     )).scalar_one_or_none()
-    return int(dim) if dim is not None else None
+    if not type_str:
+        return None
+    s = str(type_str)
+    if s.startswith("vector(") and s.endswith(")"):
+        inside = s[len("vector("):-1]
+        if inside.isdigit():
+            return int(inside)
+    return None
 
 
 async def _ensure_vector_dim(session, *, table: str, column: str, dims: int) -> None:
     dim = await _vector_dim(session, table=table, column=column)
-    if dim is None or dim == int(dims):
+    if dim == int(dims):
         return
     if table == "message_chunks":
         await session.execute(text("DROP INDEX IF EXISTS idx_chunks_embedding_hnsw"))
