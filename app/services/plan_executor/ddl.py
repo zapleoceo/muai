@@ -3,6 +3,46 @@ from sqlalchemy import text
 from app.db.database import AsyncSessionLocal
 
 
+_EMBEDDING_DIMS = 512
+
+
+async def _vector_dim(session, *, table: str, column: str) -> int | None:
+    dim = (await session.execute(
+        text(
+            """
+            SELECT a.atttypmod - 4 AS dim
+            FROM pg_attribute a
+            JOIN pg_class c ON c.oid = a.attrelid
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            JOIN pg_type t ON t.oid = a.atttypid
+            WHERE n.nspname = current_schema()
+              AND c.relname = :table
+              AND a.attname = :col
+              AND a.attnum > 0
+              AND NOT a.attisdropped
+              AND t.typname = 'vector'
+            LIMIT 1
+            """
+        ),
+        {"table": table, "col": column},
+    )).scalar_one_or_none()
+    return int(dim) if dim is not None else None
+
+
+async def _ensure_vector_dim(session, *, table: str, column: str, dims: int) -> None:
+    dim = await _vector_dim(session, table=table, column=column)
+    if dim is None or dim == int(dims):
+        return
+    if table == "message_chunks":
+        await session.execute(text("DROP INDEX IF EXISTS idx_chunks_embedding_hnsw"))
+        await session.execute(text("DROP INDEX IF EXISTS idx_chunks_embedding"))
+    if table == "media_chunks":
+        await session.execute(text("DROP INDEX IF EXISTS idx_media_chunks_embedding_hnsw"))
+    await session.execute(text(f"ALTER TABLE {table} DROP COLUMN IF EXISTS {column}"))
+    await session.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} vector({int(dims)})"))
+    await session.execute(text(f"TRUNCATE TABLE {table}"))
+
+
 async def ensure_search_infra() -> None:
     ddl = [
         "CREATE EXTENSION IF NOT EXISTS pg_trgm",
@@ -21,36 +61,38 @@ async def ensure_search_infra() -> None:
 
 
 async def ensure_chunk_schema() -> None:
-    ddl = [
-        "CREATE EXTENSION IF NOT EXISTS vector",
-        "ALTER TABLE message_chunks ADD COLUMN IF NOT EXISTS min_msg_id bigint",
-        "ALTER TABLE message_chunks ADD COLUMN IF NOT EXISTS msg_count integer",
-        "ALTER TABLE message_chunks ADD COLUMN IF NOT EXISTS meta jsonb",
-        "CREATE INDEX IF NOT EXISTS idx_chunks_min_msg_id ON message_chunks (min_msg_id)",
-        "CREATE INDEX IF NOT EXISTS idx_chunks_max_msg_id ON message_chunks (max_msg_id)",
-        "CREATE INDEX IF NOT EXISTS idx_chunks_embedding_hnsw ON message_chunks USING hnsw (embedding vector_cosine_ops)",
-        """
-        CREATE TABLE IF NOT EXISTS media_chunks (
-            id BIGSERIAL PRIMARY KEY,
-            chat_id BIGINT NOT NULL REFERENCES chats(id),
-            chat_title TEXT,
-            chat_username TEXT,
-            source_msg_id BIGINT NOT NULL,
-            source_tg_msg_id BIGINT,
-            media_type TEXT NOT NULL,
-            date_utc TIMESTAMPTZ,
-            chunk_text TEXT NOT NULL,
-            embedding vector(768),
-            meta jsonb,
-            created_at TIMESTAMPTZ DEFAULT now(),
-            CONSTRAINT uq_media_chunks_chat_tg_msg UNIQUE (chat_id, source_tg_msg_id)
-        )
-        """,
-        "CREATE INDEX IF NOT EXISTS idx_media_chunks_chat ON media_chunks (chat_id)",
-        "CREATE INDEX IF NOT EXISTS idx_media_chunks_date ON media_chunks (date_utc)",
-        "CREATE INDEX IF NOT EXISTS idx_media_chunks_embedding_hnsw ON media_chunks USING hnsw (embedding vector_cosine_ops)",
-    ]
     async with AsyncSessionLocal() as session:
-        for stmt in ddl:
-            await session.execute(text(stmt))
+        await session.execute(text("CREATE EXTENSION IF NOT EXISTS vector"))
+
+        await session.execute(text("ALTER TABLE message_chunks ADD COLUMN IF NOT EXISTS min_msg_id bigint"))
+        await session.execute(text("ALTER TABLE message_chunks ADD COLUMN IF NOT EXISTS msg_count integer"))
+        await session.execute(text("ALTER TABLE message_chunks ADD COLUMN IF NOT EXISTS meta jsonb"))
+
+        await session.execute(text(f"""
+            CREATE TABLE IF NOT EXISTS media_chunks (
+                id BIGSERIAL PRIMARY KEY,
+                chat_id BIGINT NOT NULL REFERENCES chats(id),
+                chat_title TEXT,
+                chat_username TEXT,
+                source_msg_id BIGINT NOT NULL,
+                source_tg_msg_id BIGINT,
+                media_type TEXT NOT NULL,
+                date_utc TIMESTAMPTZ,
+                chunk_text TEXT NOT NULL,
+                embedding vector({_EMBEDDING_DIMS}),
+                meta jsonb,
+                created_at TIMESTAMPTZ DEFAULT now(),
+                CONSTRAINT uq_media_chunks_chat_tg_msg UNIQUE (chat_id, source_tg_msg_id)
+            )
+        """))
+
+        await _ensure_vector_dim(session, table="message_chunks", column="embedding", dims=_EMBEDDING_DIMS)
+        await _ensure_vector_dim(session, table="media_chunks", column="embedding", dims=_EMBEDDING_DIMS)
+
+        await session.execute(text("CREATE INDEX IF NOT EXISTS idx_chunks_min_msg_id ON message_chunks (min_msg_id)"))
+        await session.execute(text("CREATE INDEX IF NOT EXISTS idx_chunks_max_msg_id ON message_chunks (max_msg_id)"))
+        await session.execute(text("CREATE INDEX IF NOT EXISTS idx_chunks_embedding_hnsw ON message_chunks USING hnsw (embedding vector_cosine_ops)"))
+        await session.execute(text("CREATE INDEX IF NOT EXISTS idx_media_chunks_chat ON media_chunks (chat_id)"))
+        await session.execute(text("CREATE INDEX IF NOT EXISTS idx_media_chunks_date ON media_chunks (date_utc)"))
+        await session.execute(text("CREATE INDEX IF NOT EXISTS idx_media_chunks_embedding_hnsw ON media_chunks USING hnsw (embedding vector_cosine_ops)"))
         await session.commit()

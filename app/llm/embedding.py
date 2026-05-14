@@ -234,7 +234,7 @@ async def _embed_gemini_v2(
 
 
 async def _embed_voyage_batch(mgr: Any, *, token_id: int, token: str, texts: list[str]) -> list[list[float]]:
-    # voyage-3 supports output_dimension up to 1024; we use 768 to match existing schema.
+    # voyage-3 supports output_dimension up to 1024; we use 512 to match schema.
     # Batch limit: 128 inputs per request.
     payload = {
         "model": _VOYAGE_MODEL,

@@ -26,7 +26,7 @@ CREATE TABLE IF NOT EXISTS media_chunks (
     media_type TEXT NOT NULL,
     date_utc TIMESTAMPTZ,
     chunk_text TEXT NOT NULL,
-    embedding vector(768),
+    embedding vector(512),
     meta jsonb,
     created_at TIMESTAMPTZ DEFAULT now(),
     CONSTRAINT uq_media_chunks_chat_tg_msg UNIQUE (chat_id, source_tg_msg_id)
@@ -35,4 +35,3 @@ CREATE TABLE IF NOT EXISTS media_chunks (
 CREATE INDEX IF NOT EXISTS idx_media_chunks_chat ON media_chunks (chat_id);
 CREATE INDEX IF NOT EXISTS idx_media_chunks_date ON media_chunks (date_utc);
 """
-
