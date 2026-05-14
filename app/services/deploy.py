@@ -56,10 +56,11 @@ async def run_migration() -> None:
 async def run_deploy() -> None:
     logger.info("Deploy: starting")
 
-    pull_out = await _run(
-        "git", "-C", "/var/www/tgbot", "pull", "origin", "master",
-    )
-    logger.info("Deploy [git pull]:\n%s", pull_out)
+    fetch_out = await _run("git", "-C", "/var/www/tgbot", "fetch", "origin", "master")
+    logger.info("Deploy [git fetch]:\n%s", fetch_out)
+
+    reset_out = await _run("git", "-C", "/var/www/tgbot", "reset", "--hard", "origin/master")
+    logger.info("Deploy [git reset]:\n%s", reset_out)
 
     build_out = await _run(*_COMPOSE, "build", "bot")
     logger.info("Deploy [build]:\n%s", build_out)
