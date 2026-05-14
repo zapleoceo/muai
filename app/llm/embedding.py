@@ -10,6 +10,8 @@ logger = logging.getLogger(__name__)
 
 _BASE_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-001:embedContent"
 _BASE_URL_V2 = "https://generativelanguage.googleapis.com/v1beta/models/gemini-embedding-2:embedContent"
+_VOYAGE_URL = "https://api.voyageai.com/v1/embeddings"
+_VOYAGE_MODEL = "voyage-3"  # supports output_dimension=768; 200M tokens/month free
 _DIMS = 768
 
 
@@ -77,6 +79,9 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> list[f
             return await _embed_gemini(mgr, token_id=lease.id, token=lease.token, text=text, task_type=task_type)
         if lease.provider == "openai":
             return await _embed_openai(mgr, token_id=lease.id, token=lease.token, text=text)
+        if lease.provider == "voyage":
+            result = await _embed_voyage_batch(mgr, token_id=lease.id, token=lease.token, texts=[text])
+            return result[0]
         raise RuntimeError(f"Embedding provider not supported: {lease.provider}")
 
     return await _get_queue().submit(_job())
@@ -100,6 +105,8 @@ async def embed_texts(texts: list[str], task_type: str = "RETRIEVAL_DOCUMENT") -
             return await _embed_gemini_batch(mgr, token_id=lease.id, token=lease.token, texts=items, task_type=task_type)
         if lease.provider == "openai":
             return await _embed_openai_batch(mgr, token_id=lease.id, token=lease.token, texts=items)
+        if lease.provider == "voyage":
+            return await _embed_voyage_batch(mgr, token_id=lease.id, token=lease.token, texts=items)
         raise RuntimeError(f"Embedding provider not supported: {lease.provider}")
 
     return await _get_queue().submit(_job())
@@ -219,6 +226,38 @@ async def _embed_gemini_v2(
     except (httpx.TransportError, asyncio.TimeoutError) as exc:
         await mgr.on_error(token_id)
         raise RuntimeError(f"Embedding API network error: {str(exc)[:200]}") from exc
+
+
+async def _embed_voyage_batch(mgr: Any, *, token_id: int, token: str, texts: list[str]) -> list[list[float]]:
+    # voyage-3 supports output_dimension up to 1024; we use 768 to match existing schema.
+    # Batch limit: 128 inputs per request.
+    payload = {
+        "model": _VOYAGE_MODEL,
+        "input": texts,
+        "input_type": "document",
+        "output_dimension": _DIMS,
+    }
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+            resp = await client.post(
+                _VOYAGE_URL,
+                json=payload,
+                headers={"Authorization": f"Bearer {token}", "Content-Type": "application/json"},
+            )
+        if resp.status_code == 429:
+            await mgr.on_rate_limit(token_id)
+            raise RuntimeError("Voyage embedding API error 429: rate-limited")
+        if resp.status_code >= 400:
+            await mgr.on_error(token_id)
+            raise RuntimeError(f"Voyage embedding API error {resp.status_code}: {resp.text[:200]}")
+        data = resp.json()
+        items = sorted(data.get("data") or [], key=lambda x: x["index"])
+        if len(items) != len(texts):
+            raise RuntimeError("Voyage embedding API: mismatched batch size")
+        return [item["embedding"] for item in items]
+    except (httpx.TransportError, asyncio.TimeoutError) as exc:
+        await mgr.on_error(token_id)
+        raise RuntimeError(f"Voyage embedding network error: {str(exc)[:200]}") from exc
 
 
 _openai_clients: dict[str, object] = {}

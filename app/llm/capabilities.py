@@ -7,6 +7,7 @@ PROVIDER_CAPABILITIES: dict[str, set[str]] = {
     "openai": {CAP_CHAT, CAP_EMBED},
     "groq": {CAP_CHAT},
     "deepseek": {CAP_CHAT},
+    "voyage": {CAP_EMBED},  # embed-only; 200M free tokens/month, no daily limit
 }
 
 

@@ -16,13 +16,14 @@ from app.services.chat_sync_settings_service import ChatSyncSettingsService
 logger = logging.getLogger(__name__)
 
 _MIN_CHARS = 30
-_BATCH_DELAY = 0.5   # seconds between API calls
+_BATCH_DELAY = 0.3        # seconds between API calls (Voyage has no per-request limit)
 _INSERT_BATCH = 25
 _EMBED_BATCH = 10
 _PAGE_SIZE = 800
 _SESSION_GAP = timedelta(minutes=20)
-_MAX_CHUNK_CHARS = 3200
-_MAX_CHUNK_MSGS = 40
+_MAX_CHUNK_CHARS = 4800   # larger chunks → fewer API calls
+_MAX_CHUNK_MSGS = 60
+_MIN_CHAT_MESSAGES = 50   # skip tiny chats — not worth embedding (noise)
 
 # ── status singleton ──────────────────────────────────────────────────────────
 
@@ -349,6 +350,9 @@ async def embed_all_chats() -> None:
         if settings_svc.is_blacklisted(int(chat.id), getattr(chat, "username", None), sync_settings):
             continue
         if not settings_svc.type_allowed(str(chat.type or ""), sync_settings):
+            continue
+        # skip tiny chats — likely noise, not worth the API quota
+        if getattr(chat, "_embed_pending", 0) < _MIN_CHAT_MESSAGES:
             continue
 
         _status.current_chat = chat.title or str(chat.id)
