@@ -67,6 +67,13 @@ export function initChatsPage() {
         btn.disabled = false;
       }
       return;
+    } else if (action === 'copy-id') {
+      navigator.clipboard.writeText(String(id)).then(() => {
+        const orig = btn.textContent;
+        btn.textContent = '✓';
+        setTimeout(() => { btn.textContent = orig; }, 1500);
+      });
+      return;
     } else if (action === 'delete') {
       const title = btn.dataset.title || String(id);
       if (!confirm(`Удалить все сообщения чата «${title}»?`)) return;
@@ -344,7 +351,7 @@ export function renderChats() {
         ? `<button class=\"topic-toggle\" data-action=\"toggle-topics\" data-id=\"${c.id}\" title=\"${topics.length} веток\">▶</button> ` : '';
       const tgLink = c.username
         ? `https://t.me/${c.username}`
-        : (c.type === 'private' && !isDeleted ? `tg://user?id=${c.id}` : null);
+        : null;
       const resolveBtn = (isUnresolved || isDeleted)
         ? `<button class="btn btn-sm btn-ghost" data-action="resolve" data-id="${c.id}" title="Определить владельца через Telegram" style="font-size:0.7rem">🔍</button>`
         : '';
@@ -353,9 +360,12 @@ export function renderChats() {
       const titleEl = tgLink
         ? `<a href=\"${tgLink}\" target=\"_blank\" rel=\"noopener\" class=\"chat-title-link\" title=\"${esc(c.title)}\">${esc(c.title)}</a>${deletedBadge}`
         : `<span class=\"chat-title-text\" title=\"${esc(c.title)}\">${esc(c.title)}</span>${deletedBadge}`;
+      const copyIdBtn = (!c.username && c.type === 'private' && !isDeleted)
+        ? `<button class="btn btn-sm btn-ghost" data-action="copy-id" data-id="${c.id}" title="Скопировать ID (${c.id})" style="font-size:0.65rem;opacity:0.55;padding:1px 4px">ID</button>`
+        : '';
       rows.push(`<tr>
         <td><span class=\"chat-type-badge\">${esc(c.type)}</span></td>
-        <td class=\"chat-name-cell\">${topicToggle}${titleEl}${uname}</td>
+        <td class=\"chat-name-cell\">${topicToggle}${titleEl}${uname}${copyIdBtn}</td>
         <td style=\"color:#64748b;font-size:0.78rem\">${c.folder ? esc(c.folder) : '<span style=\"color:#334155\">—</span>'}</td>
         <td><span class=\"chat-status-badge ${SC[c.status] || 'cs-unknown'}\">${STATUS[c.status] || c.status}</span></td>
         <td style=\"text-align:right;color:#94a3b8\">${fmt(c.message_count)}</td>
