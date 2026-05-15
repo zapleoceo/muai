@@ -1,8 +1,11 @@
 import json
+import logging
 from datetime import datetime
 
 from app.llm.base import LLMMessage
 from app.llm.factory import get_router_llm_provider
+
+logger = logging.getLogger(__name__)
 from app.services.answering_types import (
     Plan,
     PlanOnEmpty,
@@ -81,6 +84,13 @@ async def route_query(
         if forced_time_range:
             qm = _apply_forced_time_range(qm, forced_time_range)
         plan = compile_query_model_to_plan(query_model=qm, query=query)
+        logger.info(
+            "ROUTE op=%s shape=%s scope=%s tr=%s chat_q=%r strategy=%s tools=%s",
+            qm.operation.value, qm.output_shape.value,
+            qm.constraints.scope.value, qm.constraints.time_range.value,
+            qm.constraints.chat_query, plan.strategy.value,
+            [t.name for t in plan.tools],
+        )
         return plan, raw
     except Exception as exc:
         repair_prompt = (

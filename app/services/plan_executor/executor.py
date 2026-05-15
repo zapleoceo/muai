@@ -1,4 +1,5 @@
 import asyncio
+import logging
 
 from app.services.answering_types import (
     DynamicToolSpec,
@@ -262,7 +263,15 @@ async def execute_plan(
         except Exception as exc:
             return {"name": name, "ok": False, "tool_meta": {"error": str(exc)[:200]}}
 
+    logger = logging.getLogger(__name__)
     results = await asyncio.gather(*[_run_tool(tc) for tc in plan.tools])
+    for r in results:
+        logger.info("TOOL %s ok=%s msgs=%d chunks=%d meta_keys=%s err=%s",
+            r.get("name"), r.get("ok"),
+            len(r.get("messages") or []), len(r.get("chunks") or []),
+            list((r.get("meta_add") or {}).keys()) + list((r.get("meta_set") or {}).keys()),
+            (r.get("tool_meta") or {}).get("error"),
+        )
     _seen_msg_ids: set[int] = set()
     _seen_chunk_ids: set[int] = set()
     for r in results:
