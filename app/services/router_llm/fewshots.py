@@ -224,6 +224,26 @@ QUERY_FEWSHOTS: list[tuple[str, dict]] = [
          "query_variants": [], "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
     ),
     (
+        "Покажи последние 5 сообщений из личных чатов",
+        {"output_shape": "LIST", "operation": "DYNAMIC_QUERY", "need_proof": True, "precision_bias": "PRECISION",
+         "constraints": {"scope": "ALL_CHATS", "time_range": "NONE"},
+         "dynamic_tool": {
+             "select": [{"field": "date_utc", "agg": None}, {"field": "text_any", "agg": None}, {"field": "chat_title", "agg": None}, {"field": "telegram_msg_id", "agg": None}, {"field": "chat_id", "agg": None}],
+             "filters": [{"field": "chat_type", "op": "EQ", "value": "private"}],
+             "group_by": [],
+             "order_by": [{"field": "date_utc", "desc": True}],
+             "limit": 5,
+             "require_time_range": False,
+         },
+         "query_variants": [], "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
+    ),
+    (
+        "Покажи голосовые сообщения за последнюю неделю",
+        {"output_shape": "LIST", "operation": "MEDIA_MESSAGES", "need_proof": True, "precision_bias": "PRECISION",
+         "constraints": {"scope": "ALL_CHATS", "chat_query": None, "media_type": "voice", "time_range": "LAST_7_DAYS", "limit": 30},
+         "query_variants": [], "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
+    ),
+    (
         "Покажи все мои сообщения с упоминанием ссылок за всё время",
         {"output_shape": "LIST", "operation": "DYNAMIC_QUERY", "need_proof": True, "precision_bias": "PRECISION",
          "constraints": {"scope": "ALL_CHATS", "time_range": "ALL_TIME"},

@@ -79,14 +79,40 @@ async def tool_sql_media_messages_by_chat_query(
         if scope == PlanScope.CURRENT_CHAT:
             selected_chat = (await session.execute(select(Chat).where(Chat.id == chat_id).limit(1))).scalar_one_or_none()
         else:
-            if not q_norm:
-                return [], {"count": 0, "error": "empty_chat_query"}
-            row = (await session.execute(_find_chat_by_query(q_norm, chat_types))).first()
-            selected_chat = row[0] if row else None
+            if q_norm:
+                row = (await session.execute(_find_chat_by_query(q_norm, chat_types))).first()
+                selected_chat = row[0] if row else None
+            else:
+                selected_chat = None  # all-chats mode
 
-        if not selected_chat:
-            return [], {"count": 0, "chat_query": q_norm, "error": "chat_not_found"}
+    if scope != PlanScope.CURRENT_CHAT and not q_norm:
+        # all-chats mode: search across all chats
+        async with AsyncSessionLocal() as session2:
+            await session2.execute(text("SET TRANSACTION READ ONLY"))
+            q = (
+                select(Message, Chat)
+                .join(Chat, Chat.id == Message.chat_id)
+                .where(Message.media_type == media_norm)
+            )
+            if chat_types:
+                q = q.where(Chat.type.in_([ct.value for ct in chat_types]))
+            if resolved:
+                q = q.where(Message.date_utc >= resolved.from_utc, Message.date_utc < resolved.to_utc)
+            rows = (await session2.execute(q.order_by(Message.date_utc.desc()).limit(limit))).all()
+        items = [_msg_row(m, c) for (m, c) in rows]
+        return items, {
+            "count": len(items),
+            "limit": limit,
+            "media_type": media_norm,
+            "from_utc": resolved.from_utc.isoformat() if resolved else None,
+            "to_utc": resolved.to_utc.isoformat() if resolved else None,
+        }
 
+    if not selected_chat:
+        return [], {"count": 0, "chat_query": q_norm, "error": "chat_not_found"}
+
+    async with AsyncSessionLocal() as session3:
+        await session3.execute(text("SET TRANSACTION READ ONLY"))
         q = (
             select(Message, Chat)
             .join(Chat, Chat.id == Message.chat_id)
@@ -94,7 +120,7 @@ async def tool_sql_media_messages_by_chat_query(
         )
         if resolved:
             q = q.where(Message.date_utc >= resolved.from_utc, Message.date_utc < resolved.to_utc)
-        rows = (await session.execute(q.order_by(Message.date_utc.desc()).limit(limit))).all()
+        rows = (await session3.execute(q.order_by(Message.date_utc.desc()).limit(limit))).all()
 
     items = [_msg_row(m, c) for (m, c) in rows]
     return items, {
