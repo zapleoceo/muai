@@ -279,6 +279,7 @@ async def embed_chat(chat_id: int, chat_title: str, chat_type: str,
             except RuntimeError as exc:
                 logger.warning("Embed failed chat=%d batch=%d: %s", chat_id, i, exc)
                 ts = datetime.now(tz=timezone.utc).strftime("%H:%M:%S")
+                _status.errors = _status.errors[-49:]
                 _status.errors.append(f"[{ts}] {chat_title}: {exc}")
                 await asyncio.sleep(5)
                 continue
@@ -370,6 +371,7 @@ async def embed_all_chats() -> None:
         except Exception as exc:
             logger.exception("Embedder: failed for chat %s", chat.title)
             ts = datetime.now(tz=timezone.utc).strftime("%H:%M:%S")
+            _status.errors = _status.errors[-49:]
             _status.errors.append(f"[{ts}] {chat.title}: {exc}")
         _status.chats_done += 1
 

@@ -114,10 +114,16 @@ class TokenManager:
 
     # ── token access ──────────────────────────────────────────────────────────
 
-    async def next_token(self, capability: str, provider: str | None = None) -> TokenLease | None:
+    async def next_token(
+        self,
+        capability: str,
+        provider: str | None = None,
+        max_wait: float = 120.0,
+    ) -> TokenLease | None:
         if not self._loaded:
             await self.load()
         key = f"{provider or '*'}:{capability}"
+        waited = 0.0
         while True:
             async with self._lock:
                 slots = [
@@ -148,9 +154,16 @@ class TokenManager:
                 if soonest is None:
                     return None
                 wait = (soonest.cooldown_until - now).total_seconds()
-            if wait > 0:
-                logger.info("TokenManager: all tokens on cooldown, waiting %.1fs", wait)
-                await asyncio.sleep(wait)
+            if waited >= max_wait:
+                logger.warning(
+                    "TokenManager: giving up waiting for %s token after %.0fs", capability, waited
+                )
+                return None
+            sleep_for = min(wait, max_wait - waited)
+            if sleep_for > 0:
+                logger.info("TokenManager: all tokens on cooldown, waiting %.1fs", sleep_for)
+                await asyncio.sleep(sleep_for)
+                waited += sleep_for
 
     async def on_rate_limit(self, token_id: int) -> None:
         async with self._lock:

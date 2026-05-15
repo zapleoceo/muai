@@ -1,13 +1,19 @@
 import asyncio
+import logging
 import re
+import time
 
-from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, Header, HTTPException, Request
 
 from app.api.auth import require_owner
 from app.config import get_settings
 from app.services import deploy as deploy_svc
 
+logger = logging.getLogger(__name__)
 router = APIRouter()
+
+_last_deploy_at: float = 0.0
+_DEPLOY_COOLDOWN = 60.0  # seconds between allowed deploys
 
 
 def _require_deploy_auth(authorization: str | None = Header(default=None)) -> None:
@@ -52,6 +58,15 @@ async def run_migration(background: BackgroundTasks, _uid: int = Depends(require
 
 
 @router.post("/admin/deploy")
-async def trigger_deploy(_: None = Depends(_require_deploy_auth)) -> dict:
+async def trigger_deploy(request: Request, _: None = Depends(_require_deploy_auth)) -> dict:
+    global _last_deploy_at
+    now = time.monotonic()
+    if now - _last_deploy_at < _DEPLOY_COOLDOWN:
+        raise HTTPException(status_code=429, detail="Deploy already triggered recently, try again later")
+    _last_deploy_at = now
+    ip = (request.headers.get("X-Forwarded-For") or "").split(",")[0].strip() or (
+        request.client.host if request.client else "?"
+    )
+    logger.info("Deploy triggered from %s", ip)
     asyncio.create_task(deploy_svc.run_deploy())
     return {"status": "deploy triggered"}

@@ -1,7 +1,10 @@
+import logging
+
 from sqlalchemy import text
 
 from app.db.database import AsyncSessionLocal
 
+logger = logging.getLogger(__name__)
 
 _EMBEDDING_DIMS = 512
 
@@ -38,6 +41,11 @@ async def _ensure_vector_dim(session, *, table: str, column: str, dims: int) -> 
     dim = await _vector_dim(session, table=table, column=column)
     if dim == int(dims):
         return
+    logger.warning(
+        "Vector dim mismatch in %s.%s (current=%s, required=%d) — "
+        "dropping column and truncating table; all existing embeddings will be lost",
+        table, column, dim, dims,
+    )
     if table == "message_chunks":
         await session.execute(text("DROP INDEX IF EXISTS idx_chunks_embedding_hnsw"))
         await session.execute(text("DROP INDEX IF EXISTS idx_chunks_embedding"))
