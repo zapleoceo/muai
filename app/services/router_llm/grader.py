@@ -75,13 +75,41 @@ async def grade_context(
         }
         return decision, json.dumps(decision, ensure_ascii=False)
 
-    if total == 0 and str(plan.time_range.value) == "LAST_7_DAYS":
+    tr = str(plan.time_range.value)
+    if total == 0 and tr == "LAST_7_DAYS":
         decision = {
             "verdict": "RETRY",
             "reason": "empty_context_expand_time_range",
             "clarify_question": None,
             "router_hint": "expand_time_range",
             "expand_time_range_to": "LAST_30_DAYS",
+            "propose_dynamic_tool": None,
+        }
+        return decision, json.dumps(decision, ensure_ascii=False)
+
+    if total == 0 and tr == "LAST_30_DAYS":
+        decision = {
+            "verdict": "RETRY",
+            "reason": "empty_context_expand_time_range",
+            "clarify_question": None,
+            "router_hint": "expand_time_range",
+            "expand_time_range_to": "ALL_TIME",
+            "propose_dynamic_tool": None,
+        }
+        return decision, json.dumps(decision, ensure_ascii=False)
+
+    # For chat-specific summary with very few messages — expand to get full history
+    _has_chat_query = any(
+        tc.get("name") in ("sql_messages_by_chat_query_and_date", "sql_recent_messages_by_chat_query")
+        for tc in (plan.model_dump().get("tools") or [])
+    )
+    if total <= 2 and _has_chat_query and tr not in ("ALL_TIME", "NONE"):
+        decision = {
+            "verdict": "RETRY",
+            "reason": "too_few_messages_for_chat_summary",
+            "clarify_question": None,
+            "router_hint": "expand_time_range for chat-specific query",
+            "expand_time_range_to": "ALL_TIME",
             "propose_dynamic_tool": None,
         }
         return decision, json.dumps(decision, ensure_ascii=False)
