@@ -123,6 +123,24 @@ QUERY_FEWSHOTS: list[tuple[str, dict]] = [
          "query_variants": [], "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
     ),
     (
+        "Сколько сообщений было вчера по каждому чату?",
+        {"output_shape": "ANALYTICS", "operation": "DYNAMIC_QUERY", "need_proof": False, "precision_bias": "BALANCED",
+         "constraints": {"scope": "ALL_CHATS", "time_range": "YESTERDAY"},
+         "dynamic_tool": {
+             "select": [
+                 {"field": "chat_id", "agg": None, "as_name": "chat_id"},
+                 {"field": "chat_title", "agg": None, "as_name": "chat_title"},
+                 {"field": "message_id", "agg": "COUNT", "as_name": "messages"},
+             ],
+             "filters": [],
+             "group_by": ["chat_id", "chat_title"],
+             "order_by": [{"field": "messages", "desc": True}],
+             "limit": 30,
+             "require_time_range": True,
+         },
+         "query_variants": [], "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
+    ),
+    (
         "Найди все чаты, кому я делал сайты",
         {"output_shape": "LIST", "operation": "CHAT_LIST", "need_proof": False, "precision_bias": "BALANCED",
          "constraints": {"scope": "ALL_CHATS", "time_range": "ALL_TIME"},
