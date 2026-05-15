@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import text
 
 from app.db.database import AsyncSessionLocal
-from app.llm.embedding import embed_gemini_multimodal, embed_text, inline_data_part
+from app.llm.embedding import embed_gemini_multimodal, embed_text, inline_data_part, transcribe_audio_gemini
 from app.services.chat_sync_settings_service import ChatSyncSettingsService
 from app.services.plan_executor import build_message_link
 from app.userbot.client import get_client
@@ -328,16 +328,31 @@ class MediaEmbedderManager:
                         "link": link,
                     }
 
+                    _is_audio = media_type in ("voice", "audio")
                     tg = tg_by_id.get(tg_msg_id) if tg_msg_id is not None else None
                     if tg is not None and getattr(tg, "media", None) is not None:
                         try:
-                            data = await client.download_media(tg, file=bytes)
-                            if isinstance(data, (bytes, bytearray)) and 0 < len(data) <= _MAX_BYTES:
+                            raw_data = await client.download_media(tg, file=bytes)
+                            if isinstance(raw_data, (bytes, bytearray)) and 0 < len(raw_data) <= _MAX_BYTES:
                                 mime = getattr(getattr(tg, "file", None), "mime_type", None) or "application/octet-stream"
-                                digest = sha256(data).hexdigest()
-                                meta.update({"mime_type": mime, "bytes": len(data), "sha256": digest})
-                                parts = [{"text": f"title: {chat_title} | text: {caption or 'none'}"}]
-                                parts.append(inline_data_part(mime_type=mime, data=bytes(data)))
+                                digest = sha256(raw_data).hexdigest()
+                                meta.update({"mime_type": mime, "bytes": len(raw_data), "sha256": digest})
+
+                                # For voice/audio: transcribe first, use text as chunk_text
+                                if _is_audio:
+                                    try:
+                                        transcription = await transcribe_audio_gemini(mime_type=mime, data=bytes(raw_data))
+                                        if transcription:
+                                            chunk_text = f"{header}\n{transcription}"
+                                            if link:
+                                                chunk_text = f"{chunk_text}\n{link}"
+                                            meta["transcription"] = transcription
+                                    except Exception as exc:
+                                        meta["transcription_error"] = str(exc)[:200]
+                                        logger.warning("transcription failed chat=%s msg=%s: %s", chat_title, tg_msg_id, exc)
+
+                                parts = [{"text": f"title: {chat_title} | text: {caption or meta.get('transcription') or 'none'}"}]
+                                parts.append(inline_data_part(mime_type=mime, data=bytes(raw_data)))
                                 try:
                                     emb = await embed_gemini_multimodal(parts=parts)
                                     if isinstance(emb, list) and len(emb) == _EMBED_DIMS and all(isinstance(x, (int, float)) and math.isfinite(float(x)) for x in emb):
