@@ -55,6 +55,7 @@ class QueryOperation(str, Enum):
     RECENT_MESSAGES = "RECENT_MESSAGES"
     MEDIA_MESSAGES = "MEDIA_MESSAGES"
     DYNAMIC_QUERY = "DYNAMIC_QUERY"
+    CHAT_LIST = "CHAT_LIST"  # "find all chats where X was discussed"
 
 
 class QueryActor(str, Enum):

@@ -124,9 +124,23 @@ QUERY_FEWSHOTS: list[tuple[str, dict]] = [
     ),
     (
         "Найди все чаты, кому я делал сайты",
-        {"output_shape": "LIST", "operation": "SEARCH", "need_proof": True, "precision_bias": "PRECISION",
-         "constraints": {"scope": "ALL_CHATS", "time_range": "ALL_TIME", "limit": 50},
-         "query_variants": ["делал сайты", "разработка сайта", "сделал сайт", "website development"],
+        {"output_shape": "LIST", "operation": "CHAT_LIST", "need_proof": False, "precision_bias": "BALANCED",
+         "constraints": {"scope": "ALL_CHATS", "time_range": "ALL_TIME"},
+         "query_variants": ["делал сайт", "разработка сайта", "сделал сайт", "website"],
+         "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
+    ),
+    (
+        "В каких чатах обсуждали оплату?",
+        {"output_shape": "LIST", "operation": "CHAT_LIST", "need_proof": False, "precision_bias": "BALANCED",
+         "constraints": {"scope": "ALL_CHATS", "time_range": "ALL_TIME"},
+         "query_variants": ["оплата", "оплатить", "платёж", "оплачено"],
+         "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
+    ),
+    (
+        "Покажи все чаты где упоминается Telegram",
+        {"output_shape": "LIST", "operation": "CHAT_LIST", "need_proof": False, "precision_bias": "BALANCED",
+         "constraints": {"scope": "ALL_CHATS", "time_range": "ALL_TIME"},
+         "query_variants": ["Telegram", "телеграм", "тг"],
          "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
     ),
     (

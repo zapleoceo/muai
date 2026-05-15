@@ -11,6 +11,15 @@ from app.services.answering_types import (
     QueryOutputShape,
 )
 
+# tools allowed in SQL_DATE_SUMMARY validator that support chats_by_topic
+_SQL_TOOLS_WITH_TOPIC = {
+    "sql_messages_by_date", "sql_stats_by_date", "sql_search_messages_by_date",
+    "sql_lex_search_messages", "sql_message_by_tg_ref", "sql_recent_messages_by_chat_query",
+    "sql_media_messages_by_chat_query", "sql_dynamic_query",
+    "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date",
+    "sql_chats_by_topic",
+}
+
 
 def validate_plan_invariants(plan: Plan) -> None:
     tool_names = [t.name for t in plan.tools]
@@ -37,6 +46,7 @@ def validate_plan_invariants(plan: Plan) -> None:
         "sql_lex_search_messages", "sql_message_by_tg_ref", "sql_recent_messages_by_chat_query",
         "sql_media_messages_by_chat_query", "sql_dynamic_query",
         "sql_messages_by_chat_query_and_date", "sql_messages_by_folder_and_date",
+        "sql_chats_by_topic",
     }
 
     if plan.strategy.value == "SQL_DATE_SUMMARY":
@@ -112,6 +122,32 @@ def compile_query_model_to_plan(*, query_model: QueryModel, query: str) -> Plan:
             time_range=time_range, scope=c.scope, chat_types=chat_types, chat_ids=c.chat_ids,
             explicit_from=explicit_from, explicit_to=explicit_to, clarify_question=None,
             max_steps=max(2, int(query_model.max_steps or 2)), on_empty=PlanOnEmpty.RETRY, notes="compiled:media_messages",
+        )
+        validate_plan_invariants(plan)
+        return plan
+
+    if query_model.operation == QueryOperation.CHAT_LIST:
+        # "найди все чаты где..." — aggregate by chat, not individual messages
+        variants = [v for v in (query_model.query_variants or []) if str(v).strip()][:3] or [str(query).strip()]
+        use_time_range = time_range.value != "NONE"
+        tools = list(base_tools)
+        for v in variants:
+            tools.append(PlanToolCall(
+                name="sql_chats_by_topic",
+                args={
+                    "query": v,
+                    "limit": 100,
+                    "chat_types": [ct.value for ct in (chat_types or [])] or None,
+                    "use_time_range": use_time_range,
+                },
+            ))
+        plan = Plan(
+            strategy=PlanStrategy.SQL_DATE_SUMMARY,
+            tools=tools,
+            time_range=time_range, scope=c.scope, chat_types=chat_types, chat_ids=c.chat_ids,
+            explicit_from=explicit_from, explicit_to=explicit_to, clarify_question=None,
+            max_steps=max(2, int(query_model.max_steps or 2)), on_empty=PlanOnEmpty.RETRY,
+            notes="compiled:chat_list",
         )
         validate_plan_invariants(plan)
         return plan

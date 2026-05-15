@@ -21,6 +21,9 @@ _ROUTER_POLICIES = (
     "2) Выбирай operation:\n"
     "   - RECENT_MESSAGES: последние сообщения в выбранном чате.\n"
     "   - MEDIA_MESSAGES: список сообщений определённого media_type (voice/document/photo/audio/video).\n"
+    "   - CHAT_LIST: пользователь хочет найти ВСЕ ЧАТЫ где обсуждалась тема — "
+    "('в каких чатах...', 'найди все чаты кому/где...', 'покажи чаты где...'). "
+    "Возвращает уникальные чаты, НЕ отдельные сообщения. output_shape=LIST.\n"
     "   - SEARCH: поиск/саммари по базе.\n"
     "3) need_proof=true, если нужны ссылки/цитаты/пруф или есть риск путаницы (имена/точные формулировки).\n"
     "4) Заполняй constraints (scope/chat_types/chat_ids/chat_query/folder/time_range).\n"
@@ -77,7 +80,7 @@ def router_tool_catalog() -> str:
     return (
         "QUERY_MODEL:\n"
         "- output_shape: ANSWER | LIST | SUMMARY | ANALYTICS\n"
-        "- operation: SEARCH | RECENT_MESSAGES | MEDIA_MESSAGES | DYNAMIC_QUERY\n"
+        "- operation: SEARCH | RECENT_MESSAGES | MEDIA_MESSAGES | DYNAMIC_QUERY | CHAT_LIST\n"
         "- need_proof: true/false (нужны ли ссылки/цитаты)\n"
         "- constraints:\n"
         "  - scope: CURRENT_CHAT | ALL_CHATS\n"

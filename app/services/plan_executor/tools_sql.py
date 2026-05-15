@@ -670,6 +670,90 @@ async def tool_sql_lex_search_messages(
     return items, meta
 
 
+async def tool_sql_chats_by_topic(
+    *,
+    query: str,
+    chat_types: list[PlanChatType] | None,
+    limit: int = 100,
+    resolved: ResolvedRange | None = None,
+) -> tuple[list[dict], dict]:
+    """FTS search grouped by chat — returns unique chats with hit counts, not individual messages."""
+    q_raw = str(query or "").strip()
+    if not q_raw:
+        return [], {"count": 0, "error": "empty_query"}
+
+    use_ru = _has_cyrillic(q_raw)
+    use_en = _has_latin(q_raw)
+    q_expr = "coalesce(m.text,'') || ' ' || coalesce(m.caption,'')"
+
+    params: dict[str, object] = {"q": q_raw, "lim": int(limit), "use_ru": bool(use_ru), "use_en": bool(use_en)}
+    where: list[str] = []
+    if chat_types:
+        where.append("c.type = ANY(CAST(:chat_types AS text[]))")
+        params["chat_types"] = [ct.value for ct in chat_types]
+    if resolved is not None:
+        where.append("m.date_utc >= :from_utc AND m.date_utc < :to_utc")
+        params["from_utc"] = resolved.from_utc
+        params["to_utc"] = resolved.to_utc
+
+    where_sql = ("WHERE " + " AND ".join(where) + " AND") if where else "WHERE"
+
+    sql = text(f"""
+        WITH q AS (
+            SELECT
+                websearch_to_tsquery('simple', :q)  AS qs,
+                websearch_to_tsquery('russian', :q) AS qru,
+                websearch_to_tsquery('english', :q) AS qen
+        )
+        SELECT
+            c.id          AS chat_id,
+            c.type        AS chat_type,
+            c.title       AS chat_title,
+            c.username    AS chat_username,
+            c.folder      AS folder,
+            COUNT(m.id)   AS hit_count,
+            MAX(m.date_utc) AS last_hit_utc
+        FROM messages m
+        JOIN chats c ON c.id = m.chat_id
+        CROSS JOIN q
+        {where_sql}
+          (
+            to_tsvector('simple', {q_expr}) @@ q.qs
+            OR (CASE WHEN :use_ru THEN to_tsvector('russian', {q_expr}) @@ q.qru ELSE false END)
+            OR (CASE WHEN :use_en THEN to_tsvector('english', {q_expr}) @@ q.qen ELSE false END)
+            OR ({q_expr} % :q)
+          )
+        GROUP BY c.id, c.type, c.title, c.username, c.folder
+        ORDER BY hit_count DESC, c.title ASC NULLS LAST
+        LIMIT :lim
+    """)
+
+    async with AsyncSessionLocal() as session:
+        await session.execute(text("SET TRANSACTION READ ONLY"))
+        await session.execute(text("SELECT set_limit(0.12)"))
+        rows = (await session.execute(sql, params)).fetchall()
+
+    items = [
+        {
+            "chat_id": int(r.chat_id),
+            "type": r.chat_type,
+            "title": r.chat_title,
+            "username": r.chat_username,
+            "folder": r.folder,
+            "hit_count": int(r.hit_count),
+            "last_hit_utc": r.last_hit_utc.isoformat() if r.last_hit_utc else None,
+        }
+        for r in rows
+    ]
+    return items, {
+        "count": len(items),
+        "limit": int(limit),
+        "query": q_raw,
+        "from_utc": resolved.from_utc.isoformat() if resolved else None,
+        "to_utc": resolved.to_utc.isoformat() if resolved else None,
+    }
+
+
 async def tool_sql_message_by_tg_ref(
     *,
     chat_username: str | None = None,

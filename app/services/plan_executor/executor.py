@@ -13,6 +13,7 @@ from app.services.plan_executor.tools_rag import tool_rag_search
 from app.services.plan_executor.tools_sql import (
     tool_get_recent_dialog,
     tool_sql_active_chats_by_date,
+    tool_sql_chats_by_topic,
     tool_sql_dynamic_query,
     tool_sql_find_chats,
     tool_sql_lex_search_messages,
@@ -36,6 +37,7 @@ _ALLOWED_TOOLS: dict[str, set[str]] = {
         "sql_dynamic_query", "sql_search_messages", "sql_search_messages_by_date",
         "sql_find_chats", "sql_lex_search_messages", "sql_message_by_tg_ref",
         "sql_recent_messages_by_chat_query", "sql_media_messages_by_chat_query",
+        "sql_chats_by_topic",
     },
     "HYBRID": {
         "get_recent_dialog", "rag_search", "sql_messages_by_date", "sql_messages_by_chat_query_and_date",
@@ -43,6 +45,7 @@ _ALLOWED_TOOLS: dict[str, set[str]] = {
         "sql_dynamic_query", "sql_search_messages", "sql_search_messages_by_date",
         "sql_find_chats", "sql_lex_search_messages", "sql_message_by_tg_ref",
         "sql_recent_messages_by_chat_query", "sql_media_messages_by_chat_query",
+        "sql_chats_by_topic",
     },
     "COMMAND": set(),
 }
@@ -208,6 +211,16 @@ async def execute_plan(
                     resolved=resolved if (use_time and resolved) else None,
                 )
                 return {"name": name, "ok": True, "tool_meta": meta, "messages": msgs}
+
+            if name == "sql_chats_by_topic":
+                use_time = bool(tc.args.get("use_time_range", False))
+                items, meta = await tool_sql_chats_by_topic(
+                    query=str(tc.args.get("query") or query),
+                    chat_types=_coerce_chat_types(tc.args.get("chat_types", plan.chat_types)),
+                    limit=int(tc.args.get("limit", 100)),
+                    resolved=resolved if (use_time and resolved) else None,
+                )
+                return {"name": name, "ok": True, "tool_meta": meta, "meta_add": {"chat_candidates": items}}
 
             if name == "sql_message_by_tg_ref":
                 chat_id_arg = tc.args.get("chat_id")
