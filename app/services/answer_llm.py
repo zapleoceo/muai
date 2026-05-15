@@ -40,7 +40,9 @@ _HIER_SUMMARY_SYSTEM_PROMPT = (
 _HIER_REDUCE_SYSTEM_PROMPT = (
     "Ты SummarizerLLM. Объедини частичные саммари в одно итоговое. "
     "Только факты из входных данных. Пиши на языке запроса. "
-    "Сохрани ключевые темы, события, решения."
+    "Сохрани ключевые темы, события, решения. "
+    "Никаких вступлений типа 'На основе предоставленных саммари...' — сразу по делу. "
+    "Никаких ненужных заголовков, звёздочек и bold-маркдауна без причины — пиши как живой человек."
 )
 
 
@@ -131,7 +133,7 @@ def _split_messages_into_segments(messages: list[dict]) -> list[list[dict]]:
 
 async def summarize_large_history(*, query: str, messages: list[dict], language: str = "ru") -> str:
     if not messages:
-        return "Нет данных в контексте для ответа. Уточни период/чат/тему, чтобы я мог найти сообщения."
+        return "данных нет, уточни период или чат"
 
     msgs_sorted = sorted(
         messages,
@@ -143,6 +145,8 @@ async def summarize_large_history(*, query: str, messages: list[dict], language:
         by_chat.setdefault(cid, []).append(m)
 
     provider = get_llm_provider()
+    style_profile = await get_style_profile()
+
     per_chat_summaries: list[str] = []
     for cid, chat_msgs in by_chat.items():
         segments = _split_messages_into_segments(chat_msgs)
@@ -164,8 +168,12 @@ async def summarize_large_history(*, query: str, messages: list[dict], language:
             )
         )
 
+    reduce_prompt = _HIER_REDUCE_SYSTEM_PROMPT
+    if style_profile:
+        reduce_prompt += "\n\n" + style_profile
+
     reduce_payload = {"query": query, "language": language, "chat_summaries": per_chat_summaries}
-    final = await provider.complete([LLMMessage(role="user", content=json.dumps(reduce_payload, ensure_ascii=False))], system_prompt=_HIER_REDUCE_SYSTEM_PROMPT)
+    final = await provider.complete([LLMMessage(role="user", content=json.dumps(reduce_payload, ensure_ascii=False))], system_prompt=reduce_prompt)
     return final.strip()
 
 
