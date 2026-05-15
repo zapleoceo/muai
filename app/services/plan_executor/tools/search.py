@@ -146,7 +146,7 @@ async def tool_sql_lex_search_messages(
         {where_sql}
           AND (
             to_tsvector('simple', {q_expr}) @@ q.qs
-            OR ({q_expr} % :q)
+            OR (({q_expr}) % :q)
           )
         ORDER BY (r_simple + r_ru + r_en + sim) DESC, m.date_utc DESC, m.id DESC
         LIMIT :lim
@@ -234,7 +234,7 @@ async def tool_sql_chats_by_topic(
             to_tsvector('simple', {q_expr}) @@ q.qs
             OR (CASE WHEN :use_ru THEN to_tsvector('russian', {q_expr}) @@ q.qru ELSE false END)
             OR (CASE WHEN :use_en THEN to_tsvector('english', {q_expr}) @@ q.qen ELSE false END)
-            OR ({q_expr} % :q)
+            OR (({q_expr}) % :q)
           )
         GROUP BY c.id, c.type, c.title, c.username, c.folder
         ORDER BY hit_count DESC, c.title ASC NULLS LAST

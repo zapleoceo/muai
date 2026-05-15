@@ -92,18 +92,22 @@ def compile_query_model_to_plan(*, query_model: QueryModel, query: str) -> Plan:
         return plan
 
     chat_types = [PlanChatType(x) for x in c.chat_types] if c.chat_types else None
-    base_tools: list[PlanToolCall] = [PlanToolCall(name="get_recent_dialog", args={"limit": 20})]
+    include_dialog = c.scope == PlanScope.CURRENT_CHAT
+    dialog_tool = PlanToolCall(name="get_recent_dialog", args={"limit": 20})
     time_range = c.time_range
     explicit_from = c.explicit_from
     explicit_to = c.explicit_to
 
     if query_model.operation == QueryOperation.RECENT_MESSAGES:
+        tools = [PlanToolCall(
+            name="sql_recent_messages_by_chat_query",
+            args={"scope": c.scope.value, "chat_query": str(c.chat_query or ""), "limit": int(c.limit or 5), "chat_types": [ct.value for ct in (chat_types or [])] or None},
+        )]
+        if include_dialog:
+            tools.append(dialog_tool)
         plan = Plan(
             strategy=PlanStrategy.SQL_DATE_SUMMARY,
-            tools=base_tools + [PlanToolCall(
-                name="sql_recent_messages_by_chat_query",
-                args={"scope": c.scope.value, "chat_query": str(c.chat_query or ""), "limit": int(c.limit or 5), "chat_types": [ct.value for ct in (chat_types or [])] or None},
-            )],
+            tools=tools,
             time_range=PlanTimeRange.NONE, scope=c.scope, chat_types=chat_types, chat_ids=c.chat_ids,
             explicit_from=None, explicit_to=None, clarify_question=None,
             max_steps=max(2, int(query_model.max_steps or 2)), on_empty=PlanOnEmpty.RETRY, notes="compiled:recent_messages",
@@ -113,12 +117,15 @@ def compile_query_model_to_plan(*, query_model: QueryModel, query: str) -> Plan:
 
     if query_model.operation == QueryOperation.MEDIA_MESSAGES:
         use_time_range = time_range.value != "NONE"
+        tools = [PlanToolCall(
+            name="sql_media_messages_by_chat_query",
+            args={"scope": c.scope.value, "chat_query": c.chat_query, "media_type": str(c.media_type or ""), "limit": int(c.limit or 30), "chat_types": [ct.value for ct in (chat_types or [])] or None, "use_time_range": use_time_range},
+        )]
+        if include_dialog:
+            tools.append(dialog_tool)
         plan = Plan(
             strategy=PlanStrategy.SQL_DATE_SUMMARY,
-            tools=base_tools + [PlanToolCall(
-                name="sql_media_messages_by_chat_query",
-                args={"scope": c.scope.value, "chat_query": c.chat_query, "media_type": str(c.media_type or ""), "limit": int(c.limit or 30), "chat_types": [ct.value for ct in (chat_types or [])] or None, "use_time_range": use_time_range},
-            )],
+            tools=tools,
             time_range=time_range, scope=c.scope, chat_types=chat_types, chat_ids=c.chat_ids,
             explicit_from=explicit_from, explicit_to=explicit_to, clarify_question=None,
             max_steps=max(2, int(query_model.max_steps or 2)), on_empty=PlanOnEmpty.RETRY, notes="compiled:media_messages",
@@ -130,7 +137,7 @@ def compile_query_model_to_plan(*, query_model: QueryModel, query: str) -> Plan:
         # "найди все чаты где..." — aggregate by chat, not individual messages
         variants = [v for v in (query_model.query_variants or []) if str(v).strip()][:3] or [str(query).strip()]
         use_time_range = time_range.value != "NONE"
-        tools = list(base_tools)
+        tools: list[PlanToolCall] = []
         for v in variants:
             tools.append(PlanToolCall(
                 name="sql_chats_by_topic",
@@ -155,12 +162,15 @@ def compile_query_model_to_plan(*, query_model: QueryModel, query: str) -> Plan:
     if query_model.operation == QueryOperation.DYNAMIC_QUERY:
         if query_model.dynamic_tool is None:
             raise ValueError("dynamic_tool required")
+        tools = [PlanToolCall(
+            name="sql_dynamic_query",
+            args={"scope": c.scope.value, "chat_types": [ct.value for ct in (chat_types or [])] or None, "chat_ids": c.chat_ids, "spec": query_model.dynamic_tool.model_dump()},
+        )]
+        if include_dialog:
+            tools.append(dialog_tool)
         plan = Plan(
             strategy=PlanStrategy.SQL_DATE_SUMMARY,
-            tools=base_tools + [PlanToolCall(
-                name="sql_dynamic_query",
-                args={"scope": c.scope.value, "chat_types": [ct.value for ct in (chat_types or [])] or None, "chat_ids": c.chat_ids, "spec": query_model.dynamic_tool.model_dump()},
-            )],
+            tools=tools,
             time_range=time_range, scope=c.scope, chat_types=chat_types, chat_ids=c.chat_ids,
             explicit_from=explicit_from, explicit_to=explicit_to, clarify_question=None,
             max_steps=max(2, int(query_model.max_steps or 2)), on_empty=PlanOnEmpty.RETRY, notes="compiled:dynamic_query",
@@ -180,7 +190,7 @@ def compile_query_model_to_plan(*, query_model: QueryModel, query: str) -> Plan:
             main_tool = PlanToolCall(name="sql_messages_by_date", args={"scope": c.scope.value, "max_rows": 2000, "chat_types": [ct.value for ct in (chat_types or [])] or None, "chat_ids": c.chat_ids})
         plan = Plan(
             strategy=PlanStrategy.SQL_DATE_SUMMARY,
-            tools=base_tools + [main_tool, PlanToolCall(name="sql_stats_by_date", args={"scope": c.scope.value, "chat_types": [ct.value for ct in (chat_types or [])] or None, "chat_ids": c.chat_ids})],
+            tools=[main_tool, PlanToolCall(name="sql_stats_by_date", args={"scope": c.scope.value, "chat_types": [ct.value for ct in (chat_types or [])] or None, "chat_ids": c.chat_ids})],
             time_range=tr, scope=c.scope, chat_types=chat_types, chat_ids=c.chat_ids,
             explicit_from=explicit_from, explicit_to=explicit_to, clarify_question=None,
             max_steps=max(2, int(query_model.max_steps or 2)), on_empty=PlanOnEmpty.RETRY, notes="compiled:summary",
@@ -192,7 +202,7 @@ def compile_query_model_to_plan(*, query_model: QueryModel, query: str) -> Plan:
         lim = int(c.limit or 50)
         variants = [v for v in (query_model.query_variants or []) if str(v).strip()][:4] or [str(query).strip()]
         use_time_range = time_range.value != "NONE"
-        tools = list(base_tools)
+        tools: list[PlanToolCall] = []
         if c.chat_query and not c.chat_ids:
             tools.append(PlanToolCall(name="sql_find_chats", args={"query": c.chat_query, "limit": 5}))
         for v in variants:
@@ -225,7 +235,7 @@ def compile_query_model_to_plan(*, query_model: QueryModel, query: str) -> Plan:
             explicit_from = explicit_to = None
         plan = Plan(
             strategy=PlanStrategy.SQL_DATE_SUMMARY,
-            tools=base_tools + [
+            tools=[
                 PlanToolCall(name="sql_active_chats_by_date", args={"scope": c.scope.value, "limit": int(c.limit or 50), "chat_types": [ct.value for ct in (chat_types or [])] or None, "chat_ids": c.chat_ids}),
                 PlanToolCall(name="sql_stats_by_date", args={"scope": c.scope.value, "chat_types": [ct.value for ct in (chat_types or [])] or None, "chat_ids": c.chat_ids}),
             ],
@@ -240,12 +250,14 @@ def compile_query_model_to_plan(*, query_model: QueryModel, query: str) -> Plan:
     if bool(query_model.need_proof):
         variants = [v for v in (query_model.query_variants or []) if str(v).strip()][:3] or [str(query).strip()]
         use_time_range = time_range.value != "NONE"
-        tools = list(base_tools)
+        tools: list[PlanToolCall] = []
         if c.chat_query and not c.chat_ids:
             tools.append(PlanToolCall(name="sql_find_chats", args={"query": c.chat_query, "limit": 5}))
         for v in variants:
             tools.append(PlanToolCall(name="sql_lex_search_messages", args={"scope": c.scope.value, "query": v, "limit": 60, "chat_types": [ct.value for ct in (chat_types or [])] or None, "chat_ids": c.chat_ids, "chat_query": c.chat_query if c.chat_query and not c.chat_ids else None, "use_time_range": use_time_range}))
         tools.append(PlanToolCall(name="rag_search", args={"scope": c.scope.value, "query": str(query), "top_k": 10, "chat_ids": c.chat_ids}))
+        if include_dialog:
+            tools.append(dialog_tool)
         plan = Plan(
             strategy=PlanStrategy.HYBRID, tools=tools,
             time_range=time_range, scope=c.scope, chat_types=chat_types, chat_ids=c.chat_ids,
@@ -256,10 +268,12 @@ def compile_query_model_to_plan(*, query_model: QueryModel, query: str) -> Plan:
         return plan
 
     # RAG — if chat_query set without variants, add find_chats so LLM knows if chat exists
-    rag_tools = list(base_tools)
+    rag_tools: list[PlanToolCall] = []
     if c.chat_query and not c.chat_ids:
         rag_tools.append(PlanToolCall(name="sql_find_chats", args={"query": c.chat_query, "limit": 5}))
     rag_tools.append(PlanToolCall(name="rag_search", args={"scope": c.scope.value, "query": str(query), "top_k": 12, "chat_ids": c.chat_ids}))
+    if include_dialog:
+        rag_tools.append(dialog_tool)
     plan = Plan(
         strategy=PlanStrategy.RAG_SEMANTIC,
         tools=rag_tools,
