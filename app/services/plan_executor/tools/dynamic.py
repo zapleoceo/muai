@@ -53,24 +53,30 @@ async def tool_sql_dynamic_query(
     async with AsyncSessionLocal() as session:
         await session.execute(text("SET TRANSACTION READ ONLY"))
 
+        _count_implied = {"messages", "message_count", "count", "cnt", "total", "msg_count"}
+
         cols = []
         keys = []
         for s in spec.select:
             expr = _field_expr(s.field)
             if expr is None:
                 raise ValueError(f"unsupported_field:{s.field}")
-            if s.agg:
-                if s.agg == DynamicSelectAgg.COUNT:
+            # If the original field name implies counting but no agg was set, auto-apply COUNT
+            effective_agg = s.agg
+            if not effective_agg and s.field in _count_implied and spec.group_by:
+                effective_agg = DynamicSelectAgg.COUNT
+            if effective_agg:
+                if effective_agg == DynamicSelectAgg.COUNT:
                     expr = func.count(expr)
-                elif s.agg == DynamicSelectAgg.COUNT_DISTINCT:
+                elif effective_agg == DynamicSelectAgg.COUNT_DISTINCT:
                     expr = func.count(expr.distinct())
-                elif s.agg == DynamicSelectAgg.MAX:
+                elif effective_agg == DynamicSelectAgg.MAX:
                     expr = func.max(expr)
-                elif s.agg == DynamicSelectAgg.MIN:
+                elif effective_agg == DynamicSelectAgg.MIN:
                     expr = func.min(expr)
                 else:
-                    raise ValueError(f"unsupported_agg:{s.agg}")
-            key = s.as_name or (f"{s.agg.value.lower()}_{s.field}" if s.agg else s.field)
+                    raise ValueError(f"unsupported_agg:{effective_agg}")
+            key = s.as_name or (f"{effective_agg.value.lower()}_{s.field}" if effective_agg else s.field)
             cols.append(expr.label(key))
             keys.append(key)
 
@@ -113,7 +119,9 @@ async def tool_sql_dynamic_query(
         if where:
             q = q.where(*where)
         if spec.group_by:
-            group_exprs = [_field_expr(g) for g in spec.group_by]
+            # Filter out count-implied names that shouldn't be in GROUP BY
+            valid_group = [g for g in spec.group_by if g not in _count_implied]
+            group_exprs = [_field_expr(g) for g in valid_group]
             if any(e is None for e in group_exprs):
                 raise ValueError("unsupported field in group_by")
             q = q.group_by(*group_exprs)
