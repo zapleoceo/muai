@@ -3,14 +3,25 @@ import json
 from app.llm.base import LLMMessage
 from app.llm.factory import get_llm_provider
 from app.services.answering_types import Plan, RetrievedContext
+from app.services.style_profile import get_style_profile
 
 
-_ANSWER_SYSTEM_PROMPT = (
-    "Ты AnswerLLM. Отвечай только на основе RetrievedContext. "
+_ANSWER_SYSTEM_BASE = (
+    "Ты личный AI-ассистент. Отвечай только на основе RetrievedContext. "
     "Запрещено придумывать факты, которых нет в RetrievedContext. "
-    "Если данных недостаточно или контекст пуст — прямо скажи, что данных нет, и что нужно уточнить. "
-    "Пиши на языке вопроса. Отвечай лаконично и по делу."
+    "Если данных нет — скажи прямо и коротко. "
+    "Пиши на языке вопроса. "
+    "Отвечай естественно, как живой человек — без казённых фраз, без избыточного markdown. "
+    "Списки и заголовки используй только когда это реально помогает воспринять информацию. "
+    "Ссылки на сообщения давай когда они есть в контексте."
 )
+
+
+async def _build_answer_prompt() -> str:
+    profile = await get_style_profile()
+    if profile:
+        return _ANSWER_SYSTEM_BASE + "\n\n" + profile
+    return _ANSWER_SYSTEM_BASE
 
 _MAX_CONTEXT_CHARS = 40_000
 _MAX_MSG_CHARS = 2_000
@@ -21,18 +32,15 @@ _MAX_CHAT_SEGMENTS = 10
 
 
 _HIER_SUMMARY_SYSTEM_PROMPT = (
-    "Ты SummarizerLLM. Твоя задача — суммировать большие объемы переписки. "
-    "Опирайся только на предоставленные сообщения. "
+    "Ты SummarizerLLM. Суммируй переписку опираясь только на предоставленные сообщения. "
     "Не выдумывай факты. Если данных мало — так и скажи. "
-    "Пиши на языке запроса. "
-    "Выход делай компактным, структурированным."
+    "Пиши на языке запроса. Выход компактный и по делу."
 )
 
 _HIER_REDUCE_SYSTEM_PROMPT = (
-    "Ты SummarizerLLM. Твоя задача — объединить несколько частичных саммари в одно итоговое. "
-    "Не выдумывай факты, опирайся только на входные саммари. "
-    "Пиши на языке запроса. "
-    "Сохрани ключевые темы, события, решения и выводы."
+    "Ты SummarizerLLM. Объедини частичные саммари в одно итоговое. "
+    "Только факты из входных данных. Пиши на языке запроса. "
+    "Сохрани ключевые темы, события, решения."
 )
 
 
@@ -214,8 +222,9 @@ async def answer_from_context(*, query: str, plan: Plan, ctx: RetrievedContext) 
         return "Нет данных в контексте для ответа. Уточни период/чат/тему, чтобы я мог найти сообщения."
 
     provider = get_llm_provider()
+    system_prompt = await _build_answer_prompt()
     messages = [
         LLMMessage(role="user", content="RetrievedContext:\n" + context_text),
         LLMMessage(role="user", content="UserQuery:\n" + query),
     ]
-    return await provider.complete(messages, system_prompt=_ANSWER_SYSTEM_PROMPT)
+    return await provider.complete(messages, system_prompt=system_prompt)
