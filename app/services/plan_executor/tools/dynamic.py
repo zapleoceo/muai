@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, literal_column, select, text
 
 from app.db.database import AsyncSessionLocal
 from app.db.models import Chat, Message
@@ -126,12 +126,16 @@ async def tool_sql_dynamic_query(
                 raise ValueError("unsupported field in group_by")
             q = q.group_by(*group_exprs)
         if spec.order_by:
+            select_aliases = {s.as_name for s in spec.select if s.as_name}
             order_exprs = []
             for o in spec.order_by:
-                expr = _field_expr(o.field)
-                if expr is None:
-                    raise ValueError(f"unsupported_field:{o.field}")
-                order_exprs.append(expr.desc() if o.desc else expr.asc())
+                if o.field in select_aliases:
+                    expr_ord = literal_column(o.field)
+                else:
+                    expr_ord = _field_expr(o.field)
+                    if expr_ord is None:
+                        raise ValueError(f"unsupported_field:{o.field}")
+                order_exprs.append(expr_ord.desc() if o.desc else expr_ord.asc())
             q = q.order_by(*order_exprs)
 
         q = q.limit(int(spec.limit))
