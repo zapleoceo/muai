@@ -109,6 +109,38 @@ async def run_answer_pipeline(
             or retrieved.meta.get("dynamic_rows")
             or retrieved.meta.get("active_chats")
         )
+
+        # If a chat-specific query returned 0, try lex search for that chat before giving up
+        _chat_query_used = next(
+            (str(t.args.get("chat_query") or "").strip() for t in final_plan.tools if t.args.get("chat_query")),
+            None,
+        )
+        if (len(retrieved.messages) + len(retrieved.chunks)) == 0 and not _has_meta_results and _chat_query_used:
+            await _progress("🔍 ищу в базе…")
+            lex_fallback_plan = final_plan.model_copy(update={
+                "strategy": PlanStrategy.SQL_DATE_SUMMARY,
+                "tools": [PlanToolCall(
+                    name="sql_lex_search_messages",
+                    args={
+                        "scope": final_plan.scope.value,
+                        "chat_query": _chat_query_used,
+                        "query": query,
+                        "limit": 200,
+                        "chat_types": [ct.value for ct in (final_plan.chat_types or [])] or None,
+                        "use_time_range": final_plan.time_range.value != "NONE",
+                    },
+                )],
+                "max_steps": 1,
+                "on_empty": PlanOnEmpty.ASK_CLARIFY,
+                "notes": "chat_lex_fallback",
+            })
+            lex_ctx = await execute_plan(plan=lex_fallback_plan, chat_id=chat_id, query=query, timezone_name=timezone_name)
+            if lex_ctx.messages:
+                retrieved = lex_ctx
+                summary["messages"] = len(retrieved.messages)
+                summary["tool_runs"] = [tr.model_dump() for tr in retrieved.tool_runs]
+                break  # skip grader, we have results now
+
         if (len(retrieved.messages) + len(retrieved.chunks)) == 0 and not _has_meta_results and final_plan.time_range != PlanTimeRange.NONE:
             await _progress("📊 анализирую…")
             coverage_plan = final_plan.model_copy(
@@ -202,6 +234,8 @@ async def run_answer_pipeline(
         }
         if force_time_range:
             state["force_time_range"] = force_time_range
+        if _chat_query_used:
+            state["force_chat_query"] = _chat_query_used
         final_plan, final_router_raw = await route_query(
             query=query,
             user_id=user_id,

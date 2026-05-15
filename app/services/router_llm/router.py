@@ -47,10 +47,14 @@ async def route_query(
     state: dict | None = None,
 ) -> tuple[Plan, str]:
     forced_time_range: str | None = None
+    forced_chat_query: str | None = None
     if state:
         f = state.get("force_time_range")
         if isinstance(f, str) and f:
             forced_time_range = f
+        fc = state.get("force_chat_query")
+        if isinstance(fc, str) and fc:
+            forced_chat_query = fc
 
     tg_ref = extract_tg_link_ref(query)
     if tg_ref:
@@ -83,6 +87,8 @@ async def route_query(
         qm = QueryModel.model_validate(extract_json(raw))
         if forced_time_range:
             qm = _apply_forced_time_range(qm, forced_time_range)
+        if forced_chat_query and not qm.constraints.chat_query:
+            qm = qm.model_copy(update={"constraints": qm.constraints.model_copy(update={"chat_query": forced_chat_query})})
         plan = compile_query_model_to_plan(query_model=qm, query=query)
         logger.info(
             "ROUTE op=%s shape=%s scope=%s tr=%s chat_q=%r strategy=%s tools=%s",
