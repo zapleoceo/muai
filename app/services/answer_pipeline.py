@@ -104,7 +104,12 @@ async def run_answer_pipeline(
             step += 1
             continue
 
-        if (len(retrieved.messages) + len(retrieved.chunks)) == 0 and final_plan.time_range != PlanTimeRange.NONE:
+        _has_meta_results = bool(
+            retrieved.meta.get("chat_candidates")
+            or retrieved.meta.get("dynamic_rows")
+            or retrieved.meta.get("active_chats")
+        )
+        if (len(retrieved.messages) + len(retrieved.chunks)) == 0 and not _has_meta_results and final_plan.time_range != PlanTimeRange.NONE:
             await _progress("📊 анализирую…")
             coverage_plan = final_plan.model_copy(
                 update={
