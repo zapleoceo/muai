@@ -174,10 +174,11 @@ def _format_chat_list_answer(candidates: list[dict]) -> str:
     _type_label = {"private": "личный", "group": "группа", "supergroup": "супергруппа", "channel": "канал"}
     lines = [f"Найдено **{len(unique)}** чатов:\n"]
     for c in unique:
-        title = c.get("chat_title") or str(c.get("chat_id"))
-        ctype = _type_label.get(str(c.get("chat_type") or ""), str(c.get("chat_type") or ""))
+        title = c.get("chat_title") or c.get("title") or str(c.get("chat_id"))
+        ctype_raw = c.get("chat_type") or c.get("type") or ""
+        ctype = _type_label.get(str(ctype_raw), str(ctype_raw))
         hits = int(c.get("hit_count") or 0)
-        username = c.get("chat_username") or ""
+        username = c.get("chat_username") or c.get("username") or ""
         uname_part = f" @{username}" if username else ""
         lines.append(f"- **{title}**{uname_part} ({ctype}) — {hits} упом.")
     return "\n".join(lines)

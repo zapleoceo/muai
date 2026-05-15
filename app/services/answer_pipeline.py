@@ -217,7 +217,8 @@ async def run_answer_pipeline(
     if retrieved is None:
         retrieved = await execute_plan(plan=final_plan, chat_id=chat_id, query=query, timezone_name=timezone_name)
 
-    use_hier_summary = bool(final_plan.time_range.value == "ALL_TIME" and len(retrieved.messages) > 120)
+    _is_summary_plan = final_plan.notes and "summary" in str(final_plan.notes)
+    use_hier_summary = bool(len(retrieved.messages) > 120 and (_is_summary_plan or final_plan.time_range.value == "ALL_TIME"))
     if not use_hier_summary and (len(retrieved.messages) > 35 or len(retrieved.chunks) > 25):
         decision, rerank_raw = await rerank_context(
             query=query,
