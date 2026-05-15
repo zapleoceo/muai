@@ -161,9 +161,36 @@ async def summarize_large_history(*, query: str, messages: list[dict], language:
     return final.strip()
 
 
+def _format_chat_list_answer(candidates: list[dict]) -> str:
+    seen: set = set()
+    unique: list[dict] = []
+    for c in candidates:
+        cid = c.get("chat_id")
+        if cid not in seen:
+            seen.add(cid)
+            unique.append(c)
+    unique.sort(key=lambda x: int(x.get("hit_count") or 0), reverse=True)
+
+    _type_label = {"private": "личный", "group": "группа", "supergroup": "супергруппа", "channel": "канал"}
+    lines = [f"Найдено **{len(unique)}** чатов:\n"]
+    for c in unique:
+        title = c.get("chat_title") or str(c.get("chat_id"))
+        ctype = _type_label.get(str(c.get("chat_type") or ""), str(c.get("chat_type") or ""))
+        hits = int(c.get("hit_count") or 0)
+        username = c.get("chat_username") or ""
+        uname_part = f" @{username}" if username else ""
+        lines.append(f"- **{title}**{uname_part} ({ctype}) — {hits} упом.")
+    return "\n".join(lines)
+
+
 async def answer_from_context(*, query: str, plan: Plan, ctx: RetrievedContext) -> str:
     if plan.clarify_question:
         return plan.clarify_question
+
+    # CHAT_LIST: generate answer directly from structured data, no LLM needed
+    chat_candidates = ctx.meta.get("chat_candidates") or []
+    if chat_candidates and not ctx.messages and not ctx.chunks:
+        return _format_chat_list_answer(chat_candidates)
 
     context_text = format_retrieved_context(ctx)
     if not context_text:
