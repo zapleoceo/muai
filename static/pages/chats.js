@@ -232,6 +232,18 @@ export async function syncTopics() {
   });
 }
 
+export async function fixContactNames(btn) {
+  if (!confirm('Обновить имена всех приватных контактов (добавить фамилии)?\nМожет занять несколько минут.')) return;
+  await withBtn(btn, async () => {
+    const r = await apiFetch('/api/admin/chats/fix-names', { method: 'POST' });
+    if (r.ok) {
+      const d = await r.json();
+      await loadChats();
+      alert(`Обновлено ${d.updated} имён, ошибок: ${d.errors}`);
+    }
+  });
+}
+
 export function onSearch(val) {
   _search = val.trim().toLowerCase();
   _page = 0;

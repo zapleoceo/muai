@@ -15,7 +15,8 @@ def chat_title(entity) -> str | None:
     if isinstance(entity, User):
         if getattr(entity, "deleted", False):
             return "[Удалён]"
-        return entity.first_name
+        parts = [p for p in (entity.first_name, entity.last_name) if p]
+        return " ".join(parts) or None
     return getattr(entity, "title", None)
 
 
