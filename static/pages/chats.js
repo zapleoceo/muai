@@ -342,7 +342,9 @@ export function renderChats() {
       const topics = c.topics || [];
       const topicToggle = topics.length
         ? `<button class=\"topic-toggle\" data-action=\"toggle-topics\" data-id=\"${c.id}\" title=\"${topics.length} веток\">▶</button> ` : '';
-      const tgLink = c.username ? `https://t.me/${c.username}` : null;
+      const tgLink = c.username
+        ? `https://t.me/${c.username}`
+        : (c.type === 'private' && !isDeleted ? `tg://user?id=${c.id}` : null);
       const resolveBtn = (isUnresolved || isDeleted)
         ? `<button class="btn btn-sm btn-ghost" data-action="resolve" data-id="${c.id}" title="Определить владельца через Telegram" style="font-size:0.7rem">🔍</button>`
         : '';

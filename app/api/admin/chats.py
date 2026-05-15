@@ -183,48 +183,53 @@ async def sync_topics(_uid: int = Depends(require_owner)) -> dict:
 
 @router.post("/admin/chats/fix-names")
 async def fix_private_names(_uid: int = Depends(require_owner)) -> dict:
-    """Re-resolve first+last name for all private chats stored with first name only."""
-    import asyncio
+    """Re-resolve contact names using GetContactsRequest (returns your saved contact names, not profile names)."""
     import logging
-    from sqlalchemy import select, update
+    from telethon.tl.functions.contacts import GetContactsRequest
+    from sqlalchemy import update
     from app.db.database import AsyncSessionLocal
     from app.db.models import Chat, TgUser
     from app.userbot.client import get_client
 
     logger = logging.getLogger(__name__)
     client = get_client()
-    updated = 0
-    errors = 0
 
+    result = await client(GetContactsRequest(hash=0))
+    contact_map: dict[int, tuple[str, str | None, str | None]] = {}
+    for user in result.users:
+        first = getattr(user, "first_name", None) or ""
+        last = getattr(user, "last_name", None) or None
+        username = getattr(user, "username", None)
+        full = f"{first} {last}".strip() if last else first
+        if full:
+            contact_map[user.id] = (full, username, last)
+
+    updated = 0
     async with AsyncSessionLocal() as session:
+        from sqlalchemy import select
         rows = (await session.execute(
             select(Chat).where(Chat.type == "private")
         )).scalars().all()
 
-    for chat in rows:
-        try:
-            entity = await client.get_entity(int(chat.id))
-            first = getattr(entity, "first_name", None) or ""
-            last = getattr(entity, "last_name", None) or ""
-            full = f"{first} {last}".strip() or first or str(chat.id)
+        for chat in rows:
+            entry = contact_map.get(int(chat.id))
+            if not entry:
+                continue
+            full, username, last = entry
             if full == (chat.title or ""):
                 continue
-            username = getattr(entity, "username", None)
-            async with AsyncSessionLocal() as session:
-                await session.execute(
-                    update(Chat).where(Chat.id == chat.id).values(title=full, username=username)
+            first_name = full.split(" ")[0] if full else None
+            await session.execute(
+                update(Chat).where(Chat.id == chat.id).values(title=full, username=username)
+            )
+            await session.execute(
+                update(TgUser).where(TgUser.id == chat.id).values(
+                    first_name=first_name, last_name=last, username=username,
                 )
-                await session.execute(
-                    update(TgUser).where(TgUser.id == chat.id).values(
-                        first_name=first or None, last_name=last or None, username=username,
-                    )
-                )
-                await session.commit()
-            updated += 1
+            )
             logger.info("fix-names: %s → %s", chat.title, full)
-        except Exception as exc:
-            logger.warning("fix-names: skip %s (%s): %s", chat.id, chat.title, exc)
-            errors += 1
-        await asyncio.sleep(0.05)  # avoid Telegram flood
+            updated += 1
 
-    return {"updated": updated, "errors": errors}
+        await session.commit()
+
+    return {"updated": updated, "total_contacts": len(contact_map)}
