@@ -64,6 +64,7 @@ async function bootstrap() {
   window.loadChats = chats.loadChats;
   window.syncFolders = chats.syncFolders;
   window.syncTopics = chats.syncTopics;
+  window.fixContactNames = chats.fixContactNames;
   window.onSearch = chats.onSearch;
   window.setFilter = chats.setFilter;
   window.sortBy = chats.sortBy;
