@@ -71,7 +71,7 @@ async def route_query(
         "catalog": router_tool_catalog(),
         "schema_hint": {
             "output_shape": "ANSWER|LIST|SUMMARY|ANALYTICS",
-            "operation": "SEARCH|RECENT_MESSAGES|MEDIA_MESSAGES|DYNAMIC_QUERY",
+            "operation": "SEARCH|RECENT_MESSAGES|MEDIA_MESSAGES|DYNAMIC_QUERY|CHAT_LIST",
             "need_proof": "true|false",
             "constraints": {
                 "scope": "CURRENT_CHAT|ALL_CHATS",
