@@ -6,10 +6,16 @@ from app.db.models import Chat
 
 class ChatRepo:
     async def upsert_chat(self, chat) -> None:
+        first = getattr(chat, "first_name", None)
+        last = getattr(chat, "last_name", None)
+        if first is not None:
+            title = " ".join(p for p in (first, last) if p) or first
+        else:
+            title = getattr(chat, "title", None)
         await self.upsert_chat_raw(
             id=chat.id,
             type=str(chat.type.value) if hasattr(chat.type, "value") else str(chat.type),
-            title=getattr(chat, "title", None) or getattr(chat, "first_name", None),
+            title=title,
             username=getattr(chat, "username", None),
         )
 
