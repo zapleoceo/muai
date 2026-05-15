@@ -183,6 +183,17 @@ def _format_chat_list_answer(candidates: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _format_dynamic_rows_answer(rows: list[dict]) -> str:
+    if not rows:
+        return "Запрос выполнен, результатов нет."
+    headers = list(rows[0].keys())
+    lines = ["| " + " | ".join(str(h) for h in headers) + " |"]
+    lines.append("|" + "|".join("---" for _ in headers) + "|")
+    for row in rows[:200]:
+        lines.append("| " + " | ".join(str(row.get(h, "")) for h in headers) + " |")
+    return f"**{len(rows)} строк:**\n\n" + "\n".join(lines)
+
+
 async def answer_from_context(*, query: str, plan: Plan, ctx: RetrievedContext) -> str:
     if plan.clarify_question:
         return plan.clarify_question
@@ -191,6 +202,11 @@ async def answer_from_context(*, query: str, plan: Plan, ctx: RetrievedContext) 
     chat_candidates = ctx.meta.get("chat_candidates") or []
     if chat_candidates and not ctx.messages and not ctx.chunks:
         return _format_chat_list_answer(chat_candidates)
+
+    # DYNAMIC_QUERY / ANALYTICS rows: render as table without LLM
+    dynamic_rows = ctx.meta.get("dynamic_rows") or []
+    if dynamic_rows and not ctx.messages and not ctx.chunks:
+        return _format_dynamic_rows_answer(dynamic_rows)
 
     context_text = format_retrieved_context(ctx)
     if not context_text:
