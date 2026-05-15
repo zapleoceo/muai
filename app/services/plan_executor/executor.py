@@ -10,7 +10,7 @@ from app.services.answering_types import (
 )
 from app.services.plan_executor.time_range import resolve_time_range
 from app.services.plan_executor.tools_rag import tool_rag_search
-from app.services.plan_executor.tools_sql import (
+from app.services.plan_executor.tools import (
     tool_get_recent_dialog,
     tool_sql_active_chats_by_date,
     tool_sql_chats_by_topic,

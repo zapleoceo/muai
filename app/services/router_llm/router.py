@@ -2,7 +2,7 @@ import json
 from datetime import datetime
 
 from app.llm.base import LLMMessage
-from app.llm.factory import get_llm_provider
+from app.llm.factory import get_router_llm_provider
 from app.services.answering_types import (
     Plan,
     PlanOnEmpty,
@@ -55,7 +55,7 @@ async def route_query(
         plan = Plan.model_validate(plan_dict)
         return plan, json.dumps(plan_dict, ensure_ascii=False)
 
-    provider = get_llm_provider()
+    provider = get_router_llm_provider()
     now = datetime.now().isoformat(timespec="seconds")
 
     input_block = {

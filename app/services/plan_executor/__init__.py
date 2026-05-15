@@ -4,7 +4,7 @@ from app.services.plan_executor.executor import execute_plan
 from app.services.plan_executor.links import build_message_link
 from app.services.plan_executor.time_range import ResolvedRange, resolve_time_range
 from app.services.plan_executor.tools_rag import tool_rag_search
-from app.services.plan_executor.tools_sql import tool_get_recent_dialog
+from app.services.plan_executor.tools import tool_get_recent_dialog
 
 __all__ = [
     "ensure_chunk_schema",

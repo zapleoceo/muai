@@ -14,6 +14,7 @@ class Settings(BaseSettings):
     db_password: str = "changeme"
 
     llm_provider: str = "stub"
+    router_llm_provider: str = ""
     openai_api_key: str = ""
     groq_api_key: str = ""
     gemini_api_key: str = ""
