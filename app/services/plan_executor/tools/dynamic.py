@@ -21,6 +21,13 @@ async def tool_sql_dynamic_query(
     spec: DynamicToolSpec,
 ) -> tuple[list[dict], dict]:
     def _field_expr(name: str):
+        _aliases = {
+            "messages": "message_id", "message_count": "message_id", "count": "message_id",
+            "msg_id": "message_id", "id": "message_id",
+            "chat_name": "chat_title", "title": "chat_title", "name": "chat_title",
+            "username": "chat_username", "type": "chat_type",
+        }
+        name = _aliases.get(name, name)
         m = {
             "message_id": Message.id,
             "chat_id": Message.chat_id,
