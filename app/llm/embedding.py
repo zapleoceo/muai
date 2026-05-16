@@ -324,14 +324,9 @@ async def _embed_openai_batch(mgr: Any, *, token_id: int, token: str, texts: lis
 
 
 async def transcribe_audio_gemini(*, mime_type: str, data: bytes) -> str:
-    """Transcribe audio using Gemini generateContent. Returns transcription text."""
+    """Transcribe audio using Gemini generateContent. Retries across all available tokens."""
     from app.services.tokens import get_token_manager
     mgr = get_token_manager()
-    lease = await mgr.next_token("embed_media", provider="gemini")
-    if not lease:
-        lease = await mgr.next_token("embed", provider="gemini")
-    if not lease:
-        raise RuntimeError("No Gemini tokens available for transcription")
 
     b64 = base64.b64encode(data).decode()
     payload = {
@@ -343,26 +338,39 @@ async def transcribe_audio_gemini(*, mime_type: str, data: bytes) -> str:
         }],
         "generationConfig": {"maxOutputTokens": 1024},
     }
-    _gen_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={lease.token}"
-    try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
-            resp = await client.post(_gen_url, json=payload)
-        if resp.status_code == 429:
-            await mgr.on_rate_limit(lease.id)
-            raise RuntimeError("Transcription API 429: rate-limited")
-        if resp.status_code >= 400:
-            await mgr.on_error(lease.id)
-            raise RuntimeError(f"Transcription API {resp.status_code}: {resp.text[:200]}")
-        data_r = resp.json()
-        candidates = data_r.get("candidates") or []
-        if candidates:
-            parts = (candidates[0].get("content") or {}).get("parts") or []
-            if parts:
-                return str(parts[0].get("text") or "").strip()
-        raise RuntimeError("Transcription: empty response")
-    except (httpx.TransportError, asyncio.TimeoutError) as exc:
-        await mgr.on_error(lease.id)
-        raise RuntimeError(f"Transcription network error: {str(exc)[:200]}") from exc
+
+    last_error = "No Gemini tokens available for transcription"
+    # Try chat tokens first (generateContent quota), then embed_media, then embed
+    for capability in ("chat", "embed_media", "embed"):
+        for _ in range(8):
+            lease = await mgr.next_token(capability, provider="gemini")
+            if not lease:
+                break
+            _gen_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={lease.token}"
+            try:
+                async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+                    resp = await client.post(_gen_url, json=payload)
+                if resp.status_code == 429:
+                    await mgr.on_rate_limit(lease.id)
+                    last_error = f"token {lease.id} rate-limited, trying next"
+                    continue
+                if resp.status_code >= 400:
+                    await mgr.on_error(lease.id)
+                    last_error = f"Transcription API {resp.status_code}: {resp.text[:200]}"
+                    break
+                data_r = resp.json()
+                candidates = data_r.get("candidates") or []
+                if candidates:
+                    parts = (candidates[0].get("content") or {}).get("parts") or []
+                    if parts:
+                        return str(parts[0].get("text") or "").strip()
+                raise RuntimeError("Transcription: empty response")
+            except (httpx.TransportError, asyncio.TimeoutError) as exc:
+                await mgr.on_error(lease.id)
+                last_error = f"Transcription network error: {str(exc)[:200]}"
+                break
+
+    raise RuntimeError(last_error)
 
 
 def inline_data_part(*, mime_type: str, data: bytes) -> dict:
