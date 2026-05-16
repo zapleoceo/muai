@@ -17,7 +17,8 @@ def _msg_row(m: Message, c: Chat) -> dict:
         "telegram_msg_id": int(m.telegram_msg_id) if m.telegram_msg_id is not None else None,
         "direction": m.direction,
         "role": "me" if m.direction == "out" else "them",
-        "text": m.text or m.caption or f"[{m.media_type or 'media'}]",
+        "media_type": m.media_type or None,
+        "text": m.text or m.caption or (f"[{m.media_type}]" if m.media_type else "[media]"),
         "date_utc": m.date_utc.isoformat() if m.date_utc else None,
         "link": build_message_link(
             chat_id=int(m.chat_id),

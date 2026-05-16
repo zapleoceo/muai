@@ -17,6 +17,7 @@ from app.services.answering_types import (
 from app.services.interactions import create_interaction
 from app.services.plan_executor import execute_plan, tool_get_recent_dialog
 from app.services.router_llm import compile_query_model_to_plan, grade_context, rerank_context, route_query
+from app.services.voice_enricher import enrich_voice_messages
 
 
 async def run_answer_pipeline(
@@ -274,6 +275,8 @@ async def run_answer_pipeline(
 
     if retrieved is None:
         retrieved = await execute_plan(plan=final_plan, chat_id=chat_id, query=query, timezone_name=timezone_name)
+
+    await enrich_voice_messages(retrieved)
 
     _is_summary_plan = final_plan.notes and "summary" in str(final_plan.notes)
     use_hier_summary = bool(len(retrieved.messages) > 120 and (_is_summary_plan or final_plan.time_range.value == "ALL_TIME"))
