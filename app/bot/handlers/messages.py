@@ -5,6 +5,7 @@ from aiogram.enums import ChatType
 from aiogram.types import CallbackQuery, Message
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 
+from app.llm.embedding import transcribe_audio_gemini
 from app.llm.gemini_provider import GeminiContentError
 from app.logic.reply import run_ai_reply
 from app.services.interactions import set_feedback
@@ -125,12 +126,27 @@ async def handle_message(msg: Message, bot: Bot) -> None:
         logger.exception("Failed to save message chat_id=%s msg_id=%s", msg.chat.id, msg.message_id)
         inserted = True
 
-    # Auto-reply in private chats only; groups use /ai
     if msg.chat.type != ChatType.PRIVATE:
-        return
-    if not (msg.text or msg.caption):
         return
     if not inserted:
         return
 
-    await _llm_respond(msg, question=msg.text or msg.caption)
+    question = msg.text or msg.caption
+
+    voice_obj = msg.voice or msg.audio
+    if not question and voice_obj:
+        status = await msg.answer("🎤 распознаю…")
+        try:
+            buf = await bot.download(voice_obj)
+            mime = voice_obj.mime_type or "audio/ogg"
+            question = await transcribe_audio_gemini(mime_type=mime, data=buf.read())
+            await status.delete()
+        except Exception as exc:
+            logger.warning("Voice input transcription failed chat=%s: %s", msg.chat.id, exc)
+            await status.edit_text(f"⚠️ Не смог распознать голосовое: {str(exc)[:120]}")
+            return
+
+    if not question:
+        return
+
+    await _llm_respond(msg, question=question)
