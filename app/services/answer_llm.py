@@ -87,6 +87,11 @@ def format_retrieved_context(ctx: RetrievedContext) -> str:
             lines.append(f"{chat_title}{rng}\n{text}")
         parts.append("[CHUNKS]\n" + "\n\n".join(lines))
 
+    dynamic_rows = (ctx.meta or {}).get("dynamic_rows") or []
+    if dynamic_rows:
+        rows_text = json.dumps(dynamic_rows[:100], ensure_ascii=False)
+        parts.append(f"[ROWS count={len(dynamic_rows)}]\n{rows_text}")
+
     s = "\n\n".join(parts).strip()
     if len(s) > _MAX_CONTEXT_CHARS:
         s = s[: _MAX_CONTEXT_CHARS - 1].rstrip() + "…"
@@ -219,11 +224,6 @@ async def answer_from_context(*, query: str, plan: Plan, ctx: RetrievedContext) 
     chat_candidates = ctx.meta.get("chat_candidates") or []
     if chat_candidates and not ctx.messages and not ctx.chunks:
         return _format_chat_list_answer(chat_candidates)
-
-    # DYNAMIC_QUERY / ANALYTICS rows: render as table without LLM
-    dynamic_rows = ctx.meta.get("dynamic_rows") or []
-    if dynamic_rows and not ctx.messages and not ctx.chunks:
-        return _format_dynamic_rows_answer(dynamic_rows)
 
     context_text = format_retrieved_context(ctx)
     if not context_text:
