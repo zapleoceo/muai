@@ -238,6 +238,72 @@ QUERY_FEWSHOTS: list[tuple[str, dict]] = [
          "query_variants": [], "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
     ),
     (
+        "какие анонсированы события на веранде на эту неделю?",
+        {"output_shape": "LIST", "operation": "DYNAMIC_QUERY", "need_proof": True, "precision_bias": "PRECISION",
+         "constraints": {"scope": "ALL_CHATS", "time_range": "LAST_7_DAYS"},
+         "dynamic_tool": {
+             "select": [{"field": "telegram_msg_id"}, {"field": "date_utc"}, {"field": "text_any"}, {"field": "chat_title"}, {"field": "chat_id"}],
+             "filters": [
+                 {"field": "chat_title", "op": "ILIKE_ANY", "value": ["Веранда", "Veranda", "veranda", "веранда"]},
+                 {"field": "text_any", "op": "ILIKE_ANY", "value": ["событи", "анонс", "афиш", "ивент", "встреч", "мероприят", "вечер", "concert", "event"]},
+             ],
+             "group_by": [],
+             "order_by": [{"field": "date_utc", "desc": True}],
+             "limit": 30,
+             "require_time_range": True,
+         },
+         "query_variants": [], "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
+    ),
+    (
+        "за что за последние 24 часа был платеж 2000000",
+        {"output_shape": "ANSWER", "operation": "DYNAMIC_QUERY", "need_proof": True, "precision_bias": "PRECISION",
+         "constraints": {"scope": "ALL_CHATS", "time_range": "TODAY"},
+         "dynamic_tool": {
+             "select": [{"field": "telegram_msg_id"}, {"field": "date_utc"}, {"field": "text_any"}, {"field": "chat_title"}, {"field": "chat_id"}],
+             "filters": [
+                 {"field": "text_any", "op": "ILIKE_ANY", "value": ["2000000", "2 000 000", "2млн", "2 млн", "2,000,000", "платеж", "платёж", "оплат"]},
+             ],
+             "group_by": [],
+             "order_by": [{"field": "date_utc", "desc": True}],
+             "limit": 30,
+             "require_time_range": True,
+         },
+         "query_variants": [], "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
+    ),
+    (
+        "посмотри в чатах с названием Веранда или Veranda 2000000 2млн",
+        {"output_shape": "ANSWER", "operation": "DYNAMIC_QUERY", "need_proof": True, "precision_bias": "PRECISION",
+         "constraints": {"scope": "ALL_CHATS", "time_range": "LAST_30_DAYS"},
+         "dynamic_tool": {
+             "select": [{"field": "telegram_msg_id"}, {"field": "date_utc"}, {"field": "text_any"}, {"field": "chat_title"}, {"field": "chat_id"}],
+             "filters": [
+                 {"field": "chat_title", "op": "ILIKE_ANY", "value": ["Веранда", "Veranda", "veranda", "веранда"]},
+                 {"field": "text_any", "op": "ILIKE_ANY", "value": ["2000000", "2 000 000", "2млн", "2 млн", "2,000,000"]},
+             ],
+             "group_by": [],
+             "order_by": [{"field": "date_utc", "desc": True}],
+             "limit": 50,
+             "require_time_range": False,
+         },
+         "query_variants": [], "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
+    ),
+    (
+        "найди все упоминания суммы 50000 или 50к в любых чатах",
+        {"output_shape": "LIST", "operation": "DYNAMIC_QUERY", "need_proof": True, "precision_bias": "PRECISION",
+         "constraints": {"scope": "ALL_CHATS", "time_range": "ALL_TIME"},
+         "dynamic_tool": {
+             "select": [{"field": "telegram_msg_id"}, {"field": "date_utc"}, {"field": "text_any"}, {"field": "chat_title"}, {"field": "chat_id"}],
+             "filters": [
+                 {"field": "text_any", "op": "ILIKE_ANY", "value": ["50000", "50 000", "50к", "50k", "50тыс"]},
+             ],
+             "group_by": [],
+             "order_by": [{"field": "date_utc", "desc": True}],
+             "limit": 50,
+             "require_time_range": False,
+         },
+         "query_variants": [], "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
+    ),
+    (
         "Покажи голосовые сообщения за последнюю неделю",
         {"output_shape": "LIST", "operation": "MEDIA_MESSAGES", "need_proof": True, "precision_bias": "PRECISION",
          "constraints": {"scope": "ALL_CHATS", "chat_query": None, "media_type": "voice", "time_range": "LAST_7_DAYS", "limit": 30},

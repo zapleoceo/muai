@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import func, literal_column, select, text
+from sqlalchemy import func, literal_column, or_, select, text
 
 from app.db.database import AsyncSessionLocal
 from app.db.models import Chat, Message
@@ -99,9 +99,23 @@ async def tool_sql_dynamic_query(
                 raise ValueError(f"unsupported_field:{f.field}")
             if f.op == DynamicFilterOp.EQ:
                 where.append(expr == f.value)
+            elif f.op == DynamicFilterOp.NEQ:
+                where.append(expr != f.value)
+            elif f.op == DynamicFilterOp.GT:
+                where.append(expr > f.value)
+            elif f.op == DynamicFilterOp.GTE:
+                where.append(expr >= f.value)
+            elif f.op == DynamicFilterOp.LT:
+                where.append(expr < f.value)
+            elif f.op == DynamicFilterOp.LTE:
+                where.append(expr <= f.value)
             elif f.op == DynamicFilterOp.ILIKE:
                 v = str(f.value or "").strip()
                 where.append(expr.ilike(f"%{v}%"))
+            elif f.op == DynamicFilterOp.ILIKE_ANY:
+                if not isinstance(f.value, list) or not f.value:
+                    raise ValueError("ILIKE_ANY requires non-empty list value")
+                where.append(or_(*[expr.ilike(f"%{str(v).strip()}%") for v in f.value]))
             elif f.op == DynamicFilterOp.IN:
                 if not isinstance(f.value, list):
                     raise ValueError("IN requires list value")
@@ -111,6 +125,8 @@ async def tool_sql_dynamic_query(
                     raise ValueError("BETWEEN requires value and value_to")
                 where.append(expr >= f.value)
                 where.append(expr <= f.value_to)
+            elif f.op == DynamicFilterOp.IS_NULL:
+                where.append(expr.is_(None))
             elif f.op == DynamicFilterOp.IS_NOT_NULL:
                 where.append(expr.isnot(None))
             else:

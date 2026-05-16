@@ -72,9 +72,16 @@ class QueryPrecisionBias(str, Enum):
 
 class DynamicFilterOp(str, Enum):
     EQ = "EQ"
+    NEQ = "NEQ"
+    GT = "GT"
+    GTE = "GTE"
+    LT = "LT"
+    LTE = "LTE"
     ILIKE = "ILIKE"
+    ILIKE_ANY = "ILIKE_ANY"  # OR-match: field ILIKE ANY([pat1, pat2, ...])
     IN = "IN"
     BETWEEN = "BETWEEN"
+    IS_NULL = "IS_NULL"
     IS_NOT_NULL = "IS_NOT_NULL"
 
 
