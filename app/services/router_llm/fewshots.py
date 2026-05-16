@@ -9,9 +9,15 @@ QUERY_FEWSHOTS: list[tuple[str, dict]] = [
     ),
     (
         "О чем с Евочкой говорили вчера?",
-        {"output_shape": "SUMMARY", "operation": "SEARCH", "need_proof": False, "precision_bias": "BALANCED",
-         "constraints": {"scope": "ALL_CHATS", "chat_types": ["private"], "chat_query": "Евочка", "time_range": "YESTERDAY"},
-         "query_variants": ["о чём говорили", "итоги переписки"], "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
+        {"output_shape": "SUMMARY", "operation": "RECENT_MESSAGES", "need_proof": False, "precision_bias": "BALANCED",
+         "constraints": {"scope": "ALL_CHATS", "chat_types": ["private"], "chat_query": "Евочка", "time_range": "YESTERDAY", "limit": 80},
+         "query_variants": [], "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
+    ),
+    (
+        "что Евочка привезла из китая?",
+        {"output_shape": "ANSWER", "operation": "RECENT_MESSAGES", "need_proof": False, "precision_bias": "BALANCED",
+         "constraints": {"scope": "ALL_CHATS", "chat_types": ["private"], "chat_query": "Евочка", "time_range": "LAST_7_DAYS", "limit": 80},
+         "query_variants": [], "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
     ),
     (
         "В чате Евочка Моя какое последнее сообщение есть?",

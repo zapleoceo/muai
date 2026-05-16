@@ -141,6 +141,30 @@ async def run_answer_pipeline(
                 summary["tool_runs"] = [tr.model_dump() for tr in retrieved.tool_runs]
                 break  # skip grader, we have results now
 
+            # Lex also returned nothing — last resort: fetch recent messages from that chat directly
+            await _progress("🔍 ищу в базе…")
+            recent_fallback_plan = final_plan.model_copy(update={
+                "strategy": PlanStrategy.SQL_DATE_SUMMARY,
+                "tools": [PlanToolCall(
+                    name="sql_recent_messages_by_chat_query",
+                    args={
+                        "scope": final_plan.scope.value,
+                        "chat_query": _chat_query_used,
+                        "chat_types": [ct.value for ct in (final_plan.chat_types or [])] or None,
+                        "limit": 60,
+                    },
+                )],
+                "max_steps": 1,
+                "on_empty": PlanOnEmpty.ASK_CLARIFY,
+                "notes": "recent_fallback",
+            })
+            recent_ctx = await execute_plan(plan=recent_fallback_plan, chat_id=chat_id, query=query, timezone_name=timezone_name)
+            if recent_ctx.messages:
+                retrieved = recent_ctx
+                summary["messages"] = len(retrieved.messages)
+                summary["tool_runs"] = [tr.model_dump() for tr in retrieved.tool_runs]
+                break
+
         if (len(retrieved.messages) + len(retrieved.chunks)) == 0 and not _has_meta_results and final_plan.time_range != PlanTimeRange.NONE:
             await _progress("📊 анализирую…")
             coverage_plan = final_plan.model_copy(
