@@ -62,6 +62,9 @@ async def run_deploy() -> None:
     reset_out = await _run("git", "-C", "/var/www/tgbot", "reset", "--hard", "origin/master")
     logger.info("Deploy [git reset]:\n%s", reset_out)
 
+    clean_out = await _run("git", "-C", "/var/www/tgbot", "clean", "-fd")
+    logger.info("Deploy [git clean]:\n%s", clean_out)
+
     build_out = await _run(*_COMPOSE, "build", "bot")
     logger.info("Deploy [build]:\n%s", build_out)
 
