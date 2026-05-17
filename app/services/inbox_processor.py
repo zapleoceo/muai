@@ -47,17 +47,17 @@ async def process_new_item(item_id: int, bot: Bot) -> None:
             return
 
         from app.services.answer_pipeline import run_answer_pipeline  # avoid circular
+        draft = ""
         try:
             query = _build_query(item)
-            result = await run_answer_pipeline(
+            pipeline_result = await run_answer_pipeline(
                 query=query,
                 chat_id=item.chat_id,
                 user_id=item.from_user_id,
             )
-            draft = result.text or ""
+            draft = pipeline_result.text or ""
         except Exception as exc:
             logger.warning("Draft generation failed for item %d: %s", item_id, exc)
-            draft = ""
 
         item.draft_reply = draft
         item.status = "notified"
@@ -67,10 +67,11 @@ async def process_new_item(item_id: int, bot: Bot) -> None:
     from app.config import get_settings
     settings = get_settings()
 
+    draft_line = f"\n\n💬 <b>Предлагаю ответить:</b>\n{draft}" if draft else "\n\n⚠️ <i>Не удалось сгенерировать ответ автоматически.</i>"
     text = (
         f"📣 <b>Упоминание в «{item.chat_title or item.chat_id}»</b>\n"
-        f"👤 <b>{item.from_user_name or 'Unknown'}:</b> {item.text or ''}\n\n"
-        f"💬 <b>Предлагаю ответить:</b>\n{draft}"
+        f"👤 <b>{item.from_user_name or 'Unknown'}:</b> {item.text or ''}"
+        f"{draft_line}"
     )
     keyboard = InlineKeyboardMarkup(inline_keyboard=[[
         InlineKeyboardButton(text="✅ Отправить", callback_data=f"exec_approve:{item_id}"),
@@ -85,12 +86,18 @@ async def process_new_item(item_id: int, bot: Bot) -> None:
         )
         async with AsyncSessionLocal() as session:
             result = await session.execute(select(ExecutorInbox).where(ExecutorInbox.id == item_id))
-            item = result.scalar_one_or_none()
-            if item:
-                item.owner_notif_msg_id = sent.message_id
+            row = result.scalar_one_or_none()
+            if row:
+                row.owner_notif_msg_id = sent.message_id
                 await session.commit()
     except Exception:
         logger.exception("Failed to notify owner for inbox item %d", item_id)
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(ExecutorInbox).where(ExecutorInbox.id == item_id))
+            row = result.scalar_one_or_none()
+            if row:
+                row.status = "failed"
+                await session.commit()
 
 
 async def send_via_executor(item_id: int, bot: Bot, override_text: str | None = None) -> bool:

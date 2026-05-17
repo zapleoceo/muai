@@ -219,9 +219,10 @@ async def delete_bot(bot_id: int, user=Depends(require_owner)) -> dict:
         b = result.scalar_one_or_none()
         if not b:
             raise HTTPException(status_code=404, detail="Bot not found")
-        # Keep inbox history — only remove chats and mark inactive
+        # Remove known chats (re-register if bot is re-added); keep inbox history
+        from sqlalchemy import delete as sql_delete
         await session.execute(
-            select(ExecutorChat).where(ExecutorChat.executor_id == bot_id)
+            sql_delete(ExecutorChat).where(ExecutorChat.executor_id == bot_id)
         )
         b.is_active = False
         b.bot_token = None

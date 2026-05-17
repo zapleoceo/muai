@@ -6,6 +6,7 @@ from datetime import datetime, timezone
 from aiogram import Bot, Dispatcher
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramConflictError
 from aiogram.types import Message
 from sqlalchemy import select
 
@@ -16,14 +17,17 @@ logger = logging.getLogger(__name__)
 
 _tasks: dict[int, asyncio.Task] = {}
 _bots: dict[int, Bot] = {}
-_bot_ids: dict[int, int] = {}      # executor_id -> telegram user_id
-_bot_usernames: dict[int, str] = {}  # executor_id -> username (lowercase, no @)
-_known_chats: dict[int, set] = {}   # executor_id -> set[chat_id] already in DB
-_chat_history: dict[str, deque] = {}  # "{eid}:{chat_id}" -> deque
+_bot_ids: dict[int, int] = {}          # executor_id -> telegram user_id
+_bot_usernames: dict[int, str] = {}    # executor_id -> username (lowercase, no @)
+_known_chats: dict[int, set] = {}      # executor_id -> set[chat_id]
+_chat_history: dict[str, deque] = {}   # "{eid}:{chat_id}" -> deque
+
+_lock = asyncio.Lock()  # guards _tasks / _bots mutations
 
 _HISTORY_SIZE = 15
 _CONTEXT_SEND = 10
 _HEARTBEAT_INTERVAL = 30
+_CONFLICT_STOP_AFTER = 10  # stop polling after this many consecutive conflict errors
 
 
 async def _upsert_chat(executor_id: int, chat_id: int, title: str, chat_type: str) -> None:
@@ -140,7 +144,6 @@ async def _heartbeat_loop() -> None:
     from app.services.executor_registry import touch
     while True:
         await asyncio.sleep(_HEARTBEAT_INTERVAL)
-        now = datetime.now(timezone.utc)
         for eid in list(_tasks.keys()):
             t = _tasks.get(eid)
             if t and not t.done():
@@ -166,7 +169,37 @@ async def _run_bot(executor_id: int, bot_token: str) -> None:
             await _on_message(msg, executor_id, bot_username)
 
         await bot.delete_webhook(drop_pending_updates=False)
-        await dp.start_polling(bot)
+
+        conflict_count = 0
+
+        async def _polling_with_conflict_guard() -> None:
+            nonlocal conflict_count
+            while True:
+                try:
+                    await dp.start_polling(bot, handle_signals=False)
+                    break  # clean exit
+                except TelegramConflictError:
+                    conflict_count += 1
+                    if conflict_count >= _CONFLICT_STOP_AFTER:
+                        logger.error(
+                            "Bot runner: @%s (executor_id=%d) — "
+                            "%d consecutive TelegramConflictErrors. "
+                            "Another process is polling this token. Stopping.",
+                            bot_info.username, executor_id, conflict_count,
+                        )
+                        return
+                    logger.warning(
+                        "Bot runner: @%s conflict #%d — another process polling same token",
+                        bot_info.username, conflict_count,
+                    )
+                    await asyncio.sleep(5 * conflict_count)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    logger.exception("Bot runner polling error (executor_id=%d)", executor_id)
+                    await asyncio.sleep(10)
+
+        await _polling_with_conflict_guard()
 
     except asyncio.CancelledError:
         logger.info("Bot runner cancelled (executor_id=%d)", executor_id)
@@ -180,14 +213,17 @@ async def _run_bot(executor_id: int, bot_token: str) -> None:
 
 
 async def start_bot(executor_id: int, bot_token: str) -> None:
-    if executor_id in _tasks and not _tasks[executor_id].done():
-        return
-    task = asyncio.create_task(_run_bot(executor_id, bot_token))
-    _tasks[executor_id] = task
+    async with _lock:
+        t = _tasks.get(executor_id)
+        if t and not t.done():
+            return
+        task = asyncio.create_task(_run_bot(executor_id, bot_token))
+        _tasks[executor_id] = task
 
 
 async def stop_bot(executor_id: int) -> None:
-    task = _tasks.pop(executor_id, None)
+    async with _lock:
+        task = _tasks.pop(executor_id, None)
     if task and not task.done():
         task.cancel()
         try:

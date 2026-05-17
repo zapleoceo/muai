@@ -1,33 +1,17 @@
 import asyncio
 import logging
-from datetime import datetime, timezone
-
-from sqlalchemy import select
 
 from app.db.database import AsyncSessionLocal
-from app.db.models import ExecutorBot, ExecutorChat, ExecutorInbox
+from app.db.models import ExecutorBot
+from app.services.executor_registry import get_executor_for_chat
 
 logger = logging.getLogger(__name__)
 
 
-async def _find_executor_for_chat(chat_id: int) -> int | None:
+async def _first_active_executor_id() -> int | None:
+    """Fallback: any active DB-managed bot when none is registered in that chat."""
     async with AsyncSessionLocal() as session:
-        row = await session.execute(
-            select(ExecutorChat.executor_id)
-            .join(ExecutorBot, ExecutorBot.id == ExecutorChat.executor_id)
-            .where(
-                ExecutorChat.chat_id == chat_id,
-                ExecutorBot.is_active == True,  # noqa: E712
-                ExecutorBot.bot_token.isnot(None),
-            )
-            .limit(1)
-        )
-        return row.scalar_one_or_none()
-
-
-async def _first_active_executor() -> int | None:
-    """Fallback: pick any active executor when bot is not in the chat yet."""
-    async with AsyncSessionLocal() as session:
+        from sqlalchemy import select
         row = await session.execute(
             select(ExecutorBot.id)
             .where(
@@ -50,14 +34,22 @@ async def handle_owner_mention(
     quoted_text: str | None = None,
     quoted_from: str | None = None,
 ) -> None:
-    executor_id = await _find_executor_for_chat(chat_id)
-    if executor_id is None:
-        executor_id = await _first_active_executor()
+    executor = await get_executor_for_chat(chat_id)
+    executor_id: int | None = executor["id"] if executor else None
 
     if executor_id is None:
-        await _notify_no_executor(chat_title=chat_title, sender_name=sender_name, message_text=message_text)
+        executor_id = await _first_active_executor_id()
+
+    if executor_id is None:
+        await _notify_no_executor(
+            chat_title=chat_title,
+            sender_name=sender_name,
+            message_text=message_text,
+        )
         return
 
+    from app.db.database import AsyncSessionLocal
+    from app.db.models import ExecutorInbox
     async with AsyncSessionLocal() as session:
         item = ExecutorInbox(
             executor_id=executor_id,
@@ -85,7 +77,9 @@ async def handle_owner_mention(
     )
 
 
-async def _notify_no_executor(*, chat_title: str, sender_name: str, message_text: str) -> None:
+async def _notify_no_executor(
+    *, chat_title: str, sender_name: str, message_text: str
+) -> None:
     from app.main import bot
     from app.config import get_settings
     settings = get_settings()

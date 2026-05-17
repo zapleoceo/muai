@@ -132,30 +132,35 @@ async def list_executors() -> list[dict]:
     async with AsyncSessionLocal() as session:
         bots_result = await session.execute(select(ExecutorBot).order_by(ExecutorBot.id))
         bots = bots_result.scalars().all()
+        if not bots:
+            return []
 
-        out = []
-        for bot in bots:
-            chats_result = await session.execute(
-                select(ExecutorChat).where(ExecutorChat.executor_id == bot.id)
-            )
-            chats = chats_result.scalars().all()
-            out.append({
-                "id": bot.id,
-                "name": bot.name,
-                "bot_username": bot.bot_username,
-                "api_url": bot.api_url,
-                "is_active": bot.is_active,
-                "forward_mode": bot.forward_mode or "mentions",
-                "last_seen_at": bot.last_seen_at.isoformat() if bot.last_seen_at else None,
-                "created_at": bot.created_at.isoformat() if bot.created_at else None,
-                "chats": [
-                    {
-                        "chat_id": c.chat_id,
-                        "chat_title": c.chat_title,
-                        "chat_type": c.chat_type,
-                        "can_send": c.can_send,
-                    }
-                    for c in chats
-                ],
-            })
-        return out
+        bot_ids = [b.id for b in bots]
+        chats_result = await session.execute(
+            select(ExecutorChat).where(ExecutorChat.executor_id.in_(bot_ids))
+        )
+        all_chats = chats_result.scalars().all()
+
+    chats_by_bot: dict[int, list] = {b.id: [] for b in bots}
+    for c in all_chats:
+        chats_by_bot[c.executor_id].append({
+            "chat_id": c.chat_id,
+            "chat_title": c.chat_title,
+            "chat_type": c.chat_type,
+            "can_send": c.can_send,
+        })
+
+    return [
+        {
+            "id": b.id,
+            "name": b.name,
+            "bot_username": b.bot_username,
+            "api_url": b.api_url,
+            "is_active": b.is_active,
+            "forward_mode": b.forward_mode or "mentions",
+            "last_seen_at": b.last_seen_at.isoformat() if b.last_seen_at else None,
+            "created_at": b.created_at.isoformat() if b.created_at else None,
+            "chats": chats_by_bot[b.id],
+        }
+        for b in bots
+    ]
