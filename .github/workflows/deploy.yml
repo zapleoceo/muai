@@ -22,7 +22,8 @@ jobs:
 
              echo "=== git pull ==="
              GIT_SSH_COMMAND="ssh -i /root/.ssh/github_deploy -o StrictHostKeyChecking=no" \
-               git pull origin master
+               git fetch origin master
+             git reset --hard origin/master
 
              echo "=== build ==="
              docker compose build bot
