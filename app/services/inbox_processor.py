@@ -15,6 +15,13 @@ logger = logging.getLogger(__name__)
 def _build_query(item) -> str:
     parts: list[str] = []
 
+    if item.is_mention and item.chat_title:
+        parts.append(
+            f"[Задача: составь короткий естественный ответ от имени владельца "
+            f"на это упоминание в чате «{item.chat_title}». "
+            f"Ответ должен быть в тоне живого человека, подходить для группового чата.]"
+        )
+
     if item.context_messages:
         lines = [
             f"{m['from']}: {m['text']}"
