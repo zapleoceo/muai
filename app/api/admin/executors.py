@@ -145,21 +145,29 @@ async def create_bot(
     name = payload.name.strip() or bot_info.full_name or bot_info.username or "Bot"
 
     async with AsyncSessionLocal() as session:
-        # Check for duplicate username
-        existing = await session.execute(
+        result = await session.execute(
             select(ExecutorBot).where(ExecutorBot.bot_username == bot_info.username)
         )
-        if existing.scalar_one_or_none():
-            raise HTTPException(status_code=409, detail="Bot with this username already exists")
+        bot_rec = result.scalar_one_or_none()
 
-        bot_rec = ExecutorBot(
-            name=name,
-            bot_username=bot_info.username,
-            bot_token=payload.bot_token,
-            forward_mode=payload.forward_mode,
-            is_active=True,
-        )
-        session.add(bot_rec)
+        if bot_rec:
+            if bot_rec.bot_token and bot_rec.is_active:
+                raise HTTPException(status_code=409, detail="Bot with this username already running")
+            # Update existing record (e.g. registered via HTTP without token)
+            bot_rec.name = name
+            bot_rec.bot_token = payload.bot_token
+            bot_rec.forward_mode = payload.forward_mode
+            bot_rec.is_active = True
+        else:
+            bot_rec = ExecutorBot(
+                name=name,
+                bot_username=bot_info.username,
+                bot_token=payload.bot_token,
+                forward_mode=payload.forward_mode,
+                is_active=True,
+            )
+            session.add(bot_rec)
+
         await session.commit()
         executor_id: int = bot_rec.id
 
