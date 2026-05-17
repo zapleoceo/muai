@@ -88,28 +88,33 @@ export function onProviderChange() {
   const chat = document.getElementById('cap-chat');
   const embed = document.getElementById('cap-embed');
   const embedMedia = document.getElementById('cap-embed-media');
+  const embedLive = document.getElementById('cap-embed-live');
   if (provider === 'voyage') {
     chat.checked = false;
     embed.checked = true;
     embedMedia.checked = false;
+    embedLive.checked = false;
     return;
   }
   if (provider === 'gemini') {
     chat.checked = true;
     embed.checked = true;
     embedMedia.checked = true;
+    embedLive.checked = false;
     return;
   }
   if (provider === 'openai') {
     chat.checked = true;
     embed.checked = true;
     embedMedia.checked = false;
+    embedLive.checked = false;
     return;
   }
   // groq, deepseek — chat only
   chat.checked = true;
   embed.checked = false;
   embedMedia.checked = false;
+  embedLive.checked = false;
 }
 
 export async function loadTokens(btn) {
@@ -134,11 +139,12 @@ export async function loadTokens(btn) {
     const hasChat = t.capabilities && t.capabilities.includes('chat');
     const hasEmbed = t.capabilities && t.capabilities.includes('embed');
     const hasEmbedMedia = t.capabilities && t.capabilities.includes('embed_media');
+    const hasEmbedLive = t.capabilities && t.capabilities.includes('embed_live');
     return `
     <div class=\"token-row\" id=\"tr-${t.id}\">
       <span class=\"status-dot status-${t.status === 'daily_limit' ? 'inactive' : t.status}\"></span>
       <span class=\"token-badge\">${t.masked}</span>
-      <span class=\"token-label\">${t.label || '—'} <span style=\"color:#334155\">(${t.provider})</span> <span style=\"color:#64748b\">[${capsText}]</span></span>
+      <span class=\"token-label\">${t.label || '—'} <span style=\"color:#334155\">(${t.provider})</span> <span style=\"color:${hasEmbedLive ? '#a78bfa' : '#64748b'}\">[${capsText}]</span></span>
       <div style=\"display:flex;flex-direction:column;gap:3px;min-width:120px\">
         <div style=\"display:flex;justify-content:space-between;font-size:0.7rem;color:#64748b\">
           <span style=\"color:${statusColor}\">${statusText}</span>
@@ -166,6 +172,10 @@ export async function loadTokens(btn) {
           <input type=\"checkbox\" id=\"caprow-embed-media-${t.id}\" ${hasEmbedMedia ? 'checked' : ''}>
           <span>embed_media</span>
         </label>
+        <label style=\"display:flex;gap:6px;align-items:center\" title=\"Зарезервирован только для live-потока\">
+          <input type=\"checkbox\" id=\"caprow-embed-live-${t.id}\" ${hasEmbedLive ? 'checked' : ''}>
+          <span style=\"color:#a78bfa\">embed_live</span>
+        </label>
         <button class=\"btn btn-sm\" onclick=\"saveTokenCaps(${t.id}, this)\">Сохранить</button>
         <button class=\"btn btn-sm btn-ghost\" onclick=\"toggleTokenCapsEditor(${t.id})\">Закрыть</button>
       </div>
@@ -185,10 +195,12 @@ export async function saveTokenCaps(id, btn) {
   const chat = document.getElementById(`caprow-chat-${id}`);
   const embed = document.getElementById(`caprow-embed-${id}`);
   const embedMedia = document.getElementById(`caprow-embed-media-${id}`);
+  const embedLive = document.getElementById(`caprow-embed-live-${id}`);
   const caps = [];
   if (chat && chat.checked) caps.push('chat');
   if (embed && embed.checked) caps.push('embed');
   if (embedMedia && embedMedia.checked) caps.push('embed_media');
+  if (embedLive && embedLive.checked) caps.push('embed_live');
   if (!caps.length) { alert('Выбери хотя бы одну capability'); return; }
   await withBtn(btn, async () => {
     const r = await apiFetch(`/api/admin/tokens/${id}/capabilities`, {
@@ -209,6 +221,7 @@ export async function addToken(btn) {
   if (document.getElementById('cap-chat').checked) caps.push('chat');
   if (document.getElementById('cap-embed').checked) caps.push('embed');
   if (document.getElementById('cap-embed-media').checked) caps.push('embed_media');
+  if (document.getElementById('cap-embed-live').checked) caps.push('embed_live');
   if (!caps.length) { alert('Выбери хотя бы одну capability'); return; }
   if (!token) { alert('Введите токен'); return; }
   await withBtn(btn, async () => {

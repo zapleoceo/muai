@@ -31,10 +31,10 @@ def register_handlers(client: TelegramClient) -> None:
             logger.exception("Userbot: failed to save new message")
             return
 
-        # Trigger immediate embedding for live messages
+        # Immediate live embedding for new messages
         try:
-            from app.services.embedder import get_text_embedder_manager
-            get_text_embedder_manager().trigger_once()
+            from app.services.live_embedder import embed_chat_live
+            asyncio.create_task(embed_chat_live(event.chat_id))
         except Exception:
             pass
 

@@ -90,17 +90,24 @@ async def embed_text(text: str, task_type: str = "RETRIEVAL_DOCUMENT", capabilit
     return await _get_queue().submit(_job())
 
 
-async def embed_texts(texts: list[str], task_type: str = "RETRIEVAL_DOCUMENT") -> list[list[float]]:
+async def embed_texts(
+    texts: list[str],
+    task_type: str = "RETRIEVAL_DOCUMENT",
+    capability: str = "embed",
+) -> list[list[float]]:
     items = [str(t or "") for t in (texts or [])]
     if not items:
         return []
     if len(items) == 1:
-        return [await embed_text(items[0], task_type=task_type)]
+        return [await embed_text(items[0], task_type=task_type, capability=capability)]
 
     async def _job() -> list[list[float]]:
         from app.services.tokens import get_token_manager
         mgr = get_token_manager()
-        lease = await mgr.next_token("embed")
+        lease = await mgr.next_token(capability)
+        # fall back to generic embed if dedicated capability has no tokens
+        if lease is None and capability != "embed":
+            lease = await mgr.next_token("embed")
         if not lease:
             raise RuntimeError("No tokens with embed capability. Add one in Settings → API токены.")
 
