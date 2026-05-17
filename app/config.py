@@ -33,6 +33,7 @@ class Settings(BaseSettings):
     bot_mode: str = "manual"
     log_level: str = "INFO"
     api_secret_key: str = ""
+    executor_inbox_secret: str = ""
 
     @property
     def db_url_asyncpg(self) -> str:

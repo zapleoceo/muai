@@ -211,3 +211,53 @@ class Interaction(Base):
         Index("idx_interactions_chat_created_at", "chat_id", "created_at"),
         Index("idx_interactions_feedback", "feedback"),
     )
+
+
+class ExecutorBot(Base):
+    __tablename__ = "executor_bots"
+
+    id = Column(BigInteger, autoincrement=True, primary_key=True)
+    name = Column(Text, nullable=False)
+    bot_username = Column(Text)
+    api_url = Column(Text)
+    api_secret = Column(Text)
+    is_active = Column(Boolean, default=True)
+    last_seen_at = Column(TIMESTAMP(timezone=True))
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+
+class ExecutorChat(Base):
+    __tablename__ = "executor_chats"
+
+    id = Column(BigInteger, autoincrement=True, primary_key=True)
+    executor_id = Column(BigInteger, ForeignKey("executor_bots.id", ondelete="CASCADE"), nullable=False)
+    chat_id = Column(BigInteger, nullable=False)
+    chat_title = Column(Text)
+    chat_type = Column(Text)
+    can_send = Column(Boolean, default=True)
+    updated_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+
+    __table_args__ = (UniqueConstraint("executor_id", "chat_id", name="uq_executor_chat"),)
+
+
+class ExecutorInbox(Base):
+    __tablename__ = "executor_inbox"
+
+    id = Column(BigInteger, autoincrement=True, primary_key=True)
+    executor_id = Column(BigInteger, ForeignKey("executor_bots.id"), nullable=False)
+    chat_id = Column(BigInteger, nullable=False)
+    chat_title = Column(Text)
+    tg_message_id = Column(BigInteger)
+    from_user_id = Column(BigInteger)
+    from_user_name = Column(Text)
+    text = Column(Text)
+    is_mention = Column(Boolean, default=False)
+    reply_to_msg_id = Column(BigInteger)
+    priority = Column(Text, default="LOW")      # HIGH | LOW
+    status = Column(Text, default="pending")    # pending | notified | replied | ignored
+    draft_reply = Column(Text)
+    owner_notif_msg_id = Column(BigInteger)
+    created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
+    processed_at = Column(TIMESTAMP(timezone=True))
+
+    __table_args__ = (Index("idx_executor_inbox_status", "status"),)

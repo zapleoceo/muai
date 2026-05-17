@@ -10,7 +10,7 @@ from fastapi import FastAPI, Header, HTTPException, Request, Response
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
-from app.bot.handlers import commands, messages as msg_handlers
+from app.bot.handlers import commands, messages as msg_handlers, executor_approval
 from app.config import get_settings
 from app.db.database import engine
 from app.db.models import Base
@@ -30,6 +30,7 @@ bot = Bot(
 dp = Dispatcher()
 dp.include_router(commands.router)
 dp.include_router(msg_handlers.router)
+dp.include_router(executor_approval.router)
 
 
 @asynccontextmanager

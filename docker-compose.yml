@@ -38,6 +38,25 @@ services:
     networks:
       - tgbot
 
+  executor-bot:
+    build:
+      context: .
+      dockerfile: executor_bot/Dockerfile
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - EXECUTOR_BOT_NAME=ВерандаБот
+      - EXECUTOR_API_PORT=8001
+    depends_on:
+      - bot
+    networks:
+      - tgbot
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
 networks:
   tgbot:
     driver: bridge
