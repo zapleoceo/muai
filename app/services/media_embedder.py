@@ -10,7 +10,7 @@ from typing import Any
 from sqlalchemy import text
 
 from app.db.database import AsyncSessionLocal
-from app.llm.embedding import embed_gemini_multimodal, embed_text, inline_data_part, transcribe_audio_gemini
+from app.llm.embedding import embed_gemini_multimodal, embed_text, inline_data_part, transcribe_audio_gemini_queued
 from app.services.chat_sync_settings_service import ChatSyncSettingsService
 from app.services.plan_executor import build_message_link
 from app.userbot.client import get_client
@@ -341,7 +341,7 @@ class MediaEmbedderManager:
                                 # For voice/audio: transcribe first, use text as chunk_text
                                 if _is_audio:
                                     try:
-                                        transcription = await transcribe_audio_gemini(mime_type=mime, data=bytes(raw_data))
+                                        transcription = await transcribe_audio_gemini_queued(mime_type=mime, data=bytes(raw_data))
                                         if transcription:
                                             chunk_text = f"{header}\n{transcription}"
                                             if link:

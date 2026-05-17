@@ -390,6 +390,11 @@ async def transcribe_audio_gemini(*, mime_type: str, data: bytes) -> str:
     raise RuntimeError(last_error)
 
 
+async def transcribe_audio_gemini_queued(*, mime_type: str, data: bytes) -> str:
+    """Queued version for batch/background use — serialized through the embedding queue."""
+    return await _get_queue().submit(transcribe_audio_gemini(mime_type=mime_type, data=data))
+
+
 def inline_data_part(*, mime_type: str, data: bytes) -> dict:
     return {
         "inlineData": {
