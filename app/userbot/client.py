@@ -11,6 +11,8 @@ settings = get_settings()
 
 SESSION_PATH = "/app/sessions/userbot"
 _client: TelegramClient | None = None
+_owner_id: int | None = None
+_owner_username: str | None = None
 
 
 def get_client() -> TelegramClient:
@@ -20,7 +22,14 @@ def get_client() -> TelegramClient:
     return _client
 
 
+def get_owner_info() -> tuple[int | None, str | None]:
+    """Returns (telegram_user_id, username_lowercase) of the userbot owner."""
+    return _owner_id, _owner_username
+
+
 async def start_userbot() -> bool:
+    global _owner_id, _owner_username
+
     if not settings.telegram_api_id or not settings.telegram_api_hash:
         logger.warning("Userbot: TELEGRAM_API_ID / TELEGRAM_API_HASH not set, skipping")
         return False
@@ -40,7 +49,9 @@ async def start_userbot() -> bool:
     await client.start()
 
     me = await client.get_me()
-    logger.info("Userbot started as: %s (id=%s)", me.first_name, me.id)
+    _owner_id = me.id
+    _owner_username = (me.username or "").lower() if me.username else None
+    logger.info("Userbot started as: %s (id=%s username=%s)", me.first_name, me.id, me.username)
 
     if settings.sync_history_days > 0:
         from app.services.sync_manager import get_sync_manager
