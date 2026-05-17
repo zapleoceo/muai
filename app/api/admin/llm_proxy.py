@@ -1,7 +1,7 @@
 """Internal LLM proxy — lets VERA and other internal services use myAI key pool."""
 import logging
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
 from app.config import get_settings
@@ -27,7 +27,7 @@ def _auth(authorization: str | None = Header(default=None)) -> None:
 
 
 @router.post("/internal/llm/complete")
-async def llm_complete(body: _CompleteRequest, _: None = _auth) -> dict:
+async def llm_complete(body: _CompleteRequest, _: None = Depends(_auth)) -> dict:
     from app.llm.base import LLMMessage
     provider = get_llm_provider()
     msgs = [LLMMessage(role=m.role, content=m.content) for m in body.messages]
