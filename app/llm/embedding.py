@@ -323,8 +323,32 @@ async def _embed_openai_batch(mgr: Any, *, token_id: int, token: str, texts: lis
         raise
 
 
+async def _transcribe_once(mgr: Any, lease: Any, payload: dict) -> str:
+    """Single transcription attempt. Raises RuntimeError on any failure."""
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={lease.token}"
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
+            resp = await client.post(url, json=payload)
+    except (httpx.TransportError, asyncio.TimeoutError) as exc:
+        await mgr.on_error(lease.id)
+        raise RuntimeError(f"Transcription network error: {str(exc)[:200]}") from exc
+    if resp.status_code == 429:
+        await mgr.on_rate_limit(lease.id)
+        raise RuntimeError(f"token {lease.id} rate-limited")
+    if resp.status_code >= 400:
+        await mgr.on_error(lease.id)
+        raise RuntimeError(f"Transcription API {resp.status_code}: {resp.text[:200]}")
+    data = resp.json()
+    candidates = data.get("candidates") or []
+    if candidates:
+        parts = (candidates[0].get("content") or {}).get("parts") or []
+        if parts:
+            return str(parts[0].get("text") or "").strip()
+    raise RuntimeError("Transcription: empty response")
+
+
 async def transcribe_audio_gemini(*, mime_type: str, data: bytes) -> str:
-    """Transcribe audio using Gemini generateContent. Retries across all available tokens."""
+    """Transcribe audio using Gemini. Exhausts all immediately available tokens, then waits once."""
     from app.services.tokens import get_token_manager
     mgr = get_token_manager()
 
@@ -339,36 +363,29 @@ async def transcribe_audio_gemini(*, mime_type: str, data: bytes) -> str:
         "generationConfig": {"maxOutputTokens": 1024},
     }
 
+    tried: set[int] = set()
     last_error = "No Gemini tokens available for transcription"
-    # Try chat tokens first (generateContent quota), then embed_media, then embed
-    for capability in ("chat", "embed_media", "embed"):
-        for _ in range(8):
-            lease = await mgr.next_token(capability, provider="gemini")
-            if not lease:
-                break
-            _gen_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={lease.token}"
-            try:
-                async with httpx.AsyncClient(timeout=httpx.Timeout(60.0)) as client:
-                    resp = await client.post(_gen_url, json=payload)
-                if resp.status_code == 429:
-                    await mgr.on_rate_limit(lease.id)
-                    last_error = f"token {lease.id} rate-limited, trying next"
-                    continue
-                if resp.status_code >= 400:
-                    await mgr.on_error(lease.id)
-                    last_error = f"Transcription API {resp.status_code}: {resp.text[:200]}"
-                    break
-                data_r = resp.json()
-                candidates = data_r.get("candidates") or []
-                if candidates:
-                    parts = (candidates[0].get("content") or {}).get("parts") or []
-                    if parts:
-                        return str(parts[0].get("text") or "").strip()
-                raise RuntimeError("Transcription: empty response")
-            except (httpx.TransportError, asyncio.TimeoutError) as exc:
-                await mgr.on_error(lease.id)
-                last_error = f"Transcription network error: {str(exc)[:200]}"
-                break
+
+    # Phase 1: try every immediately available Gemini token without blocking
+    for _ in range(20):
+        lease = await mgr.next_token("chat", provider="gemini", max_wait=0)
+        if not lease or lease.id in tried:
+            break
+        tried.add(lease.id)
+        try:
+            return await _transcribe_once(mgr, lease, payload)
+        except RuntimeError as exc:
+            last_error = str(exc)
+            logger.warning("Transcription attempt failed: %s", exc)
+
+    # Phase 2: all immediately available tokens exhausted — wait for one to free up
+    lease = await mgr.next_token("chat", provider="gemini", max_wait=120.0)
+    if lease:
+        try:
+            return await _transcribe_once(mgr, lease, payload)
+        except RuntimeError as exc:
+            last_error = str(exc)
+            logger.warning("Transcription fallback attempt failed: %s", exc)
 
     raise RuntimeError(last_error)
 
