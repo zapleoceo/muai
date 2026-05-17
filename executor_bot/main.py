@@ -27,6 +27,9 @@ async def main() -> None:
     await site.start()
     logger.info("Executor API server started on port %d", cfg.executor_api_port)
 
+    await bot.delete_webhook(drop_pending_updates=False)
+    logger.info("Webhook deleted, starting polling")
+
     bot_info = await bot.get_me()
     for attempt in range(5):
         try:
