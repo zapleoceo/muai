@@ -1,6 +1,10 @@
+import logging
+
 import httpx
 
 from executor_bot.config import Config
+
+logger = logging.getLogger(__name__)
 
 
 async def register(cfg: Config, bot_username: str, chats: list[dict]) -> int:
@@ -29,3 +33,15 @@ async def send_inbox(cfg: Config, executor_id: int, payload: dict) -> None:
             headers={"Authorization": f"Bearer {cfg.manager_inbox_secret}"},
         )
         r.raise_for_status()
+
+
+async def heartbeat(cfg: Config, executor_id: int) -> None:
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            await client.post(
+                f"{cfg.manager_url}/api/executor/heartbeat",
+                json={"executor_id": executor_id},
+                headers={"Authorization": f"Bearer {cfg.manager_inbox_secret}"},
+            )
+    except Exception as exc:
+        logger.debug("Heartbeat failed: %s", exc)

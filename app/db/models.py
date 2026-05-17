@@ -222,6 +222,7 @@ class ExecutorBot(Base):
     api_url = Column(Text)
     api_secret = Column(Text)
     is_active = Column(Boolean, default=True)
+    forward_mode = Column(Text, default="mentions")  # mentions | replies | all
     last_seen_at = Column(TIMESTAMP(timezone=True))
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
@@ -253,6 +254,9 @@ class ExecutorInbox(Base):
     text = Column(Text)
     is_mention = Column(Boolean, default=False)
     reply_to_msg_id = Column(BigInteger)
+    quoted_text = Column(Text)
+    quoted_from = Column(Text)
+    context_messages = Column(JSONB)            # list[{from, text, date}]
     priority = Column(Text, default="LOW")      # HIGH | LOW
     status = Column(Text, default="pending")    # pending | notified | replied | ignored
     draft_reply = Column(Text)

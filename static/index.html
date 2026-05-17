@@ -34,6 +34,7 @@
     <div class="tabs">
       <div class="tab active" data-tab="dashboard">📊 Дашборд</div>
       <div class="tab" data-tab="chats">💬 Чаты</div>
+      <div class="tab" data-tab="bots">🤖 Боты</div>
       <div class="tab" data-tab="settings">⚙️ Настройки</div>
     </div>
     <a class="topbar-logout" href="/auth/logout">Выйти</a>
@@ -181,6 +182,34 @@
         </table>
       </div>
       <div class="pagination" id="chat-pagination"></div>
+    </div>
+  </div>
+
+  <!-- BOTS -->
+  <div class="page" id="tab-bots">
+    <div class="section">
+      <div class="section-header">
+        <h2>Исполнители</h2>
+        <button class="btn btn-sm btn-ghost" onclick="loadBots()">Обновить</button>
+      </div>
+      <div id="bots-list">Загрузка…</div>
+    </div>
+
+    <div class="section">
+      <div class="section-header">
+        <h2>Входящие</h2>
+        <div style="display:flex;gap:8px">
+          <button class="btn btn-sm btn-ghost" onclick="loadInbox()">Обновить</button>
+          <select class="inp" id="inbox-filter" onchange="loadInbox()" style="font-size:0.8rem;padding:4px 8px">
+            <option value="">Все</option>
+            <option value="pending">Pending</option>
+            <option value="notified">Notified</option>
+            <option value="replied">Replied</option>
+            <option value="ignored">Ignored</option>
+          </select>
+        </div>
+      </div>
+      <div id="inbox-list">Загрузка…</div>
     </div>
   </div>
 

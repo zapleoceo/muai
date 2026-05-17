@@ -28,6 +28,7 @@ function initTabs() {
       document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
       if (tab.dataset.tab === 'dashboard') { loadStats(); loadEmbedder(); loadMediaEmbedder(); loadLogs(); }
       if (tab.dataset.tab === 'chats') { loadChats(); pollSync(); }
+      if (tab.dataset.tab === 'bots') { loadBots(); loadInbox(); }
       if (tab.dataset.tab === 'settings') { loadSettings(); loadTokens(); }
     });
   });
@@ -38,7 +39,9 @@ async function bootstrap() {
   const dashboard = await import(`./pages/dashboard.js${v}`);
   const chats = await import(`./pages/chats.js${v}`);
   const settings = await import(`./pages/settings.js${v}`);
+  const bots = await import(`./pages/bots.js${v}`);
 
+  bots.initBotsPage(apiFetch);
   initTabs();
   chats.initChatsPage();
   settings.initSettingsPage();
@@ -75,6 +78,11 @@ async function bootstrap() {
   window.pollSync = chats.pollSync;
   window.onSyncTypeChange = chats.onSyncTypeChange;
   window.approvePending = chats.approvePending;
+
+  window.loadBots = bots.loadBots;
+  window.loadInbox = bots.loadInbox;
+  window.saveBotMode = bots.saveBotMode;
+  window.saveBotEnabled = bots.saveBotEnabled;
 
   window.loadSettings = settings.loadSettings;
   window.saveSettings = settings.saveSettings;

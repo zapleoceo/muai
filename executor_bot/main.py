@@ -13,6 +13,14 @@ from executor_bot.sender import make_app
 logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
 logger = logging.getLogger(__name__)
 
+_HEARTBEAT_INTERVAL = 30  # seconds
+
+
+async def _heartbeat_loop(cfg, executor_id: int) -> None:
+    while True:
+        await asyncio.sleep(_HEARTBEAT_INTERVAL)
+        await forwarder.heartbeat(cfg, executor_id)
+
 
 async def main() -> None:
     cfg = get_config()
@@ -31,6 +39,7 @@ async def main() -> None:
     logger.info("Webhook deleted, starting polling")
 
     bot_info = await bot.get_me()
+    eid: int | None = None
     for attempt in range(5):
         try:
             eid = await forwarder.register(cfg, bot_info.username or "", handlers.get_known_chats())
@@ -40,6 +49,10 @@ async def main() -> None:
         except Exception as exc:
             logger.warning("Registration attempt %d failed: %s", attempt + 1, exc)
             await asyncio.sleep(5)
+
+    if eid:
+        asyncio.create_task(_heartbeat_loop(cfg, eid))
+        logger.info("Heartbeat task started (interval=%ds)", _HEARTBEAT_INTERVAL)
 
     try:
         await dp.start_polling(bot)

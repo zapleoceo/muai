@@ -12,6 +12,26 @@ from app.db.models import ExecutorBot, ExecutorInbox
 logger = logging.getLogger(__name__)
 
 
+def _build_query(item) -> str:
+    parts: list[str] = []
+
+    if item.context_messages:
+        lines = [
+            f"{m['from']}: {m['text']}"
+            for m in item.context_messages
+            if m.get("text") and m.get("from")
+        ]
+        if lines:
+            parts.append("[Контекст чата]:\n" + "\n".join(lines))
+
+    if item.quoted_text:
+        who = item.quoted_from or "неизвестный"
+        parts.append(f"[Цитируемое сообщение от {who}]: «{item.quoted_text}»")
+
+    parts.append(item.text or "")
+    return "\n\n".join(p for p in parts if p)
+
+
 async def process_new_item(item_id: int, bot: Bot) -> None:
     async with AsyncSessionLocal() as session:
         result = await session.execute(select(ExecutorInbox).where(ExecutorInbox.id == item_id))
@@ -21,8 +41,9 @@ async def process_new_item(item_id: int, bot: Bot) -> None:
 
         from app.services.answer_pipeline import run_answer_pipeline  # avoid circular
         try:
+            query = _build_query(item)
             result = await run_answer_pipeline(
-                query=item.text or "",
+                query=query,
                 chat_id=item.chat_id,
                 user_id=item.from_user_id,
             )
