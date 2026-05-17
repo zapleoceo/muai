@@ -1,7 +1,12 @@
 import json
+import logging
 from collections.abc import Awaitable, Callable
 
+from app.llm.gemini_provider import GeminiContentError
+from app.llm.factory import get_fallback_llm_provider
 from app.services.answer_llm import answer_from_context, summarize_large_history
+
+logger = logging.getLogger(__name__)
 from app.services.answering_types import (
     DynamicToolSpec,
     PlanOnEmpty,
@@ -303,10 +308,20 @@ async def run_answer_pipeline(
 
     if use_hier_summary:
         await _progress("✍️ формирую ответ…")
-        text = await summarize_large_history(query=query, messages=retrieved.messages, language=language)
+        try:
+            text = await summarize_large_history(query=query, messages=retrieved.messages, language=language)
+        except GeminiContentError as exc:
+            logger.warning("Gemini blocked summary, retrying with fallback: %s", exc.reason)
+            await _progress("✍️ формирую ответ (fallback)…")
+            text = await summarize_large_history(query=query, messages=retrieved.messages, language=language, provider=get_fallback_llm_provider())
     else:
         await _progress("✍️ формирую ответ…")
-        text = await answer_from_context(query=query, plan=final_plan, ctx=retrieved)
+        try:
+            text = await answer_from_context(query=query, plan=final_plan, ctx=retrieved)
+        except GeminiContentError as exc:
+            logger.warning("Gemini blocked answer, retrying with fallback: %s", exc.reason)
+            await _progress("✍️ формирую ответ (fallback)…")
+            text = await answer_from_context(query=query, plan=final_plan, ctx=retrieved, provider=get_fallback_llm_provider())
 
     final_summary = {
         "messages": len(retrieved.messages),

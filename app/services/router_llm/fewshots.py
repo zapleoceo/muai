@@ -316,6 +316,39 @@ QUERY_FEWSHOTS: list[tuple[str, dict]] = [
          "query_variants": [], "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
     ),
     (
+        "в какой чат надо отправлять указания персоналу и уборщицам?",
+        {"output_shape": "ANSWER", "operation": "DYNAMIC_QUERY", "need_proof": True, "precision_bias": "PRECISION",
+         "constraints": {"scope": "ALL_CHATS", "time_range": "ALL_TIME"},
+         "dynamic_tool": {
+             "select": [{"field": "chat_title"}, {"field": "chat_id"}, {"field": "date_utc"}, {"field": "text_any"}],
+             "filters": [
+                 {"field": "text_any", "op": "ILIKE_ANY", "value": ["уборщиц", "персонал", "беседк", "старш", "отчет", "распоряж", "указани", "просьб", "сотрудник"]},
+             ],
+             "group_by": [],
+             "order_by": [{"field": "date_utc", "desc": True}],
+             "limit": 30,
+             "require_time_range": False,
+         },
+         "query_variants": [], "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
+    ),
+    (
+        "куда обычно пишут срочные задачи для сотрудников?",
+        {"output_shape": "ANSWER", "operation": "DYNAMIC_QUERY", "need_proof": True, "precision_bias": "PRECISION",
+         "constraints": {"scope": "ALL_CHATS", "time_range": "LAST_30_DAYS"},
+         "dynamic_tool": {
+             "select": [{"field": "chat_title"}, {"field": "chat_id"}, {"field": "date_utc"}, {"field": "text_any"}],
+             "filters": [
+                 {"field": "text_any", "op": "ILIKE_ANY", "value": ["срочно", "задач", "выполни", "сделай", "нужно", "поручени", "управляющ"]},
+                 {"field": "direction", "op": "EQ", "value": "out"},
+             ],
+             "group_by": [],
+             "order_by": [{"field": "date_utc", "desc": True}],
+             "limit": 30,
+             "require_time_range": True,
+         },
+         "query_variants": [], "subqueries": [], "clarify_question": None, "max_steps": 2, "on_empty": "RETRY", "notes": None},
+    ),
+    (
         "Покажи все мои сообщения с упоминанием ссылок за всё время",
         {"output_shape": "LIST", "operation": "DYNAMIC_QUERY", "need_proof": True, "precision_bias": "PRECISION",
          "constraints": {"scope": "ALL_CHATS", "time_range": "ALL_TIME"},

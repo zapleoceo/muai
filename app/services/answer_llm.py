@@ -1,6 +1,6 @@
 import json
 
-from app.llm.base import LLMMessage
+from app.llm.base import LLMMessage, LLMProvider
 from app.llm.factory import get_llm_provider
 from app.services.answering_types import Plan, RetrievedContext
 from app.services.style_profile import get_style_profile
@@ -136,7 +136,7 @@ def _split_messages_into_segments(messages: list[dict]) -> list[list[dict]]:
     return segs
 
 
-async def summarize_large_history(*, query: str, messages: list[dict], language: str = "ru") -> str:
+async def summarize_large_history(*, query: str, messages: list[dict], language: str = "ru", provider: LLMProvider | None = None) -> str:
     if not messages:
         return "данных нет, уточни период или чат"
 
@@ -149,7 +149,7 @@ async def summarize_large_history(*, query: str, messages: list[dict], language:
         cid = int(m.get("chat_id") or 0)
         by_chat.setdefault(cid, []).append(m)
 
-    provider = get_llm_provider()
+    provider = provider or get_llm_provider()
     style_profile = await get_style_profile()
 
     per_chat_summaries: list[str] = []
@@ -216,7 +216,7 @@ def _format_dynamic_rows_answer(rows: list[dict]) -> str:
     return f"**{len(rows)} строк:**\n\n" + "\n".join(lines)
 
 
-async def answer_from_context(*, query: str, plan: Plan, ctx: RetrievedContext) -> str:
+async def answer_from_context(*, query: str, plan: Plan, ctx: RetrievedContext, provider: LLMProvider | None = None) -> str:
     if plan.clarify_question:
         return plan.clarify_question
 
@@ -229,7 +229,7 @@ async def answer_from_context(*, query: str, plan: Plan, ctx: RetrievedContext) 
     if not context_text:
         return "Нет данных в контексте для ответа. Уточни период/чат/тему, чтобы я мог найти сообщения."
 
-    provider = get_llm_provider()
+    provider = provider or get_llm_provider()
     system_prompt = await _build_answer_prompt()
     messages = [
         LLMMessage(role="user", content="RetrievedContext:\n" + context_text),

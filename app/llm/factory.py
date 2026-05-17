@@ -45,6 +45,12 @@ def get_llm_provider() -> LLMProvider:
     return _provider
 
 
+def get_fallback_llm_provider() -> LLMProvider | None:
+    """Returns a fallback provider (DeepSeek) when the primary blocks content."""
+    from app.llm.deepseek_provider import DeepSeekProvider
+    return DeepSeekProvider()
+
+
 def get_router_llm_provider() -> LLMProvider:
     global _router_provider
     settings = get_settings()
