@@ -29,7 +29,7 @@ function initTabs() {
       if (tab.dataset.tab === 'dashboard') { loadStats(); loadEmbedder(); loadMediaEmbedder(); loadLogs(); }
       if (tab.dataset.tab === 'chats') { loadChats(); pollSync(); }
       if (tab.dataset.tab === 'bots') { loadBots(); loadInbox(); }
-      if (tab.dataset.tab === 'settings') { loadSettings(); loadTokens(); }
+      if (tab.dataset.tab === 'settings') { loadSettings(); loadTokens(); loadVeraCreds(); }
     });
   });
 }
@@ -99,6 +99,12 @@ async function bootstrap() {
   window.toggleTokenCapsEditor = settings.toggleTokenCapsEditor;
   window.saveTokenCaps = settings.saveTokenCaps;
   window.onProviderChange = settings.onProviderChange;
+
+  window.loadVeraCreds = settings.loadVeraCreds;
+  window.onVeraTypeChange = settings.onVeraTypeChange;
+  window.saveVeraCred = settings.saveVeraCred;
+  window.toggleVeraCred = settings.toggleVeraCred;
+  window.deleteVeraCred = settings.deleteVeraCred;
 
   apiFetch('/api/admin/stats').then(r => {
     if (!r.ok) return;

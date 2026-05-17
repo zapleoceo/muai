@@ -1,10 +1,13 @@
-"""Internal RAG search endpoint — lets VERA search owner's message history."""
+"""Internal endpoints for VERA: RAG search + credential fetch."""
+import json
 import logging
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import text
 
 from app.config import get_settings
+from app.db.database import AsyncSessionLocal
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -51,3 +54,17 @@ async def rag_search(body: _SearchRequest, _: None = Depends(_auth)) -> dict:
     except Exception:
         logger.exception("RAG search failed")
         return {"chunks": [], "text": "Ошибка поиска."}
+
+
+@router.get("/internal/vera-credentials/{cred_type}")
+async def get_vera_credential(cred_type: str, _: None = Depends(_auth)) -> dict:
+    async with AsyncSessionLocal() as session:
+        row = await session.execute(
+            text("SELECT data FROM vera_credentials WHERE type=:t AND is_active=true"),
+            {"t": cred_type},
+        )
+        r = row.one_or_none()
+    if not r:
+        raise HTTPException(status_code=404, detail="Credential not found")
+    data = r.data if isinstance(r.data, dict) else json.loads(r.data)
+    return {"data": data}

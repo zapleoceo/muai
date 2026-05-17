@@ -275,7 +275,7 @@
         <label class="cap-label"><input type="checkbox" id="cap-embed-live"><span>embed_live</span></label>
       </div>
 
-      <p class="token-hint">
+      <p class="token-hint" id="token-hint-text">
         <b>chat</b> — генерация ответов.
         <b>embed</b> — батчевый эмбеддинг текста (Voyage приоритет).
         <b>embed_media</b> — мультимодальный эмбеддинг файлов (только Gemini).<br>
@@ -285,6 +285,36 @@
         DeepSeek: требует <code>LLM_PROVIDER=deepseek</code> в .env.<br>
         Voyage AI: только <b>embed</b> / <b>embed_live</b>, 200M токенов/месяц бесплатно.
         <a href="https://www.voyageai.com/" target="_blank" style="color:#7c3aed">voyageai.com</a>
+      </p>
+    </div>
+
+    <!-- VERA Credentials -->
+    <div class="section">
+      <div class="section-header">
+        <h2>⚡ VERA — Credentials</h2>
+        <button class="btn btn-sm btn-ghost" onclick="loadVeraCreds(this)">Обновить</button>
+      </div>
+      <p style="font-size:0.8rem;color:#475569;margin-bottom:12px">
+        Ключи для инструментов агентов VERA. Хранятся здесь и передаются VERA по внутреннему API.
+      </p>
+      <div id="vera-creds-list">Загрузка…</div>
+
+      <div class="token-add" style="flex-wrap:wrap;gap:8px;margin-top:16px">
+        <select class="inp" id="vera-type-select" style="flex:0 0 auto" onchange="onVeraTypeChange()">
+          <option value="perplexity">Perplexity (ResearchAgent)</option>
+          <option value="trello">Trello (TrelloAgent)</option>
+          <option value="gmail">Gmail (GmailAgent)</option>
+          <option value="poster">Poster POS (PosterAgent)</option>
+          <option value="instagram">Instagram (InstagramAgent)</option>
+        </select>
+        <input class="inp inp-label" id="vera-name-input" type="text" placeholder="Название (необязательно)" style="flex:1;min-width:150px">
+        <button class="btn btn-sm" onclick="saveVeraCred(this)">Сохранить</button>
+      </div>
+      <textarea class="inp" id="vera-data-input" rows="5"
+        style="font-family:monospace;font-size:0.8rem;margin-top:8px"
+        placeholder='{"api_key": "pplx-..."}'></textarea>
+      <p style="font-size:0.75rem;color:#475569;margin-top:6px">
+        Выбери тип — JSON-шаблон заполнится автоматически. Замени <code>...</code> на реальные значения.
       </p>
     </div>
   </div>

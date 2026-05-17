@@ -237,6 +237,83 @@ export async function addToken(btn) {
   });
 }
 
+// ─── VERA Credentials ──────────────────────────────────────────────────────
+
+const VERA_TYPES = ['perplexity', 'trello', 'gmail', 'poster', 'instagram'];
+let _veraTemplates = {};
+
+export async function loadVeraCreds(btn) {
+  const box = document.getElementById('vera-creds-list');
+  await withBtn(btn, async () => {
+    const [credsR, tmplR] = await Promise.all([
+      apiFetch('/api/admin/vera-credentials'),
+      apiFetch('/api/admin/vera-credentials/templates'),
+    ]);
+    if (!credsR.ok) { box.textContent = 'Ошибка'; return; }
+    const creds = await credsR.json();
+    _veraTemplates = tmplR.ok ? await tmplR.json() : {};
+
+    if (!creds.length) {
+      box.innerHTML = '<p style="color:#475569;font-size:0.85rem">Credentials не добавлены</p>';
+    } else {
+      box.innerHTML = creds.map(c => `
+        <div class="token-row">
+          <span class="status-dot" style="background:${c.is_active ? '#22c55e' : '#475569'}"></span>
+          <span class="token-badge">${c.type}</span>
+          <span class="token-label">${c.name || '—'}</span>
+          <button class="btn btn-sm btn-ghost" onclick="toggleVeraCred(${c.id}, this)">${c.is_active ? 'Выкл' : 'Вкл'}</button>
+          <button class="btn btn-sm btn-danger" onclick="deleteVeraCred(${c.id}, this)">✕</button>
+        </div>
+      `).join('');
+    }
+  });
+}
+
+export function onVeraTypeChange() {
+  const type = document.getElementById('vera-type-select').value;
+  const ta = document.getElementById('vera-data-input');
+  if (_veraTemplates[type]) {
+    ta.value = JSON.stringify(_veraTemplates[type], null, 2);
+  }
+}
+
+export async function saveVeraCred(btn) {
+  const type = document.getElementById('vera-type-select').value;
+  const name = document.getElementById('vera-name-input').value.trim();
+  let data;
+  try {
+    data = JSON.parse(document.getElementById('vera-data-input').value);
+  } catch {
+    alert('Ошибка JSON'); return;
+  }
+  await withBtn(btn, async () => {
+    const r = await apiFetch('/api/admin/vera-credentials', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ type, name, data }),
+    });
+    if (!r.ok) { alert('Ошибка: ' + await r.text()); return; }
+    document.getElementById('vera-data-input').value = '';
+    document.getElementById('vera-name-input').value = '';
+    loadVeraCreds();
+  });
+}
+
+export async function toggleVeraCred(id, btn) {
+  await withBtn(btn, async () => {
+    await apiFetch(`/api/admin/vera-credentials/${id}/toggle`, { method: 'PATCH' });
+    loadVeraCreds();
+  });
+}
+
+export async function deleteVeraCred(id, btn) {
+  if (!confirm('Удалить credential?')) return;
+  await withBtn(btn, async () => {
+    await apiFetch(`/api/admin/vera-credentials/${id}`, { method: 'DELETE' });
+    loadVeraCreds();
+  });
+}
+
 export async function deleteToken(id, btn) {
   if (!confirm('Удалить токен?')) return;
   await withBtn(btn, async () => {

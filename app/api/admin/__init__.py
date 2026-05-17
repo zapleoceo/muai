@@ -13,6 +13,7 @@ from app.api.admin.style_profile import router as style_profile_router
 from app.api.admin.executors import router as executor_router
 from app.api.admin.llm_proxy import router as llm_proxy_router
 from app.api.admin.rag_proxy import router as rag_proxy_router
+from app.api.admin.vera_credentials import router as vera_creds_router
 
 router = APIRouter()
 router.include_router(stats_router)
@@ -28,3 +29,4 @@ router.include_router(style_profile_router)
 router.include_router(executor_router)
 router.include_router(llm_proxy_router)
 router.include_router(rag_proxy_router)
+router.include_router(vera_creds_router)
