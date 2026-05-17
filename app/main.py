@@ -79,8 +79,12 @@ async def lifespan(app: FastAPI):
     media_embedder = get_media_embedder_manager()
     media_embedder.start_daemon()
 
+    from app.services import bot_runner
+    await bot_runner.start_all()
+
     yield
 
+    await bot_runner.stop_all()
     await media_embedder.shutdown()
     await text_embedder.shutdown()
     from app.services.sync_manager import get_sync_manager

@@ -1,6 +1,7 @@
 import asyncio
 import logging
 
+from aiogram import Bot
 from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select
@@ -8,7 +9,7 @@ from sqlalchemy import select
 from app.api.auth import require_owner
 from app.config import get_settings
 from app.db.database import AsyncSessionLocal
-from app.db.models import ExecutorInbox
+from app.db.models import ExecutorBot, ExecutorChat, ExecutorInbox
 from app.services.executor_registry import list_executors, register_or_update, touch, update_bot_settings
 
 router = APIRouter()
@@ -20,6 +21,8 @@ def _verify_inbox_secret(authorization: str) -> None:
     if not secret or authorization != f"Bearer {secret}":
         raise HTTPException(status_code=401, detail="Unauthorized")
 
+
+# ── External executor (HTTP-registered) schemas ──────────────────────────────
 
 class RegisterPayload(BaseModel):
     name: str
@@ -48,10 +51,20 @@ class InboxPayload(BaseModel):
     context_messages: list[dict] | None = None
 
 
+# ── Admin schemas ─────────────────────────────────────────────────────────────
+
+class CreateBotPayload(BaseModel):
+    bot_token: str
+    name: str = ""
+    forward_mode: str = "mentions"
+
+
 class BotSettingsPayload(BaseModel):
     forward_mode: str | None = None
     is_enabled: bool | None = None
 
+
+# ── External executor endpoints (bearer: EXECUTOR_INBOX_SECRET) ───────────────
 
 @router.post("/executor/register")
 async def executor_register(
@@ -107,16 +120,63 @@ async def executor_inbox(
         item_id: int = item.id
 
     if payload.is_mention:
-        from app.main import bot  # import here to avoid circular at module load
+        from app.main import bot
         from app.services.inbox_processor import process_new_item
         asyncio.create_task(process_new_item(item_id, bot))
 
     return {"ok": True, "item_id": item_id}
 
 
+# ── Admin CRUD endpoints ──────────────────────────────────────────────────────
+
+@router.post("/admin/executor/bots")
+async def create_bot(
+    payload: CreateBotPayload,
+    user=Depends(require_owner),
+) -> dict:
+    # Validate token by calling Telegram API
+    try:
+        tmp = Bot(token=payload.bot_token)
+        bot_info = await tmp.get_me()
+        await tmp.session.close()
+    except Exception as exc:
+        raise HTTPException(status_code=400, detail=f"Invalid bot token: {exc}")
+
+    name = payload.name.strip() or bot_info.full_name or bot_info.username or "Bot"
+
+    async with AsyncSessionLocal() as session:
+        # Check for duplicate username
+        existing = await session.execute(
+            select(ExecutorBot).where(ExecutorBot.bot_username == bot_info.username)
+        )
+        if existing.scalar_one_or_none():
+            raise HTTPException(status_code=409, detail="Bot with this username already exists")
+
+        bot_rec = ExecutorBot(
+            name=name,
+            bot_username=bot_info.username,
+            bot_token=payload.bot_token,
+            forward_mode=payload.forward_mode,
+            is_active=True,
+        )
+        session.add(bot_rec)
+        await session.commit()
+        executor_id: int = bot_rec.id
+
+    from app.services import bot_runner
+    await bot_runner.start_bot(executor_id, payload.bot_token)
+    logger.info("Created and started executor bot id=%d @%s", executor_id, bot_info.username)
+
+    return {"ok": True, "executor_id": executor_id, "bot_username": bot_info.username}
+
+
 @router.get("/admin/executor/bots")
 async def list_bots(user=Depends(require_owner)) -> list:
-    return await list_executors()
+    from app.services import bot_runner
+    bots = await list_executors()
+    for b in bots:
+        b["is_running"] = bot_runner.is_running(b["id"])
+    return bots
 
 
 @router.patch("/admin/executor/bots/{bot_id}")
@@ -126,6 +186,39 @@ async def patch_bot(
     user=Depends(require_owner),
 ) -> dict:
     await update_bot_settings(bot_id, forward_mode=payload.forward_mode, is_enabled=payload.is_enabled)
+
+    if payload.is_enabled is not None:
+        from app.services import bot_runner
+        async with AsyncSessionLocal() as session:
+            result = await session.execute(select(ExecutorBot).where(ExecutorBot.id == bot_id))
+            b = result.scalar_one_or_none()
+
+        if payload.is_enabled and b and b.bot_token:
+            await bot_runner.start_bot(bot_id, b.bot_token)
+        elif not payload.is_enabled:
+            await bot_runner.stop_bot(bot_id)
+
+    return {"ok": True}
+
+
+@router.delete("/admin/executor/bots/{bot_id}")
+async def delete_bot(bot_id: int, user=Depends(require_owner)) -> dict:
+    from app.services import bot_runner
+    await bot_runner.stop_bot(bot_id)
+
+    async with AsyncSessionLocal() as session:
+        result = await session.execute(select(ExecutorBot).where(ExecutorBot.id == bot_id))
+        b = result.scalar_one_or_none()
+        if not b:
+            raise HTTPException(status_code=404, detail="Bot not found")
+        # Keep inbox history — only remove chats and mark inactive
+        await session.execute(
+            select(ExecutorChat).where(ExecutorChat.executor_id == bot_id)
+        )
+        b.is_active = False
+        b.bot_token = None
+        await session.commit()
+
     return {"ok": True}
 
 

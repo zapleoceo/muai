@@ -81,8 +81,10 @@ async function bootstrap() {
 
   window.loadBots = bots.loadBots;
   window.loadInbox = bots.loadInbox;
+  window.createBot = bots.createBot;
   window.saveBotMode = bots.saveBotMode;
   window.saveBotEnabled = bots.saveBotEnabled;
+  window.deleteBot = bots.deleteBot;
 
   window.loadSettings = settings.loadSettings;
   window.saveSettings = settings.saveSettings;

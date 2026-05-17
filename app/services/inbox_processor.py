@@ -101,20 +101,37 @@ async def send_via_executor(item_id: int, bot: Bot, override_text: str | None = 
             return False
 
     text = override_text or item.draft_reply or ""
-    try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            r = await client.post(
-                f"{executor.api_url}/send",
-                json={
-                    "chat_id": item.chat_id,
-                    "text": text,
-                    "reply_to_message_id": item.tg_message_id,
-                },
-                headers={"Authorization": f"Bearer {executor.api_secret}"},
+
+    from app.services import bot_runner
+    executor_bot = bot_runner.get_bot(item.executor_id)
+    if executor_bot:
+        try:
+            await executor_bot.send_message(
+                chat_id=item.chat_id,
+                text=text,
+                reply_to_message_id=item.tg_message_id,
             )
-            r.raise_for_status()
-    except Exception:
-        logger.exception("send_via_executor failed for item %d", item_id)
+        except Exception:
+            logger.exception("Direct send failed for item %d", item_id)
+            return False
+    elif executor.api_url:
+        try:
+            async with httpx.AsyncClient(timeout=10) as client:
+                r = await client.post(
+                    f"{executor.api_url}/send",
+                    json={
+                        "chat_id": item.chat_id,
+                        "text": text,
+                        "reply_to_message_id": item.tg_message_id,
+                    },
+                    headers={"Authorization": f"Bearer {executor.api_secret}"},
+                )
+                r.raise_for_status()
+        except Exception:
+            logger.exception("HTTP send failed for item %d", item_id)
+            return False
+    else:
+        logger.error("No send method available for executor_id=%d", item.executor_id)
         return False
 
     async with AsyncSessionLocal() as session:

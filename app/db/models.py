@@ -219,10 +219,11 @@ class ExecutorBot(Base):
     id = Column(BigInteger, autoincrement=True, primary_key=True)
     name = Column(Text, nullable=False)
     bot_username = Column(Text)
-    api_url = Column(Text)
+    bot_token = Column(Text)                        # set for DB-managed bots
+    api_url = Column(Text)                          # set for HTTP-registered (legacy)
     api_secret = Column(Text)
     is_active = Column(Boolean, default=True)
-    forward_mode = Column(Text, default="mentions")  # mentions | replies | all
+    forward_mode = Column(Text, default="mentions") # mentions | replies | all
     last_seen_at = Column(TIMESTAMP(timezone=True))
     created_at = Column(TIMESTAMP(timezone=True), server_default=func.now())
 
