@@ -1,3 +1,4 @@
+from vera_shared.providers.anthropic import get_anthropic
 from vera_shared.providers.base import BaseProvider, ProviderError
 from vera_shared.providers.deepseek import get_deepseek
 from vera_shared.providers.gemini import get_gemini
@@ -5,11 +6,11 @@ from vera_shared.providers.voyage import get_voyage
 from vera_shared.tokens.pool import TokensExhausted
 
 CAPABILITY_PROVIDERS: dict[str, list[str]] = {
-    "chat:fast": ["gemini", "deepseek"],
-    "prefilter": ["gemini", "deepseek"],
-    "chat:smart": ["deepseek", "gemini"],
-    "chat:code": ["deepseek", "gemini"],
-    "embed": ["voyage"],
+    "chat:fast":  ["gemini", "deepseek", "anthropic"],
+    "prefilter":  ["gemini", "deepseek", "anthropic"],
+    "chat:smart": ["deepseek", "anthropic", "gemini"],
+    "chat:code":  ["deepseek", "anthropic", "gemini"],
+    "embed":      ["voyage"],
 }
 
 _PROVIDER_MAP: dict[str, BaseProvider] = {}
@@ -21,6 +22,8 @@ def _get_provider(name: str) -> BaseProvider:
             _PROVIDER_MAP[name] = get_gemini()
         elif name == "deepseek":
             _PROVIDER_MAP[name] = get_deepseek()
+        elif name == "anthropic":
+            _PROVIDER_MAP[name] = get_anthropic()
         elif name == "voyage":
             _PROVIDER_MAP[name] = get_voyage()
         else:
