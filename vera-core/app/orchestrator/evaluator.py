@@ -1,45 +1,47 @@
+import json
 import logging
 import re
 
 log = logging.getLogger(__name__)
 
-_JUDGE_SYSTEM = (
-    "You are a quality judge for AI responses. "
-    "Rate the response on completeness and accuracy from 0 to 10. "
-    "Return only a JSON object: {\"score\": <int 0-10>, \"answer\": \"<best combined answer>\"}"
+_SYSTEM = (
+    "Ты — судья качества ответов AI-ассистента. "
+    "Тебе дан запрос пользователя и ответ ассистента. "
+    "Оцени КАЧЕСТВО ответа от 0 до 10 по критериям: "
+    "точность, полнота, релевантность запросу, читабельность. "
+    "Верни строго JSON: {\"score\": <0-10>, \"reason\": \"<кратко>\"}"
 )
 
 
-def _combine(results: dict[str, str]) -> str:
-    parts = [v for v in results.values() if not v.startswith("ERROR:")]
-    return "\n\n".join(parts) if parts else next(iter(results.values()), "")
-
-
-async def evaluate(original_request: str, results: dict[str, str]) -> tuple[float, str]:
-    combined = _combine(results)
-
-    if not combined or combined.startswith("ERROR:"):
-        return 0.0, combined
-
-    valid = [v for v in results.values() if not v.startswith("ERROR:")]
-    if len(valid) == 1:
-        return 0.8, valid[0]
+async def evaluate(request: str, reply: str) -> float:
+    if not reply or reply.startswith("Сервис временно недоступен"):
+        return 0.0
 
     prompt = (
-        f"User request: {original_request}\n\n"
-        f"Agent responses:\n{combined}\n\n"
-        "Rate and combine the best answer."
+        f"Запрос пользователя:\n{request}\n\n"
+        f"Ответ ассистента:\n{reply}\n\n"
+        "Оцени."
     )
 
     try:
         from vera_shared.providers.registry import get_registry
-        import json
-        registry = get_registry()
-        raw, _, _ = await registry.chat("chat:fast", [{"role": "user", "content": prompt}], system=_JUDGE_SYSTEM)
-        data = json.loads(raw)
-        score = float(data.get("score", 5)) / 10.0
-        answer = data.get("answer", combined)
-        return min(max(score, 0.0), 1.0), answer
+        raw, _, _ = await get_registry().chat(
+            "chat:fast", [{"role": "user", "content": prompt}], system=_SYSTEM
+        )
+        score = _extract_score(raw)
+        return max(0.0, min(1.0, score / 10.0))
     except Exception as exc:
-        log.warning("Evaluator failed: %s", exc)
-        return 0.5, combined
+        log.warning("Evaluator failed, defaulting to 0.6: %s", exc)
+        return 0.6
+
+
+def _extract_score(raw: str) -> float:
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```\w*\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+    try:
+        return float(json.loads(raw).get("score", 5))
+    except Exception:
+        m = re.search(r'"?score"?\s*[:=]\s*(\d+(?:\.\d+)?)', raw)
+        return float(m.group(1)) if m else 5.0

@@ -4,7 +4,7 @@ import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from vera_shared.db.engine import get_engine
 from vera_shared.db.migrations import run_migrations
@@ -34,19 +34,27 @@ app = FastAPI(title="vera-telegram", lifespan=lifespan)
 
 
 class TaskRequest(BaseModel):
-    prompt: str
+    request: str
+    intent: dict = Field(default_factory=dict)
     task_id: int | None = None
 
 
 class TaskResponse(BaseModel):
     success: bool
-    result: str
+    summary: str
+    data: dict | list | None = None
+    error: str | None = None
 
 
 @app.post("/task", response_model=TaskResponse)
 async def receive_task(req: TaskRequest) -> TaskResponse:
-    result = await handle_task(req.prompt)
-    return TaskResponse(success=result.success, result=result.output)
+    result = await handle_task(req.request, req.intent)
+    return TaskResponse(
+        success=result.success,
+        summary=result.summary,
+        data=result.data,
+        error=result.error,
+    )
 
 
 @app.get("/health")
