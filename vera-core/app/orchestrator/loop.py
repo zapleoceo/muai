@@ -48,7 +48,7 @@ async def run_agentic(
     request: str,
     user_id: int | None,
     progress: ProgressCb,
-) -> str:
+) -> tuple[str, list[dict]]:
     specs, route = await collect_tools()
     history = format_history(user_id)
     history_block = (
@@ -62,6 +62,7 @@ async def run_agentic(
     )
 
     messages: list[dict] = [{"role": "user", "content": request}]
+    trace: list[dict] = []
 
     for step in range(1, _MAX_ITERATIONS + 1):
         await progress(f"🧠 Думаю (шаг {step})...")
@@ -69,7 +70,7 @@ async def run_agentic(
         parsed = _parse(raw)
 
         if "answer" in parsed:
-            return str(parsed["answer"]).strip() or "Готово."
+            return str(parsed["answer"]).strip() or "Готово.", trace
 
         if "tool" in parsed:
             name = str(parsed["tool"])
@@ -81,6 +82,13 @@ async def run_agentic(
             await progress(f"📥 Получил данные от `{name}`")
             log.info("Step %d: %s(%s) ok=%s", step, name, args, tool_result.get("ok"))
 
+            trace.append({
+                "tool": name,
+                "args": args,
+                "ok": bool(tool_result.get("ok")),
+                "brief": _brief(tool_result),
+            })
+
             messages.append({"role": "assistant", "content": raw.strip()})
             messages.append({
                 "role": "user",
@@ -88,11 +96,38 @@ async def run_agentic(
             })
             continue
 
-        # Neither answer nor tool — treat raw as final answer
         log.warning("LLM emitted neither tool nor answer: %r", raw[:200])
-        return raw.strip() or "Готово."
+        return raw.strip() or "Готово.", trace
 
-    return "Превышен лимит шагов. Попробуй уточнить запрос."
+    return "Превышен лимит шагов. Попробуй уточнить запрос.", trace
+
+
+def _brief(tool_result: dict) -> str:
+    if not tool_result.get("ok"):
+        return f"❌ {tool_result.get('error', 'error')}"
+    r = tool_result.get("result")
+    if isinstance(r, list):
+        return f"{len(r)} items"
+    if isinstance(r, dict):
+        for k in ("messages_count", "count", "chat_name"):
+            if k in r:
+                v = r[k]
+                if isinstance(v, int):
+                    return f"{v}"
+                return str(v)[:40]
+        return f"{len(r)} keys"
+    return str(r)[:40] if r is not None else "ok"
+
+
+def format_trace_footer(trace: list[dict]) -> str:
+    if not trace:
+        return ""
+    lines = ["", "━━━━━"]
+    for s in trace:
+        icon = "✓" if s["ok"] else "✗"
+        args_preview = _args_preview(s["args"])
+        lines.append(f"{icon} {s['tool']}{args_preview} → {s['brief']}")
+    return "\n".join(lines)
 
 
 async def _llm(messages: list[dict], system: str) -> str:
