@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta, timezone
 
+from telethon.tl.functions.contacts import SearchRequest
+
 from app.userbot.client import get_client
 
 
@@ -21,7 +23,7 @@ def _entity_name(entity) -> str:
         return title
     fn = getattr(entity, "first_name", None) or ""
     ln = getattr(entity, "last_name", None) or ""
-    return " ".join(filter(None, [fn, ln])) or str(entity.id)
+    return " ".join(filter(None, [fn, ln])) or str(getattr(entity, "id", ""))
 
 
 async def _resolve_peer(peer: str):
@@ -32,23 +34,23 @@ async def _resolve_peer(peer: str):
     if peer.lstrip("-").isdigit():
         return await client.get_entity(int(peer))
 
-    # Try exact resolution first (works for usernames and full names in contacts)
     try:
         return await client.get_entity(peer)
     except Exception:
         pass
 
-    # Fallback: fuzzy match against dialog list
+    # Server-side search — does NOT iterate all dialogs, no flood wait
+    res = await client(SearchRequest(q=peer, limit=10))
+    candidates = list(res.users) + list(res.chats)
+    if not candidates:
+        raise LookupError(f"диалог с «{peer}» не найден (попробуй точное имя или @username)")
+
     q = peer.lower()
-    best = None
-    async for dialog in client.iter_dialogs():
-        name = _entity_name(dialog.entity).lower()
-        if q in name:
-            if best is None or len(name) < len(_entity_name(best).lower()):
-                best = dialog.entity
-    if best is None:
-        raise LookupError(f"диалог с «{peer}» не найден")
-    return best
+    exact = [e for e in candidates if q == _entity_name(e).lower()]
+    if exact:
+        return exact[0]
+    starts = [e for e in candidates if _entity_name(e).lower().startswith(q)]
+    return (starts or candidates)[0]
 
 
 async def read_messages(

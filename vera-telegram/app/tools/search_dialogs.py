@@ -1,9 +1,10 @@
+from telethon.tl.functions.contacts import SearchRequest
 from telethon.tl.types import User, Chat, Channel
 
 from app.userbot.client import get_client
 
 
-def _dialog_type(entity) -> str:
+def _entity_type(entity) -> str:
     if isinstance(entity, User):
         return "user"
     if isinstance(entity, Channel):
@@ -13,28 +14,25 @@ def _dialog_type(entity) -> str:
     return "unknown"
 
 
-def _dialog_name(dialog) -> str:
-    return getattr(dialog.entity, "title", None) or (
-        " ".join(
-            filter(None, [getattr(dialog.entity, "first_name", None),
-                          getattr(dialog.entity, "last_name", None)])
-        )
-    ) or str(dialog.id)
+def _entity_name(entity) -> str:
+    title = getattr(entity, "title", None)
+    if title:
+        return title
+    fn = getattr(entity, "first_name", None) or ""
+    ln = getattr(entity, "last_name", None) or ""
+    return " ".join(filter(None, [fn, ln])) or str(entity.id)
 
 
 async def search_dialogs(query: str, limit: int = 10) -> list[dict]:
     client = get_client()
-    q = query.lower()
-    results: list[dict] = []
-    async for dialog in client.iter_dialogs():
-        name = _dialog_name(dialog)
-        if q in name.lower():
-            results.append({
-                "id": dialog.id,
-                "name": name,
-                "type": _dialog_type(dialog.entity),
-                "unread_count": dialog.unread_count,
-            })
-            if len(results) >= limit:
-                break
-    return results
+    res = await client(SearchRequest(q=query, limit=limit))
+    entities = list(res.users) + list(res.chats)
+    return [
+        {
+            "id": e.id,
+            "name": _entity_name(e),
+            "type": _entity_type(e),
+            "username": getattr(e, "username", None),
+        }
+        for e in entities[:limit]
+    ]
