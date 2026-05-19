@@ -1,16 +1,24 @@
+import hmac
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import Agent
 
+from app.config import get_settings
 from app.internal.agent_repo import list_all_agents
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/internal/agents")
+
+
+def _require_internal(secret_header: str | None) -> None:
+    expected = get_settings().internal_secret
+    if not secret_header or not hmac.compare_digest(secret_header, expected):
+        raise HTTPException(status_code=401, detail="invalid X-Internal-Secret")
 
 
 class RegisterPayload(BaseModel):
@@ -28,7 +36,13 @@ class HeartbeatPayload(BaseModel):
 
 
 @router.post("/register")
-async def register_agent(payload: RegisterPayload) -> dict:
+async def register_agent(
+    payload: RegisterPayload,
+    x_internal_secret: str | None = Header(default=None),
+) -> dict:
+    _require_internal(x_internal_secret)
+    if not payload.http_url.startswith(("http://vera-", "http://localhost", "http://127.")):
+        raise HTTPException(400, "http_url must point to an internal vera-* service")
     async with get_session() as session:
         existing = await session.get(Agent, payload.id)
         if existing:
@@ -52,7 +66,11 @@ async def register_agent(payload: RegisterPayload) -> dict:
 
 
 @router.post("/heartbeat")
-async def heartbeat(payload: HeartbeatPayload) -> dict:
+async def heartbeat(
+    payload: HeartbeatPayload,
+    x_internal_secret: str | None = Header(default=None),
+) -> dict:
+    _require_internal(x_internal_secret)
     async with get_session() as session:
         agent = await session.get(Agent, payload.id)
         if agent:

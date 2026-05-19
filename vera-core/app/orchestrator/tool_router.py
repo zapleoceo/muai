@@ -1,5 +1,6 @@
 import json
 import logging
+from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
@@ -10,12 +11,20 @@ from vera_shared.db.models import Agent
 
 log = logging.getLogger(__name__)
 _TIMEOUT = 60.0
+_STALE_AFTER = timedelta(minutes=2)
 
 
 async def collect_tools() -> tuple[list[dict], dict[str, str]]:
-    """Return (tool_specs, tool_name → bot_http_url)."""
+    """Return (tool_specs, tool_name → bot_http_url). Only fresh agents."""
+    fresh_after = datetime.utcnow() - _STALE_AFTER
     async with get_session() as session:
-        result = await session.execute(select(Agent).where(Agent.status == "online"))
+        result = await session.execute(
+            select(Agent).where(
+                Agent.status == "online",
+                Agent.last_heartbeat.isnot(None),
+                Agent.last_heartbeat >= fresh_after,
+            )
+        )
         agents = result.scalars().all()
 
     specs: list[dict] = []

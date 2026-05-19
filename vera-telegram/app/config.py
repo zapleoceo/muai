@@ -8,6 +8,7 @@ class Settings(BaseSettings):
     session_path: str = "/data/sessions/userbot.session"
     vera_core_url: str = "http://vera-core:8000"
     db_path: str = "/data/vera.db"
+    internal_secret: str = ""
 
     model_config = SettingsConfigDict(env_file=".env")
 

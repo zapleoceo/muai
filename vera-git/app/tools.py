@@ -52,7 +52,7 @@ async def git_log(limit: int = 10) -> dict:
 async def git_diff(path: str = "") -> dict:
     args = ["diff", "--stat"]
     if path:
-        args.append(path)
+        args += ["--", path]
     code, out, err = await _git(*args)
     if code != 0:
         return {"error": err.strip(), "diff": ""}

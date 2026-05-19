@@ -16,6 +16,10 @@ _HEARTBEAT_INTERVAL = 30
 _REGISTER_RETRY = 10
 
 
+def _headers() -> dict:
+    return {"X-Internal-Secret": get_settings().internal_secret}
+
+
 async def register_self() -> bool:
     cfg = get_settings()
     payload = {
@@ -25,7 +29,10 @@ async def register_self() -> bool:
         "tools": [t.to_dict() for t in TOOLS],
     }
     async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(f"{cfg.vera_core_url}/internal/agents/register", json=payload)
+        resp = await client.post(
+            f"{cfg.vera_core_url}/internal/agents/register",
+            json=payload, headers=_headers(),
+        )
         resp.raise_for_status()
     logger.info("Registered with vera-core (%d tools)", len(TOOLS))
     return True
@@ -36,7 +43,7 @@ async def _heartbeat() -> None:
     async with httpx.AsyncClient(timeout=5) as client:
         await client.post(
             f"{cfg.vera_core_url}/internal/agents/heartbeat",
-            json={"id": AGENT_ID},
+            json={"id": AGENT_ID}, headers=_headers(),
         )
 
 

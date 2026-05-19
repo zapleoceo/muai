@@ -1,14 +1,13 @@
-import hmac
 import hashlib
+import hmac
 import time
-from urllib.parse import quote
 
 from fastapi import Cookie, HTTPException, status
 
 from app.config import get_settings
 
 _COOKIE = "vera_session"
-_TTL = 60 * 60 * 24 * 30  # 30 days
+_TTL = 60 * 60 * 24 * 7  # 7 days
 
 
 def _sign(payload: str, secret: str) -> str:
@@ -45,13 +44,7 @@ def require_owner(vera_session: str | None = Cookie(default=None)) -> bool:
     return True
 
 
-def check_deploy_secret(token: str) -> bool:
-    settings = get_settings()
-    return hmac.compare_digest(token, settings.deploy_secret)
-
-
 def verify_telegram_auth(data: dict) -> int | None:
-    """Verify Telegram Login Widget payload. Returns user_id if valid, else None."""
     settings = get_settings()
     received_hash = data.get("hash")
     if not received_hash:
@@ -64,7 +57,7 @@ def verify_telegram_auth(data: dict) -> int | None:
         return None
     try:
         auth_date = int(fields.get("auth_date", "0"))
-        if time.time() - auth_date > 86400:  # 24h window
+        if time.time() - auth_date > 86400:
             return None
         return int(fields["id"])
     except (KeyError, ValueError):

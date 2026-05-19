@@ -1,16 +1,26 @@
+import os
 from datetime import date, datetime, timedelta
 
 from sqlalchemy import select, update
 
+from vera_shared.crypto import decrypt, encrypt, is_encrypted
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import Token
 from vera_shared.tokens.model import PROVIDER_DEFAULT_CAPS, TokenRecord
 
 
+def _master() -> str:
+    s = os.environ.get("SESSION_SECRET") or os.environ.get("TOKEN_ENC_KEY")
+    if not s:
+        raise RuntimeError("SESSION_SECRET (or TOKEN_ENC_KEY) is not set — refuse to handle tokens")
+    return s
+
+
 def _to_record(row: Token) -> TokenRecord:
     caps = row.capabilities or PROVIDER_DEFAULT_CAPS.get(row.provider, [])
+    plain_token = decrypt(row.token, _master()) if is_encrypted(row.token) else row.token
     return TokenRecord(
-        id=row.id, provider=row.provider, label=row.label, token=row.token,
+        id=row.id, provider=row.provider, label=row.label, token=plain_token,
         capabilities=caps, is_active=row.is_active, daily_limit=row.daily_limit,
         daily_used=row.daily_used, daily_reset_at=row.daily_reset_at,
         cooldown_until=row.cooldown_until, error_count=row.error_count,
@@ -92,17 +102,33 @@ async def reset_daily_if_needed(token_id: int) -> None:
 async def upsert(
     provider: str, label: str, token: str, capabilities: list[str]
 ) -> TokenRecord:
+    encrypted = encrypt(token, _master())
     async with get_session() as session:
         result = await session.execute(
             select(Token).where(Token.provider == provider, Token.label == label)
         )
         row = result.scalar_one_or_none()
         if row is None:
-            row = Token(provider=provider, label=label, token=token, capabilities=capabilities)
+            row = Token(provider=provider, label=label, token=encrypted, capabilities=capabilities)
             session.add(row)
         else:
-            row.token = token
+            row.token = encrypted
             row.capabilities = capabilities
         await session.commit()
         await session.refresh(row)
         return _to_record(row)
+
+
+async def migrate_plaintext_tokens() -> int:
+    """Encrypt any tokens still in plaintext. Idempotent."""
+    master = _master()
+    migrated = 0
+    async with get_session() as session:
+        result = await session.execute(select(Token))
+        for row in result.scalars().all():
+            if row.token and not is_encrypted(row.token):
+                row.token = encrypt(row.token, master)
+                migrated += 1
+        if migrated:
+            await session.commit()
+    return migrated

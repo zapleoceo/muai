@@ -34,6 +34,11 @@ async def lifespan(app: FastAPI):
     engine = await init_engine()
     await run_migrations(engine)
 
+    from vera_shared.tokens.repository import migrate_plaintext_tokens
+    migrated = await migrate_plaintext_tokens()
+    if migrated:
+        log.info("Encrypted %d plaintext tokens at rest", migrated)
+
     _bot = Bot(
         token=settings.telegram_bot_token_vera,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),

@@ -1,4 +1,5 @@
 import asyncio
+import html
 import logging
 
 from app.bot.sender import notify_group
@@ -26,7 +27,9 @@ async def _get_logs(lines: int = 20) -> str:
 
 
 async def deploy(ref: str, message: str) -> None:
-    await notify_group(f"🚀 Deploy started\nRef: <code>{ref}</code>\n{message}")
+    await notify_group(
+        f"🚀 Deploy started\nRef: <code>{html.escape(ref)}</code>\n{html.escape(message)}"
+    )
 
     steps = [
         (["git", "pull"], "git pull"),
@@ -38,13 +41,15 @@ async def deploy(ref: str, message: str) -> None:
         code, out = await _run(cmd)
         if code != 0:
             tail = out[-800:] if len(out) > 800 else out
-            await notify_group(f"Deploy failed at <b>{label}</b>\n<pre>{tail}</pre>")
+            await notify_group(
+                f"Deploy failed at <b>{html.escape(label)}</b>\n<pre>{html.escape(tail)}</pre>"
+            )
             return
 
     health = await health_check(_SERVICES, timeout=60)
     healthy = all(health.values())
-    status = "✅ All services healthy" if healthy else "⚠️ Some services unhealthy: " + str(health)
+    status = "✅ All services healthy" if healthy else "⚠️ Some services unhealthy: " + html.escape(str(health))
 
     logs = await _get_logs(20)
     tail = logs[-800:] if len(logs) > 800 else logs
-    await notify_group(f"Deploy complete\n{status}\n<pre>{tail}</pre>")
+    await notify_group(f"Deploy complete\n{status}\n<pre>{html.escape(tail)}</pre>")

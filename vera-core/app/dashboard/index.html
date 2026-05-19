@@ -139,17 +139,6 @@ function renderLogin() {
     el('h2', {}, 'Vera Dashboard'),
     el('p', {}, 'Войти можно только владельцу аккаунта в Telegram'),
     el('div', {id:'tg-widget', style:'display:flex;justify-content:center;margin:20px 0'}),
-    el('details', {style:'margin-top:24px;color:var(--mute);font-size:12px;text-align:left'},
-      el('summary', {style:'cursor:pointer'}, 'Аварийный доступ через DEPLOY_SECRET'),
-      el('form', {style:'margin-top:12px', onsubmit:(e)=>{
-        e.preventDefault();
-        const t = e.target.querySelector('input').value.trim();
-        if (t) window.location.href = '/api/login?token=' + encodeURIComponent(t);
-      }},
-        el('input', {type:'password', placeholder:'DEPLOY_SECRET', autocomplete:'off'}),
-        el('button', {type:'submit'}, 'Войти'),
-      ),
-    ),
   );
   app.append(box);
 

@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, Query, Request, Response
+from fastapi import APIRouter, Depends, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy import func, select
 
@@ -9,7 +9,6 @@ from vera_shared.db.models import Agent, Task, Token
 
 from app.config import get_settings
 from app.dashboard.auth import (
-    check_deploy_secret,
     issue_session,
     require_owner,
     verify_telegram_auth,
@@ -23,17 +22,8 @@ def _set_session_cookie(resp: Response) -> None:
     cookie, ttl = issue_session()
     resp.set_cookie(
         "vera_session", cookie,
-        max_age=ttl, httponly=True, samesite="lax", path="/",
+        max_age=ttl, httponly=True, secure=True, samesite="lax", path="/",
     )
-
-
-@router.get("/api/login")
-async def login(token: str = Query(...)) -> Response:
-    if not check_deploy_secret(token):
-        return Response("forbidden", status_code=403)
-    resp = RedirectResponse(url="/")
-    _set_session_cookie(resp)
-    return resp
 
 
 @router.get("/api/tg_login")
@@ -53,7 +43,7 @@ async def tg_login(request: Request) -> Response:
 @router.get("/api/logout")
 async def logout() -> Response:
     resp = RedirectResponse(url="/")
-    resp.delete_cookie("vera_session", path="/")
+    resp.delete_cookie("vera_session", path="/", secure=True)
     return resp
 
 
