@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
-from telethon.tl.functions.contacts import SearchRequest
+from telethon.errors import FloodWaitError
 
 from app.userbot.client import get_client
 
@@ -30,17 +30,18 @@ async def _resolve_peer_by_id_or_name(peer: str):
     client = get_client()
     if peer.lstrip("-").isdigit():
         return await client.get_entity(int(peer))
+    # Search ONLY user's own dialogs (no global Telegram search)
+    q = peer.lower()
     try:
-        return await client.get_entity(peer)
-    except Exception:
-        pass
-    res = await client(SearchRequest(q=peer, limit=5))
-    candidates = list(res.users) + list(res.chats)
-    if not candidates:
-        raise LookupError(
-            f"chat '{peer}' not found — use telegram_search_dialogs to discover the chat_id first"
-        )
-    return candidates[0]
+        async for d in client.iter_dialogs(limit=500):
+            name = _entity_name(d.entity).lower()
+            if q in name:
+                return d.entity
+    except FloodWaitError as exc:
+        raise LookupError(f"telegram flood wait {exc.seconds}s") from exc
+    raise LookupError(
+        f"chat '{peer}' not found in your dialogs — use telegram_search_dialogs to find the chat_id"
+    )
 
 
 async def read_messages(peer: str, limit: int = 50, offset_days: int = 1) -> dict:

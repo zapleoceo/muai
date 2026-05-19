@@ -1,4 +1,4 @@
-from telethon.tl.functions.contacts import SearchRequest
+from telethon.errors import FloodWaitError
 from telethon.tl.types import Channel, Chat, User
 
 from app.userbot.client import get_client
@@ -54,23 +54,31 @@ def _name(entity) -> str:
 
 
 async def search_dialogs(query: str, limit: int = 15) -> list[dict]:
+    """Search USER's own dialogs (no global Telegram search)."""
     client = get_client()
+    variants = _query_variants(query)
+    out: list[dict] = []
     seen: set[int] = set()
-    results: list[dict] = []
 
-    for q in _query_variants(query):
-        try:
-            res = await client(SearchRequest(q=q, limit=limit))
-        except Exception:
-            continue
-        for e in list(res.users) + list(res.chats):
-            if e.id in seen:
-                continue
-            seen.add(e.id)
-            results.append({
-                "id": e.id,
-                "name": _name(e),
-                "type": _type(e),
-                "username": getattr(e, "username", None),
-            })
-    return results[:limit]
+    try:
+        async for d in client.iter_dialogs(limit=500):
+            name_l = _name(d.entity).lower()
+            if any(v in name_l for v in variants):
+                if d.entity.id in seen:
+                    continue
+                seen.add(d.entity.id)
+                out.append({
+                    "id": d.entity.id,
+                    "name": _name(d.entity),
+                    "type": _type(d.entity),
+                    "username": getattr(d.entity, "username", None),
+                    "unread_count": d.unread_count,
+                    "last_message_date": d.date.isoformat() if d.date else None,
+                })
+                if len(out) >= limit:
+                    break
+    except FloodWaitError as exc:
+        return [{"_error": f"flood wait {exc.seconds}s", "_partial": out}]
+
+    out.sort(key=lambda x: x.get("last_message_date") or "", reverse=True)
+    return out
