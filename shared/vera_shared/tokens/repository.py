@@ -28,6 +28,13 @@ async def get_by_capability(cap: str) -> list[TokenRecord]:
     return [r for r in await get_all_active() if cap in r.capabilities]
 
 
+async def get_by_provider_capability(provider: str, cap: str) -> list[TokenRecord]:
+    return [
+        r for r in await get_all_active()
+        if r.provider == provider and cap in r.capabilities
+    ]
+
+
 async def mark_cooldown(token_id: int, seconds: int) -> None:
     until = datetime.utcnow() + timedelta(seconds=seconds)
     async with get_session() as session:

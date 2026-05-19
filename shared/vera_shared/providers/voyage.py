@@ -18,7 +18,7 @@ class VoyageProvider(BaseProvider):
         raise NotImplementedError("VoyageProvider does not support chat")
 
     async def embed(self, text: str) -> list[float]:
-        token = await get_token(_CAPABILITY)
+        token = await get_token("voyage", _CAPABILITY)
         payload = {"input": [text], "model": _MODEL}
         headers = {
             "Authorization": f"Bearer {token.token}",

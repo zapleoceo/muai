@@ -7,15 +7,18 @@ from vera_shared.tokens.selector import get_token
 _BASE_URL = "https://api.deepseek.com/v1"
 _MODEL = "deepseek-chat"
 _CAPABILITY = "chat:smart"
+_PROVIDER = "deepseek"
 
 
 class DeepSeekProvider(BaseProvider):
-    name = "deepseek"
+    name = _PROVIDER
 
     async def chat(
         self, messages: list[dict], capability: str = _CAPABILITY, system: str | None = None
     ) -> tuple[str, int, int]:
-        token = await get_token(capability)
+        # DeepSeek only has chat:smart / chat:code natively; map fast/prefilter onto smart.
+        provider_cap = capability if capability in ("chat:smart", "chat:code") else "chat:smart"
+        token = await get_token(_PROVIDER, provider_cap)
         msgs = ([{"role": "system", "content": system}] + messages) if system else messages
         payload = {
             "model": _MODEL,

@@ -28,7 +28,7 @@ async def read_messages(
     async for msg in client.iter_messages(resolved_peer, limit=limit):
         if msg.date and msg.date < cutoff:
             break
-        await msg._get_sender()
+        await msg.get_sender()
         messages.append({
             "id": msg.id,
             "date": msg.date.isoformat() if msg.date else None,

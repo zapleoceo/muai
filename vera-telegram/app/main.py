@@ -34,19 +34,19 @@ app = FastAPI(title="vera-telegram", lifespan=lifespan)
 
 
 class TaskRequest(BaseModel):
-    input_text: str
+    prompt: str
     task_id: int | None = None
 
 
 class TaskResponse(BaseModel):
     success: bool
-    output: str
+    result: str
 
 
 @app.post("/task", response_model=TaskResponse)
 async def receive_task(req: TaskRequest) -> TaskResponse:
-    result = await handle_task(req.input_text)
-    return TaskResponse(success=result.success, output=result.output)
+    result = await handle_task(req.prompt)
+    return TaskResponse(success=result.success, result=result.output)
 
 
 @app.get("/health")

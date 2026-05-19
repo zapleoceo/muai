@@ -1,15 +1,18 @@
+import re
+
 import google.generativeai as genai
 
 from vera_shared.providers.base import BaseProvider, ProviderError
 from vera_shared.tokens.pool import TokensExhausted, get_pool
 from vera_shared.tokens.selector import get_token
 
-_MODEL = "gemini-2.0-flash-lite"
+_MODEL = "gemini-1.5-flash"
 _MAX_RETRIES = 3
+_PROVIDER = "gemini"
 
 
 class GeminiProvider(BaseProvider):
-    name = "gemini"
+    name = _PROVIDER
 
     async def chat(
         self, messages: list[dict], capability: str = "chat:fast", system: str | None = None
@@ -17,7 +20,7 @@ class GeminiProvider(BaseProvider):
         last_exc: Exception | None = None
 
         for _ in range(_MAX_RETRIES):
-            token = await get_token(capability)
+            token = await get_token(_PROVIDER, capability)
             genai.configure(api_key=token.token)
             model = genai.GenerativeModel(_MODEL, system_instruction=system)
 
@@ -32,9 +35,10 @@ class GeminiProvider(BaseProvider):
                 )
             except Exception as exc:
                 status = _parse_status(exc)
-                await get_pool().on_error(token.id, status)
+                retry_after = _parse_retry_after(exc) if status == 429 else None
+                await get_pool().on_error(token.id, status, retry_after_seconds=retry_after)
                 last_exc = exc
-                if status not in (429,):
+                if status != 429:
                     break
 
         raise ProviderError(str(last_exc), status_code=_parse_status(last_exc)) from last_exc
@@ -52,11 +56,19 @@ def _parse_status(exc: Exception | None) -> int:
     if exc is None:
         return 0
     text = str(exc).lower()
-    if "429" in text or "quota" in text or "rate" in text:
+    if "429" in text or "quota" in text or "rate" in text or "resource_exhausted" in text:
         return 429
-    if "401" in text or "403" in text or "api_key" in text:
+    if "401" in text or "403" in text or "api_key" in text or "permission_denied" in text:
         return 401
     return 500
+
+
+_RETRY_RE = re.compile(r"retry_delay\s*\{\s*seconds:\s*(\d+)", re.IGNORECASE)
+
+
+def _parse_retry_after(exc: Exception) -> int | None:
+    m = _RETRY_RE.search(str(exc))
+    return int(m.group(1)) if m else None
 
 
 _gemini: GeminiProvider | None = None

@@ -6,14 +6,33 @@ from app.internal.agent_repo import get_online_agents
 
 log = logging.getLogger(__name__)
 
-_SYSTEM = (
-    "You are an intent classifier for a multi-agent AI system. "
-    "Given a user request, return a JSON object with exactly these keys:\n"
-    '  "summary": one-line restatement of the task,\n'
-    '  "target_agents": list of agent IDs best suited to handle the task,\n'
-    '  "context": dict of extra data useful for agents.\n'
-    "Return only valid JSON, no explanation."
-)
+_SYSTEM = """You are an intent classifier for a multi-agent AI system.
+
+Return ONLY a JSON object with these exact keys:
+  "summary": one-line restatement of the task
+  "target_agents": list of agent IDs from the provided list that should handle it
+  "context": dict of extra useful data (empty object if none)
+
+Rules:
+- Use target_agents=[] for: greetings, small talk, meta questions ("кто ты",
+  "что умеешь"), thanks, general knowledge questions, jokes, anything that
+  does NOT require external integrations. The orchestrator will answer itself.
+- Use a Telegram agent only if the task explicitly involves reading/searching/
+  sending Telegram chats, channels, or messages.
+- Never invent agent IDs. Only choose from the provided list.
+
+Examples:
+  "привет" → {"summary":"greeting","target_agents":[],"context":{}}
+  "кто ты, что умеешь" → {"summary":"self-introduction","target_agents":[],"context":{}}
+  "расскажи анекдот" → {"summary":"joke","target_agents":[],"context":{}}
+  "какая столица Франции" → {"summary":"trivia","target_agents":[],"context":{}}
+  "прочитай последние 20 сообщений из чата Лиза" →
+    {"summary":"read last 20 msgs from Лиза","target_agents":["vera-telegram"],
+     "context":{"peer":"Лиза","limit":20}}
+  "найди чат про крипту" →
+    {"summary":"search Telegram dialogs","target_agents":["vera-telegram"],
+     "context":{"query":"крипта"}}
+"""
 
 
 @dataclass
@@ -30,23 +49,28 @@ async def prefilter(text: str) -> Intent:
     prompt = (
         f"Available agents: [{agent_list}]\n\n"
         f"User request: {text}\n\n"
-        "Classify the intent and choose the best agents."
+        "Classify and return JSON."
     )
 
     try:
         from vera_shared.providers.registry import get_registry
         registry = get_registry()
         raw, _, _ = await registry.chat("prefilter", [{"role": "user", "content": prompt}], system=_SYSTEM)
-        data = json.loads(raw)
+        data = json.loads(_strip_code_fence(raw))
         return Intent(
             summary=data.get("summary", text[:80]),
-            target_agents=data.get("target_agents", []),
-            context=data.get("context", {}),
+            target_agents=data.get("target_agents", []) or [],
+            context=data.get("context", {}) or {},
         )
     except Exception as exc:
-        log.warning("Prefilter failed, using fallback: %s", exc)
-        return Intent(
-            summary=text[:80],
-            target_agents=["vera-core-fallback"] if not agents else [agents[0]["id"]],
-            context={},
-        )
+        log.warning("Prefilter failed, defaulting to self-answer: %s", exc)
+        return Intent(summary=text[:80], target_agents=[], context={})
+
+
+def _strip_code_fence(s: str) -> str:
+    s = s.strip()
+    if s.startswith("```"):
+        s = s.split("\n", 1)[1] if "\n" in s else s[3:]
+        if s.endswith("```"):
+            s = s[:-3]
+    return s.strip()

@@ -5,8 +5,8 @@ from vera_shared.providers.voyage import get_voyage
 from vera_shared.tokens.pool import TokensExhausted
 
 CAPABILITY_PROVIDERS: dict[str, list[str]] = {
-    "chat:fast": ["gemini"],
-    "prefilter": ["gemini"],
+    "chat:fast": ["gemini", "deepseek"],
+    "prefilter": ["gemini", "deepseek"],
     "chat:smart": ["deepseek", "gemini"],
     "chat:code": ["deepseek", "gemini"],
     "embed": ["voyage"],
