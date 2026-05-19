@@ -1,31 +1,51 @@
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, Query, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy import func, select
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import Agent, Task, Token
 
+from app.config import get_settings
 from app.dashboard.auth import (
     check_deploy_secret,
     issue_session,
     require_owner,
+    verify_telegram_auth,
 )
 
 router = APIRouter()
+
+
+def _set_session_cookie(resp: Response) -> None:
+    cookie, ttl = issue_session()
+    resp.set_cookie(
+        "vera_session", cookie,
+        max_age=ttl, httponly=True, samesite="lax", path="/",
+    )
 
 
 @router.get("/api/login")
 async def login(token: str = Query(...)) -> Response:
     if not check_deploy_secret(token):
         return Response("forbidden", status_code=403)
-    cookie, ttl = issue_session()
     resp = RedirectResponse(url="/")
-    resp.set_cookie(
-        "vera_session", cookie,
-        max_age=ttl, httponly=True, samesite="lax", path="/",
-    )
+    _set_session_cookie(resp)
+    return resp
+
+
+@router.get("/api/tg_login")
+async def tg_login(request: Request) -> Response:
+    settings = get_settings()
+    data = dict(request.query_params)
+    user_id = verify_telegram_auth(data)
+    if user_id is None:
+        return Response("invalid telegram signature", status_code=403)
+    if user_id != settings.owner_telegram_id:
+        return Response(f"access denied for user {user_id}", status_code=403)
+    resp = RedirectResponse(url="/")
+    _set_session_cookie(resp)
     return resp
 
 

@@ -126,17 +126,33 @@ async function refresh() {
 function renderLogin() {
   const app = $('#app');
   app.innerHTML = '';
-  const form = el('form', {class:'login', onsubmit:(e)=>{
-    e.preventDefault();
-    const t = form.querySelector('input').value.trim();
-    if (t) window.location.href = '/api/login?token=' + encodeURIComponent(t);
-  }},
+  const box = el('div', {class:'login'},
     el('h2', {}, 'Vera Dashboard'),
-    el('p', {}, 'Введи DEPLOY_SECRET чтобы войти'),
-    el('input', {type:'password', placeholder:'DEPLOY_SECRET', autocomplete:'off'}),
-    el('button', {type:'submit'}, 'Войти'),
+    el('p', {}, 'Войти можно только владельцу аккаунта в Telegram'),
+    el('div', {id:'tg-widget', style:'display:flex;justify-content:center;margin:20px 0'}),
+    el('details', {style:'margin-top:24px;color:var(--mute);font-size:12px;text-align:left'},
+      el('summary', {style:'cursor:pointer'}, 'Аварийный доступ через DEPLOY_SECRET'),
+      el('form', {style:'margin-top:12px', onsubmit:(e)=>{
+        e.preventDefault();
+        const t = e.target.querySelector('input').value.trim();
+        if (t) window.location.href = '/api/login?token=' + encodeURIComponent(t);
+      }},
+        el('input', {type:'password', placeholder:'DEPLOY_SECRET', autocomplete:'off'}),
+        el('button', {type:'submit'}, 'Войти'),
+      ),
+    ),
   );
-  app.append(form);
+  app.append(box);
+
+  const s = document.createElement('script');
+  s.async = true;
+  s.src = 'https://telegram.org/js/telegram-widget.js?22';
+  s.setAttribute('data-telegram-login', 'Dimondra_Ai_Bot');
+  s.setAttribute('data-size', 'large');
+  s.setAttribute('data-radius', '6');
+  s.setAttribute('data-auth-url', '/api/tg_login');
+  s.setAttribute('data-request-access', 'write');
+  $('#tg-widget').append(s);
 }
 
 function statCard(label, value, sub) {

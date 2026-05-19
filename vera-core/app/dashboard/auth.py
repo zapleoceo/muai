@@ -48,3 +48,24 @@ def require_owner(vera_session: str | None = Cookie(default=None)) -> bool:
 def check_deploy_secret(token: str) -> bool:
     settings = get_settings()
     return hmac.compare_digest(token, settings.deploy_secret)
+
+
+def verify_telegram_auth(data: dict) -> int | None:
+    """Verify Telegram Login Widget payload. Returns user_id if valid, else None."""
+    settings = get_settings()
+    received_hash = data.get("hash")
+    if not received_hash:
+        return None
+    fields = {k: v for k, v in data.items() if k != "hash"}
+    check_string = "\n".join(f"{k}={fields[k]}" for k in sorted(fields))
+    secret_key = hashlib.sha256(settings.telegram_bot_token_vera.encode()).digest()
+    computed = hmac.new(secret_key, check_string.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(computed, received_hash):
+        return None
+    try:
+        auth_date = int(fields.get("auth_date", "0"))
+        if time.time() - auth_date > 86400:  # 24h window
+            return None
+        return int(fields["id"])
+    except (KeyError, ValueError):
+        return None
