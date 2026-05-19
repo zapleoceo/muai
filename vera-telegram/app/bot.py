@@ -27,6 +27,16 @@ async def handle_task(request: str, intent: dict) -> ToolResult:
     ctx = intent or {}
     action = (ctx.get("action") or _infer_action(request, ctx)).lower()
 
+    # Self-correct: read_messages without peer makes no sense — try to derive
+    # peer from the request, or fall back to search if it looks like a list query.
+    if action in ("read_messages", "read") and not ctx.get("peer"):
+        derived = _derive_peer(request)
+        if derived:
+            ctx = {**ctx, "peer": derived}
+        else:
+            action = "search_dialogs"
+            ctx = {**ctx, "query": ctx.get("query") or request}
+
     try:
         if action in ("search_dialogs", "search"):
             query = str(ctx.get("query") or ctx.get("peer") or request)
@@ -68,6 +78,13 @@ async def handle_task(request: str, intent: dict) -> ToolResult:
 _READ_HINTS = ("прочитай", "о чём", "о чем", "общались", "переписк", "сообщени")
 _SEND_HINTS = ("отправь", "напиши ", "send ")
 _SEARCH_HINTS = ("найди чат", "найди диалог", "поищи", "search")
+
+
+def _derive_peer(request: str) -> str:
+    import re
+    # Pick the longest capitalized or Latin word (likely a name)
+    words = re.findall(r"[A-Za-zА-ЯЁ][A-Za-zА-ЯЁа-яё0-9_]{2,}", request)
+    return max(words, key=len) if words else ""
 
 
 def _infer_action(request: str, ctx: dict) -> str:
