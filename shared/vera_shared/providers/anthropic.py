@@ -1,6 +1,8 @@
 import httpx
 
+import vera_shared.tokens.repository as token_repo
 from vera_shared.providers.base import BaseProvider, ProviderError
+from vera_shared.providers.pricing import cost_usd
 from vera_shared.tokens.pool import get_pool
 from vera_shared.tokens.selector import get_token
 
@@ -47,7 +49,12 @@ class AnthropicProvider(BaseProvider):
         text_parts = [b.get("text", "") for b in data.get("content", []) if b.get("type") == "text"]
         text = "".join(text_parts)
         usage = data.get("usage", {})
-        return (text, usage.get("input_tokens", 0), usage.get("output_tokens", 0))
+        t_in = usage.get("input_tokens", 0)
+        t_out = usage.get("output_tokens", 0)
+        await token_repo.record_usage(
+            token.id, t_in, t_out, cost_usd(_PROVIDER, _MODEL, t_in, t_out)
+        )
+        return (text, t_in, t_out)
 
     async def embed(self, text: str) -> list[float]:
         raise NotImplementedError("AnthropicProvider does not support embed")

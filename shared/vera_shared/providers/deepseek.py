@@ -1,6 +1,8 @@
 import httpx
 
+import vera_shared.tokens.repository as token_repo
 from vera_shared.providers.base import BaseProvider, ProviderError
+from vera_shared.providers.pricing import cost_usd
 from vera_shared.tokens.pool import get_pool
 from vera_shared.tokens.selector import get_token
 
@@ -42,7 +44,12 @@ class DeepSeekProvider(BaseProvider):
         data = resp.json()
         choice = data["choices"][0]["message"]["content"]
         usage = data.get("usage", {})
-        return (choice, usage.get("prompt_tokens", 0), usage.get("completion_tokens", 0))
+        t_in = usage.get("prompt_tokens", 0)
+        t_out = usage.get("completion_tokens", 0)
+        await token_repo.record_usage(
+            token.id, t_in, t_out, cost_usd(_PROVIDER, _MODEL, t_in, t_out)
+        )
+        return (choice, t_in, t_out)
 
     async def embed(self, text: str) -> list[float]:
         raise NotImplementedError("DeepSeekProvider does not support embed")

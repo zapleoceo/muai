@@ -69,6 +69,16 @@ async def increment_used(token_id: int) -> None:
             await session.commit()
 
 
+async def record_usage(token_id: int, tokens_in: int, tokens_out: int, cost: float) -> None:
+    async with get_session() as session:
+        row = await session.get(Token, token_id)
+        if row:
+            row.tokens_in = (row.tokens_in or 0) + max(0, tokens_in)
+            row.tokens_out = (row.tokens_out or 0) + max(0, tokens_out)
+            row.cost_usd = (row.cost_usd or 0.0) + max(0.0, cost)
+            await session.commit()
+
+
 async def reset_daily_if_needed(token_id: int) -> None:
     today = date.today()
     async with get_session() as session:

@@ -2,7 +2,9 @@ import re
 
 import google.generativeai as genai
 
+import vera_shared.tokens.repository as token_repo
 from vera_shared.providers.base import BaseProvider, ProviderError
+from vera_shared.providers.pricing import cost_usd
 from vera_shared.tokens.pool import TokensExhausted, get_pool
 from vera_shared.tokens.selector import get_token
 
@@ -28,11 +30,12 @@ class GeminiProvider(BaseProvider):
             try:
                 response = await model.generate_content_async(contents)
                 usage = response.usage_metadata
-                return (
-                    response.text,
-                    usage.prompt_token_count or 0,
-                    usage.candidates_token_count or 0,
+                t_in = usage.prompt_token_count or 0
+                t_out = usage.candidates_token_count or 0
+                await token_repo.record_usage(
+                    token.id, t_in, t_out, cost_usd(_PROVIDER, _MODEL, t_in, t_out)
                 )
+                return (response.text, t_in, t_out)
             except Exception as exc:
                 status = _parse_status(exc)
                 retry_after = _parse_retry_after(exc) if status == 429 else None

@@ -14,6 +14,7 @@ from app.dashboard.auth import (
     require_owner,
     verify_telegram_auth,
 )
+from app.dashboard.balances import get_live_balances
 
 router = APIRouter()
 
@@ -135,9 +136,41 @@ async def tokens(_=Depends(require_owner)) -> list[dict]:
             "cooldown_until": t.cooldown_until.isoformat() if t.cooldown_until else None,
             "error_count": t.error_count,
             "last_used_at": t.last_used_at.isoformat() if t.last_used_at else None,
+            "tokens_in": t.tokens_in or 0,
+            "tokens_out": t.tokens_out or 0,
+            "cost_usd": float(t.cost_usd or 0.0),
         }
         for t in rows
     ]
+
+
+@router.get("/api/balances")
+async def balances(_=Depends(require_owner)) -> dict:
+    live = await get_live_balances()
+
+    async with get_session() as session:
+        result = await session.execute(select(Token))
+        rows = result.scalars().all()
+
+    by_provider: dict[str, dict] = {}
+    for t in rows:
+        p = by_provider.setdefault(t.provider, {
+            "spent_usd": 0.0, "tokens_in": 0, "tokens_out": 0,
+            "requests": 0, "tokens_count": 0, "tokens_active": 0,
+        })
+        p["spent_usd"] += float(t.cost_usd or 0.0)
+        p["tokens_in"] += t.tokens_in or 0
+        p["tokens_out"] += t.tokens_out or 0
+        p["requests"] += t.daily_used or 0
+        p["tokens_count"] += 1
+        if t.is_active:
+            p["tokens_active"] += 1
+
+    for p, info in by_provider.items():
+        if p in live:
+            info["live_balance"] = live[p]
+
+    return by_provider
 
 
 @router.get("/api/agents")

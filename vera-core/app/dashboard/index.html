@@ -87,6 +87,13 @@ const fmt = {
   num: n => n == null ? '—' : Number(n).toLocaleString('ru-RU'),
   ms:  n => n == null ? '—' : n < 1000 ? `${n}ms` : `${(n/1000).toFixed(1)}s`,
   pct: (a,b) => b ? `${Math.round(a*100/b)}%` : '0%',
+  usd: n => n == null ? '—' : '$' + Number(n).toFixed(n < 0.01 ? 6 : 4),
+  toks: n => {
+    if (n == null) return '—';
+    if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
+    if (n >= 1e3) return (n/1e3).toFixed(1) + 'k';
+    return String(n);
+  },
   date: s => {
     if (!s) return '—';
     const d = new Date(s);
@@ -98,7 +105,7 @@ const fmt = {
   },
 };
 
-let state = { tab: 'stats', stats: null, tasks: [], tokens: [], agents: [] };
+let state = { tab: 'stats', stats: null, tasks: [], tokens: [], agents: [], balances: {} };
 
 async function api(path) {
   const r = await fetch(path, { credentials: 'include' });
@@ -110,16 +117,18 @@ async function api(path) {
 async function refresh() {
   const ok = await api('/api/whoami');
   if (!ok) { renderLogin(); return; }
-  const [stats, tasks, tokens, agents] = await Promise.all([
+  const [stats, tasks, tokens, agents, balances] = await Promise.all([
     api('/api/stats'),
     api('/api/tasks?limit=50'),
     api('/api/tokens'),
     api('/api/agents'),
+    api('/api/balances'),
   ]);
   state.stats = stats;
   state.tasks = tasks || [];
   state.tokens = tokens || [];
   state.agents = agents || [];
+  state.balances = balances || {};
   render();
 }
 
@@ -198,6 +207,38 @@ function renderTasks() {
   return el('section', {class:'active'}, table);
 }
 
+function renderBalances() {
+  const providers = Object.keys(state.balances || {});
+  if (!providers.length) return el('div',{},'');
+  const cards = providers.sort().map(p => {
+    const b = state.balances[p];
+    const live = b.live_balance;
+    let liveBlock = '';
+    if (live && live.total_balance != null) {
+      liveBlock = el('div',{style:'margin-top:8px'},
+        el('div',{class:'label'}, 'Баланс на сервисе (live)'),
+        el('div',{class:'value'}, '$' + Number(live.total_balance).toFixed(2)),
+        el('div',{style:'color:var(--mute);font-size:11px;margin-top:4px'},
+          `granted: $${Number(live.granted_balance||0).toFixed(2)} · topped up: $${Number(live.topped_up_balance||0).toFixed(2)}`),
+      );
+    } else if (live && live.error) {
+      liveBlock = el('div',{style:'margin-top:8px;color:var(--warn);font-size:12px'}, '⚠ live balance: ' + live.error);
+    }
+    return el('div',{class:'card'},
+      el('div',{style:'display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px'},
+        el('strong',{style:'font-size:15px'}, p),
+        el('span',{class:'pill mute'}, `${b.tokens_active}/${b.tokens_count} ключей`),
+      ),
+      el('div',{class:'label'}, 'Потрачено (оценка)'),
+      el('div',{class:'value'}, fmt.usd(b.spent_usd)),
+      el('div',{style:'color:var(--mute);font-size:12px;margin-top:4px'},
+        `${fmt.toks(b.tokens_in)} in · ${fmt.toks(b.tokens_out)} out · ${fmt.num(b.requests)} запросов`),
+      liveBlock,
+    );
+  });
+  return el('div', {class:'grid cards', style:'margin-bottom:24px'}, cards);
+}
+
 function renderTokens() {
   const rows = state.tokens.map(t => {
     const pctUsed = t.daily_limit ? t.daily_used / t.daily_limit : 0;
@@ -214,6 +255,11 @@ function renderTokens() {
         el('div',{}, `${fmt.num(t.daily_used)} / ${fmt.num(t.daily_limit)}`),
         el('div',{class:'bar'}, el('div',{class:barCls, style:`width:${Math.min(pctUsed*100,100)}%`})),
       ),
+      el('td', {style:'font-size:12px;color:var(--mute)'},
+        el('div',{}, `${fmt.toks(t.tokens_in)} in`),
+        el('div',{}, `${fmt.toks(t.tokens_out)} out`),
+      ),
+      el('td', {}, fmt.usd(t.cost_usd)),
       el('td', {}, status),
       el('td', {}, t.error_count || 0),
       el('td', {style:'color:var(--mute)'}, fmt.date(t.last_used_at)),
@@ -222,12 +268,13 @@ function renderTokens() {
   const table = el('table', {},
     el('thead', {}, el('tr',{},
       el('th',{},'#'), el('th',{},'Провайдер'), el('th',{},'Label'),
-      el('th',{},'Capabilities'), el('th',{},'Использовано'),
+      el('th',{},'Capabilities'), el('th',{},'Запросов'),
+      el('th',{},'Токены'), el('th',{},'Стоимость'),
       el('th',{},'Статус'), el('th',{},'Ошибки'), el('th',{},'Последнее'),
     )),
     el('tbody', {}, rows),
   );
-  return el('section', {class:'active'}, table);
+  return el('section', {class:'active'}, renderBalances(), table);
 }
 
 function renderAgents() {
