@@ -3,6 +3,7 @@ import logging
 from dataclasses import dataclass, field
 
 from app.internal.agent_repo import get_online_agents
+from app.orchestrator.memory import format_history
 
 log = logging.getLogger(__name__)
 
@@ -79,12 +80,18 @@ class Intent:
     context: dict = field(default_factory=dict)
 
 
-async def prefilter(text: str) -> Intent:
+async def prefilter(text: str, user_id: int | None = None) -> Intent:
     agents = await get_online_agents()
     agent_list = ", ".join(a["id"] for a in agents) if agents else "none"
+    history = format_history(user_id)
 
+    history_block = (
+        f"\nRecent dialog (use for references like 'ещё раз', 'тот же', 'там же'):\n{history}\n"
+        if history else ""
+    )
     prompt = (
-        f"Available agents: [{agent_list}]\n\n"
+        f"Available agents: [{agent_list}]\n"
+        f"{history_block}\n"
         f"User request: {text}\n\n"
         "Return JSON only."
     )

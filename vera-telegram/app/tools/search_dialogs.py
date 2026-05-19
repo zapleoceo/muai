@@ -2,11 +2,12 @@ from telethon.tl.functions.contacts import SearchRequest
 from telethon.tl.types import User, Chat, Channel
 
 from app.userbot.client import get_client
+from app.tools.read_messages import _query_variants
 
 
 def _entity_type(entity) -> str:
     if isinstance(entity, User):
-        return "user"
+        return "bot" if getattr(entity, "bot", False) else "user"
     if isinstance(entity, Channel):
         return "channel" if entity.broadcast else "supergroup"
     if isinstance(entity, Chat):
@@ -25,14 +26,25 @@ def _entity_name(entity) -> str:
 
 async def search_dialogs(query: str, limit: int = 10) -> list[dict]:
     client = get_client()
-    res = await client(SearchRequest(q=query, limit=limit))
-    entities = list(res.users) + list(res.chats)
-    return [
-        {
-            "id": e.id,
-            "name": _entity_name(e),
-            "type": _entity_type(e),
-            "username": getattr(e, "username", None),
-        }
-        for e in entities[:limit]
-    ]
+    seen: set[int] = set()
+    results: list[dict] = []
+
+    for q in _query_variants(query):
+        try:
+            res = await client(SearchRequest(q=q, limit=limit))
+        except Exception:
+            continue
+        for e in list(res.users) + list(res.chats):
+            if e.id in seen:
+                continue
+            seen.add(e.id)
+            results.append({
+                "id": e.id,
+                "name": _entity_name(e),
+                "type": _entity_type(e),
+                "username": getattr(e, "username", None),
+            })
+            if len(results) >= limit * 2:
+                break
+
+    return results[:limit]

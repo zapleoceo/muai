@@ -4,6 +4,7 @@ import time
 from app.db.tasks import save_task, update_task
 from app.orchestrator.dispatcher import dispatch
 from app.orchestrator.evaluator import evaluate
+from app.orchestrator.memory import add_turn
 from app.orchestrator.prefilter import prefilter
 from app.orchestrator.responder import respond
 
@@ -16,7 +17,7 @@ _QUALITY_THRESHOLD = 0.6
 async def run(input_text: str, user_id: int | None) -> str:
     started = time.monotonic()
     task_id = await save_task("telegram", user_id, input_text)
-    intent = await prefilter(input_text)
+    intent = await prefilter(input_text, user_id=user_id)
 
     if not intent.target_agents:
         final = await _self_answer(input_text)
@@ -28,7 +29,9 @@ async def run(input_text: str, user_id: int | None) -> str:
     await update_task(
         task_id, final, score, attempts, list(intent.target_agents), duration_ms
     )
-    return final or "Готово."
+    reply = final or "Готово."
+    add_turn(user_id, input_text, reply)
+    return reply
 
 
 async def _orchestrate(intent, request: str, task_id: int) -> tuple[str, float, int]:

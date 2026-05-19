@@ -1,4 +1,5 @@
 import logging
+import re
 from dataclasses import dataclass
 
 from app.tools.search_dialogs import search_dialogs
@@ -24,23 +25,21 @@ class ToolResult:
 
 
 async def handle_task(request: str, intent: dict) -> ToolResult:
-    ctx = intent or {}
+    ctx = dict(intent or {})
     action = (ctx.get("action") or _infer_action(request, ctx)).lower()
 
-    # Self-correct: read_messages without peer makes no sense — try to derive
-    # peer from the request, or fall back to search if it looks like a list query.
     if action in ("read_messages", "read") and not ctx.get("peer"):
         derived = _derive_peer(request)
         if derived:
-            ctx = {**ctx, "peer": derived}
+            ctx["peer"] = derived
         else:
             action = "search_dialogs"
-            ctx = {**ctx, "query": ctx.get("query") or request}
+            ctx["query"] = ctx.get("query") or request
 
     try:
         if action in ("search_dialogs", "search"):
             query = str(ctx.get("query") or ctx.get("peer") or request)
-            data = await search_dialogs(query, limit=int(ctx.get("limit", 10)))
+            data = await search_dialogs(query, limit=int(ctx.get("limit", 15)))
             return ToolResult(True, f"Найдено диалогов: {len(data)}", data)
 
         if action in ("send_message", "send"):
@@ -59,13 +58,17 @@ async def handle_task(request: str, intent: dict) -> ToolResult:
         peer = str(ctx.get("peer", ""))
         limit = int(ctx.get("limit", 50))
         days = int(ctx.get("days", 1))
-        data = await read_messages(peer, limit=limit, offset_days=days)
-        chat = data.get("chat_name", peer)
-        count = data.get("messages_count", 0)
-        note = data.get("resolution_note") or ""
-        summary = f"Прочитано {count} сообщений из «{chat}» за {days}д"
-        if note:
-            summary += f" ({note})"
+        data = await read_messages(peer, limit=limit, offset_days=days, request_hint=request)
+        chats = data.get("chats_read", [])
+        total = data.get("candidates_total", 0)
+        if not chats:
+            return ToolResult(True, f"Совпадений: {total}, сообщений за {days}д нет", data)
+        names = [c["chat_name"] for c in chats]
+        total_msgs = sum(c["messages_count"] for c in chats)
+        summary = (
+            f"Прочитал {total_msgs} сообщений из {len(chats)} чатов "
+            f"({', '.join(names)}) за {days}д. Совпадений всего: {total}"
+        )
         return ToolResult(True, summary, data)
 
     except LookupError as exc:
@@ -75,26 +78,26 @@ async def handle_task(request: str, intent: dict) -> ToolResult:
         return ToolResult(False, f"Ошибка инструмента: {exc}", error=str(exc))
 
 
-_READ_HINTS = ("прочитай", "о чём", "о чем", "общались", "переписк", "сообщени")
-_SEND_HINTS = ("отправь", "напиши ", "send ")
-_SEARCH_HINTS = ("найди чат", "найди диалог", "поищи", "search")
-
-
 def _derive_peer(request: str) -> str:
-    import re
-    # Pick the longest capitalized or Latin word (likely a name)
     words = re.findall(r"[A-Za-zА-ЯЁ][A-Za-zА-ЯЁа-яё0-9_]{2,}", request)
     return max(words, key=len) if words else ""
+
+
+_READ_HINTS = ("прочитай", "о чём", "о чем", "общались", "переписк", "сообщени",
+               "анонс", "новост", "что там", "что в чате")
+_SEND_HINTS = ("отправь", "напиши ", "send ")
+_SEARCH_HINTS = ("найди чат", "найди диалог", "поищи", "search", "список чатов",
+                 "все чаты", "в названии")
 
 
 def _infer_action(request: str, ctx: dict) -> str:
     r = request.lower()
     if ctx.get("text"):
         return "send_message"
-    if any(h in r for h in _SEND_HINTS):
-        return "send_message"
     if any(h in r for h in _SEARCH_HINTS):
         return "search_dialogs"
+    if any(h in r for h in _SEND_HINTS):
+        return "send_message"
     if any(h in r for h in _READ_HINTS):
         return "read_messages"
     return "read_messages"
