@@ -1,0 +1,289 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Vera Dashboard</title>
+<style>
+  :root{
+    --bg:#0e1014; --bg2:#161a21; --line:#222831; --fg:#e6edf3;
+    --mute:#7d8590; --acc:#7ee787; --warn:#f0883e; --err:#f85149;
+    --ok:#3fb950; --info:#58a6ff;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif}
+  a{color:var(--info);text-decoration:none}
+  a:hover{text-decoration:underline}
+  header{
+    display:flex;align-items:center;justify-content:space-between;
+    padding:14px 24px;border-bottom:1px solid var(--line);background:var(--bg2);
+    position:sticky;top:0;z-index:10;
+  }
+  header h1{font-size:16px;margin:0;font-weight:600;letter-spacing:.5px}
+  header .sub{color:var(--mute);font-size:12px;margin-left:12px}
+  header nav{display:flex;gap:4px}
+  header nav button{
+    background:none;border:1px solid transparent;color:var(--mute);
+    padding:6px 12px;border-radius:6px;cursor:pointer;font:inherit;
+  }
+  header nav button.active{color:var(--fg);border-color:var(--line);background:var(--bg)}
+  header nav button:hover{color:var(--fg)}
+  main{padding:24px;max-width:1400px;margin:0 auto}
+  .grid{display:grid;gap:16px}
+  .cards{grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-bottom:24px}
+  .card{
+    background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:16px;
+  }
+  .card .label{color:var(--mute);font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
+  .card .value{font-size:24px;font-weight:600}
+  .card .value.muted{color:var(--mute);font-size:14px}
+  section{display:none}
+  section.active{display:block}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--mute);font-weight:500;text-transform:uppercase;font-size:11px;letter-spacing:.5px}
+  tr:hover td{background:var(--bg2)}
+  .pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;border:1px solid var(--line)}
+  .pill.ok{color:var(--ok);border-color:var(--ok)}
+  .pill.warn{color:var(--warn);border-color:var(--warn)}
+  .pill.err{color:var(--err);border-color:var(--err)}
+  .pill.mute{color:var(--mute)}
+  pre{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--mute);margin:0;white-space:pre-wrap;word-break:break-word;max-height:200px;overflow:auto}
+  .actions{display:flex;gap:8px;align-items:center}
+  .btn{background:none;border:1px solid var(--line);color:var(--fg);padding:6px 12px;border-radius:6px;cursor:pointer;font:inherit}
+  .btn:hover{background:var(--bg2)}
+  .empty{text-align:center;color:var(--mute);padding:60px 20px}
+  .bar{height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin-top:6px}
+  .bar > div{height:100%;background:var(--acc);transition:width .3s}
+  .bar > div.warn{background:var(--warn)}
+  .bar > div.err{background:var(--err)}
+  .toolchip{display:inline-block;padding:2px 8px;margin:2px 4px 2px 0;border-radius:4px;background:var(--bg);border:1px solid var(--line);font:11px ui-monospace,monospace;color:var(--info)}
+  .login{max-width:420px;margin:80px auto;text-align:center;padding:40px;background:var(--bg2);border:1px solid var(--line);border-radius:8px}
+  .login h2{margin:0 0 8px}
+  .login p{color:var(--mute);margin:0 0 20px}
+  .login input{width:100%;padding:10px 12px;background:var(--bg);border:1px solid var(--line);color:var(--fg);border-radius:6px;font:inherit;margin-bottom:12px}
+  .login button{width:100%;padding:10px;background:var(--info);border:none;color:#fff;border-radius:6px;cursor:pointer;font:inherit;font-weight:600}
+  .toast{position:fixed;bottom:20px;right:20px;background:var(--bg2);border:1px solid var(--line);padding:10px 16px;border-radius:6px;color:var(--mute);font-size:12px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+
+<script>
+const $ = (sel, root=document) => root.querySelector(sel);
+const el = (tag, attrs={}, ...children) => {
+  const n = document.createElement(tag);
+  Object.entries(attrs).forEach(([k,v]) => {
+    if (k === 'class') n.className = v;
+    else if (k === 'html') n.innerHTML = v;
+    else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+    else n.setAttribute(k, v);
+  });
+  children.flat().forEach(c => n.append(c?.nodeType ? c : document.createTextNode(c ?? '')));
+  return n;
+};
+
+const fmt = {
+  num: n => n == null ? '—' : Number(n).toLocaleString('ru-RU'),
+  ms:  n => n == null ? '—' : n < 1000 ? `${n}ms` : `${(n/1000).toFixed(1)}s`,
+  pct: (a,b) => b ? `${Math.round(a*100/b)}%` : '0%',
+  date: s => {
+    if (!s) return '—';
+    const d = new Date(s);
+    const ms = Date.now() - d.getTime();
+    if (ms < 60000) return 'только что';
+    if (ms < 3600000) return `${Math.round(ms/60000)} мин назад`;
+    if (ms < 86400000) return `${Math.round(ms/3600000)} ч назад`;
+    return d.toLocaleDateString('ru-RU') + ' ' + d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
+  },
+};
+
+let state = { tab: 'stats', stats: null, tasks: [], tokens: [], agents: [] };
+
+async function api(path) {
+  const r = await fetch(path, { credentials: 'include' });
+  if (r.status === 401) return null;
+  if (!r.ok) throw new Error(`${r.status} ${path}`);
+  return r.json();
+}
+
+async function refresh() {
+  const ok = await api('/api/whoami');
+  if (!ok) { renderLogin(); return; }
+  const [stats, tasks, tokens, agents] = await Promise.all([
+    api('/api/stats'),
+    api('/api/tasks?limit=50'),
+    api('/api/tokens'),
+    api('/api/agents'),
+  ]);
+  state.stats = stats;
+  state.tasks = tasks || [];
+  state.tokens = tokens || [];
+  state.agents = agents || [];
+  render();
+}
+
+function renderLogin() {
+  const app = $('#app');
+  app.innerHTML = '';
+  const form = el('form', {class:'login', onsubmit:(e)=>{
+    e.preventDefault();
+    const t = form.querySelector('input').value.trim();
+    if (t) window.location.href = '/api/login?token=' + encodeURIComponent(t);
+  }},
+    el('h2', {}, 'Vera Dashboard'),
+    el('p', {}, 'Введи DEPLOY_SECRET чтобы войти'),
+    el('input', {type:'password', placeholder:'DEPLOY_SECRET', autocomplete:'off'}),
+    el('button', {type:'submit'}, 'Войти'),
+  );
+  app.append(form);
+}
+
+function statCard(label, value, sub) {
+  return el('div', {class:'card'},
+    el('div',{class:'label'}, label),
+    el('div',{class:'value'}, value ?? '—'),
+    sub ? el('div',{class:'value muted'}, sub) : '',
+  );
+}
+
+function pill(text, cls='') { return el('span', {class:`pill ${cls}`}, text); }
+
+function renderStats() {
+  const s = state.stats || {};
+  const grid = el('div', {class:'grid cards'},
+    statCard('Запросов всего', fmt.num(s.tasks_total)),
+    statCard('За 24 часа', fmt.num(s.tasks_24h)),
+    statCard('Средняя длительность', fmt.ms(s.avg_duration_ms)),
+    statCard('Агентов онлайн', fmt.num(s.agents_online)),
+    statCard('Активных токенов', fmt.num(s.tokens_active)),
+  );
+  return el('section', {class:'active'}, grid);
+}
+
+function renderTasks() {
+  if (!state.tasks.length) return el('section', {class:'active'}, el('div',{class:'empty'}, 'Пока нет задач'));
+  const rows = state.tasks.map(t => el('tr', {},
+    el('td', {}, '#' + t.id),
+    el('td', {style:'color:var(--mute)'}, fmt.date(t.created_at)),
+    el('td', {style:'max-width:300px'}, el('div',{html: escapeHtml(t.input_text)})),
+    el('td', {}, (t.agents_used||[]).map(a => pill(a,'mute'))),
+    el('td', {}, fmt.ms(t.duration_ms)),
+    el('td', {}, pill(t.status || '?', t.status==='done'?'ok':'mute')),
+    el('td', {style:'max-width:400px'}, el('pre',{}, t.final_result || '—')),
+  ));
+  const table = el('table', {},
+    el('thead', {}, el('tr',{},
+      el('th',{},'#'), el('th',{},'Время'), el('th',{},'Запрос'),
+      el('th',{},'Агенты'), el('th',{},'Длит.'), el('th',{},'Статус'), el('th',{},'Ответ'),
+    )),
+    el('tbody', {}, rows),
+  );
+  return el('section', {class:'active'}, table);
+}
+
+function renderTokens() {
+  const rows = state.tokens.map(t => {
+    const pctUsed = t.daily_limit ? t.daily_used / t.daily_limit : 0;
+    const barCls = pctUsed >= 0.9 ? 'err' : pctUsed >= 0.6 ? 'warn' : '';
+    let status = pill('активен','ok');
+    if (!t.is_active) status = pill('отключён','err');
+    else if (t.in_cooldown) status = pill('cooldown','warn');
+    return el('tr', {},
+      el('td', {}, '#' + t.id),
+      el('td', {}, t.provider),
+      el('td', {}, t.label),
+      el('td', {}, (t.capabilities||[]).map(c => pill(c,'mute'))),
+      el('td', {},
+        el('div',{}, `${fmt.num(t.daily_used)} / ${fmt.num(t.daily_limit)}`),
+        el('div',{class:'bar'}, el('div',{class:barCls, style:`width:${Math.min(pctUsed*100,100)}%`})),
+      ),
+      el('td', {}, status),
+      el('td', {}, t.error_count || 0),
+      el('td', {style:'color:var(--mute)'}, fmt.date(t.last_used_at)),
+    );
+  });
+  const table = el('table', {},
+    el('thead', {}, el('tr',{},
+      el('th',{},'#'), el('th',{},'Провайдер'), el('th',{},'Label'),
+      el('th',{},'Capabilities'), el('th',{},'Использовано'),
+      el('th',{},'Статус'), el('th',{},'Ошибки'), el('th',{},'Последнее'),
+    )),
+    el('tbody', {}, rows),
+  );
+  return el('section', {class:'active'}, table);
+}
+
+function renderAgents() {
+  if (!state.agents.length) return el('section', {class:'active'}, el('div',{class:'empty'}, 'Нет агентов'));
+  const cards = state.agents.map(a => {
+    const toolList = (a.tools || []).map(t =>
+      el('div', {style:'margin:6px 0'},
+        el('span',{class:'toolchip'}, t.name),
+        el('span',{style:'color:var(--mute);font-size:12px'}, ' — ' + (t.description || '').slice(0,120))
+      )
+    );
+    return el('div', {class:'card', style:'margin-bottom:16px'},
+      el('div', {style:'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'},
+        el('div', {},
+          el('strong',{}, a.name),
+          el('span',{style:'color:var(--mute);margin-left:8px'}, a.id),
+        ),
+        pill(a.status, a.status==='online'?'ok':'err'),
+      ),
+      el('div', {style:'color:var(--mute);font-size:12px;margin-bottom:12px'},
+        `${a.http_url} · последний heartbeat: ${fmt.date(a.last_heartbeat)}`,
+      ),
+      el('div', {}, toolList),
+    );
+  });
+  return el('section', {class:'active'}, cards);
+}
+
+function escapeHtml(s) {
+  if (s == null) return '';
+  return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+}
+
+function render() {
+  const app = $('#app');
+  app.innerHTML = '';
+
+  const tabs = [
+    ['stats','Статистика'],
+    ['tasks','Задачи'],
+    ['tokens','Токены'],
+    ['agents','Агенты'],
+  ];
+  const header = el('header', {},
+    el('div', {},
+      el('h1', {}, 'Vera'),
+      el('span', {class:'sub'}, 'orchestrator dashboard'),
+    ),
+    el('nav', {}, tabs.map(([id,name]) =>
+      el('button',{class: state.tab===id?'active':'', onclick: ()=>{state.tab=id; render();}}, name))),
+    el('div', {class:'actions'},
+      el('button', {class:'btn', onclick: refresh}, '↻ Обновить'),
+      el('a', {href:'/api/logout', class:'btn', style:'text-decoration:none'}, 'Выход'),
+    ),
+  );
+  app.append(header);
+
+  const main = el('main', {});
+  let body;
+  if (state.tab === 'stats') body = renderStats();
+  else if (state.tab === 'tasks') body = renderTasks();
+  else if (state.tab === 'tokens') body = renderTokens();
+  else if (state.tab === 'agents') body = renderAgents();
+  main.append(body);
+  app.append(main);
+}
+
+refresh().catch(err => {
+  console.error(err);
+  document.body.append(el('div',{class:'toast'}, 'Ошибка загрузки: ' + err.message));
+});
+setInterval(() => { if (state.stats) refresh().catch(()=>{}); }, 8000);
+</script>
+</body>
+</html>
