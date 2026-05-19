@@ -1,5 +1,6 @@
 from datetime import datetime, timedelta, timezone
 
+from telethon.errors import FloodWaitError
 from telethon.tl.functions.contacts import SearchRequest
 
 from app.userbot.client import get_client
@@ -26,38 +27,60 @@ def _entity_name(entity) -> str:
     return " ".join(filter(None, [fn, ln])) or str(getattr(entity, "id", ""))
 
 
-async def _resolve_peer(peer: str):
+async def _candidates_from_recent(query: str, limit: int = 200) -> list[tuple]:
+    """Return [(dialog, entity, last_date), ...] matching query, sorted by recency."""
+    client = get_client()
+    q = query.lower()
+    matches: list[tuple] = []
+    try:
+        async for d in client.iter_dialogs(limit=limit):
+            name = _entity_name(d.entity).lower()
+            if q in name:
+                matches.append((d, d.entity, d.date))
+    except FloodWaitError:
+        return []
+    matches.sort(key=lambda x: x[2] or datetime.min.replace(tzinfo=timezone.utc), reverse=True)
+    return matches
+
+
+async def _resolve_peer(peer: str) -> tuple:
+    """Returns (entity, resolution_note). Raises LookupError if nothing found."""
     client = get_client()
     if not peer:
-        raise LookupError("peer is empty — укажи с кем переписку читать")
+        raise LookupError("peer пустой — укажи с кем читать переписку")
 
     if peer.lstrip("-").isdigit():
-        return await client.get_entity(int(peer))
+        e = await client.get_entity(int(peer))
+        return e, ""
 
     try:
-        return await client.get_entity(peer)
+        e = await client.get_entity(peer)
+        return e, ""
     except Exception:
         pass
 
-    # Server-side search — does NOT iterate all dialogs, no flood wait
-    res = await client(SearchRequest(q=peer, limit=10))
-    candidates = list(res.users) + list(res.chats)
-    if not candidates:
-        raise LookupError(f"диалог с «{peer}» не найден (попробуй точное имя или @username)")
+    recent = await _candidates_from_recent(peer, limit=200)
+    if recent:
+        _, entity, _ = recent[0]
+        if len(recent) > 1:
+            others = ", ".join(_entity_name(e) for _, e, _ in recent[1:4])
+            note = f"найдено {len(recent)} совпадений, выбрал самый активный «{_entity_name(entity)}» (другие: {others})"
+        else:
+            note = ""
+        return entity, note
 
-    q = peer.lower()
-    exact = [e for e in candidates if q == _entity_name(e).lower()]
-    if exact:
-        return exact[0]
-    starts = [e for e in candidates if _entity_name(e).lower().startswith(q)]
-    return (starts or candidates)[0]
+    res = await client(SearchRequest(q=peer, limit=10))
+    entities = list(res.users) + list(res.chats)
+    if not entities:
+        raise LookupError(f"диалог с «{peer}» не найден")
+    return entities[0], f"в недавних не нашёл, взял через серверный поиск: «{_entity_name(entities[0])}»"
 
 
 async def read_messages(
-    peer: str, limit: int = 30, offset_days: int = 1
-) -> list[dict]:
+    peer: str, limit: int = 50, offset_days: int = 1
+) -> dict:
     client = get_client()
-    entity = await _resolve_peer(peer)
+    entity, note = await _resolve_peer(peer)
     chat_name = _entity_name(entity)
     cutoff = datetime.now(timezone.utc) - timedelta(days=offset_days)
 
@@ -72,6 +95,12 @@ async def read_messages(
             "text": msg.text or "",
             "from": _sender_name(msg),
             "out": msg.out,
-            "_chat_name": chat_name,
         })
-    return messages
+
+    return {
+        "chat_name": chat_name,
+        "chat_id": entity.id,
+        "resolution_note": note,
+        "messages_count": len(messages),
+        "messages": messages,
+    }

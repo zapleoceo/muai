@@ -47,15 +47,16 @@ async def handle_task(request: str, intent: dict) -> ToolResult:
             return ToolResult(True, f"Инфо о {data.get('name', peer)}", data)
 
         peer = str(ctx.get("peer", ""))
-        limit = int(ctx.get("limit", 30))
+        limit = int(ctx.get("limit", 50))
         days = int(ctx.get("days", 1))
         data = await read_messages(peer, limit=limit, offset_days=days)
-        peer_label = data[0].get("_chat_name", peer) if data else peer
-        return ToolResult(
-            True,
-            f"Прочитано {len(data)} сообщений из «{peer_label}» за {days}д",
-            data,
-        )
+        chat = data.get("chat_name", peer)
+        count = data.get("messages_count", 0)
+        note = data.get("resolution_note") or ""
+        summary = f"Прочитано {count} сообщений из «{chat}» за {days}д"
+        if note:
+            summary += f" ({note})"
+        return ToolResult(True, summary, data)
 
     except LookupError as exc:
         return ToolResult(False, str(exc), error="peer_not_found")
