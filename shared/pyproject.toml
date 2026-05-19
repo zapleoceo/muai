@@ -1,0 +1,19 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "vera-shared"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = [
+    "sqlalchemy>=2.0",
+    "aiosqlite>=0.19",
+    "httpx>=0.27",
+    "google-generativeai>=0.8",
+    "voyageai>=0.2",
+    "pydantic>=2.0",
+]
+
+[tool.setuptools.packages.find]
+where = ["."]

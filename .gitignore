@@ -15,3 +15,8 @@ _tools/
 .claude/settings.local.json
 .claude/session_log.txt
 .claude/worktrees/
+.env
+data/
+__pycache__/
+*.session
+*.pyc

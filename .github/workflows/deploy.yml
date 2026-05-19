@@ -8,46 +8,9 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Deploy via SSH
+      - name: Trigger deploy on server
         run: |
-          echo "${{ secrets.DEPLOY_SSH_KEY }}" > /tmp/deploy_key
-          chmod 600 /tmp/deploy_key
-
-          ssh -i /tmp/deploy_key \
-              -o StrictHostKeyChecking=no \
-              -o ConnectTimeout=10 \
-              -p 9617 root@195.201.31.49 \
-            'set -e
-             cd /var/www/tgbot
-
-             echo "=== git pull ==="
-             GIT_SSH_COMMAND="ssh -i /root/.ssh/github_deploy -o StrictHostKeyChecking=no" \
-               git fetch origin master
-             git reset --hard origin/master
-
-             echo "=== build ==="
-             docker compose build bot
-
-             echo "=== restart ==="
-             docker compose stop bot  || true
-             docker compose rm -f bot || true
-             docker compose up -d bot
-
-             echo "=== waiting for startup (15s) ==="
-             sleep 15
-
-             STATUS=$(docker compose ps bot --format "{{.Status}}")
-             echo "Container status: $STATUS"
-
-             if echo "$STATUS" | grep -qiE "restarting|exited|unhealthy"; then
-               echo "ERROR: container failed to start"
-               docker compose logs bot --tail=60 --no-log-prefix
-               exit 1
-             fi
-
-             echo "=== OK — tail logs ==="
-             docker compose logs bot --tail=30 --no-log-prefix'
-
-      - name: Cleanup SSH key
-        if: always()
-        run: rm -f /tmp/deploy_key
+          curl -f -X POST https://dima.veranda.my/deploy \
+            -H "Authorization: Bearer ${{ secrets.DEPLOY_SECRET }}" \
+            -H "Content-Type: application/json" \
+            -d "{\"ref\": \"${{ github.sha }}\", \"message\": \"${{ github.event.head_commit.message }}\"}"

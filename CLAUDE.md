@@ -1,4 +1,4 @@
-# myAI — Project Documentation
+# Vera 2.0 — Project Documentation
 
 > **READ THIS FIRST.** This file is the single source of truth for any AI assistant,
 > developer, or tool working on this project. Before touching any code, read this
@@ -10,98 +10,409 @@
 
 | Item | Value |
 |------|-------|
-| Stack | Python 3.12, FastAPI, aiogram 3, SQLAlchemy 2 async, Telethon, PostgreSQL 16 |
-| Bot token | in `.env` → `TELEGRAM_BOT_TOKEN` |
+| Stack | Python 3.12, FastAPI, aiogram 3, SQLAlchemy 2 async, Telethon, SQLite |
 | Live URL | https://dima.veranda.my |
-| Server | Hetzner VPS, 195.201.31.49, port 9617, SSH alias `hetzner-root` |
+| Server | Hetzner VPS, 195.201.31.49, SSH alias `hetzner-root` |
 | Repo | https://github.com/zapleoceo/muai |
-| Container | `tgbot-bot-1` (bot + FastAPI), `tgbot-db-1` (PostgreSQL) |
-| Project dir on server | `/var/www/tgbot` |
-| Compose file on server | `/var/www/tgbot/docker-compose.yml` |
+| DB | SQLite at `DB_PATH=/data/vera.db` (single shared file, all services) |
+| Project dir on server | `/var/www/vera` |
+| Owner Telegram ID | `169510539` (Dima) |
+
+---
+
+## Concept
+
+Vera is an AI orchestrator. It does **not** execute tasks itself. It:
+
+1. Receives tasks from Dima via @mention in a private Telegram group
+2. Classifies intent via a cheap prefilter
+3. Reformats the task into optimized prompts for each relevant specialized bot
+4. Dispatches to bots in parallel via internal HTTP
+5. Evaluates response quality with an LLM-judge
+6. Retries with improved prompts if quality is poor (max 3 attempts)
+7. Posts the final result to the group (Telegram = audit trail)
+
+New bots can be added dynamically by telling Vera in the group. Vera instructs vera-dev to scaffold, vera-git to push, and the CI/CD pipeline deploys automatically.
 
 ---
 
 ## Architecture
 
 ```
-myAI/
-├── app/
-│   ├── main.py              # FastAPI app, lifespan (DB init, token seed, webhook, userbot)
-│   ├── config.py            # Pydantic Settings, reads .env
-│   ├── api/
-│   │   ├── auth.py          # /auth/telegram login, /auth/logout, require_owner dependency
-│   │   ├── admin.py         # /api/admin/stats|logs|deploy|migrate + token CRUD
-│   │   ├── chats.py         # /api/admin/chats CRUD, sync stop/status, global settings
-│   │   └── routes.py        # misc public routes
-│   ├── bot/
-│   │   ├── handlers/
-│   │   │   ├── commands.py  # /start, /help, /ask
-│   │   │   └── messages.py  # incoming message handler → LLM → reply
-│   │   └── storage.py       # save_incoming(), save_outgoing(), get_dialog_context()
-│   ├── db/
-│   │   ├── database.py      # AsyncEngine + AsyncSessionLocal
-│   │   ├── models.py        # SQLAlchemy ORM models (see schema section)
-│   │   └── repository.py    # MessageRepo: upsert_chat, upsert_user, save_message, etc.
-│   ├── llm/
-│   │   ├── base.py          # LLMProvider ABC
-│   │   ├── factory.py       # get_llm_provider() singleton — reads LLM_PROVIDER from env
-│   │   ├── gemini_provider.py  # GeminiProvider: uses TokenManager for key rotation
-│   │   ├── openai_provider.py  # OpenAIProvider (also used for Groq via base_url)
-│   │   └── stub.py          # StubProvider: echoes input, used when no keys configured
-│   ├── services/
-│   │   ├── auth.py          # make_token(), verify_token(), verify_telegram_widget()
-│   │   ├── chat_settings.py # per-chat sync config + global sync settings (type filter, blacklist)
-│   │   ├── deploy.py        # get_logs(), run_migration(), run_deploy() — runs docker commands
-│   │   ├── stats.py         # get_dashboard_stats() — SQL aggregates + DB size
-│   │   ├── sync_manager.py  # SyncManager singleton: cancellation set, task ref, progress
-│   │   └── tokens.py        # TokenManager singleton: rotation, cooldown, daily counter
-│   └── userbot/
-│       ├── client.py        # TelegramClient singleton, start_userbot(), stop_userbot()
-│       ├── handlers.py      # Telethon event handlers (live messages → storage)
-│       ├── media.py         # chat_type(), chat_title(), media_type() helpers
-│       ├── storage.py       # save_event(), save_history_message()
-│       └── sync.py          # sync_history(): iterates dialogs, respects ChatSyncConfig
-├── alembic/
-│   ├── versions/
-│   │   ├── 001_initial.py   # chats, tg_users, messages, settings tables
-│   │   ├── 002_api_tokens.py
-│   │   └── 003_chat_sync_config.py
-│   └── env.py
-├── static/
-│   └── index.html           # Single-page dashboard (3 tabs: Dashboard / Chats / Settings)
-├── scripts/
-│   └── auth_userbot.py      # One-time Telethon session auth (run interactively)
-├── nginx/
-│   └── tgbot.conf           # nginx: listen 80 only (Cloudflare Flexible SSL)
-├── docker-compose.yml
-├── Dockerfile
-├── requirements.txt
-├── .env                     # secrets — NEVER commit
-└── CLAUDE.md                # ← you are here
+Dima (Telegram group)
+        │
+        ▼
+  vera-core (orchestrator)
+        │
+        ├── prefilter (classify intent, pick bots)
+        │
+        ├── dispatcher ──────────────────────────────────┐
+        │       │                                         │
+        │       ▼                                         ▼
+        │  vera-telegram        vera-dev        vera-git  vera-monitor ...
+        │  (Telethon tools)  (code + Claude) (GitHub ops) (group watch)
+        │       │
+        │       └─── internal HTTP (fast) + Telegram group (audit trail)
+        │
+        ├── evaluator (LLM-judge, score 0–1)
+        └── retry (optimize prompt, re-dispatch, max 3x)
+```
+
+### Communication model
+
+| Channel | Purpose |
+|---------|---------|
+| Internal HTTP (`http://vera-*:8001`) | Task dispatch and results (fast path) |
+| Telegram group | Audit trail visible to Dima, @mention entry point |
+| SQLite DB | Shared state: tokens, agents registry, task log, settings |
+
+---
+
+## Project structure
+
+Every file has one responsibility. Max ~80 lines per file.
+
+```
+vera/
+├── CLAUDE.md                    ← this file
+├── docker-compose.yml           ← all services
+├── .env                         ← minimal secrets only (no tokens)
+├── .github/
+│   └── workflows/
+│       └── deploy.yml           ← CI/CD, triggers on push to master
+│
+├── shared/                      ← pip-installable shared library
+│   ├── pyproject.toml
+│   └── vera_shared/
+│       ├── __init__.py
+│       ├── db/
+│       │   ├── engine.py        ← SQLite async engine factory
+│       │   ├── models.py        ← all ORM models
+│       │   └── migrations.py    ← create_all on startup
+│       ├── tokens/
+│       │   ├── model.py         ← Token dataclass + capabilities
+│       │   ├── repository.py    ← DB CRUD for tokens
+│       │   ├── pool.py          ← TokenPool: rotation, cooldown
+│       │   └── selector.py      ← get_token(capability) → token
+│       ├── providers/
+│       │   ├── base.py          ← BaseProvider ABC
+│       │   ├── gemini.py        ← GeminiProvider(BaseProvider)
+│       │   ├── deepseek.py      ← DeepSeekProvider(BaseProvider)
+│       │   ├── voyage.py        ← VoyageProvider(BaseProvider)
+│       │   └── registry.py      ← {provider_name: BaseProvider}
+│       ├── registry/
+│       │   ├── model.py         ← AgentRecord dataclass
+│       │   ├── repository.py    ← DB CRUD for agents
+│       │   └── client.py        ← register_self(), heartbeat()
+│       └── base_bot/
+│           ├── bot.py           ← BaseBot: handle_task(), register()
+│           ├── task.py          ← Task, TaskResult dataclasses
+│           └── server.py        ← FastAPI server for each bot
+│
+├── vera-core/                   ← orchestrator
+│   ├── Dockerfile
+│   ├── requirements.txt
+│   └── app/
+│       ├── main.py              ← FastAPI + aiogram lifespan
+│       ├── config.py            ← Settings from .env
+│       ├── bot/
+│       │   ├── handler.py       ← incoming TG messages → orchestrator
+│       │   └── sender.py        ← send_to_group(), reply()
+│       ├── orchestrator/
+│       │   ├── pipeline.py      ← main flow: prefilter→dispatch→evaluate→retry
+│       │   ├── prefilter.py     ← classify intent, pick bots
+│       │   ├── dispatcher.py    ← parallel HTTP calls to bots
+│       │   ├── evaluator.py     ← LLM-judge: score response quality
+│       │   ├── retry.py         ← retry loop with prompt optimization
+│       │   └── prompt_builder.py← format task per bot capabilities
+│       ├── deploy/
+│       │   ├── endpoint.py      ← POST /deploy webhook
+│       │   ├── runner.py        ← git pull + docker compose
+│       │   └── health.py        ← poll /health, collect logs
+│       └── dashboard/
+│           ├── routes.py        ← /api/* endpoints
+│           └── auth.py          ← Telegram login widget
+│
+├── vera-telegram/               ← Telethon userbot
+│   ├── Dockerfile
+│   └── app/
+│       ├── main.py
+│       ├── bot.py               ← BaseBot implementation
+│       ├── tools/
+│       │   ├── read_messages.py ← get_messages(peer, limit)
+│       │   ├── search_dialogs.py← search_dialogs(query)
+│       │   └── send_message.py  ← send_message(peer, text)
+│       └── userbot/
+│           ├── client.py        ← Telethon client singleton
+│           └── session.py       ← session file management
+│
+├── vera-dev/                    ← code development bot (Claude)
+│   ├── Dockerfile
+│   └── app/
+│       ├── main.py
+│       ├── bot.py
+│       └── tools/
+│           ├── read_file.py
+│           ├── write_file.py
+│           ├── run_tests.py
+│           └── trigger_deploy.py
+│
+├── vera-git/                    ← GitHub operations bot
+│   ├── Dockerfile
+│   └── app/
+│       ├── main.py
+│       ├── bot.py
+│       └── tools/
+│           ├── push.py          ← git add, commit, push
+│           ├── pr.py            ← create/merge PRs
+│           └── status.py        ← git status, log
+│
+├── vera-monitor/                ← TG group monitoring
+│   ├── Dockerfile
+│   └── app/
+│       ├── main.py
+│       ├── bot.py
+│       ├── listener.py          ← Telethon event handler
+│       ├── dispatch.py          ← group_msg/mention/reply routing
+│       └── summarizer.py        ← Gemini Flash summary for mentions
+│
+└── dashboard/                   ← web UI (static)
+    └── index.html               ← SPA: tokens, agents, tasks, deploy log
+```
+
+---
+
+## Environment variables (`.env`)
+
+Tokens and API keys are **never** in `.env`. They live only in the SQLite DB.
+
+```dotenv
+# Telegram
+TELEGRAM_BOT_TOKEN_VERA=        # vera orchestrator bot
+TELEGRAM_BOT_TOKEN_DEV=         # vera-dev bot
+TELEGRAM_API_ID=                # userbot (Telethon)
+TELEGRAM_API_HASH=              # userbot
+OWNER_TELEGRAM_ID=169510539     # Dima's TG id
+VERA_GROUP_ID=                  # private group chat_id
+
+# Infrastructure
+DB_PATH=/data/vera.db
+SESSION_SECRET=
+DEPLOY_SECRET=                  # for /deploy endpoint
+WEBHOOK_BASE_URL=https://dima.veranda.my
+
+# GitHub (for vera-git bot)
+GITHUB_TOKEN=
+GITHUB_REPO=zapleoceo/muai
 ```
 
 ---
 
 ## Database schema
 
-```
-chats           id(PK), type, title, created_at
-tg_users        id(PK), username, first_name, last_name, language_code, is_bot, created_at
-messages        id(PK), chat_id(FK), user_id(FK), telegram_msg_id, direction(in/out),
-                text, media_type, file_id, caption, raw_json, date_utc,
-                reply_to_msg_id, is_auto_reply, via_guest_bot, edit_date, dialog_key
-settings        key(PK), value   ← JSON blobs for global config (key="sync_settings")
-api_tokens      id(PK), provider, token, label, capabilities(JSONB), is_active, created_at, last_used_at, error_count
-chat_sync_config chat_id(PK/FK→chats), enabled, depth_days, approved_at, skip_reason, created_at
-message_chunks  chat_id, chunk_text, embedding(vector), msg_date_from/to, msg id ranges, meta(jsonb)
-media_chunks    chat_id, source_tg_msg_id, media_type, chunk_text, embedding(vector), meta(jsonb)
+Single SQLite file at `DB_PATH`. All services share it. Schema applied via `create_all` on startup (no Alembic).
+
+```sql
+-- All API keys. Tokens NEVER leave the DB.
+tokens (
+  id INTEGER PRIMARY KEY,
+  provider TEXT NOT NULL,          -- gemini | deepseek | voyage | anthropic
+  label TEXT NOT NULL,             -- human name (zapleosoft, default, etc)
+  token TEXT NOT NULL,             -- actual key — NEVER in git or env
+  capabilities JSON NOT NULL,      -- ["chat:fast", "prefilter"]
+  is_active BOOLEAN DEFAULT 1,
+  daily_limit INTEGER DEFAULT 1500,
+  daily_used INTEGER DEFAULT 0,
+  daily_reset_at DATE,
+  cooldown_until DATETIME,
+  error_count INTEGER DEFAULT 0,
+  last_used_at DATETIME,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)
+
+-- Registered bots, updated via heartbeat
+agents (
+  id TEXT PRIMARY KEY,             -- "vera-telegram", "vera-gmail-dima"
+  name TEXT NOT NULL,
+  capabilities JSON NOT NULL,      -- what this bot can do: ["email:read"]
+  required_caps JSON NOT NULL,     -- what token caps it needs: ["chat:fast"]
+  http_url TEXT NOT NULL,          -- internal http://vera-telegram:8001
+  bot_username TEXT,               -- @vera_telegram_bot
+  status TEXT DEFAULT 'offline',   -- online | offline | busy
+  last_heartbeat DATETIME,
+  registered_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)
+
+-- Every orchestration task, fully logged
+tasks (
+  id INTEGER PRIMARY KEY,
+  source TEXT NOT NULL,            -- telegram_group | direct | scheduled
+  user_id INTEGER,
+  input_text TEXT NOT NULL,
+  intent JSON,                     -- prefilter result
+  agents_used JSON,                -- which bots were called
+  attempts INTEGER DEFAULT 1,
+  final_result TEXT,
+  quality_score REAL,
+  tokens_used JSON,                -- per-provider usage stats
+  cost_usd REAL DEFAULT 0,
+  duration_ms INTEGER,
+  status TEXT DEFAULT 'pending',   -- pending | running | done | failed
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)
+
+-- Key-value config blobs
+settings (
+  key TEXT PRIMARY KEY,
+  value JSON NOT NULL,
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+)
 ```
 
-**Applying migrations:** The container has no psycopg2, so Alembic can't run directly.
-Apply SQL manually via:
-```bash
-docker compose exec -T db psql -U bot tgbot -c "CREATE TABLE ..."
+---
+
+## Token capability system
+
+Tokens are selected by **capability flag**, not by provider name. This means new providers can be added by inserting tokens with the right capability — no code changes needed.
+
+### Capability flags
+
+| Flag | Meaning | Default providers |
+|------|---------|------------------|
+| `chat:fast` | Cheap/fast chat | Gemini Flash |
+| `chat:smart` | Stronger reasoning | DeepSeek, Anthropic |
+| `chat:code` | Code generation | DeepSeek, Anthropic |
+| `embed` | Text embeddings | Voyage |
+| `prefilter` | Cheapest classifier, always runs first | Gemini Flash |
+
+### Default assignments by provider
+
+| Provider | Default capabilities |
+|---------|---------------------|
+| `gemini` | `["chat:fast", "prefilter"]` |
+| `deepseek` | `["chat:smart", "chat:code"]` |
+| `voyage` | `["embed"]` |
+| `anthropic` | `["chat:smart", "chat:code"]` |
+
+### Existing tokens (migrate from Vera 1.0 SQLite DB)
+
+| Provider | Count | Labels |
+|---------|-------|--------|
+| Gemini Flash (free tier) | 8 | default, zapleosoft, Verandapayments, Zaporozhets, Liza, Billaa, Maya, Oleg |
+| DeepSeek | 1 | demoniwwwe |
+| Voyage (embeddings) | 5 | demoniwwwe, zapleosoft, verandapay, lev, Eva |
+| Anthropic Claude | 1 | default |
+
+All 15 tokens must be exported from the old DB and imported into the new `tokens` table with appropriate `capabilities`. They must **never** appear in `.env` or git.
+
+---
+
+## Token rotation logic (`shared/tokens/pool.py`)
+
 ```
+get_token(capability: str) → str:
+  1. Filter tokens WHERE capability IN capabilities
+  2. Filter is_active = True
+  3. Filter cooldown_until < now OR cooldown_until IS NULL
+  4. Filter daily_used < daily_limit
+  5. Sort by last_used_at ASC  (least recently used first)
+  6. If empty → find minimum cooldown_until, raise TokensExhausted(retry_after=X)
+  7. Return token, update last_used_at, increment daily_used
+
+on_error(token_id, error_type):
+  429        → cooldown 60s,  error_count++
+  5xx        → cooldown 300s, error_count++
+  auth_error → is_active = False, alert posted to VERA_GROUP_ID
+```
+
+Daily counters reset at midnight. On process restart, cooldowns reset (in-memory state). Daily usage is persisted to DB and survives restarts via `daily_used` column.
+
+---
+
+## Orchestration pipeline (`vera-core/app/orchestrator/pipeline.py`)
+
+```
+Incoming message (@vera mention or direct task)
+        │
+        ▼
+prefilter.py  ← cheapest token (prefilter cap), classify intent, pick target bots
+        │
+        ▼
+prompt_builder.py  ← reformat task as optimized prompt per bot's capabilities
+        │
+        ▼
+dispatcher.py  ← parallel asyncio HTTP calls to selected bots
+        │
+        ▼
+evaluator.py  ← LLM-judge scores each response (0.0–1.0)
+        │
+        ├── score ≥ 0.7 → done, post result to group
+        │
+        └── score < 0.7 → retry.py (max 3 attempts total)
+                              ← optimize prompt, re-dispatch, re-evaluate
+```
+
+---
+
+## Health check (every service)
+
+Every bot service exposes:
+
+- `GET /health` → `{"status": "ok", "service": "vera-telegram", "version": "..."}`
+- `GET /metrics` → basic stats (tasks handled, token usage, uptime)
+
+Health checks are polled by `vera-core/app/deploy/health.py` for 60 seconds after each deploy.
+
+---
+
+## Auto-deploy flow
+
+1. vera-git bot pushes code to GitHub (`zapleoceo/muai`, branch `master`)
+2. GitHub Actions triggers on push to master
+3. Actions calls `POST /deploy` on server with `DEPLOY_SECRET` header
+4. Server runs: `git pull → docker compose build → docker compose up -d → health check`
+5. Health check polls `/health` on each service for up to 60s
+6. Result (success/failure + last 20 log lines) is posted to `VERA_GROUP_ID` Telegram group
+7. Dima can also trigger manually: `@vera задеплой`
+8. vera-dev triggers deploy after code changes and waits for the result
+
+### GitHub Actions (`.github/workflows/deploy.yml`)
+
+```yaml
+on:
+  push:
+    branches: [master]
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger deploy
+        run: |
+          curl -X POST https://dima.veranda.my/deploy \
+            -H "Authorization: Bearer ${{ secrets.DEPLOY_SECRET }}" \
+            -H "Content-Type: application/json" \
+            -d '{"ref": "${{ github.sha }}", "message": "${{ github.event.head_commit.message }}"}'
+```
+
+### Manual deploy
+
+```bash
+ssh hetzner-root "cd /var/www/vera && git pull && docker compose build && docker compose up -d"
+```
+
+---
+
+## Adding a new bot (dynamic)
+
+1. Dima: `@vera добавь бота для Notion`
+2. Vera asks vera-dev to scaffold from `BaseBot` template
+3. vera-dev creates `vera-notion/` with correct structure
+4. vera-git commits and pushes to GitHub (`master`)
+5. Auto-deploy triggers, new container starts
+6. vera-notion calls `register_self()` → writes row to `agents` table
+7. Vera announces in group: `✅ vera-notion готов: notion:read, notion:write`
+
+Every bot uses `shared/base_bot/bot.py` (`BaseBot`) and `shared/registry/client.py` (`register_self`, `heartbeat`). No changes to vera-core needed.
 
 ---
 
@@ -109,206 +420,97 @@ docker compose exec -T db psql -U bot tgbot -c "CREATE TABLE ..."
 
 | Singleton | Module | Purpose |
 |-----------|--------|---------|
-| `get_llm_provider()` | `app.llm.factory` | LLM backend (Gemini/OpenAI/Stub) |
-| `get_token_manager()` | `app.services.tokens` | API key rotation + daily limit tracking |
-| `get_sync_manager()` | `app.services.sync_manager` | Sync task ref + per-chat cancellation |
-| `get_client()` | `app.userbot.client` | Telethon TelegramClient |
-| `get_text_embedder_manager()` | `app.services.embedder` | Text chunk embedder daemon + start/stop |
-| `get_media_embedder_manager()` | `app.services.media_embedder` | Media/file embedder daemon + start/stop |
+| `get_engine()` | `vera_shared.db.engine` | SQLite async engine |
+| `get_token_pool()` | `vera_shared.tokens.pool` | Token rotation + cooldown |
+| `get_agent_registry()` | `vera_shared.registry.repository` | Agent CRUD |
+| `get_client()` | `vera_telegram.userbot.client` | Telethon TelegramClient |
 
-All singletons are initialized in `app/main.py` lifespan, in this order:
-1. DB `create_all`
-2. TokenManager: `seed_from_env` → `load`
-3. `auto_approve_existing_chats`
-4. Webhook registration
-5. `start_userbot` (which starts sync as a background task)
+Pattern for all singletons:
 
----
+```python
+_pool: TokenPool | None = None
 
-## Sync logic (`app/userbot/sync.py`)
-
-Flow per dialog:
-1. Check `type_allowed` (global setting: private/group/supergroup/channel)
-2. Check `is_blacklisted` (global setting: list of chat_ids or @usernames)
-3. Look up `ChatSyncConfig`:
-   - **No config** → register as `pending`, skip
-   - **enabled=False** → skip
-4. Check `SyncManager._cancelled` — if chat was cancel-requested, skip
-5. Sync messages since `depth_days` (per-chat override or global default)
-6. Check `_cancelled` every 50 messages mid-loop for live cancellation
-
-**Important:** When a user leaves a group in Telegram, `iter_dialogs()` simply won't
-return it. Sync skips it naturally. Existing messages stay in the DB.
-
----
-
-## Token rotation (`app/services/tokens.py`)
-
-- Round-robin across active `_Slot` objects (in-memory)
-- Tokens have **capabilities** (JSON array in DB): `chat`, `embed`
-  - If `capabilities` is NULL, defaults are derived from `provider`:
-    - `gemini`: `chat, embed`
-    - `openai`: `chat, embed`
-    - `deepseek`: `chat`
-    - `groq`: `chat`
-  - If `capabilities` contains unsupported values for a provider, they are ignored (clamped to provider defaults).
-- **429 response** → 60s cooldown on that slot
-- **Other error** → 5 min cooldown
-- **Daily limit** → 1500 req/day per key (Gemini free tier); slot marked unavailable
-- Daily counter resets at midnight (local server time, checked on each `available()` call)
-- On container restart: cooldowns and daily counters reset (in-memory only)
-- Counters shown in Settings tab with a progress bar (green→yellow→red at 70%/90%)
-
----
-
-## Deployment
-
-### Auto-deploy (no SSH needed)
-POST to `/api/admin/deploy` with `Authorization: Bearer <DEPLOY_SECRET>`:
-```
-deploy.py → git -C /var/www/tgbot pull → docker compose build bot → docker compose up -d bot
-```
-GitHub Actions workflow (`.github/workflows/deploy.yml`) triggers this on push to `master`.
-
-### Manual deploy (with SSH)
-```bash
-ssh hetzner-root "cd /var/www/tgbot && git pull && docker compose build bot && docker compose up -d bot"
-```
-
-### Apply a new migration
-```bash
-ssh hetzner-root "docker compose -f /var/www/tgbot/docker-compose.yml exec -T db psql -U bot tgbot -c 'SQL HERE'"
-```
-
-### View live logs
-```bash
-ssh hetzner-root "docker compose -f /var/www/tgbot/docker-compose.yml logs -f --tail=50 bot"
+def get_token_pool() -> TokenPool:
+    global _pool
+    if _pool is None:
+        _pool = TokenPool()
+    return _pool
 ```
 
 ---
 
-## Infrastructure notes
+## Migration from Vera 1.0
 
-- **SSL**: Cloudflare Flexible — origin speaks HTTP on port 80 only
-- **Port 443**: occupied by MTProxy (Telegram proxy), nginx must NOT touch it
-- **nginx config**: `nginx/tgbot.conf` — listen 80, proxy_pass to 127.0.0.1:8000, injects `X-Forwarded-Proto: https`
-- **Sessions volume**: `/app/sessions/userbot.session` — Telethon session file, never delete
-- **DB volume**: `tgbot_pgdata` — postgres data, survives container recreates
-- **docker.sock mount**: required for deploy endpoint to run docker commands from inside the container
+| Item | Action |
+|------|--------|
+| 15 API tokens | Export from old SQLite DB, import into new `tokens` table with `capabilities` |
+| Telethon session | Keep at `/data/sessions/userbot.session` — same path, do not recreate |
+| Old tasks data | Discard — new schema is incompatible |
+| `.env` API keys | Remove all `*_API_KEY` vars from `.env` after DB import |
 
 ---
 
-## Code style rules
-
-> These apply to every file in this project. Follow them strictly.
+## Code conventions
 
 ### Python
-- **No god files.** Each file has one responsibility. Max ~200 lines; split if larger.
-- **No comments explaining what code does.** Names are the documentation.
-  Add a comment only when WHY is non-obvious (workaround, constraint, invariant).
-- **No docstrings** longer than one line. Prefer none at all.
-- **Services layer** for all business logic — API routes are thin (validate input, call service, return result).
-- **Repository layer** for all DB access — no raw SQL in routes or services except `stats.py` aggregates.
-- **Singletons** via module-level `_var: Type | None = None` + `get_var() -> Type` pattern.
-- **Async everywhere**: all DB calls, HTTP calls, file I/O must be async.
-- **No backwards-compat shims**: if something is removed, remove it completely.
-- **No feature flags**: change the code, don't wrap it.
-- Type hints on all function signatures. Use `X | None` not `Optional[X]`.
+- Python 3.12, `async` everywhere — all DB, HTTP, file I/O
+- One file = one responsibility, max ~80 lines per file
+- Layer order: `routes` → `services` → `repository` → `models`
+- No business logic in routes; no DB access outside repository layer
+- Singletons: module-level `_var: Type | None = None` + `get_var() -> Type`
+- Type hints on all function signatures; use `X | None` not `Optional[X]`
+- Use `list[X]` / `dict[K, V]` not `List` / `Dict`
+- No bare `except:`; no swallowed exceptions
+- No comments explaining what code does — names do that
+- Add a comment only when WHY is non-obvious (workaround, constraint, invariant)
+- No docstrings longer than one line; prefer none
+- `asyncio.Lock` for shared mutable state
+- `async with AsyncSessionLocal() as session:` — never reuse sessions across calls
+- Always commit explicitly; never rely on implicit commit
 
-### HTML / JS (static/index.html)
-- Single file, vanilla JS. No build step, no frameworks.
-- All API calls via `fetch`. Handle 401 → show login screen.
-- State in module-level `let` variables, never in the DOM.
-- Keep JS functions short and named for what they do.
+### HTML / JS (dashboard/index.html)
+- Single file, vanilla JS, no build step, no frameworks
+- All API calls via `fetch`; handle 401 → show login screen
+- State in module-level `let` variables, never in the DOM
 
 ### Git
-- Commit messages: `type: short description` (feat/fix/refactor/chore)
-- One logical change per commit.
-- Never commit `.env` or session files.
+- Commit style: `feat:`, `fix:`, `refactor:`, `chore:`
+- One logical change per commit
+- Never commit `.env`, `*.session`, or tokens of any kind
 
 ---
 
-## Environment variables (`.env`)
+## Security rules
 
-| Variable | Purpose |
-|----------|---------|
-| `TELEGRAM_BOT_TOKEN` | aiogram bot token |
-| `WEBHOOK_URL` | full URL for Telegram webhook |
-| `WEBHOOK_SECRET` | optional webhook validation token |
-| `TELEGRAM_API_ID` | Telethon userbot |
-| `TELEGRAM_API_HASH` | Telethon userbot |
-| `TELEGRAM_PHONE` | Telethon userbot phone number |
-| `SYNC_HISTORY_DAYS` | default sync depth on startup |
-| `DB_URL` | asyncpg connection string |
-| `DB_PASSWORD` | postgres password (also used by docker-compose) |
-| `LLM_PROVIDER` | `gemini-2.5-flash` \| `gemini-2.5-pro` \| `openai` \| `groq` \| `stub` |
-| `GEMINI_API_KEY` | seeded into DB on first start if no `gemini` tokens exist |
-| `OPENAI_API_KEY` | seeded into DB on first start if no `openai` tokens exist |
-| `GROQ_API_KEY` | seeded into DB on first start if no `groq` tokens exist |
-| `SESSION_SECRET` | HMAC key for dashboard auth cookies |
-| `DEPLOY_SECRET` | Bearer token for `/api/admin/deploy` |
-| `TELEGRAM_BOT_USERNAME` | used in Telegram Login Widget |
-| `BOT_MODE` | `manual` (reply only when asked) or `auto` |
-| `LOG_LEVEL` | `INFO` \| `DEBUG` \| `WARNING` |
-| `OWNER_TELEGRAM_ID` | your Telegram user ID — grants dashboard access |
+- Tokens are stored **only** in the SQLite DB — never in `.env`, never in git
+- All admin routes require `Depends(require_owner)` — never relax this
+- Deploy endpoint requires `Authorization: Bearer <DEPLOY_SECRET>` header
+- Session cookies are HMAC-signed via `SESSION_SECRET`
+- `OWNER_TELEGRAM_ID` gates admin dashboard; never accept user-supplied IDs
+- Verify Telegram Login Widget hash before granting session
+- Never log full message content at INFO level — use DEBUG
+- Never run `DELETE FROM` without a `WHERE` clause on production tables
+- Confirm any `DROP` or `TRUNCATE` with Dima before executing
 
 ---
 
 ## Adding a new feature — checklist
 
-1. DB change? → add model field in `app/db/models.py` + write migration SQL
-2. Business logic → new function in `app/services/`
-3. API endpoint → thin route in `app/api/`, call the service
-4. Register router in `app/main.py` if new file
-5. Frontend → update `static/index.html`
-6. Commit, push → GitHub Actions auto-deploys
-
----
-
-## Embedding (text + media)
-
-### High-level
-
-- Text embedding produces rows in `message_chunks` from `messages.text/caption`.
-- Media embedding produces rows in `media_chunks` from `messages.media_type`:
-  - media is downloaded transiently (bytes in memory), embedded, and discarded
-  - only `chunk_text`, `embedding`, and metadata are stored
-
-### Queue and token safety
-
-All embedding calls go through a single async queue in `app/llm/embedding.py`. This prevents parallel workers from competing for tokens and causing unnecessary 429 spikes.
-
-### Text embedder
-
-- Service: `app/services/embedder.py`
-- Controlled via `TextEmbedderManager` (daemon + cancellable runs).
-- Admin API:
-  - `POST /api/admin/embedder/restart` (enables and triggers a pass)
-  - `POST /api/admin/embedder/stop`
-  - `GET /api/admin/embedder/status`
-  - `DELETE /api/admin/embedder/chunks`
-
-### Media embedder (files)
-
-- Service: `app/services/media_embedder.py`
-- Writes to `media_chunks` only (separate from `message_chunks`).
-- Uses the same token pool/cooldown rotation as text embedding (via the shared embedding queue).
-- Admin API:
-  - `GET /api/admin/media-embedder/status`
-  - `POST /api/admin/media-embedder/start` with JSON `{ "types": ["document","photo","voice", ...] }`
-  - `POST /api/admin/media-embedder/stop`
-  - `DELETE /api/admin/media-embedder/chunks`
-
-### RAG search
-
-`rag_search` searches both `message_chunks` and `media_chunks`, merges results by vector distance, and passes them to rerank/answer as a single chunk list.
+1. DB change? → add model field in `vera_shared/db/models.py`; `create_all` handles it on next restart (no Alembic needed — SQLite)
+2. Business logic → new function in the relevant service module
+3. API endpoint → thin route, call the service, return result
+4. Register router in `main.py` if new file
+5. Frontend → update `dashboard/index.html`
+6. Commit, push → auto-deploy triggers
 
 ---
 
 ## Known limitations / gotchas
 
-- **Alembic can't run in container** — no psycopg2, only asyncpg. Apply migrations via psql directly.
-- **Daily token counters reset on restart** — they're in-memory. A restart loses today's count.
-- **`iter_dialogs()` flood waits** — Telegram imposes GetHistory flood waits; sync can take hours for large accounts. This is expected.
-- **Cloudflare Flexible SSL** — all traffic between Cloudflare and the server is HTTP. If you ever switch to Full SSL, nginx must listen on 443 with a certificate.
-- **MTProxy on port 443** — do not move it. It serves Telegram users as a proxy; stopping it breaks connectivity for those users.
+- **SQLite concurrency** — SQLite allows one writer at a time. All writes go through the shared async engine with WAL mode enabled. Do not bypass the engine with raw connections.
+- **Daily token counters** — `daily_used` is persisted to DB but cooldown state is in-memory. A restart resets cooldowns (next request re-learns them via 429 errors).
+- **Telethon session** — `userbot.session` must not be deleted or recreated. It survives restarts via volume mount at `/data/sessions/`.
+- **iter_dialogs() flood waits** — Telegram imposes GetHistory flood waits; large accounts can cause slow syncs. This is expected behavior.
+- **Cloudflare Flexible SSL** — traffic between Cloudflare and server is HTTP. If switching to Full SSL, nginx must listen on 443 with a certificate.
+- **Port 443** — occupied by MTProxy. nginx must NOT use 443.
+- **docker.sock** — mounted only for the deploy endpoint. Do not expose it further.

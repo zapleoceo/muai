@@ -1,47 +1,33 @@
 services:
-  bot:
-    build: .
+  vera-core:
+    build: ./vera-core
     restart: unless-stopped
     ports:
       - "127.0.0.1:8000:8000"
-    env_file: .env
-    depends_on:
-      db:
-        condition: service_healthy
-    logging:
-      driver: "json-file"
-      options:
-        max-size: "50m"
-        max-file: "3"
     volumes:
-      - sessions:/app/sessions
+      - vera_data:/data
       - /var/run/docker.sock:/var/run/docker.sock
-      - /var/www/tgbot:/var/www/tgbot
-      - /root/.ssh:/root/.ssh:ro
-    networks:
-      - tgbot
+      - /var/www/vera:/var/www/vera
+    env_file: .env
+    networks: [vera]
 
-  db:
-    image: pgvector/pgvector:pg16
+  vera-telegram:
+    build: ./vera-telegram
     restart: unless-stopped
-    environment:
-      POSTGRES_USER: bot
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-changeme}
-      POSTGRES_DB: tgbot
     volumes:
-      - pgdata:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U bot -d tgbot"]
-      interval: 5s
-      timeout: 5s
-      retries: 10
-    networks:
-      - tgbot
-
-networks:
-  tgbot:
-    driver: bridge
+      - vera_data:/data
+    env_file: .env
+    networks: [vera]
+    depends_on: [vera-core]
 
 volumes:
-  pgdata:
-  sessions:
+  vera_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: /var/www/vera/data
+
+networks:
+  vera:
+    driver: bridge

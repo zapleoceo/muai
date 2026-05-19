@@ -1,0 +1,835 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Vera 2.0 Dashboard</title>
+<style>
+  :root {
+    --bg: #1a1a2e;
+    --card: #16213e;
+    --accent: #0f3460;
+    --accent2: #1a4a7a;
+    --text: #e0e0e0;
+    --muted: #8892a4;
+    --success: #00d4aa;
+    --err: #ff4757;
+    --warn: #ffa502;
+    --border: #1e3a5f;
+    --row-hover: #1e2d4a;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    font-size: 14px;
+    min-height: 100vh;
+  }
+
+  /* ── Login screen ── */
+  #login-screen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    gap: 24px;
+  }
+  #login-screen h1 { font-size: 28px; letter-spacing: 1px; }
+  #login-screen p { color: var(--muted); }
+
+  /* ── App shell ── */
+  #app { display: none; flex-direction: column; min-height: 100vh; }
+
+  header {
+    background: var(--card);
+    border-bottom: 1px solid var(--border);
+    padding: 0 24px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    height: 56px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .logo { font-size: 20px; font-weight: 700; letter-spacing: 1px; color: var(--success); }
+  .logo span { color: var(--text); font-weight: 300; }
+
+  nav { display: flex; gap: 4px; }
+
+  nav button {
+    background: none;
+    border: none;
+    color: var(--muted);
+    padding: 8px 18px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: all 0.15s;
+  }
+  nav button:hover { background: var(--accent); color: var(--text); }
+  nav button.active { background: var(--accent); color: var(--success); font-weight: 600; }
+
+  .header-right { display: flex; align-items: center; gap: 12px; }
+  .user-badge {
+    background: var(--accent);
+    border-radius: 20px;
+    padding: 4px 14px;
+    font-size: 13px;
+    color: var(--muted);
+  }
+
+  btn-sm {
+    display: inline-block;
+    background: var(--accent);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 5px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+
+  main { flex: 1; padding: 24px; max-width: 1200px; width: 100%; margin: 0 auto; }
+
+  /* ── Tabs ── */
+  .tab { display: none; }
+  .tab.active { display: block; }
+
+  /* ── Cards / panels ── */
+  .panel {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+
+  .panel-title {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .panel-title small { font-size: 12px; font-weight: 400; color: var(--muted); }
+
+  /* ── Tables ── */
+  table { width: 100%; border-collapse: collapse; }
+  th {
+    text-align: left;
+    padding: 8px 12px;
+    color: var(--muted);
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    border-bottom: 1px solid var(--border);
+  }
+  td {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--border);
+    vertical-align: middle;
+  }
+  tr:last-child td { border-bottom: none; }
+  tr:hover td { background: var(--row-hover); }
+
+  /* ── Badges ── */
+  .badge {
+    display: inline-block;
+    padding: 2px 10px;
+    border-radius: 12px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+  }
+  .badge-ok { background: #00d4aa22; color: var(--success); }
+  .badge-err { background: #ff475722; color: var(--err); }
+  .badge-warn { background: #ffa50222; color: var(--warn); }
+  .badge-muted { background: #ffffff11; color: var(--muted); }
+  .badge-online { background: #00d4aa22; color: var(--success); }
+  .badge-offline { background: #ff475722; color: var(--err); }
+
+  /* ── Progress bar ── */
+  .progress-wrap { width: 120px; }
+  .progress-bar {
+    height: 6px;
+    background: var(--accent);
+    border-radius: 3px;
+    overflow: hidden;
+    margin-top: 4px;
+  }
+  .progress-fill {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s;
+  }
+  .progress-fill.ok   { background: var(--success); }
+  .progress-fill.warn { background: var(--warn); }
+  .progress-fill.hot  { background: var(--err); }
+  .progress-label { font-size: 11px; color: var(--muted); }
+
+  /* ── Buttons ── */
+  .btn {
+    background: var(--accent);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 18px;
+    border-radius: 7px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background 0.15s;
+  }
+  .btn:hover { background: var(--accent2); }
+  .btn-success { background: #00d4aa33; border-color: var(--success); color: var(--success); }
+  .btn-success:hover { background: #00d4aa55; }
+  .btn-danger { background: #ff475722; border-color: var(--err); color: var(--err); }
+  .btn-danger:hover { background: #ff475744; }
+  .btn-sm { padding: 4px 12px; font-size: 12px; }
+
+  /* ── Forms ── */
+  .form-row { display: flex; gap: 10px; flex-wrap: wrap; align-items: flex-end; margin-top: 16px; }
+  .form-group { display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 140px; }
+  .form-group label { font-size: 12px; color: var(--muted); }
+  .form-group input, .form-group select {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 8px 12px;
+    border-radius: 7px;
+    font-size: 14px;
+    outline: none;
+  }
+  .form-group input:focus, .form-group select:focus { border-color: var(--success); }
+
+  /* ── Deploy log ── */
+  #deploy-log {
+    background: #0d0d1a;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 14px;
+    font-family: 'Consolas', 'Courier New', monospace;
+    font-size: 12px;
+    color: #a0c4ff;
+    max-height: 420px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    line-height: 1.6;
+  }
+
+  /* ── Caps tags ── */
+  .caps { display: flex; gap: 4px; flex-wrap: wrap; }
+  .cap-tag {
+    background: #0f3460;
+    color: #a0c4ff;
+    border-radius: 4px;
+    padding: 1px 7px;
+    font-size: 11px;
+  }
+
+  /* ── Misc ── */
+  .empty-row td { text-align: center; color: var(--muted); padding: 32px; }
+  .mono { font-family: 'Consolas', monospace; font-size: 12px; }
+  .text-right { text-align: right; }
+  .gap-top { margin-top: 16px; }
+  .inline-flex { display: inline-flex; gap: 6px; align-items: center; }
+
+  /* ── Spinner ── */
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .spinner {
+    width: 16px; height: 16px;
+    border: 2px solid var(--border);
+    border-top-color: var(--success);
+    border-radius: 50%;
+    animation: spin 0.7s linear infinite;
+    display: inline-block;
+    vertical-align: middle;
+  }
+
+  /* ── Toast ── */
+  #toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--card);
+    border: 1px solid var(--border);
+    color: var(--text);
+    padding: 12px 20px;
+    border-radius: 8px;
+    font-size: 14px;
+    z-index: 9999;
+    opacity: 0;
+    transition: opacity 0.3s;
+    max-width: 360px;
+  }
+  #toast.show { opacity: 1; }
+  #toast.ok { border-color: var(--success); color: var(--success); }
+  #toast.err { border-color: var(--err); color: var(--err); }
+
+  .refresh-note { font-size: 11px; color: var(--muted); }
+</style>
+</head>
+<body>
+
+<!-- Login -->
+<div id="login-screen">
+  <h1>VERA <span>2.0</span></h1>
+  <p>Sign in with Telegram to access the dashboard</p>
+  <div id="tg-widget"></div>
+</div>
+
+<!-- App -->
+<div id="app">
+  <header>
+    <div class="logo">VERA <span>2.0</span></div>
+    <nav>
+      <button class="active" onclick="switchTab('tasks')">Tasks</button>
+      <button onclick="switchTab('agents')">Agents</button>
+      <button onclick="switchTab('tokens')">Tokens</button>
+      <button onclick="switchTab('deploy')">Deploy</button>
+    </nav>
+    <div class="header-right">
+      <span class="user-badge" id="user-badge">—</span>
+      <button class="btn btn-sm" onclick="logout()">Logout</button>
+    </div>
+  </header>
+
+  <main>
+    <!-- Tasks Tab -->
+    <div id="tab-tasks" class="tab active">
+      <div class="panel">
+        <div class="panel-title">
+          Recent Tasks
+          <span class="refresh-note" id="tasks-refresh-note"></span>
+        </div>
+        <table id="tasks-table">
+          <thead>
+            <tr>
+              <th>#</th>
+              <th>Input</th>
+              <th>Agents Used</th>
+              <th>Status</th>
+              <th>Quality</th>
+              <th>Duration</th>
+              <th>Cost</th>
+              <th>Time</th>
+            </tr>
+          </thead>
+          <tbody id="tasks-tbody">
+            <tr class="empty-row"><td colspan="8">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Agents Tab -->
+    <div id="tab-agents" class="tab">
+      <div class="panel">
+        <div class="panel-title">
+          Registered Agents
+          <span class="refresh-note" id="agents-refresh-note"></span>
+        </div>
+        <table id="agents-table">
+          <thead>
+            <tr>
+              <th>Name</th>
+              <th>Capabilities</th>
+              <th>Status</th>
+              <th>Last Heartbeat</th>
+            </tr>
+          </thead>
+          <tbody id="agents-tbody">
+            <tr class="empty-row"><td colspan="4">Loading...</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Tokens Tab -->
+    <div id="tab-tokens" class="tab">
+      <div class="panel">
+        <div class="panel-title">API Tokens</div>
+        <table id="tokens-table">
+          <thead>
+            <tr>
+              <th>Provider</th>
+              <th>Label</th>
+              <th>Capabilities</th>
+              <th>Daily Usage</th>
+              <th>Cooldown Until</th>
+              <th>Status</th>
+              <th>Actions</th>
+            </tr>
+          </thead>
+          <tbody id="tokens-tbody">
+            <tr class="empty-row"><td colspan="7">Loading...</td></tr>
+          </tbody>
+        </table>
+
+        <div class="form-row">
+          <div class="form-group">
+            <label>Provider</label>
+            <select id="new-provider">
+              <option value="gemini">Gemini</option>
+              <option value="deepseek">DeepSeek</option>
+              <option value="voyage">Voyage</option>
+              <option value="anthropic">Anthropic</option>
+              <option value="openai">OpenAI</option>
+              <option value="groq">Groq</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label>Label</label>
+            <input id="new-label" type="text" placeholder="e.g. main-key">
+          </div>
+          <div class="form-group" style="flex:2">
+            <label>Token / API Key</label>
+            <input id="new-token" type="password" placeholder="sk-...">
+          </div>
+          <div class="form-group">
+            <label>Capabilities (comma-separated)</label>
+            <input id="new-caps" type="text" placeholder="chat:fast,prefilter">
+          </div>
+          <button class="btn btn-success" onclick="addToken()">Add Token</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Deploy Tab -->
+    <div id="tab-deploy" class="tab">
+      <div class="panel">
+        <div class="panel-title">Manual Deploy</div>
+        <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:16px;">
+          <button class="btn btn-success" id="deploy-btn" onclick="triggerDeploy()">
+            Deploy Now
+          </button>
+          <button class="btn btn-sm" onclick="loadDeployLog()">Refresh Log</button>
+          <a
+            href="https://github.com/zapleoceo/muai"
+            target="_blank"
+            rel="noopener"
+            style="color:var(--success);font-size:13px;"
+          >
+            GitHub: zapleoceo/muai
+          </a>
+          <span id="deploy-status" style="font-size:13px;color:var(--muted);"></span>
+        </div>
+        <div class="panel-title" style="margin-bottom:8px;">
+          Deploy Log <small>last 50 lines</small>
+        </div>
+        <div id="deploy-log">Loading log...</div>
+      </div>
+    </div>
+  </main>
+</div>
+
+<!-- Toast -->
+<div id="toast"></div>
+
+<script>
+'use strict';
+
+// ── State ──────────────────────────────────────────────────────────────────
+let currentUser = null;
+let currentTab = 'tasks';
+let tasksTimer = null;
+let agentsTimer = null;
+
+// ── Bootstrap ──────────────────────────────────────────────────────────────
+(async function init() {
+  try {
+    const res = await fetch('/api/me');
+    if (res.ok) {
+      currentUser = await res.json();
+      showApp();
+    } else {
+      showLogin();
+    }
+  } catch {
+    showLogin();
+  }
+})();
+
+function showLogin() {
+  document.getElementById('login-screen').style.display = 'flex';
+  document.getElementById('app').style.display = 'none';
+  loadTelegramWidget();
+}
+
+function loadTelegramWidget() {
+  const wrap = document.getElementById('tg-widget');
+  const s = document.createElement('script');
+  s.async = true;
+  s.src = 'https://telegram.org/js/telegram-widget.js?22';
+  s.setAttribute('data-telegram-login', window._BOT_USERNAME || 'vera_bot');
+  s.setAttribute('data-size', 'large');
+  s.setAttribute('data-onauth', 'onTelegramAuth(user)');
+  s.setAttribute('data-request-access', 'write');
+  wrap.appendChild(s);
+}
+
+async function onTelegramAuth(user) {
+  const params = new URLSearchParams(user).toString();
+  const res = await fetch('/auth/telegram?' + params);
+  if (res.ok) {
+    currentUser = await res.json();
+    showApp();
+  } else {
+    toast('Login failed', 'err');
+  }
+}
+
+function showApp() {
+  document.getElementById('login-screen').style.display = 'none';
+  const app = document.getElementById('app');
+  app.style.display = 'flex';
+  if (currentUser) {
+    document.getElementById('user-badge').textContent =
+      currentUser.first_name || currentUser.username || 'User';
+  }
+  switchTab('tasks');
+}
+
+async function logout() {
+  await fetch('/auth/logout', { method: 'POST' });
+  currentUser = null;
+  clearTimers();
+  showLogin();
+}
+
+// ── Tab routing ────────────────────────────────────────────────────────────
+function switchTab(name) {
+  clearTimers();
+  currentTab = name;
+
+  document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+  document.getElementById('tab-' + name).classList.add('active');
+
+  document.querySelectorAll('nav button').forEach((b, i) => {
+    b.classList.toggle('active', b.textContent.toLowerCase() === name);
+  });
+
+  if (name === 'tasks')  startTasksPolling();
+  if (name === 'agents') startAgentsPolling();
+  if (name === 'tokens') loadTokens();
+  if (name === 'deploy') { loadDeployLog(); }
+}
+
+function clearTimers() {
+  clearInterval(tasksTimer);
+  clearInterval(agentsTimer);
+}
+
+// ── Tasks ──────────────────────────────────────────────────────────────────
+function startTasksPolling() {
+  loadTasks();
+  tasksTimer = setInterval(loadTasks, 10000);
+}
+
+async function loadTasks() {
+  const res = await apiFetch('/api/tasks?limit=50');
+  if (!res) return;
+  const tasks = await res.json();
+  renderTasks(tasks);
+  document.getElementById('tasks-refresh-note').textContent =
+    'auto-refresh every 10s · last: ' + fmtTime(new Date());
+}
+
+function renderTasks(tasks) {
+  const tbody = document.getElementById('tasks-tbody');
+  if (!tasks.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="8">No tasks yet</td></tr>';
+    return;
+  }
+  tbody.innerHTML = tasks.map(t => `
+    <tr>
+      <td class="mono" style="color:var(--muted)">${t.id}</td>
+      <td style="max-width:260px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap"
+          title="${esc(t.input || '')}">${esc(truncate(t.input || '—', 60))}</td>
+      <td><div class="caps">${agentTags(t.agents_used)}</div></td>
+      <td>${statusBadge(t.status)}</td>
+      <td>${qualityCell(t.quality_score)}</td>
+      <td class="mono">${t.duration_ms ? (t.duration_ms / 1000).toFixed(1) + 's' : '—'}</td>
+      <td class="mono">${t.cost_usd != null ? '$' + t.cost_usd.toFixed(4) : '—'}</td>
+      <td style="color:var(--muted);font-size:12px">${t.created_at ? fmtDatetime(t.created_at) : '—'}</td>
+    </tr>
+  `).join('');
+}
+
+function agentTags(agents) {
+  if (!agents) return '<span style="color:var(--muted)">—</span>';
+  const list = Array.isArray(agents) ? agents : String(agents).split(',').map(s => s.trim());
+  return list.filter(Boolean).map(a => `<span class="cap-tag">${esc(a)}</span>`).join('');
+}
+
+function qualityCell(score) {
+  if (score == null) return '<span style="color:var(--muted)">—</span>';
+  const pct = Math.round(score * 100);
+  const cls = pct >= 80 ? 'ok' : pct >= 50 ? 'warn' : 'hot';
+  return `<span class="${cls === 'ok' ? 'badge badge-ok' : cls === 'warn' ? 'badge badge-warn' : 'badge badge-err'}">${pct}%</span>`;
+}
+
+function statusBadge(status) {
+  const map = {
+    done: 'badge-ok',
+    running: 'badge-warn',
+    failed: 'badge-err',
+    pending: 'badge-muted',
+  };
+  const cls = map[status] || 'badge-muted';
+  return `<span class="badge ${cls}">${esc(status || '?')}</span>`;
+}
+
+// ── Agents ─────────────────────────────────────────────────────────────────
+function startAgentsPolling() {
+  loadAgents();
+  agentsTimer = setInterval(loadAgents, 10000);
+}
+
+async function loadAgents() {
+  const res = await apiFetch('/api/agents');
+  if (!res) return;
+  const agents = await res.json();
+  renderAgents(agents);
+  document.getElementById('agents-refresh-note').textContent =
+    'auto-refresh every 10s · last: ' + fmtTime(new Date());
+}
+
+function renderAgents(agents) {
+  const tbody = document.getElementById('agents-tbody');
+  if (!agents.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="4">No agents registered</td></tr>';
+    return;
+  }
+  tbody.innerHTML = agents.map(a => {
+    const online = isOnline(a.last_heartbeat);
+    return `
+      <tr>
+        <td><strong>${esc(a.name)}</strong></td>
+        <td><div class="caps">${capTags(a.capabilities)}</div></td>
+        <td><span class="badge ${online ? 'badge-online' : 'badge-offline'}">${online ? 'online' : 'offline'}</span></td>
+        <td style="color:var(--muted);font-size:12px">${a.last_heartbeat ? fmtDatetime(a.last_heartbeat) : 'never'}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function isOnline(heartbeat) {
+  if (!heartbeat) return false;
+  const dt = new Date(heartbeat);
+  return (Date.now() - dt.getTime()) < 60000;
+}
+
+function capTags(caps) {
+  if (!caps) return '<span style="color:var(--muted)">—</span>';
+  const list = Array.isArray(caps) ? caps : String(caps).split(',').map(s => s.trim());
+  return list.filter(Boolean).map(c => `<span class="cap-tag">${esc(c)}</span>`).join('');
+}
+
+// ── Tokens ─────────────────────────────────────────────────────────────────
+async function loadTokens() {
+  const res = await apiFetch('/api/tokens');
+  if (!res) return;
+  const tokens = await res.json();
+  renderTokens(tokens);
+}
+
+function renderTokens(tokens) {
+  const tbody = document.getElementById('tokens-tbody');
+  if (!tokens.length) {
+    tbody.innerHTML = '<tr class="empty-row"><td colspan="7">No tokens configured</td></tr>';
+    return;
+  }
+  tbody.innerHTML = tokens.map(t => {
+    const used = t.daily_used || 0;
+    const limit = t.daily_limit || 1500;
+    const pct = Math.min(100, Math.round((used / limit) * 100));
+    const barCls = pct >= 90 ? 'hot' : pct >= 70 ? 'warn' : 'ok';
+    const hasCooldown = t.cooldown_until && new Date(t.cooldown_until) > new Date();
+    const cooldownStr = hasCooldown ? fmtDatetime(t.cooldown_until) : '—';
+
+    return `
+      <tr>
+        <td><span class="badge badge-muted">${esc(t.provider)}</span></td>
+        <td>${esc(t.label)}</td>
+        <td><div class="caps">${capTags(t.capabilities)}</div></td>
+        <td>
+          <div class="progress-wrap">
+            <div class="progress-label">${used} / ${limit}</div>
+            <div class="progress-bar">
+              <div class="progress-fill ${barCls}" style="width:${pct}%"></div>
+            </div>
+          </div>
+        </td>
+        <td style="font-size:12px;color:${hasCooldown ? 'var(--warn)' : 'var(--muted)'}">${cooldownStr}</td>
+        <td>
+          <span class="badge ${t.is_active ? 'badge-ok' : 'badge-muted'}">
+            ${t.is_active ? 'active' : 'disabled'}
+          </span>
+        </td>
+        <td>
+          <button class="btn btn-sm ${t.is_active ? 'btn-danger' : 'btn-success'}"
+                  onclick="toggleToken(${t.id}, ${t.is_active})">
+            ${t.is_active ? 'Disable' : 'Enable'}
+          </button>
+        </td>
+      </tr>
+    `;
+  }).join('');
+}
+
+async function addToken() {
+  const provider = document.getElementById('new-provider').value;
+  const label    = document.getElementById('new-label').value.trim();
+  const token    = document.getElementById('new-token').value.trim();
+  const capsRaw  = document.getElementById('new-caps').value.trim();
+
+  if (!label || !token) { toast('Label and token are required', 'err'); return; }
+
+  const capabilities = capsRaw
+    ? capsRaw.split(',').map(s => s.trim()).filter(Boolean)
+    : defaultCaps(provider);
+
+  const res = await apiFetch('/api/tokens', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ provider, label, token, capabilities }),
+  });
+
+  if (res && res.ok) {
+    toast('Token added', 'ok');
+    document.getElementById('new-label').value = '';
+    document.getElementById('new-token').value = '';
+    document.getElementById('new-caps').value = '';
+    loadTokens();
+  } else {
+    toast('Failed to add token', 'err');
+  }
+}
+
+async function toggleToken(id, currentlyActive) {
+  const res = await apiFetch(`/api/tokens/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ is_active: !currentlyActive }),
+  });
+  if (res && res.ok) {
+    toast(currentlyActive ? 'Token disabled' : 'Token enabled', 'ok');
+    loadTokens();
+  } else {
+    toast('Failed to update token', 'err');
+  }
+}
+
+function defaultCaps(provider) {
+  const map = {
+    gemini: ['chat:fast', 'prefilter'],
+    deepseek: ['chat:smart', 'chat:code'],
+    voyage: ['embed'],
+    anthropic: ['chat:smart', 'chat:code'],
+    openai: ['chat:fast', 'chat:smart'],
+    groq: ['chat:fast'],
+  };
+  return map[provider] || ['chat:fast'];
+}
+
+// ── Deploy ─────────────────────────────────────────────────────────────────
+async function loadDeployLog() {
+  const res = await apiFetch('/api/deploy/log');
+  if (!res) return;
+  const data = await res.json();
+  document.getElementById('deploy-log').textContent = data.log || '(empty)';
+}
+
+async function triggerDeploy() {
+  const btn = document.getElementById('deploy-btn');
+  const status = document.getElementById('deploy-status');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span> Deploying...';
+  status.textContent = '';
+
+  const res = await apiFetch('/deploy', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({}),
+  });
+
+  if (res && res.ok) {
+    const data = await res.json();
+    status.textContent = 'Deploy triggered at ' + fmtTime(new Date());
+    status.style.color = 'var(--success)';
+    toast('Deploy started', 'ok');
+    setTimeout(loadDeployLog, 3000);
+  } else {
+    status.textContent = 'Deploy failed';
+    status.style.color = 'var(--err)';
+    toast('Deploy request failed', 'err');
+  }
+
+  btn.disabled = false;
+  btn.innerHTML = 'Deploy Now';
+}
+
+// ── API helper ─────────────────────────────────────────────────────────────
+async function apiFetch(url, opts = {}) {
+  try {
+    const res = await fetch(url, opts);
+    if (res.status === 401) {
+      currentUser = null;
+      showLogin();
+      return null;
+    }
+    return res;
+  } catch (e) {
+    toast('Network error', 'err');
+    return null;
+  }
+}
+
+// ── Toast ──────────────────────────────────────────────────────────────────
+let toastTimer = null;
+function toast(msg, type = 'ok') {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.className = 'show ' + type;
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { el.className = ''; }, 3000);
+}
+
+// ── Formatting helpers ─────────────────────────────────────────────────────
+function esc(s) {
+  return String(s)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+function truncate(s, n) {
+  return s.length > n ? s.slice(0, n) + '…' : s;
+}
+
+function fmtTime(d) {
+  return d.toLocaleTimeString('en-GB', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+}
+
+function fmtDatetime(iso) {
+  const d = new Date(iso);
+  if (isNaN(d)) return iso;
+  const today = new Date();
+  const sameDay = d.toDateString() === today.toDateString();
+  if (sameDay) return fmtTime(d);
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short' }) + ' ' + fmtTime(d);
+}
+</script>
+</body>
+</html>
