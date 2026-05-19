@@ -1,0 +1,124 @@
+import json
+import logging
+import re
+from typing import Awaitable, Callable
+
+from app.orchestrator.memory import format_history
+from app.orchestrator.tool_router import (
+    call_tool, collect_tools, format_tools_for_prompt, truncate_for_llm,
+)
+
+log = logging.getLogger(__name__)
+
+ProgressCb = Callable[[str], Awaitable[None]]
+
+_MAX_ITERATIONS = 8
+
+_SYSTEM_TEMPLATE = """Ты — Vera, AI-оркестратор. У тебя есть инструменты для работы
+с разными сервисами (Telegram и др.). Ты получаешь запрос пользователя и можешь
+последовательно вызывать инструменты, чтобы собрать данные, а затем дать ответ.
+
+Доступные инструменты:
+{tools}
+
+Правила:
+- На каждом шаге отвечай СТРОГО одной из двух JSON-форм, без markdown, без префиксов:
+    1) Чтобы вызвать инструмент:
+       {{"tool": "<имя>", "args": {{...}}}}
+    2) Чтобы дать финальный ответ пользователю:
+       {{"answer": "<текст ответа на русском>"}}
+- Сначала разбирайся в данных: если знаешь только имя — сначала зови
+  telegram_search_dialogs, потом telegram_read_messages с chat_id.
+- Если в первом результате не нашлось искомого — попробуй ДРУГОЙ кандидат.
+- Никогда не выдумывай данных. Если инструмент вернул ошибку или пусто —
+  скажи об этом честно или попробуй иначе.
+- Ответ давай по-русски, кратко, по делу. Без цитирования сырого JSON.
+- Не зацикливайся: максимум {max_iter} шагов на запрос.
+{history_block}"""
+
+_JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
+
+
+async def run_agentic(
+    request: str,
+    user_id: int | None,
+    progress: ProgressCb,
+) -> str:
+    specs, route = await collect_tools()
+    history = format_history(user_id)
+    history_block = (
+        f"\n\nНедавний контекст диалога с пользователем (для ссылок типа 'ещё раз', 'тот же'):\n{history}"
+        if history else ""
+    )
+    system = _SYSTEM_TEMPLATE.format(
+        tools=format_tools_for_prompt(specs),
+        max_iter=_MAX_ITERATIONS,
+        history_block=history_block,
+    )
+
+    messages: list[dict] = [{"role": "user", "content": request}]
+
+    for step in range(1, _MAX_ITERATIONS + 1):
+        await progress(f"🧠 Думаю (шаг {step})...")
+        raw = await _llm(messages, system)
+        parsed = _parse(raw)
+
+        if "answer" in parsed:
+            return str(parsed["answer"]).strip() or "Готово."
+
+        if "tool" in parsed:
+            name = str(parsed["tool"])
+            args = parsed.get("args") or {}
+            if not isinstance(args, dict):
+                args = {}
+            await progress(f"🔧 Вызываю `{name}` {_args_preview(args)}")
+            tool_result = await call_tool(route, name, args)
+            await progress(f"📥 Получил данные от `{name}`")
+            log.info("Step %d: %s(%s) ok=%s", step, name, args, tool_result.get("ok"))
+
+            messages.append({"role": "assistant", "content": raw.strip()})
+            messages.append({
+                "role": "user",
+                "content": f"Результат `{name}`:\n{truncate_for_llm(tool_result)}",
+            })
+            continue
+
+        # Neither answer nor tool — treat raw as final answer
+        log.warning("LLM emitted neither tool nor answer: %r", raw[:200])
+        return raw.strip() or "Готово."
+
+    return "Превышен лимит шагов. Попробуй уточнить запрос."
+
+
+async def _llm(messages: list[dict], system: str) -> str:
+    from vera_shared.providers.registry import get_registry
+    text, _, _ = await get_registry().chat("chat:fast", messages, system=system)
+    return text
+
+
+def _parse(raw: str) -> dict:
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = re.sub(r"^```\w*\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+    try:
+        return json.loads(raw)
+    except Exception:
+        pass
+    m = _JSON_BLOCK_RE.search(raw)
+    if m:
+        try:
+            return json.loads(m.group(0))
+        except Exception:
+            pass
+    return {}
+
+
+def _args_preview(args: dict) -> str:
+    pairs = []
+    for k, v in args.items():
+        s = json.dumps(v, ensure_ascii=False, default=str)
+        if len(s) > 40:
+            s = s[:40] + "…"
+        pairs.append(f"{k}={s}")
+    return "(" + ", ".join(pairs) + ")"

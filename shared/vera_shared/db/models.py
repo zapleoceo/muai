@@ -36,6 +36,7 @@ class Agent(Base):
     required_caps: Mapped[list] = mapped_column(JSON, default=list)
     http_url: Mapped[str] = mapped_column(String, nullable=False)
     bot_username: Mapped[str | None] = mapped_column(String, nullable=True)
+    tools: Mapped[list | None] = mapped_column(JSON, nullable=True)
     status: Mapped[str] = mapped_column(String, default="offline")
     last_heartbeat: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     registered_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)

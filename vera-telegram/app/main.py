@@ -3,15 +3,14 @@ import logging
 import os
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
-from pydantic import BaseModel, Field
+from fastapi import FastAPI, HTTPException
 
 from vera_shared.db.engine import get_engine
 from vera_shared.db.migrations import run_migrations
 
-from app.userbot.client import start_client, stop_client
-from app.bot import handle_task
 from app.registration import register_loop
+from app.tool_handlers import HANDLERS
+from app.userbot.client import start_client, stop_client
 
 logging.basicConfig(
     level=logging.INFO,
@@ -33,30 +32,23 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="vera-telegram", lifespan=lifespan)
 
 
-class TaskRequest(BaseModel):
-    request: str
-    intent: dict = Field(default_factory=dict)
-    task_id: int | None = None
-
-
-class TaskResponse(BaseModel):
-    success: bool
-    summary: str
-    data: dict | list | None = None
-    error: str | None = None
-
-
-@app.post("/task", response_model=TaskResponse)
-async def receive_task(req: TaskRequest) -> TaskResponse:
-    result = await handle_task(req.request, req.intent)
-    return TaskResponse(
-        success=result.success,
-        summary=result.summary,
-        data=result.data,
-        error=result.error,
-    )
+@app.post("/tool/{name}")
+async def call_tool(name: str, payload: dict) -> dict:
+    handler = HANDLERS.get(name)
+    if handler is None:
+        raise HTTPException(404, f"unknown tool {name}")
+    try:
+        result = await handler(**(payload or {}))
+        return {"ok": True, "result": result}
+    except LookupError as exc:
+        return {"ok": False, "error": str(exc)}
+    except TypeError as exc:
+        return {"ok": False, "error": f"bad args: {exc}"}
+    except Exception as exc:
+        logger.exception("Tool %s failed: %s", name, exc)
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "agent": "vera-telegram"}
+    return {"status": "ok", "agent": "vera-telegram", "tools": list(HANDLERS.keys())}

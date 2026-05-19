@@ -3,8 +3,12 @@ import logging
 
 import httpx
 
-from app.bot import AGENT_ID, AGENT_NAME, CAPABILITIES, REQUIRED_CAPS, HTTP_URL
 from app.config import get_settings
+from app.tool_specs import TOOLS
+
+AGENT_ID = "vera-telegram"
+AGENT_NAME = "Telegram Userbot"
+HTTP_URL = "http://vera-telegram:8001"
 
 logger = logging.getLogger(__name__)
 
@@ -17,14 +21,13 @@ async def register_self() -> bool:
     payload = {
         "id": AGENT_ID,
         "name": AGENT_NAME,
-        "capabilities": CAPABILITIES,
-        "required_caps": REQUIRED_CAPS,
         "http_url": HTTP_URL,
+        "tools": [t.to_dict() for t in TOOLS],
     }
     async with httpx.AsyncClient(timeout=10) as client:
         resp = await client.post(f"{cfg.vera_core_url}/internal/agents/register", json=payload)
         resp.raise_for_status()
-    logger.info("Registered with vera-core as %s", AGENT_ID)
+    logger.info("Registered with vera-core (%d tools)", len(TOOLS))
     return True
 
 
@@ -45,7 +48,6 @@ async def register_loop() -> None:
         except Exception as exc:
             logger.warning("Registration attempt %d failed: %s", attempt, exc)
             await asyncio.sleep(_REGISTER_RETRY)
-
     while True:
         await asyncio.sleep(_HEARTBEAT_INTERVAL)
         try:
