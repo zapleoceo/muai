@@ -6,7 +6,7 @@ from vera_shared.providers.base import BaseProvider, ProviderError
 from vera_shared.tokens.pool import TokensExhausted, get_pool
 from vera_shared.tokens.selector import get_token
 
-_MODEL = "gemini-1.5-flash"
+_MODEL = "gemini-2.0-flash"
 _MAX_RETRIES = 3
 _PROVIDER = "gemini"
 
