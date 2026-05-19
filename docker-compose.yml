@@ -1,6 +1,8 @@
 services:
   vera-core:
-    build: ./vera-core
+    build:
+      context: .
+      dockerfile: vera-core/Dockerfile
     restart: unless-stopped
     ports:
       - "127.0.0.1:8000:8000"
@@ -12,7 +14,9 @@ services:
     networks: [vera]
 
   vera-telegram:
-    build: ./vera-telegram
+    build:
+      context: .
+      dockerfile: vera-telegram/Dockerfile
     restart: unless-stopped
     volumes:
       - vera_data:/data

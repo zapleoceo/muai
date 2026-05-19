@@ -22,7 +22,7 @@ async def register_self() -> bool:
         "http_url": HTTP_URL,
     }
     async with httpx.AsyncClient(timeout=10) as client:
-        resp = await client.post(f"{cfg.vera_core_url}/api/agents/register", json=payload)
+        resp = await client.post(f"{cfg.vera_core_url}/internal/agents/register", json=payload)
         resp.raise_for_status()
     logger.info("Registered with vera-core as %s", AGENT_ID)
     return True
@@ -31,7 +31,10 @@ async def register_self() -> bool:
 async def _heartbeat() -> None:
     cfg = get_settings()
     async with httpx.AsyncClient(timeout=5) as client:
-        await client.post(f"{cfg.vera_core_url}/api/agents/{AGENT_ID}/heartbeat")
+        await client.post(
+            f"{cfg.vera_core_url}/internal/agents/heartbeat",
+            json={"id": AGENT_ID},
+        )
 
 
 async def register_loop() -> None:
