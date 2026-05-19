@@ -1,10 +1,9 @@
 import logging
 
 from aiogram import Bot, Router
-from aiogram.filters import Command
 from aiogram.types import Message
 
-from app.bot.sender import reply
+from app.bot.progress import progress
 from app.config import get_settings
 from app.orchestrator.pipeline import run
 
@@ -55,11 +54,12 @@ async def handle_message(message: Message, bot: Bot) -> None:
 
     text = _strip_mention(message.text, me.username or "")
     user_id = message.from_user.id if message.from_user else None
-
     log.info("Pipeline triggered by user=%s text=%r", user_id, text[:60])
-    try:
-        result = await run(text, user_id)
-        await reply(message, result)
-    except Exception as exc:
-        log.exception("Pipeline error: %s", exc)
-        await reply(message, "Произошла ошибка при обработке запроса.")
+
+    async with progress(bot, message, "🤔 Думаю...") as p:
+        try:
+            result = await run(text, user_id, progress_cb=p.update)
+            await p.finish(result)
+        except Exception as exc:
+            log.exception("Pipeline error: %s", exc)
+            await p.finish("⚠️ Произошла ошибка при обработке запроса.")
