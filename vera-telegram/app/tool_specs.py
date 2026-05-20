@@ -2,6 +2,26 @@ from vera_shared.tools.spec import ToolParam, ToolSpec
 
 TOOLS: list[ToolSpec] = [
     ToolSpec(
+        name="telegram_list_recent_dialogs",
+        description=(
+            "List user's most recently active Telegram dialogs, sorted by last "
+            "message date (newest first). Use this when the user asks about "
+            "'active chats', 'recent chats', 'where I talked lately', without "
+            "naming a specific peer. Returns id, name, type, unread_count, "
+            "last_message_date for each."
+        ),
+        params=[
+            ToolParam("limit", "integer", "How many dialogs to return.",
+                      required=False, default=15),
+            ToolParam("exclude_channels", "boolean",
+                      "Skip broadcast channels (keep only people, groups, supergroups).",
+                      required=False, default=False),
+            ToolParam("only_unread", "boolean",
+                      "Return only dialogs with unread messages.",
+                      required=False, default=False),
+        ],
+    ),
+    ToolSpec(
         name="telegram_search_dialogs",
         description=(
             "Find Telegram chats/channels/users whose name contains the query. "
