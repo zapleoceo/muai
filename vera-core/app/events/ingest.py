@@ -60,6 +60,14 @@ async def ingest_episode(event_id: int, *, source: str, category: str,
     except Exception as exc:
         log.exception("Episode ingest failed for event %d: %s", event_id, exc)
 
+    # Run triage regardless of episode ingestion outcome — triage uses
+    # whatever Graphiti can return (may be empty for first events).
+    try:
+        from app.triage.dispatcher import schedule_triage
+        schedule_triage(event_id)
+    except Exception as exc:
+        log.warning("Triage schedule failed for event %d: %s", event_id, exc)
+
 
 def schedule_ingest(event_id: int, **kw) -> None:
     """Fire-and-forget background ingestion (returns immediately)."""

@@ -1,0 +1,165 @@
+import json
+import logging
+import re
+from dataclasses import dataclass
+
+from vera_shared.db.models import Event
+
+log = logging.getLogger(__name__)
+
+
+@dataclass
+class TriageProposal:
+    urgency: str          # low | medium | high | critical
+    summary: str          # 1-2 sentence summary
+    actions: list[dict]   # [{label, description, default?}]
+    confidence: float     # 0..1
+    reasoning: str
+    context_used: list[str]  # what graph-evidence was used
+
+
+_SYSTEM = """Ты — Vera, AI-оркестратор личных дел Димы. Тебе пришло НОВОЕ событие
+из одного из источников (Telegram, Gmail, банковский алерт, инфра-алерт, и т.д.).
+
+Твоя задача — за один шаг:
+1) Понять что это и насколько срочно
+2) Использовать данный тебе КОНТЕКСТ ИЗ ГРАФА (похожие прошлые случаи,
+   профили причастных сущностей, недавняя активность Димы) — это память Веры
+3) Предложить 2-5 РЕАЛЬНЫХ ВАРИАНТОВ ДЕЙСТВИЯ — что Дима скорее всего захочет
+   сделать. Каждый action: короткий label для кнопки (≤30 симв) + чуть больше
+   description с обоснованием.
+4) Оценить свою уверенность 0..1.
+
+Верни ТОЛЬКО валидный JSON, без markdown:
+{
+  "urgency": "low|medium|high|critical",
+  "summary": "1-2 предложения по-русски, что произошло и о чём это",
+  "actions": [
+    {"label": "коротко","description":"что именно сделаем и почему","default": true},
+    {"label": "...","description":"...","default": false}
+  ],
+  "confidence": 0.0..1.0,
+  "reasoning": "1-3 предложения почему именно такие варианты",
+  "context_used": ["краткий список фактов из графа которые сыграли роль"]
+}
+
+Один из actions помечается default=true — это твоя главная рекомендация.
+Если событие незначительное (newsletter, авто-уведомление) — пометь low.
+Если касается денег, инфры, личных отношений Димы — обычно medium/high.
+Никогда не выдумывай данных которых нет в контексте."""
+
+
+async def _retrieve_context(event: Event, limit: int = 6) -> list[dict]:
+    """Search Graphiti for similar past episodes + entity facts."""
+    try:
+        from app.graph.client import get_graphiti
+        client = await get_graphiti()
+        query = (event.content_text or "")[:500]
+        if not query:
+            return []
+        results = await client.search(query=query, num_results=limit)
+        out: list[dict] = []
+        for r in results:
+            out.append({
+                "fact": getattr(r, "fact", None) or getattr(r, "name", None) or str(r),
+                "uuid": str(getattr(r, "uuid", "")),
+            })
+        return out
+    except Exception as exc:
+        log.warning("Graph retrieval failed: %s", exc)
+        return []
+
+
+def _strip_fence(s: str) -> str:
+    s = s.strip()
+    if s.startswith("```"):
+        s = re.sub(r"^```\w*\s*", "", s)
+        s = re.sub(r"\s*```$", "", s)
+    return s.strip()
+
+
+def _safe_parse(raw: str) -> dict | None:
+    try:
+        return json.loads(_strip_fence(raw))
+    except Exception:
+        m = re.search(r"\{[\s\S]*\}", raw)
+        if m:
+            try:
+                return json.loads(m.group(0))
+            except Exception:
+                pass
+    return None
+
+
+def _format_event_for_llm(event: Event, context: list[dict]) -> str:
+    parts: list[str] = []
+    parts.append(f"Source: {event.source}")
+    parts.append(f"Category: {event.category}")
+    parts.append(f"Time: {event.occurred_at.isoformat() if event.occurred_at else '?'}")
+    if event.account:
+        parts.append(f"Account: {event.account}")
+    if event.entity_hints:
+        parts.append("Entities mentioned (from adapter):")
+        for h in event.entity_hints:
+            parts.append(f"  - {h.get('type','?')}: {h.get('identifier') or h.get('name') or '?'}")
+    parts.append("")
+    parts.append("CONTENT:")
+    parts.append(event.content_text or "(no text)")
+    parts.append("")
+    if context:
+        parts.append("RELATED FROM MEMORY GRAPH (most relevant first):")
+        for i, c in enumerate(context, 1):
+            parts.append(f"  {i}. {c['fact']}")
+    else:
+        parts.append("RELATED FROM MEMORY: (nothing — first event of this kind)")
+    return "\n".join(parts)
+
+
+async def triage(event: Event) -> TriageProposal | None:
+    context = await _retrieve_context(event)
+    prompt = _format_event_for_llm(event, context)
+
+    try:
+        from vera_shared.providers.registry import get_registry
+        raw, _, _ = await get_registry().chat(
+            "chat:fast", [{"role": "user", "content": prompt}], system=_SYSTEM,
+        )
+    except Exception as exc:
+        log.warning("Triage LLM failed: %s", exc)
+        return None
+
+    data = _safe_parse(raw)
+    if not data:
+        log.warning("Triage LLM returned non-JSON: %r", raw[:200])
+        return None
+
+    actions = data.get("actions") or []
+    if not isinstance(actions, list) or not actions:
+        return None
+
+    # normalise actions
+    normalised: list[dict] = []
+    for a in actions[:5]:
+        if not isinstance(a, dict):
+            continue
+        label = str(a.get("label", "")).strip()[:30]
+        if not label:
+            continue
+        normalised.append({
+            "label": label,
+            "description": str(a.get("description", "")).strip()[:300],
+            "default": bool(a.get("default", False)),
+        })
+    if not normalised:
+        return None
+    if not any(a["default"] for a in normalised):
+        normalised[0]["default"] = True
+
+    return TriageProposal(
+        urgency=str(data.get("urgency", "medium")).lower(),
+        summary=str(data.get("summary", ""))[:500],
+        actions=normalised,
+        confidence=float(data.get("confidence", 0.5) or 0.5),
+        reasoning=str(data.get("reasoning", ""))[:500],
+        context_used=[str(x) for x in (data.get("context_used") or [])][:10],
+    )

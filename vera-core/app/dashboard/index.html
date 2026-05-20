@@ -105,7 +105,7 @@ const fmt = {
   },
 };
 
-let state = { tab: 'stats', stats: null, tasks: [], tokens: [], agents: [], balances: {} };
+let state = { tab: 'stats', stats: null, tasks: [], tokens: [], agents: [], balances: {}, events: [] };
 
 async function api(path) {
   const r = await fetch(path, { credentials: 'include' });
@@ -117,18 +117,20 @@ async function api(path) {
 async function refresh() {
   const ok = await api('/api/whoami');
   if (!ok) { renderLogin(); return; }
-  const [stats, tasks, tokens, agents, balances] = await Promise.all([
+  const [stats, tasks, tokens, agents, balances, events] = await Promise.all([
     api('/api/stats'),
     api('/api/tasks?limit=50'),
     api('/api/tokens'),
     api('/api/agents'),
     api('/api/balances'),
+    api('/api/events?limit=50'),
   ]);
   state.stats = stats;
   state.tasks = tasks || [];
   state.tokens = tokens || [];
   state.agents = agents || [];
   state.balances = balances || {};
+  state.events = events || [];
   render();
 }
 
@@ -297,12 +299,61 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
 }
 
+const URGENCY_ICON = {low:'🟢', medium:'🟡', high:'🟠', critical:'🔴'};
+
+function renderEvents() {
+  if (!state.events.length)
+    return el('section', {class:'active'}, el('div',{class:'empty'}, 'Ещё нет событий. Когда адаптеры начнут слать /event — они появятся здесь.'));
+  const rows = state.events.map(ev => {
+    const tr = ev.triage_result || {};
+    const urg = (tr.urgency || '').toLowerCase();
+    const icon = URGENCY_ICON[urg] || '⚪';
+    const decided = tr.user_choice || null;
+    let statusPill;
+    if (ev.triage_status === 'decided') statusPill = pill('решено','ok');
+    else if (ev.triage_status === 'awaiting_user') statusPill = pill('ждёт','warn');
+    else if (ev.triage_status === 'failed') statusPill = pill('triage fail','err');
+    else if (ev.triage_status === 'pending') statusPill = pill('обработка','mute');
+    else statusPill = pill(ev.triage_status || '?', 'mute');
+
+    const actions = (tr.actions || []).map(a =>
+      el('div', {style:'margin:2px 0;font-size:12px;color:var(--mute)'},
+        (a.default ? '⭐ ' : '· ') + a.label
+      ),
+    );
+    return el('tr', {},
+      el('td', {style:'white-space:nowrap'}, '#' + ev.id),
+      el('td', {style:'color:var(--mute);white-space:nowrap'}, fmt.date(ev.occurred_at)),
+      el('td', {}, el('div',{}, pill(ev.source,'mute'), ' ', el('span',{style:'color:var(--mute);font-size:11px'}, ev.category))),
+      el('td', {style:'max-width:400px'},
+        el('div',{}, icon + ' ' + escapeHtml(tr.summary || ev.content_text || '—')),
+        tr.reasoning ? el('div',{style:'color:var(--mute);font-size:12px;margin-top:4px'}, escapeHtml(tr.reasoning)) : '',
+      ),
+      el('td', {style:'min-width:180px'}, actions),
+      el('td', {}, statusPill,
+        decided ? el('div',{style:'margin-top:4px;font-size:12px;color:var(--acc)'}, '→ ' + escapeHtml(decided.label || '')) : ''),
+      el('td', {style:'color:var(--mute);font-size:11px'},
+        tr.confidence != null ? Math.round(tr.confidence*100) + '%' : '—'),
+    );
+  });
+  const table = el('table',{},
+    el('thead',{}, el('tr',{},
+      el('th',{},'#'), el('th',{},'Когда'), el('th',{},'Источник'),
+      el('th',{},'Сводка'), el('th',{},'Варианты Vera'),
+      el('th',{},'Статус'), el('th',{},'Уверенность'),
+    )),
+    el('tbody',{}, rows),
+  );
+  return el('section',{class:'active'}, table);
+}
+
 function render() {
   const app = $('#app');
   app.innerHTML = '';
 
   const tabs = [
     ['stats','Статистика'],
+    ['events','События'],
     ['tasks','Задачи'],
     ['tokens','Токены'],
     ['agents','Агенты'],
@@ -324,6 +375,7 @@ function render() {
   const main = el('main', {});
   let body;
   if (state.tab === 'stats') body = renderStats();
+  else if (state.tab === 'events') body = renderEvents();
   else if (state.tab === 'tasks') body = renderTasks();
   else if (state.tab === 'tokens') body = renderTokens();
   else if (state.tab === 'agents') body = renderAgents();

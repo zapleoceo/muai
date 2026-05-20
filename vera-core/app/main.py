@@ -11,6 +11,7 @@ from fastapi import FastAPI, Request
 from vera_shared.db.engine import init_engine
 from vera_shared.db.migrations import run_migrations
 
+from app.bot.callbacks import router as callbacks_router
 from app.bot.handler import router as bot_router
 from app.bot.sender import init_bot
 from app.config import get_settings
@@ -48,10 +49,15 @@ async def lifespan(app: FastAPI):
     init_bot(_bot)
 
     _dp = Dispatcher()
+    _dp.include_router(callbacks_router)  # match callbacks before message handler
     _dp.include_router(bot_router)
 
     webhook_url = f"{settings.webhook_base_url}/bot/webhook"
-    await _bot.set_webhook(webhook_url, drop_pending_updates=True)
+    await _bot.set_webhook(
+        webhook_url, drop_pending_updates=True,
+        allowed_updates=["message", "edited_message", "callback_query",
+                         "my_chat_member", "chat_join_request"],
+    )
     log.info("Webhook set to %s", webhook_url)
 
     yield
