@@ -9,8 +9,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Trigger deploy on server
+        env:
+          DEPLOY_SECRET: ${{ secrets.DEPLOY_SECRET }}
+          REF: ${{ github.sha }}
+          MSG: ${{ github.event.head_commit.message }}
         run: |
-          curl -f -X POST https://dima.veranda.my/deploy \
-            -H "Authorization: Bearer ${{ secrets.DEPLOY_SECRET }}" \
+          payload=$(jq -nc --arg ref "$REF" --arg msg "$MSG" '{ref: $ref, message: $msg}')
+          curl -f -sS -X POST https://dima.veranda.my/deploy \
+            -H "Authorization: Bearer $DEPLOY_SECRET" \
             -H "Content-Type: application/json" \
-            -d "{\"ref\": \"${{ github.sha }}\", \"message\": \"${{ github.event.head_commit.message }}\"}"
+            -d "$payload"
