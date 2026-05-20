@@ -14,12 +14,13 @@ router = APIRouter(prefix="/api/graph")
 async def health(_=Depends(require_owner)) -> dict:
     try:
         client = await get_graphiti()
-        await ensure_indices()
-        # cheap connection probe via the underlying neo4j driver
-        async with client.driver.session() as s:
+        from app.config import get_settings
+        db = get_settings().neo4j_database
+        async with client.driver.session(database=db) as s:
             res = await s.run("RETURN 1 AS ok")
             row = await res.single()
-        return {"ok": True, "neo4j_probe": row["ok"] if row else None}
+        await ensure_indices()
+        return {"ok": True, "database": db, "neo4j_probe": row["ok"] if row else None}
     except Exception as exc:
         log.warning("graph health failed: %s", exc)
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}",
