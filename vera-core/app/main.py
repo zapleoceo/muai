@@ -17,6 +17,7 @@ from app.config import get_settings
 from app.dashboard.api import router as dashboard_api_router
 from app.dashboard.static import router as dashboard_static_router
 from app.deploy.endpoint import router as deploy_router
+from app.graph.routes import router as graph_router
 from app.internal.agents import router as agents_router
 
 logging.basicConfig(level=logging.INFO)
@@ -62,6 +63,7 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="vera-core", lifespan=lifespan)
 app.include_router(deploy_router)
 app.include_router(agents_router)
+app.include_router(graph_router)
 app.include_router(dashboard_api_router)
 app.include_router(dashboard_static_router)
 

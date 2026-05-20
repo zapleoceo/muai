@@ -14,6 +14,11 @@ class Settings(BaseSettings):
     webhook_base_url: str = "https://dima.veranda.my"
     github_repo: str = "zapleoceo/muai"
 
+    neo4j_uri: str = ""
+    neo4j_username: str = ""
+    neo4j_password: str = ""
+    neo4j_database: str = "neo4j"
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 

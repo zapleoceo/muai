@@ -4,3 +4,5 @@ aiogram>=3.7
 httpx>=0.27
 python-dotenv>=1.0
 pydantic-settings>=2.0
+graphiti-core>=0.10
+neo4j>=5.20
