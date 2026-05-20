@@ -64,6 +64,25 @@ class Task(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class Event(Base):
+    __tablename__ = "events"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String, nullable=False)
+    source_event_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    account: Mapped[str | None] = mapped_column(String, nullable=True)
+    category: Mapped[str] = mapped_column(String, nullable=False, default="generic")
+    content_text: Mapped[str | None] = mapped_column(String, nullable=True)
+    content_extra: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    entity_hints: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    metadata_: Mapped[dict | None] = mapped_column("metadata", JSON, nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    received_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    graphiti_episode_uuid: Mapped[str | None] = mapped_column(String, nullable=True)
+    triage_status: Mapped[str] = mapped_column(String, default="pending")
+    triage_result: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+
 class Setting(Base):
     __tablename__ = "settings"
 
