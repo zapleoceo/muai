@@ -1,4 +1,3 @@
-vera-shared @ file://../shared
 fastapi>=0.111
 uvicorn>=0.29
 telethon>=1.36
