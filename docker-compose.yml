@@ -46,6 +46,17 @@ services:
     networks: [vera]
     depends_on: [vera-core]
 
+  vera-gmail:
+    build:
+      context: .
+      dockerfile: vera-gmail/Dockerfile
+    restart: unless-stopped
+    volumes:
+      - vera_data:/data
+    env_file: .env
+    networks: [vera]
+    depends_on: [vera-core]
+
 volumes:
   vera_data:
     driver: local
