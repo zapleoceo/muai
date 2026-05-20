@@ -28,7 +28,8 @@ async def get_graphiti():
 
         from graphiti_core import Graphiti
         from graphiti_core.cross_encoder.gemini_reranker_client import GeminiRerankerClient
-        from graphiti_core.embedder.voyage import VoyageAIEmbedder, VoyageAIEmbedderConfig
+        from graphiti_core.driver.neo4j_driver import Neo4jDriver
+        from graphiti_core.embedder.gemini import GeminiEmbedder, GeminiEmbedderConfig
         from graphiti_core.llm_client.gemini_client import GeminiClient
         from graphiti_core.llm_client.config import LLMConfig
 
@@ -37,14 +38,15 @@ async def get_graphiti():
             raise RuntimeError("NEO4J_URI not configured")
 
         gemini_key = await _pick_token("gemini")
-        voyage_key = await _pick_token("voyage")
 
+        # Use flash-lite to reduce 503 "high demand" on the single key Graphiti holds.
+        # Long-term: replace with adapter that rotates over our token pool.
         llm_client = GeminiClient(
-            config=LLMConfig(api_key=gemini_key, model="gemini-2.5-flash"),
+            config=LLMConfig(api_key=gemini_key, model="gemini-2.5-flash-lite"),
         )
-        embedder = VoyageAIEmbedder(
-            config=VoyageAIEmbedderConfig(
-                api_key=voyage_key, embedding_model="voyage-3",
+        embedder = GeminiEmbedder(
+            config=GeminiEmbedderConfig(
+                api_key=gemini_key, embedding_model="gemini-embedding-001",
             ),
         )
 
@@ -52,23 +54,18 @@ async def get_graphiti():
             config=LLMConfig(api_key=gemini_key, model="gemini-2.5-flash-lite"),
         )
 
-        client = Graphiti(
+        driver = Neo4jDriver(
             settings.neo4j_uri,
             settings.neo4j_username,
             settings.neo4j_password,
+            database=settings.neo4j_database,
+        )
+        client = Graphiti(
+            graph_driver=driver,
             llm_client=llm_client,
             embedder=embedder,
             cross_encoder=reranker,
         )
-        # Aura Free uses the instance id as default database name.
-        try:
-            client.database = settings.neo4j_database
-        except Exception:
-            pass
-        try:
-            client.driver._default_workspace_config.database = settings.neo4j_database
-        except Exception:
-            pass
         _client = client
         log.info("Graphiti client initialised (Neo4j: %s)", settings.neo4j_uri)
     return _client

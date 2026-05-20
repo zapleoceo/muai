@@ -39,9 +39,8 @@ async def ingest_episode(event_id: int, *, source: str, category: str,
     try:
         from graphiti_core.nodes import EpisodeType
 
-        from app.graph.client import ensure_indices, get_graphiti
+        from app.graph.client import get_graphiti
 
-        await ensure_indices()
         client = await get_graphiti()
         body = _format_episode_body(source, category, content_text, entity_hints, metadata)
 
@@ -59,7 +58,7 @@ async def ingest_episode(event_id: int, *, source: str, category: str,
         await mark_episode(event_id, f"{source}/{event_id}")
         log.info("Episode ingested: %s/%d", source, event_id)
     except Exception as exc:
-        log.warning("Episode ingest failed for event %d: %s", event_id, exc)
+        log.exception("Episode ingest failed for event %d: %s", event_id, exc)
 
 
 def schedule_ingest(event_id: int, **kw) -> None:
