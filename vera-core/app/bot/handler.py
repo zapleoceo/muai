@@ -5,6 +5,7 @@ from aiogram.types import Message
 
 from app.bot.progress import progress
 from app.config import get_settings
+from app.media.extractor import extract_text
 from app.orchestrator.pipeline import run
 
 log = logging.getLogger(__name__)
@@ -12,27 +13,38 @@ router = Router()
 
 
 def _is_mention(message: Message, bot_username: str) -> bool:
-    if message.entities is None:
+    text = message.text or message.caption
+    entities = message.entities or message.caption_entities
+    if not entities or not text:
         return False
-    for entity in message.entities:
+    for entity in entities:
         if entity.type == "mention":
-            mention = message.text[entity.offset : entity.offset + entity.length] if message.text else ""
+            mention = text[entity.offset : entity.offset + entity.length]
             if mention.lower() == f"@{bot_username.lower()}":
                 return True
     return False
 
 
-def _strip_mention(text: str, bot_username: str) -> str:
+def _strip_mention(text: str | None, bot_username: str) -> str:
+    if not text:
+        return ""
     prefix = f"@{bot_username}"
     stripped = text.strip()
     if stripped.lower().startswith(prefix.lower()):
         stripped = stripped[len(prefix):].strip()
-    return stripped or text.strip()
+    return stripped
+
+
+def _has_payload(message: Message) -> bool:
+    return any([
+        message.text, message.voice, message.audio, message.photo,
+        message.document, message.video, message.video_note,
+    ])
 
 
 @router.message()
 async def handle_message(message: Message, bot: Bot) -> None:
-    if message.text is None:
+    if not _has_payload(message):
         return
 
     settings = get_settings()
@@ -52,12 +64,23 @@ async def handle_message(message: Message, bot: Bot) -> None:
     if not in_group and not from_owner:
         return
 
-    text = _strip_mention(message.text, me.username or "")
     user_id = message.from_user.id if message.from_user else None
-    log.info("Pipeline triggered by user=%s text=%r", user_id, text[:60])
+    log.info("Pipeline triggered by user=%s media=%s", user_id,
+             [k for k in ("text","voice","audio","photo","document","video","video_note")
+              if getattr(message, k, None)])
 
     async with progress(bot, message, "🤔 Думаю...") as p:
         try:
+            text = await extract_text(bot, message, p.update)
+            if text is None:
+                await p.finish("⚠️ Не понял сообщение.")
+                return
+
+            text = _strip_mention(text, me.username or "")
+            if not text:
+                await p.finish("⚠️ Пустое сообщение.")
+                return
+
             result = await run(text, user_id, progress_cb=p.update)
             await p.finish(result)
         except Exception as exc:
