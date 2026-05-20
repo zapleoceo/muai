@@ -64,6 +64,21 @@ class Task(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class GmailAccount(Base):
+    __tablename__ = "gmail_accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    email: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    refresh_token_enc: Mapped[str] = mapped_column(String, nullable=False)
+    access_token_enc: Mapped[str | None] = mapped_column(String, nullable=True)
+    access_expiry: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    history_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class Event(Base):
     __tablename__ = "events"
 

@@ -105,7 +105,7 @@ const fmt = {
   },
 };
 
-let state = { tab: 'stats', stats: null, tasks: [], tokens: [], agents: [], balances: {}, events: [] };
+let state = { tab: 'stats', stats: null, tasks: [], tokens: [], agents: [], balances: {}, events: [], gmail: [] };
 
 async function api(path) {
   const r = await fetch(path, { credentials: 'include' });
@@ -117,13 +117,14 @@ async function api(path) {
 async function refresh() {
   const ok = await api('/api/whoami');
   if (!ok) { renderLogin(); return; }
-  const [stats, tasks, tokens, agents, balances, events] = await Promise.all([
+  const [stats, tasks, tokens, agents, balances, events, gmail] = await Promise.all([
     api('/api/stats'),
     api('/api/tasks?limit=50'),
     api('/api/tokens'),
     api('/api/agents'),
     api('/api/balances'),
     api('/api/events?limit=50'),
+    api('/api/gmail/accounts'),
   ]);
   state.stats = stats;
   state.tasks = tasks || [];
@@ -131,6 +132,7 @@ async function refresh() {
   state.agents = agents || [];
   state.balances = balances || {};
   state.events = events || [];
+  state.gmail = gmail || [];
   render();
 }
 
@@ -268,6 +270,39 @@ function renderTokens() {
   return el('section', {class:'active'}, renderBalances(), table);
 }
 
+function renderSources() {
+  const gmailCard = el('div',{class:'card', style:'margin-bottom:16px'},
+    el('div',{style:'display:flex;justify-content:space-between;align-items:center;margin-bottom:12px'},
+      el('strong',{style:'font-size:15px'}, '📧 Gmail'),
+      el('a',{href:'/api/gmail/oauth/start',
+              class:'btn',
+              style:'text-decoration:none;background:var(--info);color:#fff;border:none'},
+        '+ Подключить аккаунт'),
+    ),
+    state.gmail.length === 0
+      ? el('div',{class:'empty',style:'padding:20px'}, 'Ещё нет подключённых Gmail-аккаунтов')
+      : el('table',{},
+          el('thead',{}, el('tr',{},
+            el('th',{},'Email'), el('th',{},'Статус'),
+            el('th',{},'Последний опрос'), el('th',{},'Подключён'),
+          )),
+          el('tbody',{}, state.gmail.map(g =>
+            el('tr',{},
+              el('td',{}, g.email),
+              el('td',{}, pill(g.is_active ? 'активен' : 'отключён', g.is_active ? 'ok' : 'mute')),
+              el('td',{style:'color:var(--mute)'}, fmt.date(g.last_polled_at)),
+              el('td',{style:'color:var(--mute)'}, fmt.date(g.created_at)),
+            )
+          )),
+        ),
+  );
+  return el('section',{class:'active'},
+    el('div',{style:'margin-bottom:8px;color:var(--mute);font-size:12px'},
+      'Источники событий, которые Vera будет читать и о которых принимать решения.'),
+    gmailCard,
+  );
+}
+
 function renderAgents() {
   if (!state.agents.length) return el('section', {class:'active'}, el('div',{class:'empty'}, 'Нет агентов'));
   const cards = state.agents.map(a => {
@@ -354,6 +389,7 @@ function render() {
   const tabs = [
     ['stats','Статистика'],
     ['events','События'],
+    ['sources','Источники'],
     ['tasks','Задачи'],
     ['tokens','Токены'],
     ['agents','Агенты'],
@@ -376,6 +412,7 @@ function render() {
   let body;
   if (state.tab === 'stats') body = renderStats();
   else if (state.tab === 'events') body = renderEvents();
+  else if (state.tab === 'sources') body = renderSources();
   else if (state.tab === 'tasks') body = renderTasks();
   else if (state.tab === 'tokens') body = renderTokens();
   else if (state.tab === 'agents') body = renderAgents();
