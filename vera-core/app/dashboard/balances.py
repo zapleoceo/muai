@@ -37,12 +37,11 @@ async def _deepseek_balance(api_key: str) -> dict | None:
 
 
 async def _first_active_token(provider: str) -> str | None:
-    async with get_session() as session:
-        result = await session.execute(
-            select(Token.token).where(Token.provider == provider, Token.is_active == True).limit(1)
-        )
-        row = result.first()
-    return row[0] if row else None
+    from vera_shared.tokens.repository import get_all_active
+    for r in await get_all_active():
+        if r.provider == provider:
+            return r.token  # decrypted by repository
+    return None
 
 
 async def get_live_balances() -> dict:
