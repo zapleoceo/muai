@@ -35,6 +35,17 @@ services:
     networks: [vera]
     depends_on: [vera-core]
 
+  vera-web:
+    build:
+      context: .
+      dockerfile: vera-web/Dockerfile
+    restart: unless-stopped
+    volumes:
+      - vera_data:/data
+    env_file: .env
+    networks: [vera]
+    depends_on: [vera-core]
+
 volumes:
   vera_data:
     driver: local
