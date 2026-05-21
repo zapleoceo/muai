@@ -86,8 +86,13 @@ async def handle_message(message: Message, bot: Bot) -> None:
                 await p.finish("⚠️ Пустое сообщение.")
                 return
 
-            result = await run(text, user_id, progress_cb=p.update)
-            await p.finish(result)
+            reply, trace_footer = await run(text, user_id, progress_cb=p.update)
+            await p.finish(reply)
+            if trace_footer:
+                try:
+                    await message.answer(trace_footer.lstrip("\n"))
+                except Exception as exc:
+                    log.warning("Failed to send trace footer: %s", exc)
         except Exception as exc:
             log.exception("Pipeline error: %s", exc)
             await p.finish("⚠️ Произошла ошибка при обработке запроса.")

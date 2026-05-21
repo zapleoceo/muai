@@ -149,11 +149,11 @@ def _brief(tool_result: dict) -> str:
 def format_trace_footer(trace: list[dict]) -> str:
     if not trace:
         return ""
-    lines = ["", "━━━━━"]
-    for s in trace:
+    lines = [f"🛠 Шаги ({len(trace)}):"]
+    for i, s in enumerate(trace, 1):
         icon = "✓" if s["ok"] else "✗"
         args_preview = _args_preview(s["args"])
-        lines.append(f"{icon} {s['tool']}{args_preview} → {s['brief']}")
+        lines.append(f"{i}. {icon} {s['tool']}{args_preview} → {s['brief']}")
     return "\n".join(lines)
 
 
