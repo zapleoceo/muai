@@ -56,3 +56,11 @@ jobs:
           done
           echo "dashboard not responding after deploy" >&2
           exit 1
+
+      - name: Run tests
+        env:
+          PORT: ${{ secrets.HETZNER_PORT || '9617' }}
+        run: |
+          ssh -p "$PORT" -o BatchMode=yes -o ConnectTimeout=15 \
+              root@${{ secrets.HETZNER_HOST }} \
+              'docker exec vera-vera-core-1 pytest /app/tests -q --tb=short'
