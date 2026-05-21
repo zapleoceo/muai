@@ -6,43 +6,49 @@ the dashboard inserts a row into mcp_servers and the manager starts it.
 
 PRESETS: list[dict] = [
     {
-        "id": "gmail",
-        "label": "Gmail (gongrzhe)",
-        "description": "Google Mail via OAuth. Replaces the in-tree vera-gmail poller.",
-        "transport": "stdio",
-        "command": ["npx", "-y", "@gongrzhe/server-gmail-autoauth-mcp"],
-        "env_required": ["GOOGLE_CLIENT_ID", "GOOGLE_CLIENT_SECRET", "GOOGLE_REFRESH_TOKEN"],
-        "notes": (
-            "Run `npx @gongrzhe/server-gmail-autoauth-mcp auth` once locally "
-            "to obtain the refresh token, then paste credentials here."
-        ),
-    },
-    {
-        "id": "telegram",
-        "label": "Telegram (chigwell)",
-        "description": "Telethon-backed Telegram MCP. Shares /data/sessions/userbot.session.",
-        "transport": "stdio",
-        "command": ["npx", "-y", "@chigwell/telegram-mcp"],
-        "env_required": ["TELEGRAM_API_ID", "TELEGRAM_API_HASH", "TELEGRAM_SESSION_PATH"],
-        "notes": "TELEGRAM_SESSION_PATH defaults to /data/sessions/userbot.session.",
-    },
-    {
         "id": "fetch",
-        "label": "Web fetch (modelcontextprotocol)",
+        "label": "Web fetch (mcp-server-fetch)",
         "description": "Read web pages as Markdown. Replaces ad-hoc curl/httpx scraping.",
         "transport": "stdio",
-        "command": ["npx", "-y", "@modelcontextprotocol/server-fetch"],
+        "command": ["uvx", "mcp-server-fetch"],
         "env_required": [],
-        "notes": "No credentials required.",
+        "notes": "No credentials required. Installed lazily via uvx on first run.",
     },
     {
         "id": "git",
-        "label": "Git (modelcontextprotocol)",
-        "description": "Git operations against /repos. Replaces vera-git bot.",
+        "label": "Git (mcp-server-git)",
+        "description": "Git operations against a mounted repo. Replaces vera-git bot.",
         "transport": "stdio",
-        "command": ["npx", "-y", "@modelcontextprotocol/server-git", "--repository", "/repos"],
+        "command": ["uvx", "mcp-server-git", "--repository", "/var/www/vera"],
         "env_required": [],
-        "notes": "Mount the repo at /repos. GitHub auth via /repos/.git/config credential helper.",
+        "notes": "Repo must be mounted into vera-core. GitHub auth via repo's git credential helper.",
+    },
+    {
+        "id": "filesystem",
+        "label": "Filesystem (modelcontextprotocol)",
+        "description": "Read/write files in a sandboxed directory.",
+        "transport": "stdio",
+        "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/data"],
+        "env_required": [],
+        "notes": "Scoped to /data inside the container.",
+    },
+    {
+        "id": "memory",
+        "label": "Knowledge graph memory (modelcontextprotocol)",
+        "description": "Lightweight persistent memory graph for Vera.",
+        "transport": "stdio",
+        "command": ["npx", "-y", "@modelcontextprotocol/server-memory"],
+        "env_required": [],
+        "notes": "Stores graph in process memory; survives only while server runs.",
+    },
+    {
+        "id": "github",
+        "label": "GitHub (modelcontextprotocol)",
+        "description": "GitHub API tools (issues, PRs, code search). Replaces vera-git bot.",
+        "transport": "stdio",
+        "command": ["npx", "-y", "@modelcontextprotocol/server-github"],
+        "env_required": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
+        "notes": "Token needs `repo` scope. Create at https://github.com/settings/tokens",
     },
 ]
 

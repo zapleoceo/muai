@@ -3,7 +3,7 @@ from app.mcp.presets import PRESETS, find
 
 def test_presets_have_expected_ids():
     ids = {p["id"] for p in PRESETS}
-    assert {"gmail", "telegram", "fetch", "git"} <= ids
+    assert {"fetch", "git", "filesystem", "memory", "github"} <= ids
 
 
 def test_each_preset_well_formed():
@@ -16,4 +16,4 @@ def test_each_preset_well_formed():
 
 def test_find_unknown_returns_none():
     assert find("nonexistent") is None
-    assert find("gmail")["id"] == "gmail"
+    assert find("fetch")["id"] == "fetch"

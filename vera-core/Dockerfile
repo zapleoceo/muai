@@ -3,7 +3,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     git ca-certificates curl gnupg \
     && curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
-    && apt-get purge -y curl gnupg \
+    && curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
+    && apt-get purge -y gnupg \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/* \
     && npm config set fund false \
