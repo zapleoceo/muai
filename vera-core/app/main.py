@@ -22,6 +22,7 @@ from app.events.routes import router as events_router
 from app.gmail.routes import router as gmail_router
 from app.graph.routes import router as graph_router
 from app.internal.agents import router as agents_router
+from app.mcp.routes import router as mcp_router
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -43,6 +44,13 @@ async def lifespan(app: FastAPI):
     if migrated:
         log.info("Encrypted %d plaintext tokens at rest", migrated)
 
+    # Boot MCP servers from DB; failures here must not crash vera-core
+    try:
+        from app.mcp.manager import refresh_from_db
+        await refresh_from_db()
+    except Exception as exc:
+        log.exception("MCP boot failed: %s", exc)
+
     _bot = Bot(
         token=settings.telegram_bot_token_vera,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
@@ -63,6 +71,12 @@ async def lifespan(app: FastAPI):
 
     yield
 
+    try:
+        from app.mcp.manager import stop_all
+        await stop_all()
+    except Exception as exc:
+        log.warning("MCP stop_all failed: %s", exc)
+
     await _bot.delete_webhook()
     await _bot.session.close()
     log.info("Bot shutdown complete")
@@ -74,6 +88,7 @@ app.include_router(agents_router)
 app.include_router(events_router)
 app.include_router(gmail_router)
 app.include_router(graph_router)
+app.include_router(mcp_router)
 app.include_router(dashboard_api_router)
 app.include_router(dashboard_static_router)
 

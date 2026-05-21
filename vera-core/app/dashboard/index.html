@@ -105,7 +105,7 @@ const fmt = {
   },
 };
 
-let state = { tab: 'stats', stats: null, tasks: [], tokens: [], agents: [], balances: {}, events: [], gmail: [] };
+let state = { tab: 'stats', stats: null, tasks: [], tokens: [], agents: [], balances: {}, events: [], gmail: [], mcp: [] };
 
 async function api(path) {
   const r = await fetch(path, { credentials: 'include' });
@@ -117,7 +117,7 @@ async function api(path) {
 async function refresh() {
   const ok = await api('/api/whoami');
   if (!ok) { renderLogin(); return; }
-  const [stats, tasks, tokens, agents, balances, events, gmail] = await Promise.all([
+  const [stats, tasks, tokens, agents, balances, events, gmail, mcp] = await Promise.all([
     api('/api/stats'),
     api('/api/tasks?limit=50'),
     api('/api/tokens'),
@@ -125,6 +125,7 @@ async function refresh() {
     api('/api/balances'),
     api('/api/events?limit=50'),
     api('/api/gmail/accounts'),
+    api('/api/mcp/servers'),
   ]);
   state.stats = stats;
   state.tasks = tasks || [];
@@ -132,6 +133,7 @@ async function refresh() {
   state.agents = agents || [];
   state.balances = balances || {};
   state.events = events || [];
+  state.mcp = mcp || [];
   state.gmail = gmail || [];
   render();
 }
@@ -319,6 +321,87 @@ function renderSources() {
   );
 }
 
+function renderMCP() {
+  const addForm = el('div', {class:'card', style:'margin-bottom:16px'},
+    el('div', {style:'display:flex;gap:8px;align-items:center;margin-bottom:8px'},
+      el('strong', {style:'font-size:15px'}, '+ Добавить MCP-сервер'),
+    ),
+    el('div', {style:'color:var(--mute);font-size:12px;margin-bottom:12px'},
+      'Пример команды для стандартных серверов: '
+      + 'npx -y @modelcontextprotocol/server-fetch'),
+    (() => {
+      const name = el('input', {placeholder:'name (e.g. fetch)', style:'width:200px;padding:6px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;margin-right:8px'});
+      const cmd = el('input', {placeholder:'command (npx, -y, @org/server)', style:'flex:1;padding:6px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;margin-right:8px'});
+      const env = el('input', {placeholder:'env (KEY=val; KEY2=val2)', style:'flex:1;padding:6px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;margin-right:8px'});
+      const btn = el('button', {class:'btn',
+                                style:'background:var(--info);color:#fff;border:none',
+                                onclick: async () => {
+        try {
+          const envObj = {};
+          (env.value || '').split(';').map(s=>s.trim()).filter(Boolean).forEach(p => {
+            const [k, ...v] = p.split('=');
+            if (k) envObj[k.trim()] = v.join('=').trim();
+          });
+          const r = await fetch('/api/mcp/servers', {
+            method: 'POST', credentials:'include',
+            headers: {'Content-Type':'application/json'},
+            body: JSON.stringify({
+              name: name.value.trim(),
+              command: cmd.value.trim().split(/\s+/).filter(Boolean),
+              env: envObj,
+            }),
+          });
+          if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+          name.value = ''; cmd.value = ''; env.value = '';
+          await refresh();
+        } catch (e) { alert('Ошибка: ' + e.message); }
+      }}, 'Добавить');
+      return el('div',{style:'display:flex;flex-wrap:wrap;gap:8px;align-items:center'}, name, cmd, env, btn);
+    })(),
+  );
+
+  const table = state.mcp.length === 0
+    ? el('div', {class:'empty', style:'padding:30px'}, 'Нет MCP-серверов. Добавь первый выше.')
+    : el('table', {},
+        el('thead', {}, el('tr', {},
+          el('th', {}, 'Name'), el('th', {}, 'Команда'),
+          el('th', {}, 'Статус'), el('th', {}, 'Tools'),
+          el('th', {}, 'Last start'), el('th', {}, 'Действия'),
+        )),
+        el('tbody', {}, state.mcp.map(s => el('tr', {},
+          el('td', {}, el('strong',{}, s.name),
+                       s.env_keys.length ? el('div',{style:'color:var(--mute);font-size:11px'}, 'env: ' + s.env_keys.join(', ')) : ''),
+          el('td', {style:'font-family:ui-monospace,monospace;font-size:12px;color:var(--mute)'},
+                   (s.command || []).join(' ')),
+          el('td', {}, pill(s.status,
+            s.status === 'running' ? 'ok' :
+            s.status === 'error'   ? 'err' :
+            s.status === 'starting'? 'warn' : 'mute')),
+          el('td', {}, String(s.tools_count || 0)),
+          el('td', {style:'color:var(--mute);font-size:11px'}, fmt.date(s.last_started_at)),
+          el('td', {},
+            el('button', {class:'btn', style:'margin-right:4px',
+              onclick: async () => {
+                await fetch(`/api/mcp/servers/${encodeURIComponent(s.name)}/restart`,
+                            {method:'POST', credentials:'include'});
+                refresh();
+              }}, '⟳'),
+            el('button', {class:'btn',
+              onclick: async () => {
+                if (!confirm(`Удалить MCP-сервер «${s.name}»?`)) return;
+                await fetch(`/api/mcp/servers/${encodeURIComponent(s.name)}`,
+                            {method:'DELETE', credentials:'include'});
+                refresh();
+              }}, '✕'),
+            s.error_message ? el('div',{style:'color:var(--err);font-size:11px;margin-top:4px'},
+                                  escapeHtml(s.error_message.slice(0,120))) : '',
+          ),
+        ))),
+      );
+
+  return el('section', {class:'active'}, addForm, table);
+}
+
 function renderAgents() {
   if (!state.agents.length) return el('section', {class:'active'}, el('div',{class:'empty'}, 'Нет агентов'));
   const cards = state.agents.map(a => {
@@ -406,6 +489,7 @@ function render() {
     ['stats','Статистика'],
     ['events','События'],
     ['sources','Источники'],
+    ['mcp','MCP'],
     ['tasks','Задачи'],
     ['tokens','Токены'],
     ['agents','Агенты'],
@@ -429,6 +513,7 @@ function render() {
   if (state.tab === 'stats') body = renderStats();
   else if (state.tab === 'events') body = renderEvents();
   else if (state.tab === 'sources') body = renderSources();
+  else if (state.tab === 'mcp') body = renderMCP();
   else if (state.tab === 'tasks') body = renderTasks();
   else if (state.tab === 'tokens') body = renderTokens();
   else if (state.tab === 'agents') body = renderAgents();
