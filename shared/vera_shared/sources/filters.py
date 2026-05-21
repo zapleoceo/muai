@@ -63,6 +63,19 @@ def _matches_one(match: dict, payload: dict) -> bool:
         elif key == "folder":
             if (payload.get("folder") or "").lower() != str(want).lower():
                 return False
+        elif key == "folder_in":
+            want_set = {str(x).lower() for x in (_to_set(want))}
+            if (payload.get("folder") or "").lower() not in want_set:
+                return False
+        elif key == "folder_not_in":
+            avoid = {str(x).lower() for x in (_to_set(want))}
+            if (payload.get("folder") or "").lower() in avoid:
+                return False
+        elif key == "mutual_chat_contains":
+            mutuals = [str(x).lower() for x in (payload.get("mutual_chats") or [])]
+            needle = str(want).lower()
+            if not any(needle in m for m in mutuals):
+                return False
         elif key == "from_user_id":
             if payload.get("from_user_id") not in _to_set(want):
                 return False

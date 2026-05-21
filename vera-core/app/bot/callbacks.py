@@ -4,6 +4,7 @@ from aiogram import Bot, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 
+from app.common.text import html_escape as _html_escape
 from app.config import get_settings
 from app.orchestrator.tool_router import call_tool, collect_tools, truncate_for_llm
 from app.triage.dispatcher import record_user_decision, save_execution
@@ -83,5 +84,3 @@ async def triage_callback(callback: CallbackQuery, bot: Bot) -> None:
         log.warning("Failed to edit card: %s", exc)
 
 
-def _html_escape(s: str) -> str:
-    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))

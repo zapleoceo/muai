@@ -29,8 +29,7 @@ async def _send(text: str) -> int | None:
         return None
 
 
-def _html_escape(s: str) -> str:
-    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+from app.common.text import html_escape as _html_escape  # noqa: E402
 
 
 async def create_proposal(capability: str, candidate: dict,

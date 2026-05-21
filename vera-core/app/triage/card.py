@@ -51,8 +51,7 @@ def _build_keyboard(event_id: int, proposal: TriageProposal) -> InlineKeyboardMa
     return InlineKeyboardMarkup(inline_keyboard=buttons)
 
 
-def _html_escape(s: str) -> str:
-    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+from app.common.text import html_escape as _html_escape  # noqa: E402 (kept for stable import)
 
 
 async def send_card(event_id: int, source: str, category: str,

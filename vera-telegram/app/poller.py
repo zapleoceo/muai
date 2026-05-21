@@ -3,11 +3,13 @@ per-source filters from the `sources` table, POSTs new messages to vera-core
 as events."""
 import asyncio
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 from sqlalchemy import select
 from telethon.errors import FloodWaitError
+from telethon.tl.functions.messages import GetDialogFiltersRequest
+from telethon.tl.functions.users import GetFullUserRequest
 from telethon.tl.types import Channel, Chat, Message, User
 
 from vera_shared.db.engine import get_session
@@ -22,6 +24,75 @@ log = logging.getLogger(__name__)
 _DIALOG_LIMIT = 100
 _MSG_LIMIT = 10
 _DEFAULT_INTERVAL = 60
+
+# Cache folder map (chat_id → folder title) and mutual-chats (user_id →
+# [chat titles]) for the whole poller process. Refresh every N minutes.
+_FOLDER_CACHE: dict[int, str] = {}
+_FOLDER_CACHE_AT: datetime | None = None
+_MUTUAL_CACHE: dict[int, list[str]] = {}
+_MUTUAL_TTL = timedelta(hours=12)
+_MUTUAL_AT: dict[int, datetime] = {}
+_FOLDER_TTL = timedelta(minutes=30)
+
+
+async def _refresh_folders() -> dict[int, str]:
+    global _FOLDER_CACHE, _FOLDER_CACHE_AT
+    now = datetime.utcnow()
+    if _FOLDER_CACHE_AT and (now - _FOLDER_CACHE_AT) < _FOLDER_TTL:
+        return _FOLDER_CACHE
+    try:
+        client = get_client()
+        result = await client(GetDialogFiltersRequest())
+        mapping: dict[int, str] = {}
+        # API result varies between layer versions; try both shapes.
+        filters_list = getattr(result, "filters", None) or result
+        for f in filters_list:
+            title_obj = getattr(f, "title", None)
+            if hasattr(title_obj, "text"):
+                title = title_obj.text
+            else:
+                title = title_obj
+            if not title:
+                continue
+            for peer_field in ("include_peers", "pinned_peers"):
+                for p in getattr(f, peer_field, None) or []:
+                    pid = (getattr(p, "user_id", None)
+                           or getattr(p, "chat_id", None)
+                           or getattr(p, "channel_id", None))
+                    if pid is not None:
+                        mapping[int(pid)] = title
+        _FOLDER_CACHE = mapping
+        _FOLDER_CACHE_AT = now
+        log.info("folder cache refreshed: %d entries", len(mapping))
+    except Exception as exc:
+        log.warning("folder cache refresh failed: %s", exc)
+    return _FOLDER_CACHE
+
+
+async def _mutual_chats_for(user: User) -> list[str]:
+    user_id = getattr(user, "id", None)
+    if user_id is None:
+        return []
+    cached_at = _MUTUAL_AT.get(user_id)
+    if cached_at and (datetime.utcnow() - cached_at) < _MUTUAL_TTL:
+        return _MUTUAL_CACHE.get(user_id, [])
+    titles: list[str] = []
+    try:
+        client = get_client()
+        full = await client(GetFullUserRequest(user))
+        common_count = getattr(full.full_user, "common_chats_count", 0) or 0
+        if common_count > 0:
+            from telethon.tl.functions.messages import GetCommonChatsRequest
+            res = await client(GetCommonChatsRequest(
+                user_id=user, max_id=0, limit=min(common_count, 20),
+            ))
+            titles = [getattr(c, "title", None) or _name(c)
+                      for c in res.chats][:10]
+    except Exception as exc:
+        log.debug("mutual chats for %s failed: %s", user_id, exc)
+    _MUTUAL_CACHE[user_id] = titles
+    _MUTUAL_AT[user_id] = datetime.utcnow()
+    return titles
 
 
 def _chat_type(entity) -> str:
@@ -52,7 +123,8 @@ async def _post_event(payload: dict) -> None:
         log.warning("POST /event failed (%d): %s", r.status_code, r.text[:200])
 
 
-async def _build_payload(source_name: str, dialog, msg: Message, me_id: int) -> dict:
+async def _build_payload(source_name: str, dialog, msg: Message, me_id: int,
+                          folder_map: dict[int, str]) -> dict:
     entity = dialog.entity
     chat_type = _chat_type(entity)
     chat_id = getattr(entity, "id", None)
@@ -60,6 +132,10 @@ async def _build_payload(source_name: str, dialog, msg: Message, me_id: int) -> 
     sender_id = getattr(sender, "id", None)
     sender_username = getattr(sender, "username", None)
     sender_name = _name(sender)
+    folder_name = folder_map.get(chat_id) if chat_id is not None else None
+    mutual_chats: list[str] = []
+    if chat_type == "private" and isinstance(entity, User) and not getattr(entity, "bot", False):
+        mutual_chats = await _mutual_chats_for(entity)
     text = (msg.message or "").strip()
     mention_me = False
     if msg.entities:
@@ -92,30 +168,53 @@ async def _build_payload(source_name: str, dialog, msg: Message, me_id: int) -> 
         "text": text,
         "has_attachment": msg.media is not None,
         "now": datetime.utcnow(),
+        "folder": folder_name,
+        "mutual_chats": mutual_chats,
     }
 
-    body = (
+    chat_title = _name(entity)
+    context_lines = [
         f"From: {sender_name}"
-        + (f" (@{sender_username})" if sender_username else "")
-        + f"\nChat: {_name(entity)} ({chat_type})"
-        + f"\nDate: {msg.date.isoformat() if msg.date else '?'}"
-        + f"\n---\n{text or '(пусто)'}"
-    )
+        + (f" (@{sender_username})" if sender_username else ""),
+        f"Chat: {chat_title} ({chat_type})"
+        + (f", folder «{folder_name}»" if folder_name else ""),
+        f"Date: {msg.date.isoformat() if msg.date else '?'}",
+    ]
+    if mutual_chats:
+        context_lines.append(
+            "Mutual groups with sender: " + ", ".join(mutual_chats[:8])
+        )
+    context_lines.append("---")
+    context_lines.append(text or "(пусто)")
+    body = "\n".join(context_lines)
+
     entity_hints = [
         {"type": "person", "identifier": sender_username or str(sender_id),
          "name": sender_name, "via": "telegram"},
-        {"type": "chat", "identifier": str(chat_id), "name": _name(entity),
+        {"type": "chat", "identifier": str(chat_id), "name": chat_title,
          "chat_type": chat_type, "platform": "telegram"},
     ]
+    if folder_name:
+        entity_hints.append(
+            {"type": "folder", "identifier": folder_name, "platform": "telegram"}
+        )
+    for g in mutual_chats[:5]:
+        entity_hints.append(
+            {"type": "chat", "identifier": g, "name": g,
+             "chat_type": "shared_with_sender", "platform": "telegram"}
+        )
+
     metadata = {
         "chat_id": chat_id,
         "chat_type": chat_type,
-        "chat_title": _name(entity),
+        "chat_title": chat_title,
+        "folder": folder_name,
         "message_id": msg.id,
         "sender_id": sender_id,
         "sender_username": sender_username,
         "mention_me": mention_me,
         "reply_to_me": reply_to_me,
+        "mutual_chats": mutual_chats,
     }
     return {
         "source": "telegram",
@@ -130,7 +229,8 @@ async def _build_payload(source_name: str, dialog, msg: Message, me_id: int) -> 
     }
 
 
-async def _process_source(source: Source, me_id: int) -> tuple[int, dict]:
+async def _process_source(source: Source, me_id: int,
+                           folder_map: dict[int, str]) -> tuple[int, dict]:
     client = get_client()
     seen_msg = (source.config or {}).get("seen_msg_ids") or {}
     new_seen: dict[str, int] = {str(k): int(v) for k, v in seen_msg.items()}
@@ -150,7 +250,7 @@ async def _process_source(source: Source, me_id: int) -> tuple[int, dict]:
                         and getattr(msg.from_id, "user_id", None) == me_id):
                     max_id_for_chat = max(max_id_for_chat, msg.id)
                     continue  # skip own messages
-                payload = await _build_payload(source.name, dialog, msg, me_id)
+                payload = await _build_payload(source.name, dialog, msg, me_id, folder_map)
                 filter_p = payload.pop("_filter_payload")
                 decision = evaluate(source.filters, filter_p)
                 if decision == "exclude":
@@ -198,7 +298,8 @@ async def poll_loop() -> None:
                 sources = result.scalars().all()
             for src in sources:
                 try:
-                    ingested, new_seen = await _process_source(src, me.id)  # type: ignore[misc]
+                    folder_map = await _refresh_folders()
+                    ingested, new_seen = await _process_source(src, me.id, folder_map)  # type: ignore[misc]
                     await _persist_source_state(src.id, new_seen, ingested)
                 except Exception as exc:
                     log.exception("source %s failed: %s", src.name, exc)

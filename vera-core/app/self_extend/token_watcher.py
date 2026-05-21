@@ -20,8 +20,7 @@ _DM_KEY = "self_extend.token_dm_at"
 _RENOTIFY = timedelta(hours=6)
 
 
-def _html_escape(s: str) -> str:
-    return (s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;"))
+from app.common.text import html_escape as _html_escape  # noqa: E402
 
 
 async def _was_recently_notified(server_name: str) -> bool:

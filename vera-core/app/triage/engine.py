@@ -54,11 +54,47 @@ _SYSTEM = """Ты — Vera, AI-оркестратор личных дел Дим
 Никогда не выдумывай данных которых нет в контексте."""
 
 
+_RELEVANCE_TOKEN_MIN = 3   # word length floor for tokenization
+_MIN_OVERLAP_RATIO = 0.10  # at least 10% of context tokens must appear in fact
+_MIN_ABSOLUTE_OVERLAP = 1
+
+
+def _tokenize(text: str) -> set[str]:
+    text = (text or "").lower()
+    return {w for w in re.findall(r"[\w@.-]+", text)
+            if len(w) >= _RELEVANCE_TOKEN_MIN}
+
+
+def _is_relevant(fact: str, query_tokens: set[str],
+                  entity_terms: set[str]) -> bool:
+    """A retrieved episode is relevant iff it shares meaningful tokens with
+    the event content OR mentions one of the event's entity identifiers
+    OR is a known persona/instruction/rejection signal."""
+    fact_tokens = _tokenize(fact)
+    if any(term in fact.lower() for term in entity_terms):
+        return True
+    f_low = fact.lower()
+    if any(x in f_low for x in ("игнор", "instruction", "инструкц",
+                                "rejection", "дима ", "persona")):
+        return True
+    if not query_tokens:
+        return False
+    overlap = fact_tokens & query_tokens
+    if len(overlap) < _MIN_ABSOLUTE_OVERLAP:
+        return False
+    ratio = len(overlap) / max(len(query_tokens), 1)
+    return ratio >= _MIN_OVERLAP_RATIO
+
+
 async def _retrieve_context(event: Event, limit: int = 8) -> list[dict]:
-    """Hybrid retrieval:
-      1. Semantic search on event content (what the event is about)
-      2. Per-entity search (what we already know about this sender/chat/account)
-    Merged + deduped by uuid. Keeps the most relevant N."""
+    """Hybrid retrieval with relevance gate.
+
+    Graph search returns top-N by similarity, but on a sparse graph it
+    will return DOMINANT episodes regardless of how unrelated they are
+    (the bug where Marina's message dragged in 'domain veranda.my').
+    We post-filter: keep only episodes that share tokens with the event,
+    mention one of its entities, or are persona/rejection signals.
+    """
     try:
         from app.graph.client import get_graphiti
         client = await get_graphiti()
@@ -66,7 +102,8 @@ async def _retrieve_context(event: Event, limit: int = 8) -> list[dict]:
 
         async def _add_results(results, weight: float, source_tag: str) -> None:
             for r in results:
-                uuid = str(getattr(r, "uuid", "") or id(r))
+                uuid = str(getattr(r, "uuid", "") or
+                           f"{getattr(r, 'fact', '') or ''}|{source_tag}")
                 fact = (getattr(r, "fact", None) or getattr(r, "name", None)
                         or str(r))
                 prev = seen.get(uuid)
@@ -75,18 +112,24 @@ async def _retrieve_context(event: Event, limit: int = 8) -> list[dict]:
                               "source": source_tag}
 
         content_query = (event.content_text or "")[:500]
+        query_tokens = _tokenize(content_query)
+        entity_terms: set[str] = set()
+        for hint in (event.entity_hints or [])[:6]:
+            for k in ("identifier", "name"):
+                v = (hint.get(k) or "").strip().lower()
+                if v and len(v) >= _RELEVANCE_TOKEN_MIN:
+                    entity_terms.add(v)
+
         if content_query:
             await _add_results(
                 await client.search(query=content_query, num_results=limit),
                 1.0, "semantic",
             )
 
-        # Per-entity queries — finds past episodes involving the same sender,
-        # chat, account, even if their text is completely different.
         seen_terms: set[str] = set()
         for hint in (event.entity_hints or [])[:6]:
             term = (hint.get("identifier") or hint.get("name") or "").strip()
-            if not term or len(term) < 3 or term.lower() in seen_terms:
+            if not term or len(term) < _RELEVANCE_TOKEN_MIN or term.lower() in seen_terms:
                 continue
             seen_terms.add(term.lower())
             try:
@@ -97,13 +140,21 @@ async def _retrieve_context(event: Event, limit: int = 8) -> list[dict]:
             except Exception as exc:
                 log.debug("entity search %r failed: %s", term, exc)
 
-        # Boost rejections/instructions — they're high-signal for "what NOT to do"
         for item in seen.values():
             f = (item["fact"] or "").lower()
             if "игнор" in f or "rejection" in f or "инструкц" in f or "instruction" in f:
                 item["score"] += 2.0
 
-        ranked = sorted(seen.values(), key=lambda x: x["score"], reverse=True)
+        relevant = [
+            x for x in seen.values()
+            if _is_relevant(x["fact"], query_tokens, entity_terms)
+        ]
+        dropped = len(seen) - len(relevant)
+        if dropped:
+            log.debug("retrieval: dropped %d irrelevant of %d (event=%d)",
+                      dropped, len(seen), event.id)
+
+        ranked = sorted(relevant, key=lambda x: x["score"], reverse=True)
         return [{"fact": x["fact"], "uuid": x["uuid"]} for x in ranked[:limit]]
     except Exception as exc:
         log.warning("Graph retrieval failed: %s", exc)

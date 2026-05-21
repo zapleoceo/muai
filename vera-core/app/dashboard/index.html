@@ -171,6 +171,80 @@ async function refresh() {
   render();
 }
 
+function renderResearch() {
+  const fileInput = el('input', {type:'file', multiple:true, accept:'.md,.txt,.json',
+    style:'display:block;margin:8px 0'});
+  const sourceInput = el('select', {style:'background:#0a0a0a;color:#eee;border:1px solid #333;padding:6px;margin-right:8px'},
+    el('option',{value:'perplexity'},'perplexity'),
+    el('option',{value:'chatgpt'},'chatgpt'),
+    el('option',{value:'notes'},'заметки'),
+  );
+  const status = el('div',{style:'color:var(--mute);font-size:12px;margin-top:8px'},'Выбери .md/.txt файлы из экспорта Perplexity (Chrome ext «Perplexity to Notion — Batch Export» делает дамп Spaces/Threads в Markdown).');
+  const uploadBtn = el('button',{class:'btn',
+    style:'background:var(--info);color:#fff;border:none',
+    onclick: async () => {
+      const files = Array.from(fileInput.files || []);
+      if (!files.length) { alert('Сначала выбери файлы'); return; }
+      status.textContent = `Читаю ${files.length} файлов…`;
+      const docs = [];
+      for (const f of files) {
+        const text = await f.text();
+        if (f.name.endsWith('.json')) {
+          try {
+            const arr = JSON.parse(text);
+            const list = Array.isArray(arr) ? arr : (arr.threads || arr.documents || []);
+            for (const x of list) {
+              docs.push({title: x.title || x.name || f.name,
+                         body: x.body || x.content || x.text || '',
+                         url: x.url || x.share_url,
+                         date: x.date || x.created_at});
+            }
+          } catch (e) { docs.push({title: f.name, body: text}); }
+        } else {
+          // Strip Markdown front-matter if present
+          const m = text.match(/^---\s*\n([\s\S]*?)\n---\s*\n/);
+          const front = m ? m[1] : '';
+          const body = m ? text.slice(m[0].length) : text;
+          let title = f.name.replace(/\.(md|txt)$/, '');
+          const titleMatch = body.match(/^#\s+(.+)$/m) || front.match(/title:\s*(.+)/);
+          if (titleMatch) title = titleMatch[1].trim();
+          docs.push({title, body});
+        }
+      }
+      const batches = [];
+      for (let i = 0; i < docs.length; i += 40) batches.push(docs.slice(i, i+40));
+      let total = 0;
+      for (const b of batches) {
+        const r = await api('/api/research/import', {
+          method:'POST',
+          body: JSON.stringify({source: sourceInput.value, documents: b}),
+        });
+        total += (r && r.queued) || 0;
+        status.textContent = `Залила ${total}/${docs.length}…`;
+      }
+      status.textContent = `Готово, ${total} эпизодов поставлены в очередь Graphiti.`;
+      fileInput.value = '';
+    }}, 'Загрузить в мозг');
+  return el('section',{class:'active'},
+    el('div',{class:'card'},
+      el('strong',{style:'font-size:15px'}, '📚 Загрузка дампов в мозг'),
+      el('div',{style:'color:var(--mute);font-size:12px;margin-top:6px'},
+        'Источник:'),
+      el('div',{style:'margin-top:6px'}, sourceInput, uploadBtn),
+      fileInput,
+      status,
+      el('details',{style:'margin-top:12px;color:var(--mute);font-size:12px'},
+        el('summary',{style:'cursor:pointer'}, 'Как экспортировать Perplexity Spaces'),
+        el('ol',{style:'padding-left:18px;margin-top:6px'},
+          el('li',{},'Chrome → Web Store → «Perplexity to Notion - Batch Export»'),
+          el('li',{},'Установи, открой Perplexity, выбери Space или Library'),
+          el('li',{},'Жми Export → Markdown → скачается папка с .md'),
+          el('li',{},'Возвращайся сюда, выбери все .md, жми «Загрузить в мозг»')),
+      ),
+    ),
+  );
+}
+
 function renderSelfExtend() {
   const se = state.self_extend || {};
   const rate = se.rate || {};
@@ -805,6 +879,7 @@ function render() {
     ['sources','Источники'],
     ['mcp','MCP'],
     ['self_extend','Self-extend'],
+    ['research','Память'],
     ['tokens','Токены'],
     ['agents','Агенты'],
     // 'tasks' (legacy chat-pipeline trace) hidden from nav
@@ -830,6 +905,7 @@ function render() {
   else if (state.tab === 'sources') body = renderSources();
   else if (state.tab === 'mcp') body = renderMCP();
   else if (state.tab === 'self_extend') body = renderSelfExtend();
+  else if (state.tab === 'research') body = renderResearch();
   else if (state.tab === 'tokens') body = renderTokens();
   else if (state.tab === 'agents') body = renderAgents();
   main.append(body);

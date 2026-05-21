@@ -243,8 +243,55 @@ No code changes in vera-core needed — `Source` model + filter engine in
 
 ---
 
+## 11.5. Telegram context enrichment
+
+Telegram poller decorates each event with:
+- `folder`: dialog filter (folder) where the chat lives, e.g. «Работа»,
+  «Личное». Cached 30min.
+- `mutual_chats`: for private DMs, list of groups Vera shares with the
+  sender. Cached 12h per-user via Telegram's `GetCommonChats`. Surfaces
+  in `entity_hints` so Graphiti binds the person to their groups.
+
+Filter predicates added: `folder`, `folder_in`, `folder_not_in`,
+`mutual_chat_contains`. See `shared/vera_shared/sources/filters.py`.
+
+## 11.6. Retrieval relevance gate
+
+Graphiti `search()` returns top-N regardless of similarity. On a sparse
+graph this surfaces unrelated episodes (the «veranda leak» — a message
+from Marina was dragging in `domain veranda.my…namecheap` fact because
+it was the only thing the graph had).
+
+`triage/engine._is_relevant` post-filters retrievals:
+- keep if any `entity_hint.identifier` appears in the fact, OR
+- keep if persona/instruction/rejection signal present, OR
+- keep if ≥10% of event content tokens (len≥3) overlap with fact tokens.
+
+## 11.7. Research dump import
+
+`POST /api/research/import` accepts `{source, documents: [{title, body,
+url?, date?}]}` and enqueues each document as a Graphiti episode.
+Dashboard «Память» tab provides a file upload widget.
+
+Workflow for Perplexity Spaces backfill:
+1. Install Chrome extension «Perplexity to Notion — Batch Export»
+2. Export Space/Library → Markdown folder
+3. Dashboard → Память → выбрать все .md → Загрузить в мозг
+
+JSON exports (Perplexity API thread dumps, ChatGPT exports) are
+auto-parsed if they look like `[{title, body, ...}]` or
+`{threads: [...]}`.
+
 ## 12. Migration log (recent significant changes)
 
+- 2026-05-21: Pack S/D/R/N — destructive-tools args resolved server-side
+  for telegram_send_* too; AUTO_SAFE_TOOLS whitelist gates auto-mode;
+  CSRF header on dashboard; deploy script gets rollback + image cleanup
+  + Telegram failure DM
+- 2026-05-21: Brain feedback loops (R3+R4) — decisions/rejections/
+  instructions persist to Graphiti; hybrid retrieval with relevance
+  gate; DM instructions inline-written
+- 2026-05-21: Telegram folder + mutual_chats context, /api/research/import
 - 2026-05-21: vera-git + vera-web removed (replaced by MCP fetch/git/github)
 - 2026-05-21: Source model + filter engine + Telegram poller + dashboard editor
 - 2026-05-21: Triage callback security (owner+chat check, server-side arg
