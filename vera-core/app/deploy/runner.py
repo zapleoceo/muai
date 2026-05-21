@@ -38,7 +38,8 @@ async def deploy(ref: str, message: str) -> None:
     )
 
     steps = [
-        (["git", "pull"], "git pull"),
+        (["git", "fetch", "origin", "master"], "git fetch"),
+        (["git", "reset", "--hard", "origin/master"], "git reset"),
         (["docker", "compose", "build"], "docker compose build"),
         (["docker", "compose", "up", "-d"], "docker compose up -d"),
     ]
