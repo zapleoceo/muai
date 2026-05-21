@@ -114,6 +114,27 @@ class GmailAccount(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
+class Source(Base):
+    """Configurable event source (gmail account, telegram identity, etc).
+    All polling behaviour, filters and per-source thresholds live here."""
+    __tablename__ = "sources"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    type: Mapped[str] = mapped_column(String, nullable=False)        # gmail|telegram|bank|...
+    name: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    account: Mapped[str | None] = mapped_column(String, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    poll_interval_sec: Mapped[int] = mapped_column(Integer, default=120)
+    base_threshold: Mapped[float] = mapped_column(Float, default=0.95)
+    filters: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    config: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String, nullable=True)
+    intake_count: Mapped[int] = mapped_column(Integer, default=0)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class Event(Base):
     __tablename__ = "events"
 

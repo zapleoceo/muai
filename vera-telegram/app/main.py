@@ -8,6 +8,7 @@ from fastapi import FastAPI, HTTPException
 from vera_shared.db.engine import get_engine
 from vera_shared.db.migrations import run_migrations
 
+from app.poller import poll_loop
 from app.registration import register_loop
 from app.tool_handlers import HANDLERS
 from app.userbot.client import start_client, stop_client
@@ -25,6 +26,7 @@ async def lifespan(app: FastAPI):
     await run_migrations(get_engine())
     await start_client()
     asyncio.create_task(register_loop())
+    asyncio.create_task(poll_loop())
     yield
     await stop_client()
 

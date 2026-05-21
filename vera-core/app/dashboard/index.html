@@ -117,7 +117,7 @@ async function api(path) {
 async function refresh() {
   const ok = await api('/api/whoami');
   if (!ok) { renderLogin(); return; }
-  const [stats, tasks, tokens, agents, balances, events, gmail, mcp] = await Promise.all([
+  const [stats, tasks, tokens, agents, balances, events, gmail, mcp, sources] = await Promise.all([
     api('/api/stats'),
     api('/api/tasks?limit=50'),
     api('/api/tokens'),
@@ -126,6 +126,7 @@ async function refresh() {
     api('/api/events?limit=50'),
     api('/api/gmail/accounts'),
     api('/api/mcp/servers'),
+    api('/api/sources'),
   ]);
   state.stats = stats;
   state.tasks = tasks || [];
@@ -135,6 +136,7 @@ async function refresh() {
   state.events = events || [];
   state.mcp = mcp || [];
   state.gmail = gmail || [];
+  state.sources = sources || [];
   render();
 }
 
@@ -318,7 +320,125 @@ function renderSources() {
     el('div',{style:'margin-bottom:8px;color:var(--mute);font-size:12px'},
       'Источники событий, которые Vera будет читать и о которых принимать решения.'),
     gmailCard,
+    renderConfigurableSources(),
   );
+}
+
+function renderConfigurableSources() {
+  const newBtn = el('button',{class:'btn',
+      style:'background:var(--info);color:#fff;border:none',
+      onclick: () => promptCreateSource()}, '+ Новый источник');
+  const header = el('div',{style:'display:flex;justify-content:space-between;align-items:center;margin-bottom:12px'},
+    el('strong',{style:'font-size:15px'}, '🔌 Источники с фильтрами'),
+    newBtn);
+  const list = (state.sources || []);
+  const body = list.length === 0
+    ? el('div',{class:'empty',style:'padding:20px'},
+        'Пока нет настроенных источников. Создай первый — например, Telegram.')
+    : el('table',{},
+        el('thead',{}, el('tr',{},
+          el('th',{},'Имя'), el('th',{},'Тип'), el('th',{},'Статус'),
+          el('th',{},'Правил'), el('th',{},'Threshold'),
+          el('th',{},'Поток (всего)'), el('th',{},'Последний опрос'), el('th',{},''),
+        )),
+        el('tbody',{}, list.map(s =>
+          el('tr',{},
+            el('td',{}, s.name),
+            el('td',{}, s.type),
+            el('td',{}, pill(s.enabled ? 'on' : 'off', s.enabled ? 'ok' : 'mute')),
+            el('td',{}, String((s.filters || []).length)),
+            el('td',{}, (s.base_threshold ?? 0.95).toFixed(2)),
+            el('td',{style:'color:var(--mute)'}, String(s.intake_count || 0)),
+            el('td',{style:'color:var(--mute)'}, fmt.date(s.last_polled_at)),
+            el('td',{style:'text-align:right'},
+              el('button',{class:'btn', style:'margin-right:6px',
+                onclick: ()=>editSourceFilters(s)}, '✎ Фильтры'),
+              el('button',{class:'btn',
+                onclick: ()=>toggleSource(s)}, s.enabled ? '⏸' : '▶'),
+              el('button',{class:'btn', style:'margin-left:6px;color:var(--err)',
+                onclick: ()=>deleteSource(s)}, '×'),
+            ),
+          ),
+        )),
+      );
+  return el('div',{class:'card'}, header, body);
+}
+
+async function promptCreateSource() {
+  const type = prompt('Тип источника? (telegram | gmail | bank | instagram | generic)', 'telegram');
+  if (!type) return;
+  const name = prompt('Имя источника (уникальное, например "tg-main"):');
+  if (!name) return;
+  const account = prompt('Account (опционально — для гмейла e-mail, для tg оставь пустым):', '');
+  try {
+    await fetch('/api/sources', {
+      method:'POST', headers:{'content-type':'application/json'}, credentials:'include',
+      body: JSON.stringify({type, name, account: account || null,
+                            filters: defaultFilters(type)}),
+    }).then(r => { if (!r.ok) return r.text().then(t => Promise.reject(t)); });
+    await refresh();
+  } catch(e) { alert('Не удалось: ' + e); }
+}
+
+function defaultFilters(type) {
+  if (type === 'telegram') return [
+    {match: {chat_type: "private"}, action: "include"},
+    {match: {chat_type: "private", from_username: "spambot"}, action: "exclude"},
+  ];
+  return [];
+}
+
+async function toggleSource(s) {
+  await fetch('/api/sources/' + s.id, {
+    method:'PUT', headers:{'content-type':'application/json'}, credentials:'include',
+    body: JSON.stringify({enabled: !s.enabled}),
+  });
+  await refresh();
+}
+
+async function deleteSource(s) {
+  if (!confirm('Удалить источник «' + s.name + '»? Это не удалит уже сохранённые события.')) return;
+  await fetch('/api/sources/' + s.id, {method:'DELETE', credentials:'include'});
+  await refresh();
+}
+
+function editSourceFilters(s) {
+  const txt = JSON.stringify(s.filters || [], null, 2);
+  const dialog = el('div',{style:'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99;'+
+                            'display:flex;align-items:center;justify-content:center'},
+    el('div',{class:'card', style:'width:min(720px,92vw);max-height:90vh;overflow:auto'},
+      el('h3',{style:'margin:0 0 6px'}, 'Фильтры — ' + s.name),
+      el('div',{style:'color:var(--mute);font-size:12px;margin-bottom:8px'},
+        'Массив правил. Последнее совпавшее правило выигрывает. По умолчанию exclude.'),
+      el('textarea',{id:'flt-edit', rows:'18',
+        style:'width:100%;font-family:monospace;font-size:12px;padding:8px;background:#0a0a0a;color:#eee;border:1px solid #333;border-radius:4px'},
+        txt),
+      el('div',{style:'display:flex;gap:8px;margin-top:10px'},
+        el('label',{style:'display:flex;align-items:center;gap:6px;color:var(--mute);font-size:12px'},
+          'Threshold (auto при confidence ≥)',
+          el('input',{id:'flt-thr', type:'number', step:'0.01', min:'0', max:'1',
+                     value:String(s.base_threshold ?? 0.95),
+                     style:'width:80px;background:#0a0a0a;color:#eee;border:1px solid #333;padding:4px'}),
+        ),
+        el('div',{style:'flex:1'}),
+        el('button',{class:'btn', onclick: ()=>document.body.removeChild(dialog)}, 'Отмена'),
+        el('button',{class:'btn', style:'background:var(--info);color:#fff;border:none',
+                     onclick: async ()=>{
+          let parsed;
+          try { parsed = JSON.parse(document.getElementById('flt-edit').value); }
+          catch(e) { alert('JSON error: ' + e.message); return; }
+          const thr = parseFloat(document.getElementById('flt-thr').value);
+          await fetch('/api/sources/' + s.id, {
+            method:'PUT', headers:{'content-type':'application/json'}, credentials:'include',
+            body: JSON.stringify({filters: parsed, base_threshold: isFinite(thr) ? thr : 0.95}),
+          });
+          document.body.removeChild(dialog);
+          await refresh();
+        }}, 'Сохранить'),
+      ),
+    ),
+  );
+  document.body.append(dialog);
 }
 
 function renderMCP() {
@@ -490,9 +610,9 @@ function render() {
     ['events','События'],
     ['sources','Источники'],
     ['mcp','MCP'],
-    ['tasks','Задачи'],
     ['tokens','Токены'],
     ['agents','Агенты'],
+    // 'tasks' (legacy chat-pipeline trace) hidden from nav — still accessible via state.tab='tasks'
   ];
   const header = el('header', {},
     el('div', {},
