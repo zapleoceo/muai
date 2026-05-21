@@ -5,6 +5,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
        | tar -xzC /tmp \
     && mv /tmp/docker/docker /usr/local/bin/docker \
     && rm -rf /tmp/docker \
+    && mkdir -p /usr/libexec/docker/cli-plugins \
+    && curl -fsSL https://github.com/docker/compose/releases/download/v2.29.7/docker-compose-linux-x86_64 \
+       -o /usr/libexec/docker/cli-plugins/docker-compose \
+    && chmod +x /usr/libexec/docker/cli-plugins/docker-compose \
     && apt-get purge -y curl \
     && apt-get autoremove -y \
     && rm -rf /var/lib/apt/lists/*
