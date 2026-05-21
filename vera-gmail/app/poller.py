@@ -24,10 +24,26 @@ async def _post_event(payload: dict) -> None:
         log.warning("POST /event failed (%d): %s", r.status_code, r.text[:200])
 
 
+_NOISE_SENDER_HINTS = (
+    "noreply", "no-reply", "no_reply", "donotreply", "do-not-reply",
+    "notifications@", "notification@", "alerts@", "marketing@", "newsletter",
+    "promo@", "promotions@", "team@", "info@", "support@",
+    "@e.", "@em.", "@email.", "@mail.",
+)
+
+
+def _is_noise(sender: str) -> bool:
+    s = (sender or "").lower()
+    return any(hint in s for hint in _NOISE_SENDER_HINTS)
+
+
 async def _process_account(email: str) -> None:
     cfg = get_settings()
     minutes = cfg.poll_lookback_minutes
-    q = f"newer_than:{max(minutes // 60, 1)}h in:inbox is:unread"
+    q = (
+        f"newer_than:{max(minutes // 60, 1)}h in:inbox is:unread "
+        "-category:promotions -category:social -category:updates"
+    )
     threads = await list_threads(email, query=q, max_results=10)
     if threads and isinstance(threads, list) and threads and "error" in threads[0]:
         log.warning("list_threads error for %s: %s", email, threads[0])
@@ -46,6 +62,11 @@ async def _process_account(email: str) -> None:
         last = (full.get("messages") or [{}])[-1]
         subject = last.get("subject") or "(без темы)"
         sender = last.get("from") or "?"
+
+        if _is_noise(sender):
+            log.info("Skip noise: %s", sender)
+            continue
+
         body_excerpt = (last.get("text") or last.get("snippet") or "")[:1500]
         text = (
             f"From: {sender}\n"
