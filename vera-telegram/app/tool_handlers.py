@@ -22,12 +22,13 @@ async def _t_list_recent(limit: int = 15, exclude_channels: bool = False,
     )
 
 
-async def _t_read(chat_id: int = 0, peer: str = "", days: int = 1, limit: int = 50) -> Any:
+async def _t_read(chat_id: int = 0, peer: str = "", days: int = 1,
+                  limit: int = 50, ocr_images: bool = True) -> Any:
     if not chat_id and not peer:
         raise ValueError("Either chat_id or peer is required")
     return await read_messages(
         peer=str(chat_id) if chat_id else peer,
-        limit=limit, offset_days=days,
+        limit=limit, offset_days=days, ocr_images=bool(ocr_images),
     )
 
 

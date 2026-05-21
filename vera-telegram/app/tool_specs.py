@@ -40,8 +40,13 @@ TOOLS: list[ToolSpec] = [
         name="telegram_read_messages",
         description=(
             "Read recent messages from a Telegram chat. Pass chat_id (preferred, "
-            "from search_dialogs) OR peer (string name). Returns a list of "
-            "messages with date, text, from, out flag."
+            "from search_dialogs) OR peer (string name). Returns each message "
+            "with date, text, from, out, has_image, has_ocr. When a message "
+            "contains a photo or image-document and ocr_images=true (default), "
+            "the image is downloaded and OCR'd via Gemini — recognized text is "
+            "appended to message.text as '[OCR]:\\n…'. So screenshots of "
+            "balances, tables, receipts become readable. Bounded to 6 OCR "
+            "calls per request."
         ),
         params=[
             ToolParam("chat_id", "integer", "Telegram entity id from search_dialogs. Preferred over peer.",
@@ -52,6 +57,8 @@ TOOLS: list[ToolSpec] = [
                       required=False, default=1),
             ToolParam("limit", "integer", "Max messages to fetch.",
                       required=False, default=50),
+            ToolParam("ocr_images", "boolean", "Run OCR on image attachments.",
+                      required=False, default=True),
         ],
     ),
     ToolSpec(
