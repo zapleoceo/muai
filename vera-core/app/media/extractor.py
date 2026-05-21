@@ -5,7 +5,7 @@ from typing import Awaitable, Callable
 from aiogram import Bot
 from aiogram.types import Audio, Document, Message, PhotoSize, Video, Voice
 
-from app.media.gemini_multimodal import media_to_text
+from vera_shared.media.multimodal import media_to_text
 
 log = logging.getLogger(__name__)
 
