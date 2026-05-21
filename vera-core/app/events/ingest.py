@@ -8,6 +8,9 @@ from app.events.store import mark_episode
 
 log = logging.getLogger(__name__)
 
+# Throttle Graphiti episode-ingest to avoid Gemini embed rate limits.
+_INGEST_SEM = asyncio.Semaphore(1)
+
 
 def _format_episode_body(
     source: str, category: str, content_text: str | None,
@@ -44,15 +47,16 @@ async def ingest_episode(event_id: int, *, source: str, category: str,
         client = await get_graphiti()
         body = _format_episode_body(source, category, content_text, entity_hints, metadata)
 
-        # Graphiti will create an episodic node + extract entities/relationships
-        await client.add_episode(
-            name=f"{source}/{event_id}",
-            episode_body=body,
-            source=EpisodeType.text,
-            source_description=f"{source} event ({category})",
-            reference_time=occurred_at,
-            group_id="vera",
-        )
+        # Serialise ingestion so we don't slam Gemini embed quota.
+        async with _INGEST_SEM:
+            await client.add_episode(
+                name=f"{source}/{event_id}",
+                episode_body=body,
+                source=EpisodeType.text,
+                source_description=f"{source} event ({category})",
+                reference_time=occurred_at,
+                group_id="vera",
+            )
         # Graphiti doesn't return the episode uuid directly; we mark "done"
         # for now by storing the name. Future: query for the node uuid.
         await mark_episode(event_id, f"{source}/{event_id}")
