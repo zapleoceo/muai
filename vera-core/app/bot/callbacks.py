@@ -40,8 +40,8 @@ async def triage_callback(callback: CallbackQuery, bot: Bot) -> None:
             await bot.send_message(
                 chat_id=user_id,
                 text=(f"✍️ Что сделать с #{event_id}?\n\n"
-                      f"<i>Ответь reply'ем на это сообщение — текстом, например "
-                      f"«заархивируй», «ответь что я занят», «удали».</i>"),
+                      f"<i>Ответь reply'ем на это сообщение — или начни сообщение "
+                      f"с #{event_id}. Примеры: «заархивируй», «ответь что я занят», «удали».</i>"),
                 parse_mode="HTML",
             )
         except TelegramBadRequest as exc:
