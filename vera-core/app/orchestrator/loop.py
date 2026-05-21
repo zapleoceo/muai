@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging
 import re
@@ -7,6 +8,19 @@ from app.orchestrator.memory import format_history
 from app.orchestrator.tool_router import (
     call_tool, collect_tools, format_tools_for_prompt, truncate_for_llm,
 )
+
+
+async def _propose_capability(capability: str) -> None:
+    try:
+        from app.self_extend.discovery import discover
+        from app.self_extend.proposer import create_proposal
+        candidates = await discover(capability, top_n=1)
+        if not candidates:
+            log.info("Self-extend: no candidates for %r", capability)
+            return
+        await create_proposal(capability, candidates[0])
+    except Exception as exc:
+        log.exception("self-extend proposal failed: %s", exc)
 
 log = logging.getLogger(__name__)
 
@@ -32,11 +46,14 @@ _SYSTEM_TEMPLATE = """Ты — Vera, AI-оркестратор. У тебя ес
   откажись и спроси подтверждение.
 
 Правила:
-- На каждом шаге отвечай СТРОГО одной из двух JSON-форм, без markdown, без префиксов:
+- На каждом шаге отвечай СТРОГО одной из трёх JSON-форм, без markdown, без префиксов:
     1) Чтобы вызвать инструмент:
        {{"tool": "<имя>", "args": {{...}}}}
     2) Чтобы дать финальный ответ пользователю:
        {{"answer": "<текст ответа на русском>"}}
+    3) Если в TOOLS НЕТ инструмента для этой задачи — попросить добавить:
+       {{"capability_gap": "<краткое описание нужной функции>"}}
+       Vera сама найдёт пакет в реестре и предложит Диме поставить.
 - Сначала разбирайся в данных: если знаешь только имя — сначала зови
   telegram_search_dialogs, потом telegram_read_messages с chat_id.
 - Если поиск вернул НЕСКОЛЬКО кандидатов (>1), прочитай 2-3 самых
@@ -103,6 +120,13 @@ async def run_agentic(
         await progress(f"🧠 Думаю (шаг {step})...")
         raw = await _llm(messages, system)
         parsed = _parse(raw)
+
+        if "capability_gap" in parsed:
+            cap = str(parsed.get("capability_gap") or "").strip()
+            if cap:
+                asyncio.create_task(_propose_capability(cap))
+                return (f"Не нашла подходящего инструмента для: «{cap}». "
+                        "Ищу в реестре, пришлю предложение в DM."), trace
 
         if "answer" in parsed:
             return str(parsed["answer"]).strip() or "Готово.", trace

@@ -58,7 +58,6 @@ async def call_tool(server_name: str, tool_name: str, args: dict) -> dict:
 
     try:
         result = await handle._session.call_tool(tool_name, arguments=args or {})
-        # MCP CallToolResult has content blocks. We flatten to a simple shape.
         parts = []
         for c in (result.content or []):
             if hasattr(c, "text") and c.text:
@@ -66,13 +65,56 @@ async def call_tool(server_name: str, tool_name: str, args: dict) -> dict:
             elif hasattr(c, "data"):
                 parts.append({"binary_bytes": len(c.data or b"")})
         is_error = bool(getattr(result, "isError", False))
-        return {
-            "ok": not is_error,
-            "result": "\n".join(p for p in parts if isinstance(p, str)) or parts,
-        }
+        flat = "\n".join(p for p in parts if isinstance(p, str)) or parts
+        await _record_tool_call(server_name, is_error=is_error,
+                                error_text=(flat if is_error else None))
+        return {"ok": not is_error, "result": flat}
     except Exception as exc:
         log.warning("MCP call %s/%s failed: %s", server_name, tool_name, exc)
+        await _record_tool_call(server_name, is_error=True, error_text=str(exc))
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+_AUTH_ERROR_PATTERNS = ("401", "403", "unauthorized", "invalid token",
+                       "token expired", "authentication failed",
+                       "access denied", "permission denied")
+
+
+async def _record_tool_call(server_name: str, *, is_error: bool,
+                            error_text: str | None = None) -> None:
+    try:
+        from datetime import datetime
+        from sqlalchemy import update
+        from vera_shared.db.models import MCPServer
+        async with get_session() as session:
+            stmt = (
+                update(MCPServer)
+                .where(MCPServer.name == server_name)
+                .values(
+                    tool_calls_count=MCPServer.tool_calls_count + 1,
+                    last_tool_call_at=datetime.utcnow(),
+                )
+            )
+            await session.execute(stmt)
+            if is_error and error_text:
+                low = (error_text or "").lower()
+                if any(p in low for p in _AUTH_ERROR_PATTERNS):
+                    await session.execute(
+                        update(MCPServer)
+                        .where(MCPServer.name == server_name)
+                        .values(auth_state="token_expired")
+                    )
+            await session.commit()
+        if is_error and error_text:
+            low = (error_text or "").lower()
+            if any(p in low for p in _AUTH_ERROR_PATTERNS):
+                try:
+                    from app.self_extend.token_watcher import notify_token_expired
+                    await notify_token_expired(server_name)
+                except Exception:
+                    pass
+    except Exception as exc:
+        log.debug("record_tool_call failed: %s", exc)
 
 
 async def refresh_from_db() -> None:

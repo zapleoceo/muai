@@ -117,7 +117,7 @@ async function api(path) {
 async function refresh() {
   const ok = await api('/api/whoami');
   if (!ok) { renderLogin(); return; }
-  const [stats, tasks, tokens, agents, balances, events, gmail, mcp, sources] = await Promise.all([
+  const [stats, tasks, tokens, agents, balances, events, gmail, mcp, sources, selfExtend] = await Promise.all([
     api('/api/stats'),
     api('/api/tasks?limit=50'),
     api('/api/tokens'),
@@ -127,6 +127,7 @@ async function refresh() {
     api('/api/gmail/accounts'),
     api('/api/mcp/servers'),
     api('/api/sources'),
+    api('/api/self_extend/status'),
   ]);
   state.stats = stats;
   state.tasks = tasks || [];
@@ -137,7 +138,106 @@ async function refresh() {
   state.mcp = mcp || [];
   state.gmail = gmail || [];
   state.sources = sources || [];
+  state.self_extend = selfExtend || {};
   render();
+}
+
+function renderSelfExtend() {
+  const se = state.self_extend || {};
+  const rate = se.rate || {};
+  const props = se.proposals || [];
+  const idle = se.idle_30d || [];
+  const expired = se.expired_auth || [];
+
+  const discoverBox = el('div',{class:'card', style:'margin-bottom:16px'},
+    el('strong',{style:'font-size:15px'}, '🔎 Найти новый инструмент'),
+    el('div',{style:'color:var(--mute);font-size:12px;margin-bottom:8px'},
+      'Опиши что нужно — Vera поищет MCP-сервер и предложит установку в DM.'),
+    el('div',{style:'display:flex;gap:8px'},
+      el('input',{id:'se-cap', placeholder:'например, "отправлять DM в Instagram"',
+        style:'flex:1;background:#0a0a0a;color:#eee;border:1px solid #333;padding:8px'}),
+      el('button',{class:'btn', style:'background:var(--info);color:#fff;border:none',
+        onclick: async () => {
+          const cap = document.getElementById('se-cap').value.trim();
+          if (!cap) return;
+          const r = await fetch('/api/self_extend/discover', {
+            method:'POST', credentials:'include',
+            headers:{'content-type':'application/json'},
+            body: JSON.stringify({capability: cap}),
+          });
+          const data = await r.json();
+          if (!data.ok) alert('Не нашла: ' + (data.reason || 'unknown'));
+          else alert('Предложение #' + data.proposal_id + ' отправлено в DM');
+          await refresh();
+        }}, 'Поискать'),
+    ),
+  );
+
+  const limits = el('div',{class:'card', style:'margin-bottom:16px'},
+    el('strong',{style:'font-size:15px'}, '📊 Лимиты'),
+    el('div',{style:'color:var(--mute);font-size:12px;margin-top:6px'},
+      `Установок за час: ${rate.events_last_hour ?? 0}/${rate.hour_limit ?? 1}, ` +
+      `за сутки: ${rate.events_24h ?? 0}/${rate.day_limit ?? 5}` +
+      (rate.next_allowed_at ? `. Следующая после ${fmt.date(rate.next_allowed_at)}` : '')),
+  );
+
+  const propsTable = el('div',{class:'card', style:'margin-bottom:16px'},
+    el('strong',{style:'font-size:15px'}, '📜 История предложений'),
+    props.length === 0
+      ? el('div',{class:'empty',style:'padding:20px'}, 'Ещё нет предложений.')
+      : el('table',{},
+          el('thead',{}, el('tr',{},
+            el('th',{},'#'), el('th',{},'Capability'),
+            el('th',{},'Пакет'), el('th',{},'Статус'),
+            el('th',{},'Создано'), el('th',{},'Ошибка'),
+          )),
+          el('tbody',{}, props.map(p => el('tr',{},
+            el('td',{}, String(p.id)),
+            el('td',{}, p.capability),
+            el('td',{style:'font-family:monospace;font-size:12px'}, p.package_name || '—'),
+            el('td',{}, pill(p.status, p.status === 'active' ? 'ok' :
+                              p.status === 'failed' || p.status === 'rejected' ? 'err' : 'mute')),
+            el('td',{style:'color:var(--mute)'}, fmt.date(p.created_at)),
+            el('td',{style:'color:var(--err);font-size:12px'}, (p.error || '').substring(0,80)),
+          ))),
+        ),
+  );
+
+  const idleSection = idle.length === 0 ? null : el('div',{class:'card', style:'margin-bottom:16px'},
+    el('strong',{style:'font-size:15px'}, '💤 Неиспользуемые MCP (>30д)'),
+    el('div',{style:'color:var(--mute);font-size:12px;margin-bottom:8px'},
+      'Кандидаты на удаление. Жми ✕ если больше не нужны.'),
+    el('table',{},
+      el('thead',{}, el('tr',{},
+        el('th',{},'Имя'), el('th',{},'Вызовов'), el('th',{},'Последний'), el('th',{}, ''),
+      )),
+      el('tbody',{}, idle.map(m => el('tr',{},
+        el('td',{}, m.name), el('td',{}, String(m.tool_calls)),
+        el('td',{style:'color:var(--mute)'}, fmt.date(m.last_used) || 'никогда'),
+        el('td',{style:'text-align:right'},
+          el('button',{class:'btn', style:'color:var(--err)',
+            onclick: async () => {
+              if (!confirm('Удалить MCP ' + m.name + '?')) return;
+              await fetch('/api/self_extend/uninstall/' + encodeURIComponent(m.name),
+                          {method:'POST', credentials:'include'});
+              await refresh();
+            }}, '✕'),
+        ),
+      ))),
+    ),
+  );
+
+  const expSection = expired.length === 0 ? null : el('div',{class:'card', style:'margin-bottom:16px'},
+    el('strong',{style:'font-size:15px;color:var(--err)'}, '🔐 Токены протухли'),
+    el('ul',{}, expired.map(e => el('li',{},
+      e.name + (e.since ? ' (последний вызов: ' + fmt.date(e.since) + ')' : '')))),
+  );
+
+  const kids = [discoverBox, limits];
+  if (expSection) kids.push(expSection);
+  if (idleSection) kids.push(idleSection);
+  kids.push(propsTable);
+  return el('section',{class:'active'}, ...kids);
 }
 
 function renderLogin() {
@@ -610,9 +710,10 @@ function render() {
     ['events','События'],
     ['sources','Источники'],
     ['mcp','MCP'],
+    ['self_extend','Self-extend'],
     ['tokens','Токены'],
     ['agents','Агенты'],
-    // 'tasks' (legacy chat-pipeline trace) hidden from nav — still accessible via state.tab='tasks'
+    // 'tasks' (legacy chat-pipeline trace) hidden from nav
   ];
   const header = el('header', {},
     el('div', {},
@@ -634,6 +735,7 @@ function render() {
   else if (state.tab === 'events') body = renderEvents();
   else if (state.tab === 'sources') body = renderSources();
   else if (state.tab === 'mcp') body = renderMCP();
+  else if (state.tab === 'self_extend') body = renderSelfExtend();
   else if (state.tab === 'tasks') body = renderTasks();
   else if (state.tab === 'tokens') body = renderTokens();
   else if (state.tab === 'agents') body = renderAgents();

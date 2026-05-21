@@ -78,7 +78,32 @@ class MCPServer(Base):
     status: Mapped[str] = mapped_column(String, default="stopped")
     error_message: Mapped[str | None] = mapped_column(String, nullable=True)
     tools_count: Mapped[int] = mapped_column(Integer, default=0)
+    tool_calls_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_tool_call_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    installed_by: Mapped[str] = mapped_column(String, default="manual")  # manual|self_extend
+    auth_state: Mapped[str] = mapped_column(String, default="ok")  # ok|token_expired
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
+class MCPProposal(Base):
+    """Self-extension flow state. Each row tracks one proposal: needed
+    capability → candidate package → owner decision → install result."""
+    __tablename__ = "mcp_proposals"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    capability: Mapped[str] = mapped_column(String, nullable=False)
+    package_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    package_info: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    env_required: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    env_collected: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="proposed")
+    # proposed → awaiting_creds → installing → active | rejected | failed | uninstalled
+    source_event_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    mcp_server_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    error: Mapped[str | None] = mapped_column(String, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    completed_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class Trigger(Base):

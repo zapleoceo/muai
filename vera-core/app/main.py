@@ -26,6 +26,7 @@ from app.mcp.routes import router as mcp_router
 from app.persona.routes import router as persona_router
 from app.admin.routes import router as admin_router
 from app.sources.routes import router as sources_router
+from app.self_extend.routes import router as self_extend_router
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -95,6 +96,7 @@ app.include_router(mcp_router)
 app.include_router(persona_router)
 app.include_router(admin_router)
 app.include_router(sources_router)
+app.include_router(self_extend_router)
 app.include_router(dashboard_api_router)
 app.include_router(dashboard_static_router)
 

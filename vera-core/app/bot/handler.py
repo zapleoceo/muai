@@ -13,6 +13,8 @@ from app.triage.followup import handle as handle_followup
 
 _FOLLOWUP_RE = re.compile(r"Что сделать с #(\d+)")
 _INLINE_EVENT_RE = re.compile(r"#(\d+)\b")
+_PROPOSAL_RE = re.compile(r"#proposal-(\d+)\b", re.IGNORECASE)
+_TOKEN_RE = re.compile(r"#token-([\w.-]+)\s+(\w+)\s+(.+)", re.IGNORECASE | re.DOTALL)
 
 log = logging.getLogger(__name__)
 router = Router()
@@ -92,11 +94,31 @@ async def handle_message(message: Message, bot: Bot) -> None:
                 await p.finish("⚠️ Пустое сообщение.")
                 return
 
-            followup_event_id: int | None = None
-            if (message.reply_to_message
-                    and message.reply_to_message.from_user
-                    and message.reply_to_message.from_user.id == me.id):
+            replied_text = ""
+            replied_to_bot = (message.reply_to_message
+                              and message.reply_to_message.from_user
+                              and message.reply_to_message.from_user.id == me.id)
+            if replied_to_bot:
                 replied_text = message.reply_to_message.text or message.reply_to_message.caption or ""
+
+            if is_dm:
+                m = _PROPOSAL_RE.search(text) or _PROPOSAL_RE.search(replied_text)
+                if m:
+                    from app.self_extend.proposer import handle_followup as se_followup
+                    pid = int(m.group(1))
+                    cleaned = _PROPOSAL_RE.sub("", text).strip() or text
+                    reply = await se_followup(pid, cleaned)
+                    await p.finish(reply)
+                    return
+                m = _TOKEN_RE.search(text) or _TOKEN_RE.search(replied_text)
+                if m:
+                    from app.self_extend.token_watcher import apply_token_update
+                    reply = await apply_token_update(m.group(1), m.group(2), m.group(3).strip())
+                    await p.finish(reply)
+                    return
+
+            followup_event_id: int | None = None
+            if replied_to_bot:
                 m = _FOLLOWUP_RE.search(replied_text)
                 if m:
                     followup_event_id = int(m.group(1))
