@@ -27,11 +27,17 @@ TOOLS: list[ToolSpec] = [
         name="gmail_read_thread",
         description=(
             "Read all messages of a single Gmail thread, including text bodies, "
-            "From/To/Subject headers, labels."
+            "From/To/Subject headers, labels. When ocr_images=true (default) any "
+            "embedded image attachments (screenshots of tables, scanned docs, "
+            "photos with text) are OCR'd via Gemini and appended to each "
+            "message's text — so you see tables that Gmail displays as inline "
+            "images. has_ocr flag tells you which messages had image content."
         ),
         params=[
             ToolParam("email", "string", "Connected Gmail address."),
             ToolParam("thread_id", "string", "Gmail thread id from list_threads."),
+            ToolParam("ocr_images", "boolean", "Run OCR on image attachments.",
+                      required=False, default=True),
         ],
     ),
     ToolSpec(

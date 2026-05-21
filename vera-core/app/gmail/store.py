@@ -111,6 +111,20 @@ async def deactivate(email: str) -> bool:
         return True
 
 
+async def set_include_automated(email: str, value: bool) -> bool:
+    async with get_session() as session:
+        result = await session.execute(
+            select(GmailAccount).where(GmailAccount.email == email)
+        )
+        row = result.scalar_one_or_none()
+        if row is None:
+            return False
+        row.include_automated = bool(value)
+        row.updated_at = datetime.utcnow()
+        await session.commit()
+        return True
+
+
 def _to_dict(row: GmailAccount, master: str) -> dict:
     return {
         "id": row.id,
@@ -121,5 +135,6 @@ def _to_dict(row: GmailAccount, master: str) -> dict:
         "history_id": row.history_id,
         "last_polled_at": row.last_polled_at,
         "is_active": row.is_active,
+        "include_automated": bool(getattr(row, "include_automated", False)),
         "created_at": row.created_at,
     }

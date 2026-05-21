@@ -37,9 +37,12 @@ def _is_noise(sender: str) -> bool:
     return any(hint in s for hint in _NOISE_SENDER_HINTS)
 
 
-async def _process_account(email: str) -> None:
+async def _process_account(email: str, include_automated: bool) -> None:
     cfg = get_settings()
     minutes = cfg.poll_lookback_minutes
+    # Promotions/social/updates are bulk marketing — always skip; include_automated
+    # only affects per-sender noreply filter (so business automation like payment
+    # receipts can still reach Vera).
     q = (
         f"newer_than:{max(minutes // 60, 1)}h in:inbox is:unread "
         "-category:promotions -category:social -category:updates"
@@ -63,8 +66,8 @@ async def _process_account(email: str) -> None:
         subject = last.get("subject") or "(без темы)"
         sender = last.get("from") or "?"
 
-        if _is_noise(sender):
-            log.info("Skip noise: %s", sender)
+        if not include_automated and _is_noise(sender):
+            log.info("Skip noise: %s (include_automated=False)", sender)
             continue
 
         body_excerpt = (last.get("text") or last.get("snippet") or "")[:1500]
@@ -111,14 +114,15 @@ async def poll_loop() -> None:
         try:
             async with get_session() as session:
                 result = await session.execute(
-                    select(GmailAccount.email).where(GmailAccount.is_active == True)
+                    select(GmailAccount.email, GmailAccount.include_automated)
+                    .where(GmailAccount.is_active == True)
                 )
-                emails = [r[0] for r in result.all()]
-            for e in emails:
+                accounts = [(r[0], bool(r[1])) for r in result.all()]
+            for email, include_automated in accounts:
                 try:
-                    await _process_account(e)
+                    await _process_account(email, include_automated)
                 except Exception as exc:
-                    log.warning("poll account %s error: %s", e, exc)
+                    log.warning("poll account %s error: %s", email, exc)
         except Exception as exc:
             log.exception("poller iteration crashed: %s", exc)
         await asyncio.sleep(cfg.poll_interval_sec)

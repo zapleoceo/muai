@@ -5,11 +5,21 @@ from email.mime.text import MIMEText
 
 import httpx
 
+from vera_shared.media.multimodal import media_to_text
+
 from app.credentials import get_access_token
 
 log = logging.getLogger(__name__)
 
 _BASE = "https://gmail.googleapis.com/gmail/v1/users/me"
+_OCR_INSTRUCTION = (
+    "Это вложение из e-mail. Извлеки весь читаемый текст. "
+    "Если это таблица — сохрани структуру (имена колонок, строки построчно). "
+    "Если рисунок без значимого текста — короткое описание (1 строка). "
+    "Не комментируй, не интерпретируй, только содержимое."
+)
+_OCR_MAX_PER_MESSAGE = 4
+_OCR_MAX_BYTES = 8 * 1024 * 1024
 
 
 def _client(token: str) -> httpx.AsyncClient:
@@ -55,6 +65,62 @@ def _headers(payload: dict) -> dict:
     return out
 
 
+def _collect_image_parts(payload: dict, out: list | None = None) -> list[tuple]:
+    """Walk payload tree, return [(filename, mime_type, attachment_id), ...]
+    for image parts that have an attachmentId."""
+    if out is None:
+        out = []
+    if not payload:
+        return out
+    mime = payload.get("mimeType", "")
+    body = payload.get("body") or {}
+    att_id = body.get("attachmentId")
+    if mime.startswith("image/") and att_id:
+        out.append((payload.get("filename") or "image", mime, att_id))
+    for p in payload.get("parts") or []:
+        _collect_image_parts(p, out)
+    return out
+
+
+async def _download_attachment(token: str, message_id: str, attachment_id: str) -> bytes | None:
+    async with _client(token) as c:
+        r = await c.get(
+            f"{_BASE}/messages/{message_id}/attachments/{attachment_id}"
+        )
+    if r.status_code != 200:
+        return None
+    body_data = r.json().get("data") or ""
+    body_data += "=" * (-len(body_data) % 4)
+    try:
+        return base64.urlsafe_b64decode(body_data.encode())
+    except Exception:
+        return None
+
+
+async def _ocr_message_attachments(token: str, message_id: str, payload: dict) -> str:
+    """Find image attachments in the message, OCR each via Gemini, return joined text."""
+    images = _collect_image_parts(payload)
+    if not images:
+        return ""
+    parts: list[str] = []
+    for i, (filename, mime, att_id) in enumerate(images[:_OCR_MAX_PER_MESSAGE]):
+        try:
+            data = await _download_attachment(token, message_id, att_id)
+        except Exception as exc:
+            log.warning("attachment download %s failed: %s", att_id, exc)
+            continue
+        if not data or len(data) > _OCR_MAX_BYTES:
+            continue
+        try:
+            text = await media_to_text(mime, data, _OCR_INSTRUCTION)
+        except Exception as exc:
+            log.warning("OCR failed for %s: %s", filename, exc)
+            continue
+        if text and not text.startswith("⚠"):
+            parts.append(f"[Картинка {i + 1} «{filename}»]\n{text.strip()}")
+    return "\n\n".join(parts)
+
+
 async def list_threads(email: str, query: str = "", max_results: int = 20) -> list[dict]:
     token = await get_access_token(email)
     params = {"maxResults": max_results}
@@ -75,7 +141,7 @@ async def list_threads(email: str, query: str = "", max_results: int = 20) -> li
     return threads
 
 
-async def read_thread(email: str, thread_id: str) -> dict:
+async def read_thread(email: str, thread_id: str, ocr_images: bool = True) -> dict:
     token = await get_access_token(email)
     async with _client(token) as c:
         r = await c.get(f"{_BASE}/threads/{thread_id}", params={"format": "full"})
@@ -84,8 +150,17 @@ async def read_thread(email: str, thread_id: str) -> dict:
     data = r.json()
     messages = []
     for m in data.get("messages") or []:
-        hdrs = _headers(m.get("payload") or {})
-        text, html = _walk_parts(m.get("payload") or {})
+        payload = m.get("payload") or {}
+        hdrs = _headers(payload)
+        text, html = _walk_parts(payload)
+        body = text[:6000] or html[:6000]
+
+        ocr_text = ""
+        if ocr_images:
+            ocr_text = await _ocr_message_attachments(token, m.get("id"), payload)
+            if ocr_text:
+                body = (body + "\n\n" + ocr_text)[:14000]
+
         messages.append({
             "id": m.get("id"),
             "internal_date": m.get("internalDate"),
@@ -94,7 +169,8 @@ async def read_thread(email: str, thread_id: str) -> dict:
             "subject": hdrs.get("subject"),
             "date": hdrs.get("date"),
             "snippet": m.get("snippet"),
-            "text": text[:6000] or html[:6000],
+            "text": body,
+            "has_ocr": bool(ocr_text),
             "label_ids": m.get("labelIds") or [],
         })
     return {

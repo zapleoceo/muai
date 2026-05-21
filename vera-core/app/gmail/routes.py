@@ -10,7 +10,7 @@ from app.gmail.oauth import (
     build_auth_url, consume_state, exchange_code,
     fetch_userinfo, refresh_access_token,
 )
-from app.gmail.store import deactivate, list_accounts, save_account
+from app.gmail.store import deactivate, list_accounts, save_account, set_include_automated
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -84,6 +84,7 @@ async def api_accounts(_=Depends(require_owner)) -> list[dict]:
         {
             "id": r["id"], "email": r["email"],
             "is_active": r["is_active"],
+            "include_automated": r.get("include_automated", False),
             "last_polled_at": r["last_polled_at"].isoformat() if r["last_polled_at"] else None,
             "created_at": r["created_at"].isoformat() if r["created_at"] else None,
         }
@@ -95,6 +96,13 @@ async def api_accounts(_=Depends(require_owner)) -> list[dict]:
 async def api_disconnect(email: str, _=Depends(require_owner)) -> dict:
     ok = await deactivate(email)
     return {"ok": ok}
+
+
+@router.post("/api/gmail/include_automated")
+async def api_toggle_automated(email: str, value: bool,
+                                _=Depends(require_owner)) -> dict:
+    ok = await set_include_automated(email, value)
+    return {"ok": ok, "email": email, "include_automated": value}
 
 
 def _html(body: str, status: int = 200) -> HTMLResponse:

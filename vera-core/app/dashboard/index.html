@@ -284,16 +284,32 @@ function renderSources() {
       : el('table',{},
           el('thead',{}, el('tr',{},
             el('th',{},'Email'), el('th',{},'Статус'),
+            el('th',{},'Авто-рассылки'),
             el('th',{},'Последний опрос'), el('th',{},'Подключён'),
           )),
-          el('tbody',{}, state.gmail.map(g =>
-            el('tr',{},
+          el('tbody',{}, state.gmail.map(g => {
+            const cb = el('input', {type:'checkbox', style:'cursor:pointer'});
+            cb.checked = !!g.include_automated;
+            const lbl = el('span', {style:'color:var(--mute);font-size:12px'},
+              g.include_automated ? 'noreply пропускаются' : 'noreply фильтруются');
+            cb.onchange = async () => {
+              try {
+                await fetch('/api/gmail/include_automated?email=' +
+                  encodeURIComponent(g.email) + '&value=' + cb.checked,
+                  {method:'POST', credentials:'include'});
+                g.include_automated = cb.checked;
+                lbl.textContent = cb.checked ? 'noreply пропускаются' : 'noreply фильтруются';
+              } catch(e) { cb.checked = !cb.checked; }
+            };
+            const wrap = el('label', {style:'display:flex;gap:6px;align-items:center;cursor:pointer'}, cb, lbl);
+            return el('tr',{},
               el('td',{}, g.email),
               el('td',{}, pill(g.is_active ? 'активен' : 'отключён', g.is_active ? 'ok' : 'mute')),
+              el('td',{}, wrap),
               el('td',{style:'color:var(--mute)'}, fmt.date(g.last_polled_at)),
               el('td',{style:'color:var(--mute)'}, fmt.date(g.created_at)),
-            )
-          )),
+            );
+          })),
         ),
   );
   return el('section',{class:'active'},
