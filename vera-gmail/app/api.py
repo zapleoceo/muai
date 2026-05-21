@@ -281,3 +281,70 @@ async def modify_thread(email: str, thread_id: str, action: str) -> dict:
 async def list_accounts() -> list[str]:
     from app.credentials import list_connected_emails
     return await list_connected_emails()
+
+
+async def modify_threads(email: str, thread_ids: list[str], action: str) -> dict:
+    """Batch: apply same action to many threads. Returns {ok, ok_count, errors}."""
+    ok_count = 0
+    errors: list[dict] = []
+    for tid in thread_ids:
+        r = await modify_thread(email, tid, action)
+        if r.get("ok"):
+            ok_count += 1
+        else:
+            errors.append({"thread_id": tid, "error": r.get("error", "unknown")})
+    return {"ok": not errors, "ok_count": ok_count,
+            "total": len(thread_ids), "errors": errors[:10]}
+
+
+async def _list_labels(email: str) -> list[dict]:
+    token = await get_access_token(email)
+    async with _client(token) as c:
+        r = await c.get(f"{_BASE}/labels")
+    if r.status_code != 200:
+        return []
+    return r.json().get("labels", [])
+
+
+async def _create_label(email: str, name: str) -> dict | None:
+    token = await get_access_token(email)
+    async with _client(token) as c:
+        r = await c.post(f"{_BASE}/labels",
+                         json={"name": name, "labelListVisibility": "labelShow",
+                               "messageListVisibility": "show"})
+    if r.status_code not in (200, 201):
+        log.warning("create_label failed: %s %s", r.status_code, r.text[:200])
+        return None
+    return r.json()
+
+
+async def apply_label(email: str, thread_ids: list[str], label_name: str,
+                      also_mark_read: bool = False) -> dict:
+    """Find or create label, then add to all thread_ids. If also_mark_read,
+    additionally remove UNREAD label in the same modify call."""
+    labels = await _list_labels(email)
+    match = next((l for l in labels if l.get("name", "").lower() == label_name.lower()), None)
+    if match is None:
+        match = await _create_label(email, label_name)
+        if match is None:
+            return {"error": f"could not create label '{label_name}'"}
+    label_id = match["id"]
+
+    token = await get_access_token(email)
+    ok_count = 0
+    errors: list[dict] = []
+    add_ids = [label_id]
+    remove_ids = ["UNREAD"] if also_mark_read else []
+    async with _client(token) as c:
+        for tid in thread_ids:
+            r = await c.post(
+                f"{_BASE}/threads/{tid}/modify",
+                json={"addLabelIds": add_ids, "removeLabelIds": remove_ids},
+            )
+            if r.status_code in (200, 201, 202):
+                ok_count += 1
+            else:
+                errors.append({"thread_id": tid,
+                               "error": f"{r.status_code}: {r.text[:120]}"})
+    return {"ok": not errors, "label_id": label_id, "label_name": match.get("name"),
+            "ok_count": ok_count, "total": len(thread_ids), "errors": errors[:10]}

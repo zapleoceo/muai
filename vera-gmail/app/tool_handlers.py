@@ -1,5 +1,6 @@
 from app.api import (
-    list_accounts, list_threads, modify_thread, read_thread, send_reply,
+    apply_label, list_accounts, list_threads, modify_thread, modify_threads,
+    read_thread, send_reply,
 )
 
 
@@ -14,4 +15,9 @@ HANDLERS = {
                    in_reply_to=str(in_reply_to) or None),
     "gmail_modify_thread":  lambda email, thread_id, action, **_:
         modify_thread(str(email), str(thread_id), str(action)),
+    "gmail_modify_threads": lambda email, thread_ids, action, **_:
+        modify_threads(str(email), [str(t) for t in (thread_ids or [])], str(action)),
+    "gmail_apply_label":    lambda email, thread_ids, label_name, also_mark_read=False, **_:
+        apply_label(str(email), [str(t) for t in (thread_ids or [])],
+                    str(label_name), bool(also_mark_read)),
 }

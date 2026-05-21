@@ -68,4 +68,33 @@ TOOLS: list[ToolSpec] = [
             ToolParam("action", "string", "One of archive/trash/mark_read/mark_unread/star/unstar."),
         ],
     ),
+    ToolSpec(
+        name="gmail_modify_threads",
+        description=(
+            "BATCH version of gmail_modify_thread — apply the SAME action to "
+            "many threads in one call. Use this whenever you would otherwise "
+            "loop modify_thread N times (e.g. 'mark all Bybit unread as read'). "
+            "Pass an array of thread_ids."
+        ),
+        params=[
+            ToolParam("email", "string", "Connected Gmail address."),
+            ToolParam("thread_ids", "array", "Array of thread ids to modify."),
+            ToolParam("action", "string", "One of archive/trash/mark_read/mark_unread/star/unstar."),
+        ],
+    ),
+    ToolSpec(
+        name="gmail_apply_label",
+        description=(
+            "Add a label to one or more threads. Creates the label if it "
+            "doesn't exist. Pass also_mark_read=true to mark threads as read "
+            "in the same call. Use this for sorting threads into folders."
+        ),
+        params=[
+            ToolParam("email", "string", "Connected Gmail address."),
+            ToolParam("thread_ids", "array", "Array of thread ids."),
+            ToolParam("label_name", "string", "Label name (e.g. 'Bybit'). Created if missing."),
+            ToolParam("also_mark_read", "boolean", "Also remove UNREAD label.",
+                      required=False, default=False),
+        ],
+    ),
 ]
