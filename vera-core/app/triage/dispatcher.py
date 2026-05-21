@@ -13,12 +13,27 @@ from app.triggers.predicates import matches
 log = logging.getLogger(__name__)
 
 
+_FINAL_STATUSES = frozenset({
+    "decided", "executed", "execute_failed",
+    "auto_executed", "auto_failed", "failed", "proposal_only",
+    "awaiting_user",  # already shown a card; user hasn't responded
+})
+
+
 async def _run_triage(event_id: int) -> None:
     async with get_session() as session:
         event = await session.get(Event, event_id)
         if event is None:
             return
-        # detach for use outside session
+        # GUARD: one trigger → one triage. If this event has already been
+        # processed (any non-pending status), refuse to re-do it. Decisions
+        # live in the brain via graph episodes (write_decision / write_
+        # rejection) — that's where future similar events should pull from,
+        # not by re-running triage on the same row.
+        if event.triage_status in _FINAL_STATUSES:
+            log.info("Triage skip: event %d already in status %s",
+                     event_id, event.triage_status)
+            return
         e = event
 
     proposal = await triage(e)
