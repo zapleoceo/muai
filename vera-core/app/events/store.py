@@ -14,7 +14,10 @@ async def save_event(
     category: str, content_text: str | None, content_extra: dict | None,
     entity_hints: list | None, metadata: dict | None,
     occurred_at: datetime,
-) -> Event:
+) -> tuple[Event, bool]:
+    """Returns (event, is_new). When (source, source_event_id) already
+    exists, returns the existing row with is_new=False so the caller
+    can skip re-scheduling ingest/triage."""
     async with get_session() as session:
         if source_event_id:
             existing = await session.execute(
@@ -25,7 +28,7 @@ async def save_event(
             )
             row = existing.scalars().first()
             if row is not None:
-                return row
+                return row, False
         e = Event(
             source=source, source_event_id=source_event_id, account=account,
             category=category, content_text=content_text, content_extra=content_extra,
@@ -35,7 +38,7 @@ async def save_event(
         session.add(e)
         await session.commit()
         await session.refresh(e)
-        return e
+        return e, True
 
 
 async def mark_episode(event_id: int, episode_uuid: str | None) -> None:

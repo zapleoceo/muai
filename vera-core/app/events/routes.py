@@ -49,7 +49,7 @@ async def ingest_event(
 ) -> dict:
     _require_internal(x_internal_secret)
     occurred = payload.occurred_at or datetime.utcnow()
-    event = await save_event(
+    event, is_new = await save_event(
         source=payload.source,
         source_event_id=payload.source_event_id,
         account=payload.account,
@@ -60,7 +60,7 @@ async def ingest_event(
         metadata=payload.metadata,
         occurred_at=occurred,
     )
-    if event.graphiti_episode_uuid:
+    if not is_new:
         return {"ok": True, "event_id": event.id, "deduped": True}
     schedule_ingest(
         event.id,
