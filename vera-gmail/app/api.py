@@ -1,5 +1,7 @@
 """Thin wrappers over Gmail REST API."""
+import asyncio
 import base64
+import hashlib
 import logging
 from email.mime.text import MIMEText
 
@@ -19,7 +21,9 @@ _OCR_INSTRUCTION = (
     "Не комментируй, не интерпретируй, только содержимое."
 )
 _OCR_MAX_PER_MESSAGE = 4
+_OCR_MAX_PER_THREAD = 6           # total OCR calls across whole thread
 _OCR_MAX_BYTES = 8 * 1024 * 1024
+_OCR_SEM = asyncio.Semaphore(1)   # serialise OCR globally so we don't burst tokens
 
 
 def _client(token: str) -> httpx.AsyncClient:
@@ -97,13 +101,21 @@ async def _download_attachment(token: str, message_id: str, attachment_id: str) 
         return None
 
 
-async def _ocr_message_attachments(token: str, message_id: str, payload: dict) -> str:
-    """Find image attachments in the message, OCR each via Gemini, return joined text."""
+async def _ocr_message_attachments(
+    token: str, message_id: str, payload: dict,
+    *, cache: dict, ocr_budget: list[int],
+) -> str:
+    """OCR image attachments. cache: {sha256: ocr_text} shared across the
+    whole thread to dedupe identical screenshots quoted in many replies.
+    ocr_budget is a [remaining] mutable counter so we stop at the thread limit."""
     images = _collect_image_parts(payload)
     if not images:
         return ""
     parts: list[str] = []
     for i, (filename, mime, att_id) in enumerate(images[:_OCR_MAX_PER_MESSAGE]):
+        if ocr_budget[0] <= 0:
+            log.info("OCR thread budget exhausted, skipping remaining images")
+            break
         try:
             data = await _download_attachment(token, message_id, att_id)
         except Exception as exc:
@@ -111,13 +123,30 @@ async def _ocr_message_attachments(token: str, message_id: str, payload: dict) -
             continue
         if not data or len(data) > _OCR_MAX_BYTES:
             continue
-        try:
-            text = await media_to_text(mime, data, _OCR_INSTRUCTION)
-        except Exception as exc:
-            log.warning("OCR failed for %s: %s", filename, exc)
+
+        sig = hashlib.sha256(data).hexdigest()
+        cached = cache.get(sig)
+        if cached is not None:
+            if cached:
+                parts.append(f"[Картинка {i + 1} «{filename}» — дубликат] {cached}")
             continue
+
+        async with _OCR_SEM:
+            try:
+                text = await media_to_text(mime, data, _OCR_INSTRUCTION)
+            except Exception as exc:
+                log.warning("OCR failed for %s: %s", filename, exc)
+                cache[sig] = ""
+                continue
+        ocr_budget[0] -= 1
+
         if text and not text.startswith("⚠"):
-            parts.append(f"[Картинка {i + 1} «{filename}»]\n{text.strip()}")
+            clean = text.strip()
+            cache[sig] = clean
+            parts.append(f"[Картинка {i + 1} «{filename}»]\n{clean}")
+        else:
+            cache[sig] = ""
+            log.info("OCR returned warning, skipping: %s", text[:80] if text else "")
     return "\n\n".join(parts)
 
 
@@ -148,6 +177,10 @@ async def read_thread(email: str, thread_id: str, ocr_images: bool = True) -> di
     if r.status_code != 200:
         return {"error": f"gmail {r.status_code}: {r.text[:200]}"}
     data = r.json()
+
+    ocr_cache: dict[str, str] = {}      # sha256 → OCR text
+    ocr_budget = [_OCR_MAX_PER_THREAD]   # mutable counter
+
     messages = []
     for m in data.get("messages") or []:
         payload = m.get("payload") or {}
@@ -157,7 +190,10 @@ async def read_thread(email: str, thread_id: str, ocr_images: bool = True) -> di
 
         ocr_text = ""
         if ocr_images:
-            ocr_text = await _ocr_message_attachments(token, m.get("id"), payload)
+            ocr_text = await _ocr_message_attachments(
+                token, m.get("id"), payload,
+                cache=ocr_cache, ocr_budget=ocr_budget,
+            )
             if ocr_text:
                 body = (body + "\n\n" + ocr_text)[:14000]
 
@@ -177,6 +213,8 @@ async def read_thread(email: str, thread_id: str, ocr_images: bool = True) -> di
         "thread_id": data.get("id"),
         "history_id": data.get("historyId"),
         "messages_count": len(messages),
+        "ocr_done": _OCR_MAX_PER_THREAD - ocr_budget[0],
+        "ocr_unique": len([v for v in ocr_cache.values() if v]),
         "messages": messages,
     }
 
