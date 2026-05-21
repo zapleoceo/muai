@@ -7,6 +7,8 @@ from app.bot.progress import progress
 from app.config import get_settings
 from app.media.extractor import extract_text
 from app.orchestrator.pipeline import run
+from app.triage.followup import handle as handle_followup
+from app.triage.pending import pop_pending
 
 log = logging.getLogger(__name__)
 router = Router()
@@ -84,6 +86,12 @@ async def handle_message(message: Message, bot: Bot) -> None:
             text = _strip_mention(text, me.username or "")
             if not text:
                 await p.finish("⚠️ Пустое сообщение.")
+                return
+
+            pending_event_id = pop_pending(user_id) if user_id else None
+            if pending_event_id is not None:
+                reply = await handle_followup(pending_event_id, text)
+                await p.finish(reply)
                 return
 
             reply, trace_footer = await run(text, user_id, progress_cb=p.update)
