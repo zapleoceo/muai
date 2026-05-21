@@ -125,6 +125,15 @@ async def triage(event: Event) -> TriageProposal | None:
     prompt = _format_event_for_llm(event, context)
 
     try:
+        from app.persona import digest as persona_digest
+        persona = await persona_digest.current()
+        if persona and persona.get("bullets"):
+            prompt += "\n\nPERSONA (Дима, наблюдаемые шаблоны):\n" + \
+                      "\n".join(f"- {b}" for b in persona["bullets"][:15])
+    except Exception as exc:
+        log.warning("persona read failed: %s", exc)
+
+    try:
         from app.orchestrator.tool_router import collect_tools, format_tools_for_prompt
         specs, _ = await collect_tools()
         tools_block = "\n\nTOOLS:\n" + format_tools_for_prompt(specs)

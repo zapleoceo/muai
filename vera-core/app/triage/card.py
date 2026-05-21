@@ -56,11 +56,13 @@ def _html_escape(s: str) -> str:
 
 
 async def send_card(event_id: int, source: str, category: str,
-                    proposal: TriageProposal) -> int | None:
+                    proposal: TriageProposal, auto_note: str | None = None) -> int | None:
     settings = get_settings()
     bot = get_bot()
     text = _build_text(event_id, source, category, proposal)
-    kb = _build_keyboard(event_id, proposal)
+    if auto_note:
+        text += "\n\n" + auto_note
+    kb = None if auto_note else _build_keyboard(event_id, proposal)
     try:
         msg = await bot.send_message(
             chat_id=settings.vera_group_id,

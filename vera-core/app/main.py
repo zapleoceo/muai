@@ -23,6 +23,7 @@ from app.gmail.routes import router as gmail_router
 from app.graph.routes import router as graph_router
 from app.internal.agents import router as agents_router
 from app.mcp.routes import router as mcp_router
+from app.persona.routes import router as persona_router
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -89,6 +90,7 @@ app.include_router(events_router)
 app.include_router(gmail_router)
 app.include_router(graph_router)
 app.include_router(mcp_router)
+app.include_router(persona_router)
 app.include_router(dashboard_api_router)
 app.include_router(dashboard_static_router)
 

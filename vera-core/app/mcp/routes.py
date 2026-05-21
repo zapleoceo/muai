@@ -9,6 +9,7 @@ from vera_shared.db.models import MCPServer
 
 from app.dashboard.auth import require_owner
 from app.mcp import manager
+from app.mcp.presets import PRESETS, find as find_preset
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/mcp")
@@ -47,6 +48,36 @@ async def add_server(payload: dict = Body(...), _=Depends(require_owner)) -> dic
     async with get_session() as session:
         row = MCPServer(
             name=name, transport=transport, command=command, env=env, enabled=True,
+        )
+        session.add(row)
+        await session.commit()
+    await manager.refresh_from_db()
+    return {"ok": True, "name": name}
+
+
+@router.get("/presets")
+async def list_presets(_=Depends(require_owner)) -> list[dict]:
+    return PRESETS
+
+
+@router.post("/presets/{preset_id}")
+async def add_from_preset(
+    preset_id: str, payload: dict = Body(default={}),
+    _=Depends(require_owner),
+) -> dict:
+    preset = find_preset(preset_id)
+    if preset is None:
+        raise HTTPException(404, f"preset '{preset_id}' not found")
+    env = payload.get("env") or {}
+    name = (payload.get("name") or preset_id).strip()
+    missing = [k for k in preset["env_required"] if not env.get(k)]
+    if missing:
+        raise HTTPException(400, f"missing env: {', '.join(missing)}")
+
+    async with get_session() as session:
+        row = MCPServer(
+            name=name, transport=preset["transport"],
+            command=preset["command"], env=env, enabled=True,
         )
         session.add(row)
         await session.commit()

@@ -4,10 +4,11 @@ import logging
 from sqlalchemy import select
 
 from vera_shared.db.engine import get_session
-from vera_shared.db.models import Event
+from vera_shared.db.models import Event, Trigger
 
 from app.triage.card import send_card
 from app.triage.engine import triage
+from app.triggers.predicates import matches
 
 log = logging.getLogger(__name__)
 
@@ -29,13 +30,25 @@ async def _run_triage(event_id: int) -> None:
                 await session.commit()
         return
 
-    card_msg_id = await send_card(event_id, e.source, e.category, proposal)
+    auto_action = await _pick_auto_action(e, proposal)
+    card_msg_id = None
+    auto_exec: dict | None = None
+
+    if auto_action is not None:
+        auto_exec = await _execute_auto(event_id, auto_action)
+        await send_card(event_id, e.source, e.category, proposal,
+                        auto_note=_format_auto_note(auto_action, auto_exec))
+    else:
+        card_msg_id = await send_card(event_id, e.source, e.category, proposal)
 
     async with get_session() as session:
         row = await session.get(Event, event_id)
         if row:
-            row.triage_status = "awaiting_user" if card_msg_id else "proposal_only"
-            row.triage_result = {
+            if auto_exec is not None:
+                row.triage_status = "auto_executed" if auto_exec.get("ok") else "auto_failed"
+            else:
+                row.triage_status = "awaiting_user" if card_msg_id else "proposal_only"
+            payload = {
                 "urgency": proposal.urgency,
                 "summary": proposal.summary,
                 "actions": proposal.actions,
@@ -44,8 +57,60 @@ async def _run_triage(event_id: int) -> None:
                 "context_used": proposal.context_used,
                 "card_message_id": card_msg_id,
             }
+            if auto_exec is not None:
+                payload["executions"] = [auto_exec]
+                payload["user_choice"] = {"label": auto_action["label"], "auto": True}
+            row.triage_result = payload
             await session.commit()
-    log.info("Triage done for event %d: %s (msg=%s)", event_id, proposal.urgency, card_msg_id)
+    log.info("Triage done for event %d: %s (msg=%s, auto=%s)",
+             event_id, proposal.urgency, card_msg_id, auto_exec is not None)
+
+
+async def _pick_auto_action(event: Event, proposal) -> dict | None:
+    """Return the default action iff a matching trigger says auto-execute."""
+    default = next((a for a in proposal.actions if a.get("default") and a.get("tool")), None)
+    if default is None:
+        return None
+    async with get_session() as session:
+        result = await session.execute(
+            select(Trigger).where(
+                Trigger.source == event.source,
+                Trigger.enabled == True,
+                Trigger.auto_confidence > 0,
+            )
+        )
+        triggers = result.scalars().all()
+    for t in triggers:
+        if t.account and event.account and t.account != event.account:
+            continue
+        if t.predicate and not matches(t.predicate, _event_payload(event)):
+            continue
+        if proposal.confidence >= t.auto_confidence:
+            return default
+    return None
+
+
+def _event_payload(event: Event) -> dict:
+    return {
+        "source": event.source,
+        "category": event.category,
+        "account": event.account,
+        "content_text": event.content_text or "",
+        "entity_hints": event.entity_hints or [],
+    }
+
+
+async def _execute_auto(event_id: int, action: dict) -> dict:
+    from app.orchestrator.tool_router import call_tool, collect_tools
+    _, route = await collect_tools()
+    result = await call_tool(route, action["tool"], action.get("args") or {})
+    return {"tool": action["tool"], "args": action.get("args") or {}, "result": result,
+            "ok": bool(result.get("ok")), "auto": True}
+
+
+def _format_auto_note(action: dict, exec_result: dict) -> str:
+    mark = "✅" if exec_result.get("ok") else "⚠️"
+    return f"{mark} <b>Auto:</b> {action['label']}"
 
 
 def schedule_triage(event_id: int) -> None:
