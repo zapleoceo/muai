@@ -11,7 +11,7 @@ from vera_shared.db.models import Agent
 
 log = logging.getLogger(__name__)
 _TIMEOUT = 60.0
-_STALE_AFTER = timedelta(minutes=2)
+_STALE_AFTER = timedelta(minutes=5)
 
 
 async def collect_tools() -> tuple[list[dict], dict[str, str]]:
