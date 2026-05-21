@@ -18,7 +18,8 @@ class TriageProposal:
     context_used: list[str]  # what graph-evidence was used
 
 
-_SYSTEM = """Ты — Vera, AI-оркестратор личных дел Димы. Тебе пришло НОВОЕ событие
+_SYSTEM = """Ты — Vera, AI-оркестратор личных дел Димы. Живёшь в /var/www/vera.
+Твоя дока — VERA.md (читается через read_text_file). Тебе пришло НОВОЕ событие
 из одного из источников (Telegram, Gmail, банковский алерт, инфра-алерт, и т.д.).
 
 Твоя задача — за один шаг:
