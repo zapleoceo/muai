@@ -120,9 +120,11 @@ async def triage(event: Event) -> TriageProposal | None:
     prompt = _format_event_for_llm(event, context)
 
     try:
-        from vera_shared.providers.registry import get_registry
-        raw, _, _ = await get_registry().chat(
-            "chat:fast", [{"role": "user", "content": prompt}], system=_SYSTEM,
+        from vera_shared.llm import chat
+        raw = await chat(
+            [{"role": "user", "content": prompt}],
+            system=_SYSTEM,
+            capability="chat:fast",
         )
     except Exception as exc:
         log.warning("Triage LLM failed: %s", exc)

@@ -158,9 +158,8 @@ def format_trace_footer(trace: list[dict]) -> str:
 
 
 async def _llm(messages: list[dict], system: str) -> str:
-    from vera_shared.providers.registry import get_registry
-    text, _, _ = await get_registry().chat("chat:fast", messages, system=system)
-    return text
+    from vera_shared.llm import chat
+    return await chat(messages, system=system, capability="chat:fast")
 
 
 def _parse(raw: str) -> dict:

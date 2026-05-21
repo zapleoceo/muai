@@ -6,3 +6,5 @@ python-dotenv>=1.0
 pydantic-settings>=2.0
 graphiti-core[google-genai]>=0.10
 neo4j>=5.20
+pytest>=8.0
+pytest-asyncio>=0.23
