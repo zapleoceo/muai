@@ -78,3 +78,17 @@ async def record_user_decision(event_id: int, choice: str) -> dict | None:
         event.triage_status = "decided"
         await session.commit()
         return chosen
+
+
+async def save_execution(event_id: int, tool: str, args: dict, result: dict) -> None:
+    async with get_session() as session:
+        event = await session.get(Event, event_id)
+        if not event or not event.triage_result:
+            return
+        merged = dict(event.triage_result)
+        execs = list(merged.get("executions") or [])
+        execs.append({"tool": tool, "args": args, "result": result})
+        merged["executions"] = execs
+        event.triage_result = merged
+        event.triage_status = "executed" if result.get("ok") else "execute_failed"
+        await session.commit()

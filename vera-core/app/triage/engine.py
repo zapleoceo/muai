@@ -28,15 +28,20 @@ _SYSTEM = """Ты — Vera, AI-оркестратор личных дел Дим
 3) Предложить 2-5 РЕАЛЬНЫХ ВАРИАНТОВ ДЕЙСТВИЯ — что Дима скорее всего захочет
    сделать. Каждый action: короткий label для кнопки (≤30 симв) + чуть больше
    description с обоснованием.
-4) Оценить свою уверенность 0..1.
+4) Если в списке TOOLS есть подходящий инструмент — добавь поля "tool"
+   (имя из TOOLS) и "args" (объект параметров) к action. Тогда нажатие кнопки
+   автоматически выполнит этот инструмент. НЕ ВЫДУМЫВАЙ tool, которого нет
+   в TOOLS. Не клади tool в action, который требует размышления/уточнения.
+5) Оценить свою уверенность 0..1.
 
 Верни ТОЛЬКО валидный JSON, без markdown:
 {
   "urgency": "low|medium|high|critical",
   "summary": "1-2 предложения по-русски, что произошло и о чём это",
   "actions": [
-    {"label": "коротко","description":"что именно сделаем и почему","default": true},
-    {"label": "...","description":"...","default": false}
+    {"label":"коротко","description":"что и почему","default":true,
+     "tool":"имя_из_TOOLS_или_null","args":{...}},
+    {"label":"...","description":"...","default":false}
   ],
   "confidence": 0.0..1.0,
   "reasoning": "1-3 предложения почему именно такие варианты",
@@ -120,9 +125,17 @@ async def triage(event: Event) -> TriageProposal | None:
     prompt = _format_event_for_llm(event, context)
 
     try:
+        from app.orchestrator.tool_router import collect_tools, format_tools_for_prompt
+        specs, _ = await collect_tools()
+        tools_block = "\n\nTOOLS:\n" + format_tools_for_prompt(specs)
+    except Exception as exc:
+        log.warning("collect_tools for triage failed: %s", exc)
+        tools_block = "\n\nTOOLS: (нет доступных инструментов)"
+
+    try:
         from vera_shared.llm import chat
         raw = await chat(
-            [{"role": "user", "content": prompt}],
+            [{"role": "user", "content": prompt + tools_block}],
             system=_SYSTEM,
             capability="chat:fast",
         )
@@ -147,11 +160,17 @@ async def triage(event: Event) -> TriageProposal | None:
         label = str(a.get("label", "")).strip()[:30]
         if not label:
             continue
-        normalised.append({
+        item = {
             "label": label,
             "description": str(a.get("description", "")).strip()[:300],
             "default": bool(a.get("default", False)),
-        })
+        }
+        tool = a.get("tool")
+        if isinstance(tool, str) and tool.strip():
+            item["tool"] = tool.strip()
+            args = a.get("args")
+            item["args"] = args if isinstance(args, dict) else {}
+        normalised.append(item)
     if not normalised:
         return None
     if not any(a["default"] for a in normalised):

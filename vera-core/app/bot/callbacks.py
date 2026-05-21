@@ -4,7 +4,8 @@ from aiogram import Bot, Router
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.types import CallbackQuery
 
-from app.triage.dispatcher import record_user_decision
+from app.orchestrator.tool_router import call_tool, collect_tools, truncate_for_llm
+from app.triage.dispatcher import record_user_decision, save_execution
 
 log = logging.getLogger(__name__)
 router = Router()
@@ -30,11 +31,27 @@ async def triage_callback(callback: CallbackQuery, bot: Bot) -> None:
 
     label = chosen.get("label", "?")
     await callback.answer(f"✅ {label}")
+
+    suffix = f"\n\n<b>✓ Решено:</b> {_html_escape(label)}"
+
+    tool = chosen.get("tool")
+    if isinstance(tool, str) and tool:
+        try:
+            _, route = await collect_tools()
+            result = await call_tool(route, tool, chosen.get("args") or {})
+            ok = bool(result.get("ok"))
+            preview = truncate_for_llm(result.get("result") or result.get("error"), 600)
+            await save_execution(event_id, tool, chosen.get("args") or {}, result)
+            mark = "✅" if ok else "⚠️"
+            suffix += f"\n<b>{mark} {_html_escape(tool)}:</b> <code>{_html_escape(preview)}</code>"
+        except Exception as exc:
+            log.exception("Tool execution failed: %s", exc)
+            suffix += f"\n<b>⚠️ Ошибка инструмента:</b> {_html_escape(str(exc)[:200])}"
+
     try:
         if callback.message:
             base = callback.message.html_text or callback.message.text or ""
-            new_text = base + f"\n\n<b>✓ Решено:</b> {_html_escape(label)}"
-            await callback.message.edit_text(new_text, parse_mode="HTML", reply_markup=None)
+            await callback.message.edit_text(base + suffix, parse_mode="HTML", reply_markup=None)
     except TelegramBadRequest as exc:
         log.warning("Failed to edit card: %s", exc)
 
