@@ -619,8 +619,77 @@ function renderMCP() {
         ))),
       );
 
-  return el('section', {class:'active'}, addForm, table);
+  return el('section', {class:'active'}, renderMCPPresets(), addForm, table);
 }
+
+
+function renderMCPPresets() {
+  const card = el('div', {class:'card', style:'margin-bottom:16px'},
+    el('strong',{style:'font-size:15px'}, '📦 Готовые пресеты'),
+    el('div',{style:'color:var(--mute);font-size:12px;margin-bottom:12px'},
+      'Curated MCP-сервера в один клик. Если нужны env — спросит при установке.'),
+    el('div',{id:'mcp-presets-grid', style:'display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px'},
+      el('div',{style:'color:var(--mute)'}, 'Загружаю…'),
+    ),
+  );
+  // Async fetch + populate
+  fetch('/api/mcp/presets', {credentials:'include'}).then(r => r.json()).then(presets => {
+    const grid = card.querySelector('#mcp-presets-grid');
+    grid.innerHTML = '';
+    const installed = new Set((state.mcp || []).map(s => s.name));
+    presets.forEach(p => {
+      const ins = installed.has(p.id);
+      const tile = el('div',{style:'border:1px solid var(--line);border-radius:6px;padding:10px;background:var(--bg)'},
+        el('div',{style:'display:flex;justify-content:space-between;align-items:start;gap:8px'},
+          el('strong',{}, p.label),
+          ins ? pill('установлен','ok')
+              : el('button',{class:'btn',
+                  style:'background:var(--info);color:#fff;border:none;font-size:12px',
+                  onclick: () => installPreset(p)}, '+ Поставить'),
+        ),
+        el('div',{style:'color:var(--mute);font-size:12px;margin-top:4px'}, p.description),
+        p.env_required && p.env_required.length
+          ? el('div',{style:'color:var(--mute);font-size:11px;margin-top:6px'},
+              'Нужен env: ' + p.env_required.join(', '))
+          : '',
+        p.notes ? el('details',{style:'margin-top:6px;font-size:11px;color:var(--mute)'},
+                    el('summary',{style:'cursor:pointer'}, 'Как получить'),
+                    el('div',{style:'margin-top:4px'}, p.notes))
+                : '',
+      );
+      grid.append(tile);
+    });
+  }).catch(e => {
+    const grid = card.querySelector('#mcp-presets-grid');
+    grid.innerHTML = '';
+    grid.append(el('div',{style:'color:var(--err)'}, 'Ошибка загрузки пресетов: ' + e.message));
+  });
+  return card;
+}
+
+
+async function installPreset(p) {
+  const env = {};
+  for (const key of (p.env_required || [])) {
+    const val = prompt(`${p.label} — введи ${key}:`, '');
+    if (val === null) return;
+    if (!val.trim()) { alert(`${key} обязателен`); return; }
+    env[key] = val.trim();
+  }
+  const name = prompt('Имя для этого MCP-сервера:', p.id);
+  if (!name) return;
+  try {
+    const r = await fetch(`/api/mcp/presets/${encodeURIComponent(p.id)}`, {
+      method:'POST', credentials:'include',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({name: name.trim(), env}),
+    });
+    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
+    alert(`Поставила ${name}. Жми ⟳ на карточке если не стартует, или проверь логи.`);
+    await refresh();
+  } catch (e) { alert('Не получилось: ' + e.message); }
+}
+
 
 function renderAgents() {
   if (!state.agents.length) return el('section', {class:'active'}, el('div',{class:'empty'}, 'Нет агентов'));
