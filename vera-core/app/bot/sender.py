@@ -1,7 +1,12 @@
+import logging
+
 from aiogram import Bot
+from aiogram.exceptions import TelegramAPIError
 from aiogram.types import Message
 
 from app.config import get_settings
+
+log = logging.getLogger(__name__)
 
 _bot: Bot | None = None
 _MAX_LEN = 4000
@@ -49,4 +54,11 @@ async def reply(message: Message, text: str) -> None:
 
 
 async def notify_group(text: str) -> None:
-    await send_to_group(text)
+    """Best-effort group notification. Never raises — caller (deploy etc.)
+    must not depend on Telegram availability."""
+    try:
+        await send_to_group(text)
+    except TelegramAPIError as exc:
+        log.warning("notify_group suppressed Telegram error: %s", exc)
+    except Exception as exc:
+        log.warning("notify_group suppressed unexpected error: %s", exc)
