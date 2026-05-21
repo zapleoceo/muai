@@ -25,12 +25,27 @@ PRESETS: list[dict] = [
     },
     {
         "id": "filesystem",
-        "label": "Filesystem (modelcontextprotocol)",
-        "description": "Read/write files in a sandboxed directory.",
+        "label": "Filesystem — /data (modelcontextprotocol)",
+        "description": "Read/write files in /data (sessions, vera.db).",
         "transport": "stdio",
         "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem", "/data"],
         "env_required": [],
         "notes": "Scoped to /data inside the container.",
+    },
+    {
+        "id": "docs",
+        "label": "Project docs (read-only)",
+        "description": (
+            "Read VERA.md, SELF_EXTENSION.md and any other markdown docs in "
+            "/var/www/vera/docs and the repo root. Lets Vera answer "
+            "questions about her own architecture from the actual files."
+        ),
+        "transport": "stdio",
+        "command": ["npx", "-y", "@modelcontextprotocol/server-filesystem",
+                    "/var/www/vera/docs", "/var/www/vera/VERA.md",
+                    "/var/www/vera/CLAUDE.md"],
+        "env_required": [],
+        "notes": "No credentials. Vera can read but not modify project docs.",
     },
     {
         "id": "memory",
