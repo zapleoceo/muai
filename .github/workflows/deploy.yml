@@ -7,7 +7,7 @@ on:
 
 concurrency:
   group: deploy-production
-  cancel-in-progress: false  # serialise, don't drop
+  cancel-in-progress: false
 
 jobs:
   deploy:
@@ -27,40 +27,21 @@ jobs:
 
       - name: Deploy on server
         env:
-          REF: ${{ github.sha }}
-          MSG: ${{ github.event.head_commit.message }}
           PORT: ${{ secrets.HETZNER_PORT || '9617' }}
         run: |
           ssh -p "$PORT" -o BatchMode=yes -o ConnectTimeout=15 \
               root@${{ secrets.HETZNER_HOST }} \
-              "bash -s" <<'REMOTE'
-          set -euo pipefail
-          export DEBIAN_FRONTEND=noninteractive
-          cd /var/www/vera
-
-          # Serialise concurrent deploys (in case two land within seconds)
-          exec 200>/tmp/vera-deploy.lock
-          flock -w 120 200 || { echo "deploy lock timeout"; exit 1; }
-
-          echo "::group::git"
-          git fetch --quiet origin master
-          git reset --hard origin/master
-          git log --oneline -1
-          echo "::endgroup::"
-
-          echo "::group::build"
-          docker compose build --pull 2>&1 | tail -20
-          echo "::endgroup::"
-
-          echo "::group::up"
-          docker compose up -d --remove-orphans 2>&1 | tail -20
-          echo "::endgroup::"
-
-          echo "::group::health"
-          sleep 5
-          docker compose ps
-          echo "::endgroup::"
-          REMOTE
+              'set -e
+               cd /var/www/vera
+               exec 200>/tmp/vera-deploy.lock
+               flock -w 120 200
+               git fetch --quiet origin master
+               git reset --hard origin/master
+               git log --oneline -1
+               docker compose build --pull
+               docker compose up -d --remove-orphans
+               sleep 5
+               docker compose ps'
 
       - name: Smoke ping dashboard
         run: |
