@@ -29,5 +29,6 @@ async def test_write_instruction_does_not_raise():
 
 @pytest.mark.asyncio
 async def test_add_swallows_failures():
-    with patch("app.graph.write.get_graphiti", new=AsyncMock(side_effect=RuntimeError("no neo4j"))):
+    with patch("app.graph.client.get_graphiti",
+               new=AsyncMock(side_effect=RuntimeError("no neo4j"))):
         await gw._add("test/x", "body")  # must not raise
