@@ -50,6 +50,42 @@ PRESETS: list[dict] = [
         "env_required": ["GITHUB_PERSONAL_ACCESS_TOKEN"],
         "notes": "Token needs `repo` scope. Create at https://github.com/settings/tokens",
     },
+    {
+        "id": "instagram",
+        "label": "Instagram Graph API (community)",
+        "description": (
+            "Read posts, comments, DMs via Meta Graph API. Long-lived "
+            "user access token required (FB Business / Instagram Pro account)."
+        ),
+        "transport": "stdio",
+        "command": ["npx", "-y", "@pinkpixel/instagram-engagement-mcp"],
+        "env_required": ["INSTAGRAM_ACCESS_TOKEN", "INSTAGRAM_BUSINESS_ACCOUNT_ID"],
+        "notes": (
+            "1) Convert your Instagram account to Business/Creator and link to "
+            "a Facebook Page. 2) Generate a long-lived user token at "
+            "developers.facebook.com/tools/explorer with permissions: "
+            "instagram_basic, instagram_manage_comments, instagram_manage_messages, "
+            "pages_show_list, pages_read_engagement. 3) Find your IG business "
+            "account id via /me/accounts → instagram_business_account.id."
+        ),
+    },
+    {
+        "id": "facebook",
+        "label": "Facebook Pages (community)",
+        "description": (
+            "Read/post on Facebook Pages, manage comments and Messenger. "
+            "Uses the same Meta Graph token as Instagram."
+        ),
+        "transport": "stdio",
+        "command": ["npx", "-y", "@pinkpixel/facebook-pages-mcp"],
+        "env_required": ["FACEBOOK_PAGE_ACCESS_TOKEN", "FACEBOOK_PAGE_ID"],
+        "notes": (
+            "Page access token (NOT user token). Generate via "
+            "/me/accounts and pick the page's access_token. Permissions: "
+            "pages_messaging, pages_manage_posts, pages_read_engagement, "
+            "pages_read_user_content."
+        ),
+    },
 ]
 
 

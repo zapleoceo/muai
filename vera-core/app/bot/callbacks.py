@@ -14,6 +14,16 @@ router = Router()
 
 @router.callback_query(lambda c: c.data and c.data.startswith("tri:"))
 async def triage_callback(callback: CallbackQuery, bot: Bot) -> None:
+    settings = get_settings()
+    if not callback.from_user or callback.from_user.id != settings.owner_telegram_id:
+        await callback.answer("Только владельцу", show_alert=True)
+        log.warning("Rejected triage_callback from non-owner user_id=%s",
+                    getattr(callback.from_user, "id", None))
+        return
+    if (callback.message and callback.message.chat
+            and callback.message.chat.id != settings.vera_group_id):
+        await callback.answer("Не та переписка", show_alert=True)
+        return
     parts = (callback.data or "").split(":")
     if len(parts) != 3:
         await callback.answer("Битый callback")

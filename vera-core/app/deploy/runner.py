@@ -10,8 +10,6 @@ _PROJECT_DIR = "/var/www/vera"
 _SERVICES = [
     "http://vera-core:8000",
     "http://vera-telegram:8001",
-    "http://vera-git:8002",
-    "http://vera-web:8003",
     "http://vera-gmail:8004",
 ]
 

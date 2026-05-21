@@ -2,14 +2,20 @@ import hmac
 import logging
 from datetime import datetime
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import Agent
 
 from app.config import get_settings
+from app.dashboard.auth import require_owner
 from app.internal.agent_repo import list_all_agents
+
+_REGISTRATION_ALLOWED_HOSTS = {
+    "vera-telegram", "vera-gmail", "vera-bank",
+    "localhost", "127.0.0.1",
+}
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/internal/agents")
@@ -41,8 +47,10 @@ async def register_agent(
     x_internal_secret: str | None = Header(default=None),
 ) -> dict:
     _require_internal(x_internal_secret)
-    if not payload.http_url.startswith(("http://vera-", "http://localhost", "http://127.")):
-        raise HTTPException(400, "http_url must point to an internal vera-* service")
+    from urllib.parse import urlparse
+    host = (urlparse(payload.http_url).hostname or "").lower()
+    if host not in _REGISTRATION_ALLOWED_HOSTS:
+        raise HTTPException(400, f"http_url host '{host}' not in allowlist")
     async with get_session() as session:
         existing = await session.get(Agent, payload.id)
         if existing:
@@ -81,5 +89,5 @@ async def heartbeat(
 
 
 @router.get("")
-async def list_agents() -> list[dict]:
+async def list_agents(_=Depends(require_owner)) -> list[dict]:
     return await list_all_agents()

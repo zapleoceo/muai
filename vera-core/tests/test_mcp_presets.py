@@ -3,7 +3,8 @@ from app.mcp.presets import PRESETS, find
 
 def test_presets_have_expected_ids():
     ids = {p["id"] for p in PRESETS}
-    assert {"fetch", "git", "filesystem", "memory", "github"} <= ids
+    assert {"fetch", "git", "filesystem", "memory", "github",
+            "instagram", "facebook"} <= ids
 
 
 def test_each_preset_well_formed():

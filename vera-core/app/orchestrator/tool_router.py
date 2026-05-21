@@ -62,6 +62,10 @@ async def call_tool(route: dict[str, tuple[str, str]], name: str, args: dict) ->
     target = route.get(name)
     if target is None:
         return {"ok": False, "error": f"unknown tool '{name}'"}
+    try:
+        args = await _resolve_safe_args(name, args)
+    except _ResolveError as exc:
+        return {"ok": False, "error": f"arg resolution: {exc}"}
     kind, dest = target
     if kind == "mcp":
         from app.mcp.manager import call_tool as mcp_call
@@ -77,6 +81,52 @@ async def call_tool(route: dict[str, tuple[str, str]], name: str, args: dict) ->
     except Exception as exc:
         log.warning("Tool %s failed: %s", name, exc)
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+class _ResolveError(Exception):
+    pass
+
+
+async def _resolve_safe_args(name: str, args: dict) -> dict:
+    """For destructive tools (send_*, send_reply, modify_*) certain args are
+    NOT trusted from the LLM. We re-derive them from authoritative state
+    (e.g. recipient = last sender of the actual thread). Prevents prompt-
+    injection via email content tricking Vera into emailing attacker."""
+    if name == "gmail_send_reply":
+        email = args.get("email")
+        thread_id = args.get("thread_id")
+        if not email or not thread_id:
+            raise _ResolveError("gmail_send_reply requires email + thread_id")
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
+                resp = await c.post(
+                    "http://vera-gmail:8004/tool/gmail_read_thread",
+                    json={"email": str(email), "thread_id": str(thread_id),
+                          "ocr_images": False},
+                )
+            resp.raise_for_status()
+            data = resp.json().get("result") or {}
+            messages = data.get("messages") or []
+            inbound = [m for m in messages if (m.get("from") or "").strip()]
+            if not inbound:
+                raise _ResolveError("no inbound messages in thread")
+            last_from = inbound[-1].get("from") or ""
+            import re as _re
+            m = _re.search(r"<([^>]+)>", last_from) or _re.search(r"\b[\w.+-]+@[\w.-]+\.\w+\b", last_from)
+            authoritative_to = (m.group(1) if hasattr(m, 'group') and m and "<" in last_from else
+                                m.group(0) if m else "").strip()
+            if not authoritative_to:
+                raise _ResolveError(f"could not parse 'to' from sender {last_from!r}")
+            if args.get("to") and args["to"].lower() != authoritative_to.lower():
+                log.warning("gmail_send_reply: overriding LLM-chosen to=%r with thread sender %r",
+                            args.get("to"), authoritative_to)
+            args = dict(args)
+            args["to"] = authoritative_to
+        except _ResolveError:
+            raise
+        except Exception as exc:
+            raise _ResolveError(f"could not resolve recipient: {exc}")
+    return args
 
 
 def format_tools_for_prompt(specs: list[dict]) -> str:
