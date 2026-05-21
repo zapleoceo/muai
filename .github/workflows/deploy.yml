@@ -34,6 +34,15 @@ jobs:
                  'cd /var/www/vera && git rev-parse HEAD' || echo "")
           echo "prev_sha=$PREV" >> "$GITHUB_OUTPUT"
 
+      - name: Bootstrap (sync deploy script)
+        run: |
+          ssh -p "$PORT" -o BatchMode=yes "root@$HOST" '
+            cd /var/www/vera
+            git fetch --quiet origin master
+            git checkout origin/master -- scripts/deploy.sh
+            chmod +x scripts/deploy.sh
+          '
+
       - name: Deploy
         id: deploy
         run: ssh -p "$PORT" -o BatchMode=yes -o ConnectTimeout=15 "root@$HOST"
