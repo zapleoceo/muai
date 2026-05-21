@@ -85,6 +85,17 @@ class MCPServer(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class PendingFollowup(Base):
+    """Tracks 'Свой ответ' click → next DM message routes to that event,
+    with a 5-min TTL. Survives vera-core restart so user can switch
+    tabs / restart bot freely."""
+    __tablename__ = "pending_followups"
+
+    user_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    event_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class MCPProposal(Base):
     """Self-extension flow state. Each row tracks one proposal: needed
     capability → candidate package → owner decision → install result."""

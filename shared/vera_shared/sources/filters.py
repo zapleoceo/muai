@@ -24,9 +24,13 @@ Predicates (all optional, AND-combined):
 Evaluation: last matching rule wins. If no rule matches → default action
 is "exclude" (do not ingest).
 """
+import logging
 import re
 from datetime import datetime
 from typing import Literal
+
+_log = logging.getLogger(__name__)
+_warned: set[str] = set()
 
 FilterAction = Literal["include", "exclude", "priority"]
 _DEFAULT: FilterAction = "exclude"
@@ -104,6 +108,9 @@ def _matches_one(match: dict, payload: dict) -> bool:
             if bool(payload.get("has_attachment")) is not bool(want):
                 return False
         else:
+            if key not in _warned:
+                _warned.add(key)
+                _log.warning("filters: unknown predicate key %r — rule will never match", key)
             return False
     return True
 

@@ -87,45 +87,96 @@ class _ResolveError(Exception):
     pass
 
 
+# Tools that touch the outside world. LLM args for these are tainted:
+# we either (a) re-derive critical args from authoritative state, or
+# (b) refuse to execute without explicit user-context binding.
+DESTRUCTIVE_TOOLS: set[str] = {
+    "gmail_send_reply", "gmail_send_message",
+    "gmail_modify_thread", "gmail_modify_threads", "gmail_apply_label",
+    "telegram_send_message", "telegram_send_reaction",
+    "telegram_send_reply", "telegram_forward_message",
+    "telegram_delete_messages", "telegram_edit_message",
+    "telegram_pin_message", "telegram_unpin_message",
+    "ig_reply_to_comment", "ig_send_dm", "ig_delete_comment",
+    "ig_hide_comment", "fb_reply_to_comment", "fb_send_dm",
+}
+
+# Tools safe to run automatically without user confirmation (read-only +
+# locally-idempotent state changes on Dima's own data). Anything not in
+# this set requires explicit user click — never auto-execute from triage.
+AUTO_SAFE_TOOLS: set[str] = {
+    "gmail_modify_thread", "gmail_modify_threads", "gmail_apply_label",
+    "telegram_read_messages", "telegram_search_dialogs",
+    "telegram_list_recent_dialogs", "telegram_get_dialog_info",
+    "gmail_list_threads", "gmail_read_thread", "gmail_list_accounts",
+    "fetch", "git_status", "git_log", "git_diff",
+}
+
+
+def is_auto_safe(tool_name: str) -> bool:
+    return tool_name in AUTO_SAFE_TOOLS
+
+
+def _email_from_field(raw: str) -> str | None:
+    import re as _re
+    raw = (raw or "").strip()
+    if not raw:
+        return None
+    m = _re.search(r"<([^>]+)>", raw)
+    if m:
+        return m.group(1).strip()
+    m = _re.search(r"\b[\w.+-]+@[\w.-]+\.\w+\b", raw)
+    return m.group(0).strip() if m else None
+
+
 async def _resolve_safe_args(name: str, args: dict) -> dict:
-    """For destructive tools (send_*, send_reply, modify_*) certain args are
-    NOT trusted from the LLM. We re-derive them from authoritative state
-    (e.g. recipient = last sender of the actual thread). Prevents prompt-
-    injection via email content tricking Vera into emailing attacker."""
+    """For every destructive tool, re-derive trusted args from server-side
+    state. LLM gets only soft inputs (subject, body, label); identifiers
+    (to, chat_id, peer, thread_id) come from event/thread metadata."""
     if name == "gmail_send_reply":
         email = args.get("email")
         thread_id = args.get("thread_id")
         if not email or not thread_id:
             raise _ResolveError("gmail_send_reply requires email + thread_id")
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
+            resp = await c.post(
+                "http://vera-gmail:8004/tool/gmail_read_thread",
+                json={"email": str(email), "thread_id": str(thread_id),
+                      "ocr_images": False},
+            )
         try:
-            async with httpx.AsyncClient(timeout=_TIMEOUT) as c:
-                resp = await c.post(
-                    "http://vera-gmail:8004/tool/gmail_read_thread",
-                    json={"email": str(email), "thread_id": str(thread_id),
-                          "ocr_images": False},
-                )
             resp.raise_for_status()
-            data = resp.json().get("result") or {}
-            messages = data.get("messages") or []
-            inbound = [m for m in messages if (m.get("from") or "").strip()]
-            if not inbound:
-                raise _ResolveError("no inbound messages in thread")
-            last_from = inbound[-1].get("from") or ""
-            import re as _re
-            m = _re.search(r"<([^>]+)>", last_from) or _re.search(r"\b[\w.+-]+@[\w.-]+\.\w+\b", last_from)
-            authoritative_to = (m.group(1) if hasattr(m, 'group') and m and "<" in last_from else
-                                m.group(0) if m else "").strip()
-            if not authoritative_to:
-                raise _ResolveError(f"could not parse 'to' from sender {last_from!r}")
-            if args.get("to") and args["to"].lower() != authoritative_to.lower():
-                log.warning("gmail_send_reply: overriding LLM-chosen to=%r with thread sender %r",
-                            args.get("to"), authoritative_to)
-            args = dict(args)
-            args["to"] = authoritative_to
-        except _ResolveError:
-            raise
         except Exception as exc:
-            raise _ResolveError(f"could not resolve recipient: {exc}")
+            raise _ResolveError(f"thread read failed: {exc}")
+        data = resp.json().get("result") or {}
+        messages = data.get("messages") or []
+        inbound = [m for m in messages if (m.get("from") or "").strip()]
+        if not inbound:
+            raise _ResolveError("no inbound messages in thread")
+        authoritative_to = _email_from_field(inbound[-1].get("from") or "")
+        if not authoritative_to:
+            raise _ResolveError(
+                f"could not parse 'to' from sender {inbound[-1].get('from')!r}")
+        if args.get("to") and args["to"].lower() != authoritative_to.lower():
+            log.warning("gmail_send_reply override to=%r with %r",
+                        args.get("to"), authoritative_to)
+        args = dict(args)
+        args["to"] = authoritative_to
+        return args
+
+    if name in ("telegram_send_message", "telegram_send_reaction",
+                "telegram_send_reply"):
+        # peer or chat_id must be explicitly named; we cannot infer.
+        peer = args.get("peer") or args.get("chat_id")
+        if not peer or (isinstance(peer, str) and not peer.strip()):
+            raise _ResolveError(
+                f"{name} requires peer/chat_id explicitly. "
+                "Не выбираю чат сам — назови явно или жми «Свой ответ» на нужной карточке.")
+        # Strip any LLM-supplied 'from' override (Telethon doesn't use it,
+        # but we don't want LLM injecting authorship metadata).
+        args = {k: v for k, v in args.items() if k != "from"}
+        return args
+
     return args
 
 

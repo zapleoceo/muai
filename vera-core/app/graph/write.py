@@ -42,7 +42,8 @@ def write_decision(event_id: int, source: str, sender: str | None,
         body_parts.append(f"Отправитель: {sender}")
     if summary:
         body_parts.append(f"Контекст события: {summary}")
-    asyncio.create_task(_add(
+    from app.common.bg import spawn as _spawn
+    _spawn(_add(
         name=f"decision/{event_id}",
         body="\n".join(body_parts),
         description="user decision",
@@ -59,7 +60,8 @@ def write_execution(event_id: int, tool: str, ok: bool,
         body_parts.append(f"Аргументы: {', '.join(f'{k}={v}' for k,v in args.items())[:300]}")
     if sender:
         body_parts.append(f"Отправитель: {sender}")
-    asyncio.create_task(_add(
+    from app.common.bg import spawn as _spawn
+    _spawn(_add(
         name=f"execution/{event_id}/{tool}",
         body="\n".join(body_parts),
         description="tool execution",
@@ -70,7 +72,8 @@ def write_instruction(user_id: int, text: str) -> None:
     """Persist a free-text instruction Dima gave to the bot in DM. These
     are long-lived preference statements ('игнорируй verandamybot')."""
     body = f"Дима написал инструкцию боту: «{text}»"
-    asyncio.create_task(_add(
+    from app.common.bg import spawn as _spawn
+    _spawn(_add(
         name=f"instruction/{user_id}/{int(datetime.utcnow().timestamp())}",
         body=body,
         description="dima instruction",
@@ -87,7 +90,8 @@ def write_rejection(event_id: int, source: str, sender: str | None,
         body_parts.append(f"Отправитель: {sender} — такие события ему не нужны.")
     if summary:
         body_parts.append(f"Что было: {summary}")
-    asyncio.create_task(_add(
+    from app.common.bg import spawn as _spawn
+    _spawn(_add(
         name=f"rejection/{event_id}",
         body="\n".join(body_parts),
         description="user rejection",

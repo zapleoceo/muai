@@ -2,12 +2,14 @@ import hashlib
 import hmac
 import time
 
-from fastapi import Cookie, HTTPException, status
+from fastapi import Cookie, Header, HTTPException, Request, status
 
 from app.config import get_settings
 
 _COOKIE = "vera_session"
 _TTL = 60 * 60 * 24 * 7  # 7 days
+_CSRF_TTL = 60 * 60 * 24  # 1 day
+_MUTATING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 
 
 def _sign(payload: str, secret: str) -> str:
@@ -37,10 +39,31 @@ def issue_session() -> tuple[str, int]:
     return _sign(payload, settings.session_secret), _TTL
 
 
-def require_owner(vera_session: str | None = Cookie(default=None)) -> bool:
+def issue_csrf(session_token: str) -> str:
+    """Stateless CSRF token derived from the session token. Anyone with a
+    valid session cookie can request one; only same-origin requests can
+    read it back via /api/csrf and resend it as X-CSRF header."""
+    settings = get_settings()
+    return hmac.new(settings.session_secret.encode(),
+                    f"csrf:{session_token}".encode(),
+                    hashlib.sha256).hexdigest()
+
+
+def _csrf_valid(session_token: str, presented: str | None) -> bool:
+    if not presented:
+        return False
+    expected = issue_csrf(session_token)
+    return hmac.compare_digest(presented, expected)
+
+
+def require_owner(request: Request,
+                  vera_session: str | None = Cookie(default=None),
+                  x_csrf: str | None = Header(default=None)) -> bool:
     settings = get_settings()
     if not vera_session or _verify(vera_session, settings.session_secret) is None:
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "unauthorized")
+    if request.method in _MUTATING_METHODS and not _csrf_valid(vera_session, x_csrf):
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "invalid CSRF token")
     return True
 
 

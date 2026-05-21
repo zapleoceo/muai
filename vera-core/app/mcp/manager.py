@@ -75,9 +75,28 @@ async def call_tool(server_name: str, tool_name: str, args: dict) -> dict:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
-_AUTH_ERROR_PATTERNS = ("401", "403", "unauthorized", "invalid token",
-                       "token expired", "authentication failed",
-                       "access denied", "permission denied")
+import re as _re
+
+# Patterns are anchored to common transport-level auth failures. We
+# intentionally avoid bare words like "unauthorized" or "permission denied"
+# because they appear inside legitimate tool outputs (e.g. an HTTP fetch
+# of a 403 page should NOT mark our MCP token as expired).
+_AUTH_ERROR_REGEXES = (
+    _re.compile(r"\bHTTP\s*40[13]\b"),
+    _re.compile(r"\b401\s+unauthorized\b", _re.IGNORECASE),
+    _re.compile(r"\b403\s+forbidden\b", _re.IGNORECASE),
+    _re.compile(r"\binvalid[_\s-]?(?:grant|token|access[_\s-]?token)\b", _re.IGNORECASE),
+    _re.compile(r"\btoken[_\s-]?(?:expired|has\s+expired|is\s+expired)\b", _re.IGNORECASE),
+    _re.compile(r"\bauth(?:entication)?[_\s-]?(?:failed|required|error)\b", _re.IGNORECASE),
+    _re.compile(r"\baccess[_\s-]?token[_\s-]?(?:expired|invalid|missing)\b", _re.IGNORECASE),
+    _re.compile(r"\boauth[_\s-]?error\b", _re.IGNORECASE),
+)
+
+
+def _looks_like_auth_error(text: str) -> bool:
+    if not text:
+        return False
+    return any(rx.search(text) for rx in _AUTH_ERROR_REGEXES)
 
 
 async def _record_tool_call(server_name: str, *, is_error: bool,
@@ -96,23 +115,19 @@ async def _record_tool_call(server_name: str, *, is_error: bool,
                 )
             )
             await session.execute(stmt)
-            if is_error and error_text:
-                low = (error_text or "").lower()
-                if any(p in low for p in _AUTH_ERROR_PATTERNS):
-                    await session.execute(
-                        update(MCPServer)
-                        .where(MCPServer.name == server_name)
-                        .values(auth_state="token_expired")
-                    )
+            if is_error and _looks_like_auth_error(error_text or ""):
+                await session.execute(
+                    update(MCPServer)
+                    .where(MCPServer.name == server_name)
+                    .values(auth_state="token_expired")
+                )
             await session.commit()
-        if is_error and error_text:
-            low = (error_text or "").lower()
-            if any(p in low for p in _AUTH_ERROR_PATTERNS):
-                try:
-                    from app.self_extend.token_watcher import notify_token_expired
-                    await notify_token_expired(server_name)
-                except Exception:
-                    pass
+        if is_error and _looks_like_auth_error(error_text or ""):
+            try:
+                from app.self_extend.token_watcher import notify_token_expired
+                await notify_token_expired(server_name)
+            except Exception:
+                pass
     except Exception as exc:
         log.debug("record_tool_call failed: %s", exc)
 

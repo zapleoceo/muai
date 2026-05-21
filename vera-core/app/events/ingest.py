@@ -94,7 +94,8 @@ def schedule_ingest(event_id: int, **kw) -> None:
     """Fire-and-forget ingest + triage in PARALLEL.
     Triage no longer waits for graph write — it reads whatever is already
     there. The graph fills in over time as ingests complete."""
-    asyncio.create_task(ingest_episode(event_id, **kw))
+    from app.common.bg import spawn
+    spawn(ingest_episode(event_id, **kw), name=f"ingest-{event_id}")
     try:
         from app.triage.dispatcher import schedule_triage
         schedule_triage(event_id)

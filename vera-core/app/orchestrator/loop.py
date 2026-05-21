@@ -124,7 +124,8 @@ async def run_agentic(
         if "capability_gap" in parsed:
             cap = str(parsed.get("capability_gap") or "").strip()
             if cap:
-                asyncio.create_task(_propose_capability(cap))
+                from app.common.bg import spawn
+                spawn(_propose_capability(cap), name=f"propose-capability")
                 return (f"Не нашла подходящего инструмента для: «{cap}». "
                         "Ищу в реестре, пришлю предложение в DM."), trace
 

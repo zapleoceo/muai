@@ -101,10 +101,17 @@ def _event_payload(event: Event) -> dict:
 
 
 async def _execute_auto(event_id: int, action: dict) -> dict:
-    from app.orchestrator.tool_router import call_tool, collect_tools
+    from app.orchestrator.tool_router import call_tool, collect_tools, is_auto_safe
+    tool = action["tool"]
+    if not is_auto_safe(tool):
+        log.warning("auto-skip: tool %r not in AUTO_SAFE_TOOLS for event %d",
+                    tool, event_id)
+        return {"tool": tool, "args": action.get("args") or {},
+                "result": {"ok": False, "error": f"tool '{tool}' not auto-safe"},
+                "ok": False, "auto": True, "skipped": True}
     _, route = await collect_tools()
-    result = await call_tool(route, action["tool"], action.get("args") or {})
-    return {"tool": action["tool"], "args": action.get("args") or {}, "result": result,
+    result = await call_tool(route, tool, action.get("args") or {})
+    return {"tool": tool, "args": action.get("args") or {}, "result": result,
             "ok": bool(result.get("ok")), "auto": True}
 
 
@@ -114,7 +121,8 @@ def _format_auto_note(action: dict, exec_result: dict) -> str:
 
 
 def schedule_triage(event_id: int) -> None:
-    asyncio.create_task(_run_triage(event_id))
+    from app.common.bg import spawn
+    spawn(_run_triage(event_id), name=f"triage-{event_id}")
 
 
 async def record_user_decision(event_id: int, choice: str) -> dict | None:

@@ -105,21 +105,51 @@ const fmt = {
   },
 };
 
-let state = { tab: 'stats', stats: null, tasks: [], tokens: [], agents: [], balances: {}, events: [], gmail: [], mcp: [] };
+let state = { tab: 'stats', stats: null, tasks: [], tokens: [], agents: [], balances: {}, events: [], gmail: [], mcp: [], csrf: null, pollHandle: null, modalOpen: false };
 
-async function api(path) {
-  const r = await fetch(path, { credentials: 'include' });
-  if (r.status === 401) return null;
+async function api(path, opts) {
+  opts = opts || {};
+  const init = { credentials: 'include', headers: opts.headers || {} };
+  const method = (opts.method || 'GET').toUpperCase();
+  init.method = method;
+  if (method !== 'GET' && method !== 'HEAD') {
+    if (state.csrf) init.headers['X-CSRF'] = state.csrf;
+    if (opts.body) init.body = opts.body;
+    if (opts.body && !init.headers['Content-Type'] && typeof opts.body === 'string') {
+      init.headers['Content-Type'] = 'application/json';
+    }
+  }
+  const r = await fetch(path, init);
+  if (r.status === 401) {
+    if (state.pollHandle) { clearInterval(state.pollHandle); state.pollHandle = null; }
+    renderLogin();
+    return null;
+  }
+  if (r.status === 403) {
+    state.csrf = null;
+    await fetchCsrf();
+    throw new Error('CSRF rejected — refreshed token, retry');
+  }
   if (!r.ok) throw new Error(`${r.status} ${path}`);
-  return r.json();
+  if (r.status === 204) return null;
+  const ct = r.headers.get('content-type') || '';
+  return ct.includes('application/json') ? r.json() : r.text();
+}
+
+async function fetchCsrf() {
+  try {
+    const r = await fetch('/api/csrf', { credentials: 'include' });
+    if (r.ok) { const j = await r.json(); state.csrf = j.csrf; }
+  } catch (e) { /* offline */ }
 }
 
 async function refresh() {
+  if (state.modalOpen) return;  // don't trample open editors
   const ok = await api('/api/whoami');
-  if (!ok) { renderLogin(); return; }
-  const [stats, tasks, tokens, agents, balances, events, gmail, mcp, sources, selfExtend] = await Promise.all([
+  if (!ok) return;  // api() handles 401 → renderLogin + polling clear
+  if (!state.csrf) await fetchCsrf();
+  const [stats, tokens, agents, balances, events, gmail, mcp, sources, selfExtend] = await Promise.all([
     api('/api/stats'),
-    api('/api/tasks?limit=50'),
     api('/api/tokens'),
     api('/api/agents'),
     api('/api/balances'),
@@ -130,7 +160,6 @@ async function refresh() {
     api('/api/self_extend/status'),
   ]);
   state.stats = stats;
-  state.tasks = tasks || [];
   state.tokens = tokens || [];
   state.agents = agents || [];
   state.balances = balances || {};
@@ -160,12 +189,9 @@ function renderSelfExtend() {
         onclick: async () => {
           const cap = document.getElementById('se-cap').value.trim();
           if (!cap) return;
-          const r = await fetch('/api/self_extend/discover', {
-            method:'POST', credentials:'include',
-            headers:{'content-type':'application/json'},
-            body: JSON.stringify({capability: cap}),
+          const data = await api('/api/self_extend/discover', {
+            method:'POST', body: JSON.stringify({capability: cap}),
           });
-          const data = await r.json();
           if (!data.ok) alert('Не нашла: ' + (data.reason || 'unknown'));
           else alert('Предложение #' + data.proposal_id + ' отправлено в DM');
           await refresh();
@@ -218,8 +244,8 @@ function renderSelfExtend() {
           el('button',{class:'btn', style:'color:var(--err)',
             onclick: async () => {
               if (!confirm('Удалить MCP ' + m.name + '?')) return;
-              await fetch('/api/self_extend/uninstall/' + encodeURIComponent(m.name),
-                          {method:'POST', credentials:'include'});
+              await api('/api/self_extend/uninstall/' + encodeURIComponent(m.name),
+                        {method:'POST'});
               await refresh();
             }}, '✕'),
         ),
@@ -398,9 +424,9 @@ function renderSources() {
               g.include_automated ? 'noreply пропускаются' : 'noreply фильтруются');
             cb.onchange = async () => {
               try {
-                await fetch('/api/gmail/include_automated?email=' +
+                await api('/api/gmail/include_automated?email=' +
                   encodeURIComponent(g.email) + '&value=' + cb.checked,
-                  {method:'POST', credentials:'include'});
+                  {method:'POST'});
                 g.include_automated = cb.checked;
                 lbl.textContent = cb.checked ? 'noreply пропускаются' : 'noreply фильтруются';
               } catch(e) { cb.checked = !cb.checked; }
@@ -471,11 +497,11 @@ async function promptCreateSource() {
   if (!name) return;
   const account = prompt('Account (опционально — для гмейла e-mail, для tg оставь пустым):', '');
   try {
-    await fetch('/api/sources', {
-      method:'POST', headers:{'content-type':'application/json'}, credentials:'include',
+    await api('/api/sources', {
+      method:'POST',
       body: JSON.stringify({type, name, account: account || null,
                             filters: defaultFilters(type)}),
-    }).then(r => { if (!r.ok) return r.text().then(t => Promise.reject(t)); });
+    });
     await refresh();
   } catch(e) { alert('Не удалось: ' + e); }
 }
@@ -489,20 +515,24 @@ function defaultFilters(type) {
 }
 
 async function toggleSource(s) {
-  await fetch('/api/sources/' + s.id, {
-    method:'PUT', headers:{'content-type':'application/json'}, credentials:'include',
-    body: JSON.stringify({enabled: !s.enabled}),
+  await api('/api/sources/' + s.id, {
+    method:'PUT', body: JSON.stringify({enabled: !s.enabled}),
   });
   await refresh();
 }
 
 async function deleteSource(s) {
   if (!confirm('Удалить источник «' + s.name + '»? Это не удалит уже сохранённые события.')) return;
-  await fetch('/api/sources/' + s.id, {method:'DELETE', credentials:'include'});
+  await api('/api/sources/' + s.id, {method:'DELETE'});
   await refresh();
 }
 
 function editSourceFilters(s) {
+  state.modalOpen = true;
+  const closeModal = () => {
+    state.modalOpen = false;
+    try { closeModal(); } catch (e) {}
+  };
   const txt = JSON.stringify(s.filters || [], null, 2);
   const dialog = el('div',{style:'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99;'+
                             'display:flex;align-items:center;justify-content:center'},
@@ -521,18 +551,18 @@ function editSourceFilters(s) {
                      style:'width:80px;background:#0a0a0a;color:#eee;border:1px solid #333;padding:4px'}),
         ),
         el('div',{style:'flex:1'}),
-        el('button',{class:'btn', onclick: ()=>document.body.removeChild(dialog)}, 'Отмена'),
+        el('button',{class:'btn', onclick: ()=>closeModal()}, 'Отмена'),
         el('button',{class:'btn', style:'background:var(--info);color:#fff;border:none',
                      onclick: async ()=>{
           let parsed;
           try { parsed = JSON.parse(document.getElementById('flt-edit').value); }
           catch(e) { alert('JSON error: ' + e.message); return; }
           const thr = parseFloat(document.getElementById('flt-thr').value);
-          await fetch('/api/sources/' + s.id, {
-            method:'PUT', headers:{'content-type':'application/json'}, credentials:'include',
+          await api('/api/sources/' + s.id, {
+            method:'PUT',
             body: JSON.stringify({filters: parsed, base_threshold: isFinite(thr) ? thr : 0.95}),
           });
-          document.body.removeChild(dialog);
+          closeModal();
           await refresh();
         }}, 'Сохранить'),
       ),
@@ -562,16 +592,14 @@ function renderMCP() {
             const [k, ...v] = p.split('=');
             if (k) envObj[k.trim()] = v.join('=').trim();
           });
-          const r = await fetch('/api/mcp/servers', {
-            method: 'POST', credentials:'include',
-            headers: {'Content-Type':'application/json'},
+          await api('/api/mcp/servers', {
+            method: 'POST',
             body: JSON.stringify({
               name: name.value.trim(),
               command: cmd.value.trim().split(/\s+/).filter(Boolean),
               env: envObj,
             }),
           });
-          if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
           name.value = ''; cmd.value = ''; env.value = '';
           await refresh();
         } catch (e) { alert('Ошибка: ' + e.message); }
@@ -602,15 +630,15 @@ function renderMCP() {
           el('td', {},
             el('button', {class:'btn', style:'margin-right:4px',
               onclick: async () => {
-                await fetch(`/api/mcp/servers/${encodeURIComponent(s.name)}/restart`,
-                            {method:'POST', credentials:'include'});
+                await api(`/api/mcp/servers/${encodeURIComponent(s.name)}/restart`,
+                          {method:'POST'});
                 refresh();
               }}, '⟳'),
             el('button', {class:'btn',
               onclick: async () => {
                 if (!confirm(`Удалить MCP-сервер «${s.name}»?`)) return;
-                await fetch(`/api/mcp/servers/${encodeURIComponent(s.name)}`,
-                            {method:'DELETE', credentials:'include'});
+                await api(`/api/mcp/servers/${encodeURIComponent(s.name)}`,
+                          {method:'DELETE'});
                 refresh();
               }}, '✕'),
             s.error_message ? el('div',{style:'color:var(--err);font-size:11px;margin-top:4px'},
@@ -679,12 +707,9 @@ async function installPreset(p) {
   const name = prompt('Имя для этого MCP-сервера:', p.id);
   if (!name) return;
   try {
-    const r = await fetch(`/api/mcp/presets/${encodeURIComponent(p.id)}`, {
-      method:'POST', credentials:'include',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({name: name.trim(), env}),
+    await api(`/api/mcp/presets/${encodeURIComponent(p.id)}`, {
+      method:'POST', body: JSON.stringify({name: name.trim(), env}),
     });
-    if (!r.ok) throw new Error(`${r.status} ${await r.text()}`);
     alert(`Поставила ${name}. Жми ⟳ на карточке если не стартует, или проверь логи.`);
     await refresh();
   } catch (e) { alert('Не получилось: ' + e.message); }
@@ -805,7 +830,6 @@ function render() {
   else if (state.tab === 'sources') body = renderSources();
   else if (state.tab === 'mcp') body = renderMCP();
   else if (state.tab === 'self_extend') body = renderSelfExtend();
-  else if (state.tab === 'tasks') body = renderTasks();
   else if (state.tab === 'tokens') body = renderTokens();
   else if (state.tab === 'agents') body = renderAgents();
   main.append(body);

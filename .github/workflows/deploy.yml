@@ -12,6 +12,10 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      HOST: ${{ secrets.HETZNER_HOST }}
+      PORT: ${{ secrets.HETZNER_PORT || '9617' }}
     steps:
       - name: Set up SSH
         uses: webfactory/ssh-agent@v0.9.0
@@ -19,48 +23,99 @@ jobs:
           ssh-private-key: ${{ secrets.HETZNER_SSH_KEY }}
 
       - name: Trust host key
-        env:
-          PORT: ${{ secrets.HETZNER_PORT || '9617' }}
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -p "$PORT" -H "${{ secrets.HETZNER_HOST }}" >> ~/.ssh/known_hosts
+          ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts
 
-      - name: Deploy on server
-        env:
-          PORT: ${{ secrets.HETZNER_PORT || '9617' }}
+      - name: Capture previous SHA (for rollback)
+        id: prev
         run: |
-          ssh -p "$PORT" -o BatchMode=yes -o ConnectTimeout=15 \
-              root@${{ secrets.HETZNER_HOST }} \
-              'set -e
-               cd /var/www/vera
-               exec 200>/tmp/vera-deploy.lock
-               flock -w 120 200
-               git fetch --quiet origin master
-               git reset --hard origin/master
-               git log --oneline -1
-               docker compose build --pull
-               docker compose up -d --remove-orphans
-               sleep 5
-               docker compose ps'
+          PREV=$(ssh -p "$PORT" -o BatchMode=yes "root@$HOST" \
+                 'cd /var/www/vera && git rev-parse HEAD' || echo "")
+          echo "prev_sha=$PREV" >> "$GITHUB_OUTPUT"
+          echo "Previous server HEAD: $PREV"
 
-      - name: Smoke ping dashboard
+      - name: Pull + build + start
+        id: deploy
         run: |
-          for i in 1 2 3 4 5; do
+          ssh -p "$PORT" -o BatchMode=yes -o ConnectTimeout=15 "root@$HOST" '
+            set -e
+            cd /var/www/vera
+            exec 200>/tmp/vera-deploy.lock
+            flock -w 600 200 || { echo "deploy lock busy >600s, aborting" >&2; exit 75; }
+            echo "--- before ---"
+            git rev-parse HEAD
+            git fetch --quiet origin master
+            git reset --hard origin/master
+            echo "--- after ---"
+            git rev-parse HEAD
+            git log --oneline -1
+            docker compose build --pull
+            docker compose up -d --remove-orphans
+            sleep 5
+            docker compose ps
+          '
+
+      - name: Smoke ping — dashboard + per-service health
+        id: smoke
+        run: |
+          ok=0
+          for i in 1 2 3 4 5 6 7 8; do
             code=$(curl -sk -o /dev/null -w "%{http_code}" https://dima.veranda.my/ || true)
-            if [ "$code" = "200" ]; then
-              echo "dashboard up (HTTP $code)"
-              exit 0
-            fi
-            echo "attempt $i: HTTP $code, retry in 5s"
+            if [ "$code" = "200" ]; then ok=1; break; fi
+            echo "dashboard attempt $i: HTTP $code"
             sleep 5
           done
-          echo "dashboard not responding after deploy" >&2
-          exit 1
+          if [ "$ok" != "1" ]; then echo "dashboard 502 after 40s" >&2; exit 1; fi
+          ssh -p "$PORT" -o BatchMode=yes "root@$HOST" '
+            set -e
+            for svc in vera-core vera-gmail vera-telegram; do
+              container="vera-${svc}-1"
+              echo "--- $svc ---"
+              docker inspect -f "{{.State.Status}}" "$container" || { echo "$svc missing" >&2; exit 1; }
+              [ "$(docker inspect -f "{{.State.Status}}" "$container")" = "running" ] \
+                || { echo "$svc not running" >&2; exit 1; }
+            done
+            curl -fsS -o /dev/null --max-time 10 http://localhost:8000/api/whoami || curl -fsS -o /dev/null --max-time 10 -w "%{http_code}\n" http://localhost:8000/api/whoami 2>&1 | grep -qE "^(200|401)$"
+          '
 
-      - name: Run tests
-        env:
-          PORT: ${{ secrets.HETZNER_PORT || '9617' }}
+      - name: Run pytest inside vera-core
+        id: tests
         run: |
-          ssh -p "$PORT" -o BatchMode=yes -o ConnectTimeout=15 \
-              root@${{ secrets.HETZNER_HOST }} \
+          ssh -p "$PORT" -o BatchMode=yes "root@$HOST" \
               'docker exec vera-vera-core-1 pytest /app/tests -q --tb=short'
+
+      - name: Rollback on failure
+        if: failure() && steps.prev.outputs.prev_sha != ''
+        run: |
+          echo "Rolling back to ${{ steps.prev.outputs.prev_sha }}"
+          ssh -p "$PORT" -o BatchMode=yes "root@$HOST" "
+            set -e
+            cd /var/www/vera
+            git reset --hard ${{ steps.prev.outputs.prev_sha }}
+            docker compose build --pull
+            docker compose up -d --remove-orphans
+          " || echo "rollback ssh failed"
+
+      - name: Image cleanup
+        if: always()
+        run: |
+          ssh -p "$PORT" -o BatchMode=yes "root@$HOST" '
+            docker image prune -f --filter "until=168h" || true
+            docker builder prune -f --filter "unused-for=168h" || true
+          '
+
+      - name: Notify on failure
+        if: failure()
+        env:
+          BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN_VERA }}
+          OWNER_ID: ${{ secrets.OWNER_TELEGRAM_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -n "$BOT_TOKEN" ] && [ -n "$OWNER_ID" ]; then
+            curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+                 -d "chat_id=${OWNER_ID}" \
+                 -d "parse_mode=HTML" \
+                 -d "text=⚠️ Deploy failed → rolled back%0A${RUN_URL}" \
+                 -o /dev/null || true
+          fi

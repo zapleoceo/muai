@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Cookie, Depends, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy import func, select
 
@@ -22,7 +22,7 @@ def _set_session_cookie(resp: Response) -> None:
     cookie, ttl = issue_session()
     resp.set_cookie(
         "vera_session", cookie,
-        max_age=ttl, httponly=True, secure=True, samesite="lax", path="/",
+        max_age=ttl, httponly=True, secure=True, samesite="strict", path="/",
     )
 
 
@@ -50,6 +50,19 @@ async def logout() -> Response:
 @router.get("/api/whoami")
 async def whoami(_=Depends(require_owner)) -> dict:
     return {"role": "owner"}
+
+
+@router.get("/api/csrf")
+async def csrf(vera_session: str | None = Cookie(default=None)) -> dict:
+    """Read-only endpoint that returns the per-session CSRF token.
+    Frontend calls this once after login and stores in memory, sends as
+    X-CSRF header on every mutating request."""
+    from app.dashboard.auth import _verify, issue_csrf
+    settings = get_settings()
+    if not vera_session or _verify(vera_session, settings.session_secret) is None:
+        from fastapi import HTTPException
+        raise HTTPException(401, "unauthorized")
+    return {"csrf": issue_csrf(vera_session)}
 
 
 @router.get("/api/stats")

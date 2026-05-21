@@ -10,9 +10,10 @@ from app.orchestrator.pipeline import run
 import re
 
 from app.triage.followup import handle as handle_followup
+from app.triage.pending import pop_pending
 
 _FOLLOWUP_RE = re.compile(r"Что сделать с #(\d+)")
-_INLINE_EVENT_RE = re.compile(r"#(\d+)\b")
+_INLINE_EVENT_RE = re.compile(r"^\s*#(\d+)\b")  # only when message STARTS with #N
 _PROPOSAL_RE = re.compile(r"#proposal-(\d+)\b", re.IGNORECASE)
 _TOKEN_RE = re.compile(r"#token-([\w.-]+)\s+(\w+)\s+(.+)", re.IGNORECASE | re.DOTALL)
 
@@ -118,7 +119,13 @@ async def handle_message(message: Message, bot: Bot) -> None:
                     return
 
             followup_event_id: int | None = None
-            if replied_to_bot:
+            # Priority 1: short-lived pending state set by "Свой ответ" click.
+            if is_dm and from_owner and user_id:
+                pending = await pop_pending(user_id)
+                if pending is not None:
+                    followup_event_id = pending
+            # Priority 2: explicit reply to the bot's "Что сделать с #N?" prompt.
+            if followup_event_id is None and replied_to_bot:
                 m = _FOLLOWUP_RE.search(replied_text)
                 if m:
                     followup_event_id = int(m.group(1))

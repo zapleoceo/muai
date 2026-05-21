@@ -7,6 +7,7 @@ from aiogram.types import CallbackQuery
 from app.config import get_settings
 from app.orchestrator.tool_router import call_tool, collect_tools, truncate_for_llm
 from app.triage.dispatcher import record_user_decision, save_execution
+from app.triage.pending import set_pending
 
 log = logging.getLogger(__name__)
 router = Router()
@@ -46,12 +47,13 @@ async def triage_callback(callback: CallbackQuery, bot: Bot) -> None:
     if choice == "custom":
         owner_id = get_settings().owner_telegram_id
         user_id = callback.from_user.id if callback.from_user else owner_id
+        await set_pending(user_id, event_id)
         try:
             await bot.send_message(
                 chat_id=user_id,
                 text=(f"✍️ Что сделать с #{event_id}?\n\n"
-                      f"<i>Ответь reply'ем на это сообщение — или начни сообщение "
-                      f"с #{event_id}. Примеры: «заархивируй», «ответь что я занят», «удали».</i>"),
+                      f"<i>Просто напиши следующим сообщением — у тебя 5 минут. "
+                      f"Примеры: «заархивируй», «ответь что я занят», «удали».</i>"),
                 parse_mode="HTML",
             )
         except TelegramBadRequest as exc:
