@@ -49,7 +49,7 @@ async def handle_message(message: Message, bot: Bot) -> None:
 
     settings = get_settings()
     me = await bot.get_me()
-    in_group = message.chat.id == settings.vera_group_id
+    is_dm = message.chat.type == "private"
     from_owner = message.from_user and message.from_user.id == settings.owner_telegram_id
 
     mentioned = _is_mention(message, me.username or "")
@@ -59,10 +59,15 @@ async def handle_message(message: Message, bot: Bot) -> None:
         and message.reply_to_message.from_user.id == me.id
     )
 
-    if in_group and not (mentioned or replied_to_bot):
-        return
-    if not in_group and not from_owner:
-        return
+    if is_dm:
+        if not from_owner:
+            return
+    else:
+        # In groups: only the configured one, and only when addressed.
+        if message.chat.id != settings.vera_group_id:
+            return
+        if not (mentioned or replied_to_bot):
+            return
 
     user_id = message.from_user.id if message.from_user else None
     log.info("Pipeline triggered by user=%s media=%s", user_id,
