@@ -142,7 +142,24 @@ async def record_user_decision(event_id: int, choice: str) -> dict | None:
         event.triage_result = result
         event.triage_status = "decided"
         await session.commit()
+
+        # Persist decision to Graphiti so future similar events surface it.
+        from app.graph import write as gw
+        sender = _sender_of(event)
+        summary = result.get("summary") or (event.content_text or "")[:200]
+        if choice == "ignore":
+            gw.write_rejection(event_id, event.source, sender, summary)
+        else:
+            gw.write_decision(event_id, event.source, sender,
+                              chosen.get("label", "?"), chosen.get("tool"), summary)
         return chosen
+
+
+def _sender_of(event: Event) -> str | None:
+    for hint in (event.entity_hints or []):
+        if hint.get("type") == "person":
+            return hint.get("identifier") or hint.get("name")
+    return None
 
 
 async def save_execution(event_id: int, tool: str, args: dict, result: dict) -> None:
@@ -157,3 +174,7 @@ async def save_execution(event_id: int, tool: str, args: dict, result: dict) -> 
         event.triage_result = merged
         event.triage_status = "executed" if result.get("ok") else "execute_failed"
         await session.commit()
+
+        from app.graph import write as gw
+        gw.write_execution(event_id, tool, bool(result.get("ok")), args,
+                           _sender_of(event))

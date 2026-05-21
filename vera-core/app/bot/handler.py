@@ -133,6 +133,14 @@ async def handle_message(message: Message, bot: Bot) -> None:
                 return
 
             reply, trace_footer = await run(text, user_id, progress_cb=p.update)
+            # Persist Dima's free-text DM instruction to the brain so future
+            # triages of unrelated events can still surface it via retrieval.
+            if from_owner and user_id and len(text) >= 6:
+                try:
+                    from app.graph import write as gw
+                    gw.write_instruction(user_id, text)
+                except Exception as exc:
+                    log.warning("write_instruction failed: %s", exc)
             await p.finish(reply)
             if trace_footer:
                 try:

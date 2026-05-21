@@ -54,22 +54,57 @@ _SYSTEM = """Ты — Vera, AI-оркестратор личных дел Дим
 Никогда не выдумывай данных которых нет в контексте."""
 
 
-async def _retrieve_context(event: Event, limit: int = 6) -> list[dict]:
-    """Search Graphiti for similar past episodes + entity facts."""
+async def _retrieve_context(event: Event, limit: int = 8) -> list[dict]:
+    """Hybrid retrieval:
+      1. Semantic search on event content (what the event is about)
+      2. Per-entity search (what we already know about this sender/chat/account)
+    Merged + deduped by uuid. Keeps the most relevant N."""
     try:
         from app.graph.client import get_graphiti
         client = await get_graphiti()
-        query = (event.content_text or "")[:500]
-        if not query:
-            return []
-        results = await client.search(query=query, num_results=limit)
-        out: list[dict] = []
-        for r in results:
-            out.append({
-                "fact": getattr(r, "fact", None) or getattr(r, "name", None) or str(r),
-                "uuid": str(getattr(r, "uuid", "")),
-            })
-        return out
+        seen: dict[str, dict] = {}
+
+        async def _add_results(results, weight: float, source_tag: str) -> None:
+            for r in results:
+                uuid = str(getattr(r, "uuid", "") or id(r))
+                fact = (getattr(r, "fact", None) or getattr(r, "name", None)
+                        or str(r))
+                prev = seen.get(uuid)
+                score = (prev["score"] if prev else 0) + weight
+                seen[uuid] = {"fact": fact, "uuid": uuid, "score": score,
+                              "source": source_tag}
+
+        content_query = (event.content_text or "")[:500]
+        if content_query:
+            await _add_results(
+                await client.search(query=content_query, num_results=limit),
+                1.0, "semantic",
+            )
+
+        # Per-entity queries — finds past episodes involving the same sender,
+        # chat, account, even if their text is completely different.
+        seen_terms: set[str] = set()
+        for hint in (event.entity_hints or [])[:6]:
+            term = (hint.get("identifier") or hint.get("name") or "").strip()
+            if not term or len(term) < 3 or term.lower() in seen_terms:
+                continue
+            seen_terms.add(term.lower())
+            try:
+                await _add_results(
+                    await client.search(query=term, num_results=4),
+                    1.5, f"entity:{hint.get('type','?')}",
+                )
+            except Exception as exc:
+                log.debug("entity search %r failed: %s", term, exc)
+
+        # Boost rejections/instructions — they're high-signal for "what NOT to do"
+        for item in seen.values():
+            f = (item["fact"] or "").lower()
+            if "игнор" in f or "rejection" in f or "инструкц" in f or "instruction" in f:
+                item["score"] += 2.0
+
+        ranked = sorted(seen.values(), key=lambda x: x["score"], reverse=True)
+        return [{"fact": x["fact"], "uuid": x["uuid"]} for x in ranked[:limit]]
     except Exception as exc:
         log.warning("Graph retrieval failed: %s", exc)
         return []
