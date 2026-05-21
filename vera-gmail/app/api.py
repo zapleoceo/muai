@@ -8,6 +8,7 @@ from email.mime.text import MIMEText
 import httpx
 
 from vera_shared.media.multimodal import media_to_text
+from vera_shared.tokens.pool import TokensExhausted
 
 from app.credentials import get_access_token
 
@@ -20,8 +21,8 @@ _OCR_INSTRUCTION = (
     "Если рисунок без значимого текста — короткое описание (1 строка). "
     "Не комментируй, не интерпретируй, только содержимое."
 )
-_OCR_MAX_PER_MESSAGE = 4
-_OCR_MAX_PER_THREAD = 6           # total OCR calls across whole thread
+_OCR_MAX_PER_MESSAGE = 2
+_OCR_MAX_PER_THREAD = 4           # total OCR calls across whole thread
 _OCR_MAX_BYTES = 8 * 1024 * 1024
 _OCR_SEM = asyncio.Semaphore(1)   # serialise OCR globally so we don't burst tokens
 
@@ -134,6 +135,13 @@ async def _ocr_message_attachments(
         async with _OCR_SEM:
             try:
                 text = await media_to_text(mime, data, _OCR_INSTRUCTION)
+            except TokensExhausted as exc:
+                # All gemini chat:fast tokens in cooldown. Don't keep trying;
+                # zero the budget so caller skips remaining images.
+                log.warning("OCR aborted (tokens exhausted): %s", exc)
+                cache[sig] = ""
+                ocr_budget[0] = 0
+                break
             except Exception as exc:
                 log.warning("OCR failed for %s: %s", filename, exc)
                 cache[sig] = ""
