@@ -3,19 +3,72 @@ name: Deploy
 on:
   push:
     branches: [master]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false  # serialise, don't drop
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger deploy on server
+      - name: Set up SSH
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.HETZNER_SSH_KEY }}
+
+      - name: Trust host key
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H ${{ secrets.HETZNER_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Deploy on server
         env:
-          DEPLOY_SECRET: ${{ secrets.DEPLOY_SECRET }}
           REF: ${{ github.sha }}
           MSG: ${{ github.event.head_commit.message }}
         run: |
-          payload=$(jq -nc --arg ref "$REF" --arg msg "$MSG" '{ref: $ref, message: $msg}')
-          curl -f -sS -X POST https://dima.veranda.my/deploy \
-            -H "Authorization: Bearer $DEPLOY_SECRET" \
-            -H "Content-Type: application/json" \
-            -d "$payload"
+          ssh -o BatchMode=yes -o ConnectTimeout=10 \
+              root@${{ secrets.HETZNER_HOST }} \
+              "bash -s" <<'REMOTE'
+          set -euo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+          cd /var/www/vera
+
+          # Serialise concurrent deploys (in case two land within seconds)
+          exec 200>/tmp/vera-deploy.lock
+          flock -w 120 200 || { echo "deploy lock timeout"; exit 1; }
+
+          echo "::group::git"
+          git fetch --quiet origin master
+          git reset --hard origin/master
+          git log --oneline -1
+          echo "::endgroup::"
+
+          echo "::group::build"
+          docker compose build --pull 2>&1 | tail -20
+          echo "::endgroup::"
+
+          echo "::group::up"
+          docker compose up -d --remove-orphans 2>&1 | tail -20
+          echo "::endgroup::"
+
+          echo "::group::health"
+          sleep 5
+          docker compose ps --format 'table {{.Service}}\t{{.Status}}'
+          echo "::endgroup::"
+          REMOTE
+
+      - name: Smoke ping dashboard
+        run: |
+          for i in 1 2 3 4 5; do
+            code=$(curl -sk -o /dev/null -w "%{http_code}" https://dima.veranda.my/ || true)
+            if [ "$code" = "200" ]; then
+              echo "dashboard up (HTTP $code)"
+              exit 0
+            fi
+            echo "attempt $i: HTTP $code, retry in 5s"
+            sleep 5
+          done
+          echo "dashboard not responding after deploy" >&2
+          exit 1
