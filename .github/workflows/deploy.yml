@@ -19,16 +19,19 @@ jobs:
           ssh-private-key: ${{ secrets.HETZNER_SSH_KEY }}
 
       - name: Trust host key
+        env:
+          PORT: ${{ secrets.HETZNER_PORT || '9617' }}
         run: |
           mkdir -p ~/.ssh
-          ssh-keyscan -H ${{ secrets.HETZNER_HOST }} >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -p "$PORT" -H "${{ secrets.HETZNER_HOST }}" >> ~/.ssh/known_hosts
 
       - name: Deploy on server
         env:
           REF: ${{ github.sha }}
           MSG: ${{ github.event.head_commit.message }}
+          PORT: ${{ secrets.HETZNER_PORT || '9617' }}
         run: |
-          ssh -o BatchMode=yes -o ConnectTimeout=10 \
+          ssh -p "$PORT" -o BatchMode=yes -o ConnectTimeout=15 \
               root@${{ secrets.HETZNER_HOST }} \
               "bash -s" <<'REMOTE'
           set -euo pipefail
