@@ -58,7 +58,7 @@ jobs:
 
           echo "::group::health"
           sleep 5
-          docker compose ps --format 'table {{.Service}}\t{{.Status}}'
+          docker compose ps
           echo "::endgroup::"
           REMOTE
 
