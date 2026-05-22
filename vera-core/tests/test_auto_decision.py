@@ -34,7 +34,9 @@ async def test_no_replay_means_no_auto():
 
 
 @pytest.mark.asyncio
-async def test_replay_below_min_repeats_no_auto():
+async def test_replay_below_threshold_no_auto():
+    """With formula `1 - 0.5/count` and default threshold 0.95, need ≥10
+    repeats. A 2-repeat history yields confidence 0.75 which is < 0.95."""
     occurred = datetime.utcnow()
     ev, _ = await save_event(
         source="gmail", source_event_id="auto-2", account="a@b.c",
@@ -42,14 +44,12 @@ async def test_replay_below_min_repeats_no_auto():
         entity_hints=[{"type": "person", "identifier": "repeat-low@x.com"}],
         metadata=None, occurred_at=occurred,
     )
-    await rp.record(ev, "Archive", "gmail_modify_thread", {"action": "archive"})
-    await rp.record(ev, "Archive", "gmail_modify_thread", {"action": "archive"})
     p = _proposal([
         {"default": True, "tool": "gmail_modify_thread",
          "args": {"action": "archive"}, "label": "Archive", "replay": True},
-    ], confidence=0.99)
+    ], confidence=0.75)
     out = await _pick_auto_action(ev, p)
-    assert out is None  # only 2 prior → < default min_repeats=3
+    assert out is None  # 0.75 < default threshold 0.95
 
 
 @pytest.mark.asyncio
@@ -113,6 +113,7 @@ async def test_preferences_threshold_blocks_below_value():
         await preferences.set("auto_threshold", 0.95)
 
 
-def test_default_prefs_define_thresholds():
+def test_default_prefs_define_threshold():
     assert "auto_threshold" in preferences._DEFAULTS
-    assert "auto_min_repeats" in preferences._DEFAULTS
+    # min_repeats removed — confidence formula does the gating now
+    assert "auto_min_repeats" not in preferences._DEFAULTS

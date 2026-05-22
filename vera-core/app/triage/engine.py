@@ -308,10 +308,12 @@ async def triage(event: Event) -> TriageProposal | None:
             a["default"] = False
         normalised = [replay_action] + normalised
         # Confidence derived from repeat count, OVERRIDING the LLM's
-        # gut-feel guess. 1 → 0.55, 2 → 0.75, 3 → 0.90, 5 → 0.97,
-        # ≥10 → 1.0. Asymptotically → 1 as Dima keeps confirming.
-        # Don't max() with LLM number — replay history IS the truth here.
-        confidence = round(1 - 0.6 / (count + 0.5), 3)
+        # gut-feel guess. Curve: 1 - 0.5/count. So:
+        #   1 → 0.50    3 → 0.83    5 → 0.90
+        #   10 → 0.95   20 → 0.975  50 → 0.99
+        # Single threshold gates everything — user picks how cautious
+        # via preferences.auto_threshold (default 0.95 = ≥10 repeats).
+        confidence = round(1 - 0.5 / count, 3)
     elif not any(a["default"] for a in normalised):
         normalised[0]["default"] = True
 

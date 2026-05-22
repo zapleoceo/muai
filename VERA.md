@@ -267,6 +267,59 @@ it was the only thing the graph had).
 - keep if persona/instruction/rejection signal present, OR
 - keep if ≥10% of event content tokens (len≥3) overlap with fact tokens.
 
+## 11.65. Auto-execution: when Vera acts without asking
+
+Single knob: **`preferences.auto_threshold`** (default 0.95).
+
+Confidence is derived from the count of identical past decisions for
+the same sender (normalised — email or @username):
+
+```
+confidence = 1 - 0.5 / count
+```
+
+| count | confidence |
+|---|---|
+| 1 | 0.50 |
+| 3 | 0.83 |
+| 5 | 0.90 |
+| 10 | 0.95 |
+| 20 | 0.975 |
+| 50 | 0.99 |
+
+Vera auto-executes iff **all** of:
+- default action came from replay history (not LLM guess)
+- tool is in `AUTO_SAFE_TOOLS` (read-only or idempotent label ops — never
+  send/post/reply)
+- confidence ≥ `auto_threshold`
+
+So `auto_threshold=0.95` means *«after I've done the same thing 10+
+times for this sender, Vera does it herself»*. Drop to `0.85` to make
+her bolder (4 repeats), raise to `0.99` to make her cautious (50).
+
+### Topic-mode delivery
+
+When `preferences.use_topics=true` and `forum_chat_id=<supergroup>`,
+every event lands in its own forum topic in that supergroup. The
+`message_thread_id` IS the event scope — no global pending state, no
+context bleed across conversations. Topic is **deleted** after Dima's
+decision (`delete_topic_on_decision=true`), so the topic list = your
+open to-do.
+
+### Card-deletion in DM mode
+
+`delete_card_after_decision=true` — after action, card is removed
+instead of edited with «Решено». Add `execution_recap_in_dm=true` to
+get the tool result as a separate DM message.
+
+### Self-modification
+
+Vera can flip any pref via `vera_set_pref(key, value)` when Dima asks
+in plain text. Examples Vera handles automatically:
+- *«удаляй карточки после реакции»* → `delete_card_after_decision=true`
+- *«ставь порог auto на 0.99»* → `auto_threshold=0.99`
+- *«не закрывай темы после решения»* → `close_topic_on_decision=false`
+
 ## 11.7. Research dump import
 
 `POST /api/research/import` accepts `{source, documents: [{title, body,

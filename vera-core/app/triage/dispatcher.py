@@ -97,34 +97,28 @@ async def _run_triage(event_id: int) -> None:
 
 
 async def _pick_auto_action(event: Event, proposal) -> dict | None:
-    """Brain-driven auto-execute: no Trigger rows required.
+    """Brain-driven auto-execute.
 
     Fires when ALL of:
-      1. The default action has a tool AND the tool is auto-safe (read-only
-         or idempotent label op — never send/post)
-      2. proposal.confidence >= preferences.auto_threshold (default 0.95)
-      3. The action is a replay of a prior decision Dima made for this
-         sender ≥ preferences.auto_min_repeats times (default 3) — so we
-         only auto-fire on patterns Dima visibly approved
+      1. The default action has a tool AND tool is in AUTO_SAFE_TOOLS
+      2. The action came from replay history (not LLM gut-feel)
+      3. proposal.confidence >= preferences.auto_threshold
+
+    Confidence is derived from replay count via `1 - 0.5/count`, so a
+    single threshold (the only knob) maps directly to a repeat-count
+    requirement:
+      threshold 0.85 → 4 repeats   threshold 0.95 → 10 repeats
+      threshold 0.90 → 5 repeats   threshold 0.99 → 50 repeats
     """
     default = next((a for a in proposal.actions if a.get("default") and a.get("tool")), None)
-    if default is None:
+    if default is None or not default.get("replay"):
         return None
     from app.orchestrator.tool_router import is_auto_safe
     if not is_auto_safe(default["tool"]):
         return None
     from app.bot import preferences
-    prefs = await preferences.get_all()
-    threshold = float(prefs.get("auto_threshold", 0.95))
-    min_repeats = int(prefs.get("auto_min_repeats", 3))
+    threshold = float((await preferences.get_all()).get("auto_threshold", 0.95))
     if proposal.confidence < threshold:
-        return None
-    # Replay action carries `replay: true` flag. Count is in description.
-    if not default.get("replay"):
-        return None
-    from app.triage import replay as rp
-    prior = await rp.suggest(event, limit=1)
-    if not prior or prior[0].get("count", 0) < min_repeats:
         return None
     return default
 
