@@ -269,7 +269,35 @@ async def triage(event: Event) -> TriageProposal | None:
         normalised.append(item)
     if not normalised:
         return None
-    if not any(a["default"] for a in normalised):
+
+    # «Как в прошлый раз»: pull recent decisions for this sender from the
+    # replay table, prepend the most-frequent one as default action. This
+    # is the FAST PATH for "do what we did last time" — no LLM re-derivation.
+    try:
+        from app.triage.replay import suggest as suggest_replays
+        prior = await suggest_replays(event, limit=3)
+    except Exception as exc:
+        log.debug("replay suggest failed: %s", exc)
+        prior = []
+    if prior:
+        top = prior[0]
+        replay_action = {
+            "label": f"⭐ Как в прошлый раз: {top['label'][:24]}",
+            "description": (
+                f"Повторить решение #{top.get('count', 1)} раз для этого "
+                f"отправителя. Последний раз: {top.get('last_used_at', '')[:10]}."
+            ),
+            "default": True,
+            "replay": True,
+        }
+        if top.get("tool"):
+            replay_action["tool"] = top["tool"]
+            replay_action["args"] = top.get("args") or {}
+        # Demote any LLM-default; replay wins.
+        for a in normalised:
+            a["default"] = False
+        normalised = [replay_action] + normalised
+    elif not any(a["default"] for a in normalised):
         normalised[0]["default"] = True
 
     return TriageProposal(

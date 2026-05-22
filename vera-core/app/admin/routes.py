@@ -14,6 +14,26 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/admin")
 
 
+@router.post("/expire-stale-events")
+async def expire_stale_events(hours: int = 48, _=Depends(require_owner)) -> dict:
+    """Move pending|awaiting_user events older than N hours to 'expired'.
+    Keeps the dashboard clean and stops accidental re-triage if any code
+    path tries to schedule them again."""
+    from datetime import datetime, timedelta
+    from sqlalchemy import update
+    cutoff = datetime.utcnow() - timedelta(hours=hours)
+    async with get_session() as session:
+        stmt = (
+            update(Event)
+            .where(Event.triage_status.in_(["pending", "awaiting_user"]))
+            .where(Event.occurred_at < cutoff)
+            .values(triage_status="expired")
+        )
+        result = await session.execute(stmt)
+        await session.commit()
+    return {"ok": True, "expired": result.rowcount or 0, "older_than_hours": hours}
+
+
 @router.post("/replay-triage")
 async def replay_triage(_=Depends(require_owner)) -> dict:
     async with get_session() as session:

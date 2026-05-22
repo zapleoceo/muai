@@ -27,6 +27,7 @@ from app.admin.routes import router as admin_router
 from app.sources.routes import router as sources_router
 from app.self_extend.routes import router as self_extend_router
 from app.research.routes import router as research_router
+from app.system.routes import register_self_loop, router as system_router
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -73,6 +74,11 @@ async def lifespan(app: FastAPI):
     )
     log.info("Webhook set to %s", webhook_url)
 
+    # Spawn self-registration so vera-core's own tools (system_deploy,
+    # system_status) appear in collect_tools().
+    import asyncio
+    asyncio.create_task(register_self_loop())
+
     yield
 
     try:
@@ -97,6 +103,7 @@ app.include_router(admin_router)
 app.include_router(sources_router)
 app.include_router(self_extend_router)
 app.include_router(research_router)
+app.include_router(system_router)
 app.include_router(dashboard_api_router)
 app.include_router(dashboard_static_router)
 

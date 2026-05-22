@@ -85,6 +85,24 @@ class MCPServer(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class DecisionReplay(Base):
+    """Fast lookup of past user decisions keyed by sender. Lets triage
+    surface 'repeat last time' as a one-tap option instead of waiting
+    for the LLM to derive it from graph retrieval (which is noisy and
+    rate-limited). Updated on each record_user_decision."""
+    __tablename__ = "decision_replays"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    source: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    sender_key: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    label: Mapped[str] = mapped_column(String, nullable=False)
+    tool: Mapped[str | None] = mapped_column(String, nullable=True)
+    args: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+    count: Mapped[int] = mapped_column(Integer, default=1)
+    last_used_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+
+
 class PendingFollowup(Base):
     """Tracks 'Свой ответ' click → next DM message routes to that event,
     with a 5-min TTL. Survives vera-core restart so user can switch

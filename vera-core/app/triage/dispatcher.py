@@ -17,6 +17,7 @@ _FINAL_STATUSES = frozenset({
     "decided", "executed", "execute_failed",
     "auto_executed", "auto_failed", "failed", "proposal_only",
     "awaiting_user",  # already shown a card; user hasn't responded
+    "expired",        # cleaned up by /api/admin/expire-stale-events
 })
 
 
@@ -168,13 +169,18 @@ async def record_user_decision(event_id: int, choice: str) -> dict | None:
 
         # Persist decision to Graphiti so future similar events surface it.
         from app.graph import write as gw
+        from app.triage import replay
         sender = _sender_of(event)
         summary = result.get("summary") or (event.content_text or "")[:200]
         if choice == "ignore":
             gw.write_rejection(event_id, event.source, sender, summary)
+            await replay.record(event, "Игнорировать", None, None)
         else:
+            label = chosen.get("label", "?")
             gw.write_decision(event_id, event.source, sender,
-                              chosen.get("label", "?"), chosen.get("tool"), summary)
+                              label, chosen.get("tool"), summary)
+            await replay.record(event, label, chosen.get("tool"),
+                                 chosen.get("args"))
         return chosen
 
 
