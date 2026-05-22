@@ -296,14 +296,22 @@ async def triage(event: Event) -> TriageProposal | None:
         if top.get("tool"):
             replay_action["tool"] = top["tool"]
             replay_action["args"] = top.get("args") or {}
+        # Dedup: drop any LLM-suggested action that is functionally the
+        # same as the replay action (same tool + same args).
+        replay_sig = (replay_action.get("tool"),
+                      tuple(sorted((replay_action.get("args") or {}).items())))
+        normalised = [
+            a for a in normalised
+            if (a.get("tool"), tuple(sorted((a.get("args") or {}).items()))) != replay_sig
+        ]
         for a in normalised:
             a["default"] = False
         normalised = [replay_action] + normalised
-        # Replace LLM's gut-feel confidence with one derived from the
-        # actual repeat count. 1 → 0.55, 2 → 0.75, 3 → 0.90, 5 → 0.97,
-        # ≥10 → 1.0. Asymptotically approaches 1 as user keeps doing
-        # the same thing. This is what enables auto-execution.
-        confidence = max(confidence, 1 - 0.6 / (count + 0.5))
+        # Confidence derived from repeat count, OVERRIDING the LLM's
+        # gut-feel guess. 1 → 0.55, 2 → 0.75, 3 → 0.90, 5 → 0.97,
+        # ≥10 → 1.0. Asymptotically → 1 as Dima keeps confirming.
+        # Don't max() with LLM number — replay history IS the truth here.
+        confidence = round(1 - 0.6 / (count + 0.5), 3)
     elif not any(a["default"] for a in normalised):
         normalised[0]["default"] = True
 

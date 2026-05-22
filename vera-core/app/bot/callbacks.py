@@ -95,14 +95,22 @@ async def triage_callback(callback: CallbackQuery, bot: Bot) -> None:
 
     from app.bot import preferences
     prefs = await preferences.get_all()
-    # Close the forum topic this event lives in, if any.
+    # Close or delete the forum topic this event lives in.
     thread_id = getattr(callback.message, "message_thread_id", None) if callback.message else None
     chat_id = callback.message.chat.id if (callback.message and callback.message.chat) else None
-    if thread_id and chat_id and prefs.get("close_topic_on_decision"):
-        try:
-            await bot.close_forum_topic(chat_id=chat_id, message_thread_id=thread_id)
-        except TelegramBadRequest as exc:
-            log.debug("close_forum_topic failed (probably already closed): %s", exc)
+    if thread_id and chat_id:
+        if prefs.get("delete_topic_on_decision"):
+            try:
+                await bot.delete_forum_topic(chat_id=chat_id, message_thread_id=thread_id)
+                # delete removes the whole topic — skip the card-edit below
+                return
+            except TelegramBadRequest as exc:
+                log.warning("delete_forum_topic failed: %s — falling back to close", exc)
+        if prefs.get("close_topic_on_decision"):
+            try:
+                await bot.close_forum_topic(chat_id=chat_id, message_thread_id=thread_id)
+            except TelegramBadRequest as exc:
+                log.debug("close_forum_topic failed (probably already closed): %s", exc)
     try:
         if callback.message:
             if prefs.get("delete_card_after_decision"):

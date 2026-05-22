@@ -10,15 +10,44 @@ from vera_shared.db.models import DecisionReplay, Event
 _RECENT = timedelta(days=60)
 
 
+import re as _re
+
+_EMAIL_RE = _re.compile(r"[\w.+-]+@[\w.-]+\.\w+")
+_USERNAME_RE = _re.compile(r"@(\w+)")
+
+
+def _normalize_sender(raw: str) -> str:
+    """Reduce a sender string to a stable key. Strategies:
+      - email present anywhere → lowercase email
+      - @username → lowercase username
+      - else → lowercased, stripped, non-empty
+    Examples:
+      '"Joinposter.com" <contact@joinposter.com>' → 'contact@joinposter.com'
+      'VerandaBot (@VerandamyBot)' → 'verandamybot'
+      'Eva' → 'eva'
+    """
+    raw = (raw or "").strip()
+    m = _EMAIL_RE.search(raw)
+    if m:
+        return m.group(0).lower()
+    m = _USERNAME_RE.search(raw)
+    if m:
+        return m.group(1).lower()
+    return raw.lower() if raw else ""
+
+
 def _sender_key(event: Event) -> str | None:
-    """Stable key identifying the 'who' behind an event — across rows."""
+    """Stable key identifying the 'who' behind an event — same key across
+    rows even when sender display name changes."""
     for hint in (event.entity_hints or []):
         if hint.get("type") == "person":
-            ident = hint.get("identifier") or hint.get("name")
-            if ident:
-                return str(ident).lower()
-    # Fall back to account (e.g. gmail address) when there's no sender hint
-    return (event.account or "").lower() or None
+            for field in ("identifier", "name"):
+                v = hint.get(field)
+                if v:
+                    norm = _normalize_sender(str(v))
+                    if norm:
+                        return norm
+    return _normalize_sender(event.account or "") or None
 
 
 async def record(event: Event, label: str, tool: str | None,

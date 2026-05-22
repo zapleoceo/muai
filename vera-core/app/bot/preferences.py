@@ -14,6 +14,7 @@ _DEFAULTS: dict = {
     "use_topics": False,                   # post each event into its own forum topic
     "forum_chat_id": 0,                    # supergroup with forums enabled (negative int)
     "close_topic_on_decision": True,       # close forum topic once Dima decided
+    "delete_topic_on_decision": True,      # delete (not just close) topic after decision
 }
 
 
