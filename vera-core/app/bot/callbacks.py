@@ -22,9 +22,16 @@ async def triage_callback(callback: CallbackQuery, bot: Bot) -> None:
         log.warning("Rejected triage_callback from non-owner user_id=%s",
                     getattr(callback.from_user, "id", None))
         return
-    if (callback.message and callback.message.chat
-            and callback.message.chat.id != settings.vera_group_id):
+    # Accept callbacks from EITHER the legacy DM (vera_group_id) OR the
+    # current forum chat (when topics-mode is on).
+    from app.bot import preferences
+    _prefs = await preferences.get_all()
+    forum_chat = int(_prefs.get("forum_chat_id") or 0)
+    chat_id = callback.message.chat.id if (callback.message and callback.message.chat) else None
+    if chat_id is not None and chat_id != settings.vera_group_id and chat_id != forum_chat:
         await callback.answer("Не та переписка", show_alert=True)
+        log.warning("Rejected callback from chat=%s (expected %s or %s)",
+                    chat_id, settings.vera_group_id, forum_chat)
         return
     parts = (callback.data or "").split(":")
     if len(parts) != 3:
