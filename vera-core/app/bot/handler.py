@@ -172,6 +172,20 @@ async def handle_message(message: Message, bot: Bot) -> None:
             if followup_event_id is not None:
                 reply = await handle_followup(followup_event_id, text)
                 await p.finish(reply)
+                # In topic-mode, the followup completes the conversation
+                # for this event → close/delete the topic.
+                if thread_id and message.chat:
+                    from app.bot import preferences
+                    _prefs = await preferences.get_all()
+                    try:
+                        if _prefs.get("delete_topic_on_decision"):
+                            await bot.delete_forum_topic(
+                                chat_id=message.chat.id, message_thread_id=thread_id)
+                        elif _prefs.get("close_topic_on_decision"):
+                            await bot.close_forum_topic(
+                                chat_id=message.chat.id, message_thread_id=thread_id)
+                    except Exception as exc:
+                        log.debug("topic teardown after followup failed: %s", exc)
                 return
 
             reply, trace_footer = await run(text, user_id, progress_cb=p.update)

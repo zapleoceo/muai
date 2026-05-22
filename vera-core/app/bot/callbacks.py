@@ -72,15 +72,23 @@ async def triage_callback(callback: CallbackQuery, bot: Bot) -> None:
     if choice == "custom":
         owner_id = get_settings().owner_telegram_id
         user_id = callback.from_user.id if callback.from_user else owner_id
-        await set_pending(user_id, event_id)
+        # Post the prompt INTO the topic (when in topic-mode) so the
+        # whole conversation stays in one place. Pending-state is the
+        # DM fallback.
+        prompt = (f"✍️ Что сделать с #{event_id}?\n\n"
+                  f"<i>Напиши инструкцию следующим сообщением. "
+                  f"Примеры: «заархивируй», «ответь что я занят», «удали».</i>")
+        thread_id_for_prompt = getattr(callback.message, "message_thread_id", None)
         try:
-            await bot.send_message(
-                chat_id=user_id,
-                text=(f"✍️ Что сделать с #{event_id}?\n\n"
-                      f"<i>Просто напиши следующим сообщением — у тебя 5 минут. "
-                      f"Примеры: «заархивируй», «ответь что я занят», «удали».</i>"),
-                parse_mode="HTML",
-            )
+            if thread_id_for_prompt and callback.message and callback.message.chat:
+                await bot.send_message(
+                    chat_id=callback.message.chat.id,
+                    text=prompt, parse_mode="HTML",
+                    message_thread_id=thread_id_for_prompt,
+                )
+            else:
+                await set_pending(user_id, event_id)
+                await bot.send_message(chat_id=user_id, text=prompt, parse_mode="HTML")
         except TelegramBadRequest as exc:
             log.warning("Failed to prompt for custom instruction: %s", exc)
 
@@ -102,10 +110,13 @@ async def triage_callback(callback: CallbackQuery, bot: Bot) -> None:
 
     from app.bot import preferences
     prefs = await preferences.get_all()
-    # Close or delete the forum topic this event lives in.
+    # Close or delete the forum topic — but ONLY when the decision is
+    # final. 'custom' means user is about to type free-text instruction,
+    # topic stays open until that instruction is processed.
     thread_id = getattr(callback.message, "message_thread_id", None) if callback.message else None
     chat_id = callback.message.chat.id if (callback.message and callback.message.chat) else None
-    if thread_id and chat_id:
+    decision_is_final = choice not in ("custom",)
+    if thread_id and chat_id and decision_is_final:
         if prefs.get("delete_topic_on_decision"):
             try:
                 await bot.delete_forum_topic(chat_id=chat_id, message_thread_id=thread_id)
