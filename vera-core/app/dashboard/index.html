@@ -417,7 +417,7 @@ PAGES.sources = {
             el('table', {},
               el('thead', {}, el('tr', {},
                 el('th', {text:'Email'}), el('th', {text:'Active'}),
-                el('th', {text:'Auto-noise'}), el('th', {text:'Last poll'}))),
+                el('th', {text:'Принимать авто-рассылки'}), el('th', {text:'Last poll'}))),
               el('tbody', {}, (gmail||[]).map(g => {
                 const tog = el('input', {type:'checkbox', style:'cursor:pointer'});
                 tog.checked = !!g.include_automated;

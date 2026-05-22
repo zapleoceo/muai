@@ -76,11 +76,23 @@ async def triage_callback(callback: CallbackQuery, bot: Bot) -> None:
             log.exception("Tool execution failed: %s", exc)
             suffix += f"\n<b>⚠️ Ошибка инструмента:</b> {_html_escape(str(exc)[:200])}"
 
+    from app.bot import preferences
+    prefs = await preferences.get_all()
     try:
         if callback.message:
-            base = callback.message.html_text or callback.message.text or ""
-            await callback.message.edit_text(base + suffix, parse_mode="HTML", reply_markup=None)
+            if prefs.get("delete_card_after_decision"):
+                await callback.message.delete()
+                if prefs.get("execution_recap_in_dm") and suffix.strip():
+                    await bot.send_message(
+                        chat_id=callback.message.chat.id,
+                        text=suffix.strip(), parse_mode="HTML",
+                    )
+            else:
+                base = callback.message.html_text or callback.message.text or ""
+                await callback.message.edit_text(
+                    base + suffix, parse_mode="HTML", reply_markup=None,
+                )
     except TelegramBadRequest as exc:
-        log.warning("Failed to edit card: %s", exc)
+        log.warning("Failed to update card: %s", exc)
 
 

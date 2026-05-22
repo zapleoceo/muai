@@ -41,6 +41,32 @@ TOOL_SPECS = [
         ),
         "params": [],
     },
+    {
+        "name": "vera_set_pref",
+        "description": (
+            "Toggle Vera's own behaviour preferences. Use when Dima asks "
+            "her to change how she behaves. Known keys:\n"
+            "  - delete_card_after_decision (bool): if true, card disappears "
+            "from chat after Dima taps an action, instead of being edited "
+            "with the result.\n"
+            "  - execution_recap_in_dm (bool): if true and delete_card_after_"
+            "decision is also true, post the action result as a separate DM "
+            "message so it isn't lost."
+        ),
+        "params": [
+            {"name": "key", "type": "string",
+             "description": "Preference name (see description for list).",
+             "required": True},
+            {"name": "value", "type": "string",
+             "description": "New value. For booleans pass true/false/да/нет/вкл/выкл.",
+             "required": True},
+        ],
+    },
+    {
+        "name": "vera_get_prefs",
+        "description": "Read all current behaviour preferences.",
+        "params": [],
+    },
 ]
 
 

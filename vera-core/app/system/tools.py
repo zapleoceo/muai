@@ -102,7 +102,28 @@ async def system_status() -> dict:
     return {"ok": True, "result": out}
 
 
+async def vera_set_pref(key: str, value) -> dict:
+    """Toggle a user preference. Lets Vera flip her own behaviour when
+    Dima asks her in plain text (e.g. «удаляй карточку после реакции»)."""
+    from app.bot import preferences
+    if key not in preferences.known_keys():
+        return {"ok": False,
+                "error": f"unknown pref {key!r}, allowed: {preferences.known_keys()}"}
+    # Coerce truthy strings into bool for boolean prefs
+    if isinstance(value, str) and value.lower() in ("true", "false", "1", "0", "yes", "no", "да", "нет", "вкл", "выкл"):
+        value = value.lower() in ("true", "1", "yes", "да", "вкл")
+    await preferences.set(key, value)
+    return {"ok": True, "key": key, "value": value, "all": await preferences.get_all()}
+
+
+async def vera_get_prefs() -> dict:
+    from app.bot import preferences
+    return {"ok": True, "result": await preferences.get_all()}
+
+
 HANDLERS = {
     "system_deploy": system_deploy,
     "system_status": system_status,
+    "vera_set_pref": vera_set_pref,
+    "vera_get_prefs": vera_get_prefs,
 }
