@@ -45,7 +45,7 @@ jobs:
 
       - name: Deploy
         id: deploy
-        run: ssh -p "$PORT" -o BatchMode=yes -o ConnectTimeout=15 "root@$HOST"
+        run: ssh -p "$PORT" -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 "root@$HOST"
              '/var/www/vera/scripts/deploy.sh'
 
       - name: Rollback on failure

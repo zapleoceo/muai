@@ -899,20 +899,32 @@ function renderMain() {
 }
 
 function renderLogin() {
-  return el('div', {class:'login-wrap'},
+  // Telegram widget needs to be inserted from a parsed-HTML <script> tag,
+  // dynamically-appended script elements don't trigger the widget bootstrap.
+  // Use innerHTML which goes through the HTML parser.
+  const host = el('div', {class:'login-wrap'},
     el('div', {class:'login'},
       el('h1', {text: 'Vera'}),
       el('p', {text: 'Войди через Telegram'}),
-      (() => {
-        const div = el('div', {id:'tg-login'});
-        const s = el('script', {async:'', src:'https://telegram.org/js/telegram-widget.js?22',
-          'data-telegram-login':'Dimondra_Ai_Bot', 'data-size':'large',
-          'data-auth-url':'/api/tg_login', 'data-request-access':'write'});
-        div.append(s);
-        return div;
-      })(),
+      el('div', {id:'tg-login-slot'}),
     ),
   );
+  setTimeout(() => {
+    const slot = host.querySelector('#tg-login-slot');
+    if (!slot) return;
+    slot.innerHTML =
+      '<script async src="https://telegram.org/js/telegram-widget.js?22"' +
+      ' data-telegram-login="Dimondra_Ai_Bot" data-size="large"' +
+      ' data-auth-url="/api/tg_login" data-request-access="write"></scr' + 'ipt>';
+    // innerHTML doesn't execute scripts — manually re-create + replace.
+    const oldScript = slot.querySelector('script');
+    if (oldScript) {
+      const fresh = document.createElement('script');
+      for (const a of oldScript.attributes) fresh.setAttribute(a.name, a.value);
+      oldScript.replaceWith(fresh);
+    }
+  }, 0);
+  return host;
 }
 
 /* ============================================================
