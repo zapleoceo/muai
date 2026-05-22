@@ -9,6 +9,8 @@ _KEY = "user_prefs"
 _DEFAULTS: dict = {
     "delete_card_after_decision": False,   # true → bot.delete_message after action
     "execution_recap_in_dm": False,        # send tool result as separate DM message
+    "auto_threshold": 0.95,                # confidence ≥ X → auto-execute
+    "auto_min_repeats": 3,                 # also require this many prior same decisions
 }
 
 

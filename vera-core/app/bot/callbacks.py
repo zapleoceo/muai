@@ -37,6 +37,23 @@ async def triage_callback(callback: CallbackQuery, bot: Bot) -> None:
         await callback.answer("Битый id")
         return
 
+    # Undo path — record explicit rejection of the auto-decision and skip
+    # tool execution. Strong signal for retrieval next time.
+    if choice == "undo":
+        from app.triage.dispatcher import record_undo
+        msg = await record_undo(event_id)
+        await callback.answer("Откатила")
+        try:
+            if callback.message:
+                base = callback.message.html_text or callback.message.text or ""
+                await callback.message.edit_text(
+                    base + f"\n\n<b>✋ Откачено:</b> {_html_escape(msg)}",
+                    parse_mode="HTML", reply_markup=None,
+                )
+        except TelegramBadRequest as exc:
+            log.warning("Failed to edit card on undo: %s", exc)
+        return
+
     chosen = await record_user_decision(event_id, choice)
     if chosen is None:
         await callback.answer("Не удалось записать решение")

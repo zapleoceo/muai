@@ -54,14 +54,45 @@ def _build_keyboard(event_id: int, proposal: TriageProposal) -> InlineKeyboardMa
 from app.common.text import html_escape as _html_escape  # noqa: E402 (kept for stable import)
 
 
+def _build_auto_kb(event_id: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="✋ Откати", callback_data=f"tri:{event_id}:undo"),
+    ]])
+
+
+def _build_auto_text(event_id: int, source: str, action_label: str,
+                      tool_result_preview: str, confidence: float, ok: bool) -> str:
+    icon = "✅" if ok else "⚠️"
+    lines = [
+        f"{icon} <b>Сделала автоматом:</b> {_html_escape(action_label)}",
+        f"<i>{source} · #{event_id} · уверенность {int(confidence*100)}%</i>",
+    ]
+    if tool_result_preview:
+        lines.append(f"<code>{_html_escape(tool_result_preview[:200])}</code>")
+    return "\n".join(lines)
+
+
 async def send_card(event_id: int, source: str, category: str,
-                    proposal: TriageProposal, auto_note: str | None = None) -> int | None:
+                    proposal: TriageProposal, auto_exec: dict | None = None,
+                    auto_note: str | None = None) -> int | None:
+    """Two render modes:
+      - Manual (no auto_exec): full card with summary, reasoning, buttons.
+      - Auto (auto_exec set): one-liner + Откати-button. No noise."""
     settings = get_settings()
     bot = get_bot()
-    text = _build_text(event_id, source, category, proposal)
-    if auto_note:
-        text += "\n\n" + auto_note
-    kb = None if auto_note else _build_keyboard(event_id, proposal)
+    if auto_exec is not None:
+        text = _build_auto_text(
+            event_id, source,
+            (auto_exec.get("label") or "—"),
+            str(auto_exec.get("result_preview") or "")[:200],
+            proposal.confidence, bool(auto_exec.get("ok")),
+        )
+        kb = _build_auto_kb(event_id)
+    else:
+        text = _build_text(event_id, source, category, proposal)
+        if auto_note:
+            text += "\n\n" + auto_note
+        kb = _build_keyboard(event_id, proposal)
     try:
         msg = await bot.send_message(
             chat_id=settings.vera_group_id,

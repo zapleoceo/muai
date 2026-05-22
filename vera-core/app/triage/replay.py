@@ -51,6 +51,22 @@ async def record(event: Event, label: str, tool: str | None,
         await s.commit()
 
 
+async def reset(event: Event, reason: str = "") -> None:
+    """Drop all replay rows for this sender so confidence falls back to
+    the LLM's baseline. Called after Dima undoes an auto-execution."""
+    sender = _sender_key(event)
+    if not sender:
+        return
+    from sqlalchemy import delete
+    async with get_session() as s:
+        await s.execute(
+            delete(DecisionReplay)
+            .where(DecisionReplay.source == event.source)
+            .where(DecisionReplay.sender_key == sender)
+        )
+        await s.commit()
+
+
 async def suggest(event: Event, limit: int = 3) -> list[dict]:
     """Return prior decisions for this sender, most-frequent first."""
     sender = _sender_key(event)

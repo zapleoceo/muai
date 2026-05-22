@@ -52,8 +52,18 @@ async def _run_triage(event_id: int) -> None:
 
     if auto_action is not None:
         auto_exec = await _execute_auto(event_id, auto_action)
-        await send_card(event_id, e.source, e.category, proposal,
-                        auto_note=_format_auto_note(auto_action, auto_exec))
+        # Compact result preview for the one-liner card.
+        res = (auto_exec.get("result") or {})
+        preview = ""
+        if isinstance(res, dict):
+            preview = str(res.get("result") or res.get("error") or "")
+        else:
+            preview = str(res)
+        card_msg_id = await send_card(
+            event_id, e.source, e.category, proposal,
+            auto_exec={"label": auto_action["label"], "ok": auto_exec.get("ok"),
+                       "result_preview": preview},
+        )
     else:
         card_msg_id = await send_card(event_id, e.source, e.category, proposal)
 
@@ -83,27 +93,36 @@ async def _run_triage(event_id: int) -> None:
 
 
 async def _pick_auto_action(event: Event, proposal) -> dict | None:
-    """Return the default action iff a matching trigger says auto-execute."""
+    """Brain-driven auto-execute: no Trigger rows required.
+
+    Fires when ALL of:
+      1. The default action has a tool AND the tool is auto-safe (read-only
+         or idempotent label op — never send/post)
+      2. proposal.confidence >= preferences.auto_threshold (default 0.95)
+      3. The action is a replay of a prior decision Dima made for this
+         sender ≥ preferences.auto_min_repeats times (default 3) — so we
+         only auto-fire on patterns Dima visibly approved
+    """
     default = next((a for a in proposal.actions if a.get("default") and a.get("tool")), None)
     if default is None:
         return None
-    async with get_session() as session:
-        result = await session.execute(
-            select(Trigger).where(
-                Trigger.source == event.source,
-                Trigger.enabled == True,
-                Trigger.auto_confidence > 0,
-            )
-        )
-        triggers = result.scalars().all()
-    for t in triggers:
-        if t.account and event.account and t.account != event.account:
-            continue
-        if t.predicate and not matches(t.predicate, _event_payload(event)):
-            continue
-        if proposal.confidence >= t.auto_confidence:
-            return default
-    return None
+    from app.orchestrator.tool_router import is_auto_safe
+    if not is_auto_safe(default["tool"]):
+        return None
+    from app.bot import preferences
+    prefs = await preferences.get_all()
+    threshold = float(prefs.get("auto_threshold", 0.95))
+    min_repeats = int(prefs.get("auto_min_repeats", 3))
+    if proposal.confidence < threshold:
+        return None
+    # Replay action carries `replay: true` flag. Count is in description.
+    if not default.get("replay"):
+        return None
+    from app.triage import replay as rp
+    prior = await rp.suggest(event, limit=1)
+    if not prior or prior[0].get("count", 0) < min_repeats:
+        return None
+    return default
 
 
 def _event_payload(event: Event) -> dict:
@@ -132,6 +151,8 @@ async def _execute_auto(event_id: int, action: dict) -> dict:
 
 
 def _format_auto_note(action: dict, exec_result: dict) -> str:
+    """Legacy helper kept for backward compat; new card path uses
+    send_card(..., auto_exec={...}) instead."""
     mark = "✅" if exec_result.get("ok") else "⚠️"
     return f"{mark} <b>Auto:</b> {action['label']}"
 
@@ -189,6 +210,37 @@ def _sender_of(event: Event) -> str | None:
         if hint.get("type") == "person":
             return hint.get("identifier") or hint.get("name")
     return None
+
+
+async def record_undo(event_id: int) -> str:
+    """Undo an auto-executed decision: mark status, write strong rejection
+    episode + decrement the replay count so confidence drops below the
+    auto threshold next time. Tool-level undo is best-effort and depends
+    on the tool (some are reversible, some not — we only invalidate the
+    learning signal, leaving Dima to manually undo side-effects if any)."""
+    async with get_session() as session:
+        event = await session.get(Event, event_id)
+        if event is None:
+            return "событие не найдено"
+        sender = _sender_of(event)
+        merged = dict(event.triage_result or {})
+        merged["undone"] = True
+        event.triage_result = merged
+        event.triage_status = "undone"
+        await session.commit()
+
+    from app.graph import write as gw
+    from app.triage import replay as rp
+    summary = merged.get("summary") or (event.content_text or "")[:200]
+    gw.write_rejection(event_id, event.source, sender,
+                       f"АВТО-ДЕЙСТВИЕ ОТКАЧЕНО. {summary}")
+    # Reset replay count for this sender so we don't auto-fire again
+    # until Dima rebuilds trust manually.
+    try:
+        await rp.reset(event, reason="auto-action undone")
+    except Exception as exc:
+        log.warning("replay reset failed: %s", exc)
+    return f"замена счётчика повторов для {sender or 'отправителя'}"
 
 
 async def save_execution(event_id: int, tool: str, args: dict, result: dict) -> None:

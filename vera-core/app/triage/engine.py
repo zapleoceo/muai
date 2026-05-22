@@ -279,24 +279,31 @@ async def triage(event: Event) -> TriageProposal | None:
     except Exception as exc:
         log.debug("replay suggest failed: %s", exc)
         prior = []
+    confidence = float(data.get("confidence", 0.5) or 0.5)
     if prior:
         top = prior[0]
+        count = int(top.get("count", 1) or 1)
         replay_action = {
             "label": f"⭐ Как в прошлый раз: {top['label'][:24]}",
             "description": (
-                f"Повторить решение #{top.get('count', 1)} раз для этого "
-                f"отправителя. Последний раз: {top.get('last_used_at', '')[:10]}."
+                f"Повторено {count} раз для этого отправителя. "
+                f"Последний раз: {top.get('last_used_at', '')[:10]}."
             ),
             "default": True,
             "replay": True,
+            "replay_count": count,
         }
         if top.get("tool"):
             replay_action["tool"] = top["tool"]
             replay_action["args"] = top.get("args") or {}
-        # Demote any LLM-default; replay wins.
         for a in normalised:
             a["default"] = False
         normalised = [replay_action] + normalised
+        # Replace LLM's gut-feel confidence with one derived from the
+        # actual repeat count. 1 → 0.55, 2 → 0.75, 3 → 0.90, 5 → 0.97,
+        # ≥10 → 1.0. Asymptotically approaches 1 as user keeps doing
+        # the same thing. This is what enables auto-execution.
+        confidence = max(confidence, 1 - 0.6 / (count + 0.5))
     elif not any(a["default"] for a in normalised):
         normalised[0]["default"] = True
 
@@ -304,7 +311,7 @@ async def triage(event: Event) -> TriageProposal | None:
         urgency=str(data.get("urgency", "medium")).lower(),
         summary=str(data.get("summary", ""))[:500],
         actions=normalised,
-        confidence=float(data.get("confidence", 0.5) or 0.5),
+        confidence=round(min(confidence, 1.0), 3),
         reasoning=str(data.get("reasoning", ""))[:500],
         context_used=[str(x) for x in (data.get("context_used") or [])][:10],
     )
