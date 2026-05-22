@@ -14,6 +14,24 @@ from app.triage.pending import pop_pending
 
 _FOLLOWUP_RE = re.compile(r"Что сделать с #(\d+)")
 _INLINE_EVENT_RE = re.compile(r"^\s*#(\d+)\b")  # only when message STARTS with #N
+
+
+async def _lookup_event_by_thread(thread_id: int, chat_id: int) -> int | None:
+    """In topic mode every event lives in its own forum thread. Find the
+    most recent event whose triage_result records this thread."""
+    from sqlalchemy import desc, select
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models import Event
+    async with get_session() as s:
+        result = await s.execute(
+            select(Event).order_by(desc(Event.id)).limit(200)
+        )
+        for ev in result.scalars():
+            tr = ev.triage_result or {}
+            if (tr.get("card_thread_id") == thread_id
+                    and tr.get("card_chat_id") == chat_id):
+                return ev.id
+    return None
 _PROPOSAL_RE = re.compile(r"#proposal-(\d+)\b", re.IGNORECASE)
 _TOKEN_RE = re.compile(r"#token-([\w.-]+)\s+(\w+)\s+(.+)", re.IGNORECASE | re.DOTALL)
 
@@ -72,10 +90,21 @@ async def handle_message(message: Message, bot: Bot) -> None:
         if not from_owner:
             return
     else:
-        # In groups: only the configured one, and only when addressed.
-        if message.chat.id != settings.vera_group_id:
+        # Accept group messages from:
+        #   - the legacy vera_group_id (mention/reply rules apply)
+        #   - the new forum_chat_id when message is inside a topic (any
+        #     message in a triage topic is implicitly addressed to Vera)
+        from app.bot import preferences
+        _prefs = await preferences.get_all()
+        forum_chat = int(_prefs.get("forum_chat_id") or 0)
+        in_legacy = message.chat.id == settings.vera_group_id
+        in_forum_topic = (forum_chat and message.chat.id == forum_chat
+                          and getattr(message, "message_thread_id", None))
+        if not (in_legacy or in_forum_topic):
             return
-        if not (mentioned or replied_to_bot):
+        if in_legacy and not (mentioned or replied_to_bot):
+            return
+        if not from_owner:
             return
 
     user_id = message.from_user.id if message.from_user else None
@@ -119,8 +148,14 @@ async def handle_message(message: Message, bot: Bot) -> None:
                     return
 
             followup_event_id: int | None = None
-            # Priority 1: short-lived pending state set by "Свой ответ" click.
-            if is_dm and from_owner and user_id:
+            # Priority 0: forum-topic scope. Each event has its own topic,
+            # so message_thread_id uniquely identifies which event the
+            # reply is about. Drops the wrong-message bug entirely.
+            thread_id = getattr(message, "message_thread_id", None)
+            if thread_id and from_owner:
+                followup_event_id = await _lookup_event_by_thread(thread_id, message.chat.id)
+            # Priority 1: short-lived pending state set by "Свой ответ" click (DM only).
+            if followup_event_id is None and is_dm and from_owner and user_id:
                 pending = await pop_pending(user_id)
                 if pending is not None:
                     followup_event_id = pending

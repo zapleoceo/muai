@@ -72,14 +72,42 @@ def _build_auto_text(event_id: int, source: str, action_label: str,
     return "\n".join(lines)
 
 
+def _topic_name(source: str, summary: str, event_id: int) -> str:
+    icon = {"gmail": "📧", "telegram": "💬", "bank": "💰",
+            "instagram": "📷", "facebook": "📘"}.get(source, "📥")
+    short = (summary or "").strip().splitlines()[0] if summary else ""
+    short = short[:48]
+    base = f"{icon} {short or f'event #{event_id}'}"
+    return base[:60]
+
+
+async def _post_to_topic(bot, chat_id: int, topic_name: str,
+                         text: str, kb) -> tuple[int | None, int | None]:
+    """Create a forum topic and post inside it. Returns (msg_id, thread_id)."""
+    try:
+        topic = await bot.create_forum_topic(
+            chat_id=chat_id, name=topic_name,
+        )
+        msg = await bot.send_message(
+            chat_id=chat_id, text=text, parse_mode="HTML",
+            reply_markup=kb, message_thread_id=topic.message_thread_id,
+        )
+        return msg.message_id, topic.message_thread_id
+    except TelegramBadRequest as exc:
+        log.warning("topic post failed: %s", exc)
+        return None, None
+
+
 async def send_card(event_id: int, source: str, category: str,
                     proposal: TriageProposal, auto_exec: dict | None = None,
-                    auto_note: str | None = None) -> int | None:
-    """Two render modes:
-      - Manual (no auto_exec): full card with summary, reasoning, buttons.
-      - Auto (auto_exec set): one-liner + Откати-button. No noise."""
+                    auto_note: str | None = None) -> dict | None:
+    """Returns dict {msg_id, thread_id?, chat_id} or None on failure.
+    Two layouts (manual/auto) × two transports (DM or forum topic)."""
     settings = get_settings()
     bot = get_bot()
+    from app.bot import preferences
+    prefs = await preferences.get_all()
+
     if auto_exec is not None:
         text = _build_auto_text(
             event_id, source,
@@ -93,12 +121,24 @@ async def send_card(event_id: int, source: str, category: str,
         if auto_note:
             text += "\n\n" + auto_note
         kb = _build_keyboard(event_id, proposal)
+
+    use_topics = bool(prefs.get("use_topics"))
+    forum_chat = int(prefs.get("forum_chat_id") or 0)
+    if use_topics and forum_chat:
+        topic_name = _topic_name(source, proposal.summary, event_id)
+        msg_id, thread_id = await _post_to_topic(bot, forum_chat, topic_name, text, kb)
+        if msg_id is not None:
+            return {"msg_id": msg_id, "thread_id": thread_id,
+                    "chat_id": forum_chat}
+        # Fall through to DM if topic post failed.
+
     try:
         msg = await bot.send_message(
             chat_id=settings.vera_group_id,
             text=text, parse_mode="HTML", reply_markup=kb,
         )
-        return msg.message_id
+        return {"msg_id": msg.message_id, "thread_id": None,
+                "chat_id": settings.vera_group_id}
     except TelegramBadRequest as exc:
         log.warning("Telegram send_card failed: %s", exc)
         return None

@@ -52,20 +52,22 @@ async def _run_triage(event_id: int) -> None:
 
     if auto_action is not None:
         auto_exec = await _execute_auto(event_id, auto_action)
-        # Compact result preview for the one-liner card.
         res = (auto_exec.get("result") or {})
-        preview = ""
         if isinstance(res, dict):
             preview = str(res.get("result") or res.get("error") or "")
         else:
             preview = str(res)
-        card_msg_id = await send_card(
+        card = await send_card(
             event_id, e.source, e.category, proposal,
             auto_exec={"label": auto_action["label"], "ok": auto_exec.get("ok"),
                        "result_preview": preview},
         )
     else:
-        card_msg_id = await send_card(event_id, e.source, e.category, proposal)
+        card = await send_card(event_id, e.source, e.category, proposal)
+
+    card_msg_id = card.get("msg_id") if card else None
+    card_thread_id = card.get("thread_id") if card else None
+    card_chat_id = card.get("chat_id") if card else None
 
     async with get_session() as session:
         row = await session.get(Event, event_id)
@@ -82,6 +84,8 @@ async def _run_triage(event_id: int) -> None:
                 "reasoning": proposal.reasoning,
                 "context_used": proposal.context_used,
                 "card_message_id": card_msg_id,
+                "card_thread_id": card_thread_id,
+                "card_chat_id": card_chat_id,
             }
             if auto_exec is not None:
                 payload["executions"] = [auto_exec]

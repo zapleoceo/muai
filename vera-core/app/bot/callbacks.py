@@ -95,6 +95,14 @@ async def triage_callback(callback: CallbackQuery, bot: Bot) -> None:
 
     from app.bot import preferences
     prefs = await preferences.get_all()
+    # Close the forum topic this event lives in, if any.
+    thread_id = getattr(callback.message, "message_thread_id", None) if callback.message else None
+    chat_id = callback.message.chat.id if (callback.message and callback.message.chat) else None
+    if thread_id and chat_id and prefs.get("close_topic_on_decision"):
+        try:
+            await bot.close_forum_topic(chat_id=chat_id, message_thread_id=thread_id)
+        except TelegramBadRequest as exc:
+            log.debug("close_forum_topic failed (probably already closed): %s", exc)
     try:
         if callback.message:
             if prefs.get("delete_card_after_decision"):
@@ -103,6 +111,7 @@ async def triage_callback(callback: CallbackQuery, bot: Bot) -> None:
                     await bot.send_message(
                         chat_id=callback.message.chat.id,
                         text=suffix.strip(), parse_mode="HTML",
+                        message_thread_id=thread_id,
                     )
             else:
                 base = callback.message.html_text or callback.message.text or ""

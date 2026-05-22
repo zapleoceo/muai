@@ -11,6 +11,9 @@ _DEFAULTS: dict = {
     "execution_recap_in_dm": False,        # send tool result as separate DM message
     "auto_threshold": 0.95,                # confidence ≥ X → auto-execute
     "auto_min_repeats": 3,                 # also require this many prior same decisions
+    "use_topics": False,                   # post each event into its own forum topic
+    "forum_chat_id": 0,                    # supergroup with forums enabled (negative int)
+    "close_topic_on_decision": True,       # close forum topic once Dima decided
 }
 
 
