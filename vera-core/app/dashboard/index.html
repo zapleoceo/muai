@@ -3,920 +3,932 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Vera Dashboard</title>
+<title>Vera</title>
 <style>
-  :root{
-    --bg:#0e1014; --bg2:#161a21; --line:#222831; --fg:#e6edf3;
-    --mute:#7d8590; --acc:#7ee787; --warn:#f0883e; --err:#f85149;
-    --ok:#3fb950; --info:#58a6ff;
+  :root {
+    --bg:#0d0e10; --panel:#16181c; --line:#22262d; --fg:#e6edf3;
+    --mute:#8b949e; --dim:#5b6470;
+    --ok:#3fb950; --warn:#d29922; --err:#f85149; --info:#58a6ff;
+    --r:6px;
   }
-  *{box-sizing:border-box}
-  html,body{margin:0;background:var(--bg);color:var(--fg);font:14px/1.5 -apple-system,BlinkMacSystemFont,"Segoe UI",Inter,sans-serif}
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--bg);color:var(--fg);
+    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;
+    -webkit-font-smoothing:antialiased}
   a{color:var(--info);text-decoration:none}
   a:hover{text-decoration:underline}
-  header{
-    display:flex;align-items:center;justify-content:space-between;
-    padding:14px 24px;border-bottom:1px solid var(--line);background:var(--bg2);
-    position:sticky;top:0;z-index:10;
-  }
-  header h1{font-size:16px;margin:0;font-weight:600;letter-spacing:.5px}
-  header .sub{color:var(--mute);font-size:12px;margin-left:12px}
-  header nav{display:flex;gap:4px}
-  header nav button{
-    background:none;border:1px solid transparent;color:var(--mute);
-    padding:6px 12px;border-radius:6px;cursor:pointer;font:inherit;
-  }
-  header nav button.active{color:var(--fg);border-color:var(--line);background:var(--bg)}
-  header nav button:hover{color:var(--fg)}
-  main{padding:24px;max-width:1400px;margin:0 auto}
-  .grid{display:grid;gap:16px}
-  .cards{grid-template-columns:repeat(auto-fit,minmax(180px,1fr));margin-bottom:24px}
-  .card{
-    background:var(--bg2);border:1px solid var(--line);border-radius:8px;padding:16px;
-  }
-  .card .label{color:var(--mute);font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px}
-  .card .value{font-size:24px;font-weight:600}
-  .card .value.muted{color:var(--mute);font-size:14px}
-  section{display:none}
-  section.active{display:block}
+  button,input,select,textarea{font:inherit;color:inherit}
+  button{cursor:pointer}
+
+  /* layout */
+  .shell{display:grid;grid-template-columns:220px 1fr;min-height:100vh}
+  .sidebar{background:var(--panel);border-right:1px solid var(--line);
+    display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
+  .sidebar .brand{padding:18px 20px;border-bottom:1px solid var(--line);
+    font-weight:600;letter-spacing:.5px;display:flex;align-items:center;justify-content:space-between}
+  .sidebar .brand .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);
+    display:inline-block;margin-right:8px;vertical-align:middle}
+  .sidebar nav{flex:1;padding:8px;overflow:auto}
+  .sidebar nav button{display:flex;width:100%;align-items:center;gap:10px;
+    background:none;border:none;color:var(--mute);padding:9px 12px;
+    border-radius:var(--r);text-align:left;margin-bottom:2px;font-size:13px}
+  .sidebar nav button:hover{color:var(--fg);background:var(--bg)}
+  .sidebar nav button.active{color:var(--fg);background:var(--bg)}
+  .sidebar nav button .icon{width:16px;text-align:center;opacity:.7}
+  .sidebar .foot{border-top:1px solid var(--line);padding:12px 20px;
+    color:var(--dim);font-size:11px;display:flex;justify-content:space-between}
+  .topbar{display:none}
+  main{padding:24px 32px;overflow-x:auto;min-width:0}
+  main h2{font-size:18px;font-weight:600;margin-bottom:4px}
+  main .lead{color:var(--mute);font-size:13px;margin-bottom:20px}
+  .page-head{display:flex;justify-content:space-between;align-items:flex-start;
+    margin-bottom:20px;flex-wrap:wrap;gap:12px}
+  .page-head .ctrl{display:flex;gap:8px;align-items:center}
+
+  /* atoms */
+  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px;margin-bottom:12px}
+  .card.compact{padding:12px}
+  .card.tight{padding:10px 14px}
+  .card-title{font-weight:600;font-size:13px;margin-bottom:8px;display:flex;
+    justify-content:space-between;align-items:center;gap:8px}
+  .card-sub{color:var(--mute);font-size:12px;margin-bottom:10px}
+  .grid{display:grid;gap:12px}
+  .grid.cols-auto{grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
+  .grid.cols-2{grid-template-columns:repeat(2,1fr)}
+  .grid.cols-3{grid-template-columns:repeat(3,1fr)}
+  .stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px}
+  .stat .k{color:var(--mute);font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+  .stat .v{font-size:22px;font-weight:600;font-variant-numeric:tabular-nums}
+  .stat .v.dim{color:var(--mute);font-size:14px;font-weight:400}
+  .stat .delta{color:var(--mute);font-size:11px;margin-top:2px}
+
+  .btn{background:transparent;border:1px solid var(--line);color:var(--fg);
+    padding:6px 12px;border-radius:var(--r);transition:.1s background}
+  .btn:hover{background:var(--bg)}
+  .btn.primary{background:var(--info);border-color:var(--info);color:#fff}
+  .btn.primary:hover{filter:brightness(1.1)}
+  .btn.danger{color:var(--err);border-color:var(--line)}
+  .btn.danger:hover{background:var(--bg);border-color:var(--err)}
+  .btn.sm{padding:4px 8px;font-size:12px}
+  .btn[disabled]{opacity:.4;cursor:not-allowed}
+
+  .pill{display:inline-flex;align-items:center;padding:1px 8px;border-radius:10px;
+    font-size:11px;border:1px solid var(--line);color:var(--mute);white-space:nowrap}
+  .pill.ok{color:var(--ok);border-color:rgba(63,185,80,.35)}
+  .pill.warn{color:var(--warn);border-color:rgba(210,153,34,.35)}
+  .pill.err{color:var(--err);border-color:rgba(248,81,73,.35)}
+  .pill.info{color:var(--info);border-color:rgba(88,166,255,.35)}
+
+  .input{background:var(--bg);border:1px solid var(--line);color:var(--fg);
+    padding:8px 10px;border-radius:var(--r);width:100%}
+  .input:focus{outline:none;border-color:var(--info)}
+  .ta{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;min-height:200px;resize:vertical}
+
   table{width:100%;border-collapse:collapse;font-size:13px}
-  th,td{text-align:left;padding:10px 12px;border-bottom:1px solid var(--line);vertical-align:top}
-  th{color:var(--mute);font-weight:500;text-transform:uppercase;font-size:11px;letter-spacing:.5px}
-  tr:hover td{background:var(--bg2)}
-  .pill{display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;border:1px solid var(--line)}
-  .pill.ok{color:var(--ok);border-color:var(--ok)}
-  .pill.warn{color:var(--warn);border-color:var(--warn)}
-  .pill.err{color:var(--err);border-color:var(--err)}
-  .pill.mute{color:var(--mute)}
-  pre{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--mute);margin:0;white-space:pre-wrap;word-break:break-word;max-height:200px;overflow:auto}
-  .actions{display:flex;gap:8px;align-items:center}
-  .btn{background:none;border:1px solid var(--line);color:var(--fg);padding:6px 12px;border-radius:6px;cursor:pointer;font:inherit}
-  .btn:hover{background:var(--bg2)}
-  .empty{text-align:center;color:var(--mute);padding:60px 20px}
-  .bar{height:4px;background:var(--line);border-radius:2px;overflow:hidden;margin-top:6px}
-  .bar > div{height:100%;background:var(--acc);transition:width .3s}
-  .bar > div.warn{background:var(--warn)}
-  .bar > div.err{background:var(--err)}
-  .toolchip{display:inline-block;padding:2px 8px;margin:2px 4px 2px 0;border-radius:4px;background:var(--bg);border:1px solid var(--line);font:11px ui-monospace,monospace;color:var(--info)}
-  .login{max-width:420px;margin:80px auto;text-align:center;padding:40px;background:var(--bg2);border:1px solid var(--line);border-radius:8px}
-  .login h2{margin:0 0 8px}
-  .login p{color:var(--mute);margin:0 0 20px}
-  .login input{width:100%;padding:10px 12px;background:var(--bg);border:1px solid var(--line);color:var(--fg);border-radius:6px;font:inherit;margin-bottom:12px}
-  .login button{width:100%;padding:10px;background:var(--info);border:none;color:#fff;border-radius:6px;cursor:pointer;font:inherit;font-weight:600}
-  .toast{position:fixed;bottom:20px;right:20px;background:var(--bg2);border:1px solid var(--line);padding:10px 16px;border-radius:6px;color:var(--mute);font-size:12px}
+  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
+  th{color:var(--mute);font-weight:500;text-transform:uppercase;font-size:10.5px;letter-spacing:.5px}
+  tr:hover td{background:var(--bg)}
+  td.right,th.right{text-align:right}
+  td.mono{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--mute)}
+  td.actions{white-space:nowrap}
+  .table-wrap{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:var(--r)}
+
+  pre{font:12px ui-monospace,Menlo,monospace;white-space:pre-wrap;word-break:break-word;
+    color:var(--mute);max-height:220px;overflow:auto;background:var(--bg);padding:8px;border-radius:4px}
+  code{font:12px ui-monospace,Menlo,monospace;color:var(--info);background:var(--bg);padding:1px 5px;border-radius:3px}
+
+  .empty{text-align:center;color:var(--mute);padding:48px 20px;font-size:13px}
+  .spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--line);
+    border-top-color:var(--info);border-radius:50%;animation:s .8s linear infinite}
+  @keyframes s{to{transform:rotate(360deg)}}
+
+  /* modal */
+  .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100;
+    display:flex;align-items:center;justify-content:center;padding:20px}
+  .modal{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+    width:min(720px,100%);max-height:90vh;display:flex;flex-direction:column}
+  .modal-head{padding:14px 18px;border-bottom:1px solid var(--line);
+    display:flex;justify-content:space-between;align-items:center}
+  .modal-head h3{font-size:15px;font-weight:600}
+  .modal-body{padding:18px;overflow:auto;flex:1}
+  .modal-foot{padding:12px 18px;border-top:1px solid var(--line);
+    display:flex;gap:8px;justify-content:flex-end}
+
+  /* toast */
+  .toasts{position:fixed;bottom:16px;right:16px;z-index:200;display:flex;flex-direction:column;gap:6px}
+  .toast{background:var(--panel);border:1px solid var(--line);padding:10px 14px;
+    border-radius:var(--r);font-size:12px;color:var(--fg);max-width:360px;
+    animation:slide .2s ease-out}
+  .toast.ok{border-left:3px solid var(--ok)}
+  .toast.err{border-left:3px solid var(--err)}
+  @keyframes slide{from{transform:translateX(20px);opacity:0}to{transform:none;opacity:1}}
+
+  /* login */
+  .login-wrap{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
+  .login{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
+    padding:36px 32px;width:min(380px,100%);text-align:center}
+  .login h1{font-size:18px;margin-bottom:8px}
+  .login p{color:var(--mute);font-size:13px;margin-bottom:20px}
+
+  /* responsive */
+  @media (max-width:880px){
+    .shell{grid-template-columns:1fr}
+    .sidebar{position:fixed;left:-260px;width:240px;transition:left .2s;z-index:50;box-shadow:2px 0 8px rgba(0,0,0,.4)}
+    .sidebar.open{left:0}
+    .topbar{display:flex;align-items:center;justify-content:space-between;
+      padding:12px 16px;border-bottom:1px solid var(--line);background:var(--panel);
+      position:sticky;top:0;z-index:40}
+    .topbar .burger{background:none;border:none;color:var(--fg);font-size:18px;padding:4px 8px}
+    .topbar .ttl{font-weight:600;font-size:14px}
+    main{padding:16px}
+    .grid.cols-2,.grid.cols-3{grid-template-columns:1fr}
+    .scrim{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:45;display:none}
+    .scrim.show{display:block}
+  }
 </style>
 </head>
 <body>
-<div id="app"></div>
+<div id="root"></div>
+<div id="toasts" class="toasts"></div>
 
 <script>
-const $ = (sel, root=document) => root.querySelector(sel);
-const el = (tag, attrs={}, ...children) => {
+"use strict";
+
+/* ============================================================
+   1. UTIL
+   ============================================================ */
+const $  = (s, r=document) => r.querySelector(s);
+const el = (tag, attrs={}, ...kids) => {
   const n = document.createElement(tag);
-  Object.entries(attrs).forEach(([k,v]) => {
-    if (k === 'class') n.className = v;
-    else if (k === 'html') n.innerHTML = v;
-    else if (k.startsWith('on')) n.addEventListener(k.slice(2), v);
+  for (const [k, v] of Object.entries(attrs || {})) {
+    if (v == null || v === false) continue;
+    if (k === 'class')      n.className = v;
+    else if (k === 'text')  n.textContent = v;
+    else if (k.startsWith('on')) n.addEventListener(k.slice(2).toLowerCase(), v);
     else n.setAttribute(k, v);
-  });
-  children.flat().forEach(c => n.append(c?.nodeType ? c : document.createTextNode(c ?? '')));
+  }
+  for (const c of kids.flat()) {
+    if (c == null || c === false) continue;
+    n.append(c instanceof Node ? c : document.createTextNode(String(c)));
+  }
   return n;
 };
-
 const fmt = {
   num: n => n == null ? '—' : Number(n).toLocaleString('ru-RU'),
-  ms:  n => n == null ? '—' : n < 1000 ? `${n}ms` : `${(n/1000).toFixed(1)}s`,
-  pct: (a,b) => b ? `${Math.round(a*100/b)}%` : '0%',
-  usd: n => n == null ? '—' : '$' + Number(n).toFixed(n < 0.01 ? 6 : 4),
-  toks: n => {
-    if (n == null) return '—';
-    if (n >= 1e6) return (n/1e6).toFixed(1) + 'M';
-    if (n >= 1e3) return (n/1e3).toFixed(1) + 'k';
-    return String(n);
-  },
-  date: s => {
+  dt: s => {
     if (!s) return '—';
-    const d = new Date(s);
+    const d = new Date(s); if (isNaN(d)) return s;
     const ms = Date.now() - d.getTime();
-    if (ms < 60000) return 'только что';
-    if (ms < 3600000) return `${Math.round(ms/60000)} мин назад`;
-    if (ms < 86400000) return `${Math.round(ms/3600000)} ч назад`;
-    return d.toLocaleDateString('ru-RU') + ' ' + d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
+    if (ms < 60_000) return 'только что';
+    if (ms < 3_600_000) return Math.round(ms/60_000) + 'м';
+    if (ms < 86_400_000) return Math.round(ms/3_600_000) + 'ч';
+    return d.toLocaleDateString('ru-RU') + ' ' +
+           d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
   },
+  trunc: (s, n=80) => !s ? '' : (s.length <= n ? s : s.slice(0, n) + '…'),
 };
 
-let state = { tab: 'stats', stats: null, tasks: [], tokens: [], agents: [], balances: {}, events: [], gmail: [], mcp: [], csrf: null, pollHandle: null, modalOpen: false };
+/* ============================================================
+   2. STATE + API
+   ============================================================ */
+const state = {
+  page: localStorage.getItem('vera.page') || 'stats',
+  csrf: null,
+  loggedIn: null,            // null=unknown, true/false
+  modalOpen: false,
+  navOpen: false,
+  cache: {},                 // per-page data cache
+  pollHandle: null,
+};
 
-async function api(path, opts) {
-  opts = opts || {};
-  const init = { credentials: 'include', headers: opts.headers || {} };
+async function rawFetch(path, opts={}) {
+  const init = { credentials:'include', headers:{} };
   const method = (opts.method || 'GET').toUpperCase();
   init.method = method;
-  if (method !== 'GET' && method !== 'HEAD') {
-    if (state.csrf) init.headers['X-CSRF'] = state.csrf;
-    if (opts.body) init.body = opts.body;
-    if (opts.body && !init.headers['Content-Type'] && typeof opts.body === 'string') {
-      init.headers['Content-Type'] = 'application/json';
-    }
+  if (opts.body != null) {
+    init.body = typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body);
+    init.headers['Content-Type'] = 'application/json';
   }
-  const r = await fetch(path, init);
-  if (r.status === 401) {
-    if (state.pollHandle) { clearInterval(state.pollHandle); state.pollHandle = null; }
-    renderLogin();
-    return null;
-  }
-  if (r.status === 403) {
+  if (method !== 'GET' && method !== 'HEAD' && state.csrf) init.headers['X-CSRF'] = state.csrf;
+  return fetch(path, init);
+}
+
+async function api(path, opts={}) {
+  const r = await rawFetch(path, opts);
+  if (r.status === 401) { onUnauthorized(); return null; }
+  if (r.status === 403) {                       // stale csrf — refresh + retry
     state.csrf = null;
     await fetchCsrf();
-    throw new Error('CSRF rejected — refreshed token, retry');
+    const r2 = await rawFetch(path, opts);
+    if (!r2.ok) throw new Error(r2.status + ' ' + path);
+    if (r2.status === 204) return null;
+    const ct = r2.headers.get('content-type') || '';
+    return ct.includes('json') ? r2.json() : r2.text();
   }
-  if (!r.ok) throw new Error(`${r.status} ${path}`);
+  if (!r.ok) throw new Error(r.status + ' ' + path);
   if (r.status === 204) return null;
   const ct = r.headers.get('content-type') || '';
-  return ct.includes('application/json') ? r.json() : r.text();
+  return ct.includes('json') ? r.json() : r.text();
 }
 
 async function fetchCsrf() {
   try {
-    const r = await fetch('/api/csrf', { credentials: 'include' });
+    const r = await fetch('/api/csrf', {credentials:'include'});
     if (r.ok) { const j = await r.json(); state.csrf = j.csrf; }
-  } catch (e) { /* offline */ }
+  } catch {}
 }
 
-async function refresh() {
-  if (state.modalOpen) return;  // don't trample open editors
-  const ok = await api('/api/whoami');
-  if (!ok) return;  // api() handles 401 → renderLogin + polling clear
-  if (!state.csrf) await fetchCsrf();
-  const [stats, tokens, agents, balances, events, gmail, mcp, sources, selfExtend] = await Promise.all([
-    api('/api/stats'),
-    api('/api/tokens'),
-    api('/api/agents'),
-    api('/api/balances'),
-    api('/api/events?limit=50'),
-    api('/api/gmail/accounts'),
-    api('/api/mcp/servers'),
-    api('/api/sources'),
-    api('/api/self_extend/status'),
-  ]);
-  state.stats = stats;
-  state.tokens = tokens || [];
-  state.agents = agents || [];
-  state.balances = balances || {};
-  state.events = events || [];
-  state.mcp = mcp || [];
-  state.gmail = gmail || [];
-  state.sources = sources || [];
-  state.self_extend = selfExtend || {};
-  render();
+function onUnauthorized() {
+  if (state.pollHandle) { clearInterval(state.pollHandle); state.pollHandle = null; }
+  state.loggedIn = false;
+  state.csrf = null;
+  renderApp();
 }
 
-function renderResearch() {
-  const fileInput = el('input', {type:'file', multiple:true, accept:'.md,.txt,.json',
-    style:'display:block;margin:8px 0'});
-  const sourceInput = el('select', {style:'background:#0a0a0a;color:#eee;border:1px solid #333;padding:6px;margin-right:8px'},
-    el('option',{value:'perplexity'},'perplexity'),
-    el('option',{value:'chatgpt'},'chatgpt'),
-    el('option',{value:'notes'},'заметки'),
-  );
-  const status = el('div',{style:'color:var(--mute);font-size:12px;margin-top:8px'},'Выбери .md/.txt файлы из экспорта Perplexity (Chrome ext «Perplexity to Notion — Batch Export» делает дамп Spaces/Threads в Markdown).');
-  const uploadBtn = el('button',{class:'btn',
-    style:'background:var(--info);color:#fff;border:none',
-    onclick: async () => {
+/* ============================================================
+   3. COMPONENTS
+   ============================================================ */
+const C = {
+  pill: (text, kind='') => el('span', {class:'pill ' + kind, text}),
+  spinner: () => el('span', {class:'spinner'}),
+  empty: msg => el('div', {class:'empty', text: msg || 'Пусто'}),
+  card: (title, ...body) => el('div', {class:'card'},
+    title ? el('div', {class:'card-title'}, title) : null, ...body),
+  stat: (k, v, dim=false, sub=null) => el('div', {class:'stat'},
+    el('div', {class:'k', text:k}),
+    el('div', {class:'v' + (dim ? ' dim' : ''), text:String(v ?? '—')}),
+    sub ? el('div', {class:'delta', text:sub}) : null,
+  ),
+  row: (...kids) => el('div', {class:'row'}, ...kids),
+  btn: (text, opts={}) => el('button', {
+    class:'btn ' + (opts.kind || '') + (opts.sm ? ' sm' : ''),
+    onclick: opts.onClick, disabled: opts.disabled,
+  }, text),
+
+  toast(msg, kind='ok', ttl=3500) {
+    const n = el('div', {class:'toast ' + kind, text: msg});
+    $('#toasts').append(n);
+    setTimeout(() => n.remove(), ttl);
+  },
+
+  modal({title, body, foot, onClose}) {
+    state.modalOpen = true;
+    const close = () => {
+      state.modalOpen = false;
+      try { bg.remove(); } catch {}
+      onClose && onClose();
+    };
+    const bg = el('div', {class:'modal-bg',
+      onclick: e => { if (e.target === bg) close(); }},
+      el('div', {class:'modal'},
+        el('div', {class:'modal-head'},
+          el('h3', {text:title || ''}),
+          el('button', {class:'btn sm', onclick: close}, '×'),
+        ),
+        el('div', {class:'modal-body'}, body),
+        foot ? el('div', {class:'modal-foot'}, foot) : null,
+      ),
+    );
+    document.body.append(bg);
+    return { close };
+  },
+
+  /** Prompt(label) → Promise<string|null>. Custom modal, not browser prompt. */
+  ask(label, {placeholder='', defaultValue='', multiline=false}={}) {
+    return new Promise(res => {
+      const input = multiline
+        ? el('textarea', {class:'input ta', placeholder, rows:'4'}, defaultValue)
+        : el('input', {class:'input', placeholder, value:defaultValue});
+      setTimeout(() => input.focus(), 50);
+      const submit = () => { mod.close(); res(input.value.trim() || null); };
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter' && !multiline) submit();
+        if (e.key === 'Escape') { mod.close(); res(null); }
+      });
+      const mod = C.modal({
+        title: label,
+        body: input,
+        foot: [
+          C.btn('Отмена', { onClick: () => { mod.close(); res(null); }}),
+          C.btn('OK', { kind:'primary', onClick: submit }),
+        ],
+        onClose: () => res(null),
+      });
+    });
+  },
+
+  confirm(label) {
+    return new Promise(res => {
+      const m = C.modal({
+        title: label,
+        body: el('div', {class:'card-sub', text:'Подтверди действие.'}),
+        foot: [
+          C.btn('Отмена', { onClick: () => { m.close(); res(false); }}),
+          C.btn('Подтвердить', { kind:'danger', onClick: () => { m.close(); res(true); }}),
+        ],
+        onClose: () => res(false),
+      });
+    });
+  },
+};
+
+/* ============================================================
+   4. PAGE REGISTRY
+   Each page: { title, lead?, icon, fetch(): data,
+                render(data, helpers): node, refreshSec? }
+   ============================================================ */
+const PAGES = {};
+
+PAGES.stats = {
+  title: 'Статистика', icon: '📊', refreshSec: 10,
+  fetch: () => Promise.all([api('/api/stats'), api('/api/balances')])
+                     .then(([s, b]) => ({stats:s, balances:b})),
+  render: ({stats, balances}) => {
+    const s = stats || {};
+    const grid = el('div', {class:'grid cols-auto'},
+      C.stat('Запросов всего', fmt.num(s.tasks_total)),
+      C.stat('За 24 часа', fmt.num(s.tasks_24h)),
+      C.stat('Источники активны', fmt.num(s.sources_active ?? '—'), true),
+      C.stat('Cost (USD, сегодня)', (s.cost_today ?? 0).toFixed(4), true),
+    );
+    const bal = balances || {};
+    const balCard = C.card('Балансы провайдеров',
+      Object.keys(bal).length === 0
+        ? C.empty('Нет балансовых данных')
+        : el('div', {class:'grid cols-2'},
+            ...Object.entries(bal).map(([prov, info]) =>
+              el('div', {class:'card tight'},
+                el('div', {class:'card-title'}, prov,
+                  C.pill(info.ok ? 'ok' : 'err', info.ok ? 'ok' : 'err')),
+                el('pre', {text: JSON.stringify(info, null, 2)}),
+              ),
+            ),
+          ),
+    );
+    return el('div', {}, grid, balCard);
+  },
+};
+
+PAGES.events = {
+  title: 'События', icon: '📥', refreshSec: 8,
+  fetch: () => api('/api/events?limit=50'),
+  render: events => {
+    if (!events || !events.length) return C.empty('Ещё нет событий');
+    const rows = events.map(e => el('tr', {},
+      el('td', {class:'mono', text:'#'+e.id}),
+      el('td', {}, C.pill(e.source, 'info')),
+      el('td', {text: e.account || '—'}),
+      el('td', {text: fmt.trunc(e.content_text, 100)}),
+      el('td', {}, statusPill(e.triage_status)),
+      el('td', {class:'mono', text: fmt.dt(e.occurred_at)}),
+    ));
+    return el('div', {class:'table-wrap'},
+      el('table', {},
+        el('thead', {}, el('tr', {},
+          el('th', {text:'#'}), el('th', {text:'Source'}), el('th', {text:'Acct'}),
+          el('th', {text:'Preview'}), el('th', {text:'Status'}), el('th', {text:'When'}))),
+        el('tbody', {}, rows),
+      ),
+    );
+  },
+};
+function statusPill(s) {
+  if (!s) return C.pill('—', 'mute');
+  if (['decided','executed','auto_executed'].includes(s)) return C.pill(s, 'ok');
+  if (['failed','execute_failed','auto_failed'].includes(s)) return C.pill(s, 'err');
+  if (['awaiting_user','proposal_only'].includes(s)) return C.pill(s, 'warn');
+  return C.pill(s, '');
+}
+
+PAGES.sources = {
+  title: 'Источники', icon: '🔌', refreshSec: 15,
+  fetch: () => Promise.all([api('/api/sources'), api('/api/gmail/accounts')])
+                     .then(([s, g]) => ({sources:s, gmail:g})),
+  render: ({sources, gmail}, helpers) => {
+    const gmailCard = C.card(
+      el('div', {class:'row'},
+        el('span', {text:'Gmail аккаунты'}),
+        C.pill((gmail||[]).length + ' подключено', 'info'),
+      ),
+      (gmail || []).length === 0
+        ? C.empty('Нет подключённых ящиков')
+        : el('div', {class:'table-wrap'},
+            el('table', {},
+              el('thead', {}, el('tr', {},
+                el('th', {text:'Email'}), el('th', {text:'Active'}),
+                el('th', {text:'Auto-noise'}), el('th', {text:'Last poll'}))),
+              el('tbody', {}, (gmail||[]).map(g => {
+                const tog = el('input', {type:'checkbox', style:'cursor:pointer'});
+                tog.checked = !!g.include_automated;
+                tog.onchange = async () => {
+                  try {
+                    await api('/api/gmail/include_automated?email=' +
+                      encodeURIComponent(g.email) + '&value=' + tog.checked, {method:'POST'});
+                    C.toast('Настройка сохранена');
+                  } catch (e) { tog.checked = !tog.checked; C.toast(e.message, 'err'); }
+                };
+                return el('tr', {},
+                  el('td', {text:g.email}),
+                  el('td', {}, C.pill(g.is_active ? 'active' : 'off', g.is_active ? 'ok' : 'mute')),
+                  el('td', {}, tog),
+                  el('td', {class:'mono', text: fmt.dt(g.last_polled_at)}),
+                );
+              })),
+            ),
+          ),
+      el('div', {class:'row', style:'margin-top:10px'},
+        el('a', {href:'/api/gmail/oauth/start', class:'btn primary'}, '+ Подключить Gmail'),
+      ),
+    );
+
+    const list = sources || [];
+    const sourcesCard = C.card(
+      el('div', {class:'row'},
+        el('span', {text:'Кастомные источники (с фильтрами)'}),
+        C.btn('+ Новый', { kind:'primary', sm:true,
+          onClick: () => helpers.action('newSource') }),
+      ),
+      el('div', {class:'card-sub'},
+        'Filter rules: last-matching wins. Predicates: chat_type, chat_id, '+
+        'from_user_id, from_username, mention_me, reply_to_me, folder, '+
+        'mutual_chat_contains, text_contains, has_attachment.'),
+      list.length === 0
+        ? C.empty('Пока нет — добавь Telegram source через кнопку +')
+        : el('div', {class:'table-wrap'},
+            el('table', {},
+              el('thead', {}, el('tr', {},
+                el('th', {text:'Name'}), el('th', {text:'Type'}),
+                el('th', {text:'Status'}), el('th', {text:'Rules'}),
+                el('th', {text:'Thresh'}), el('th', {text:'In/Out'}),
+                el('th', {text:'Last poll'}), el('th', {text:''}))),
+              el('tbody', {}, list.map(s => el('tr', {},
+                el('td', {text:s.name}),
+                el('td', {}, C.pill(s.type, 'info')),
+                el('td', {}, C.pill(s.enabled ? 'on' : 'off', s.enabled ? 'ok' : 'mute')),
+                el('td', {text:String((s.filters||[]).length)}),
+                el('td', {text:(s.base_threshold ?? 0.95).toFixed(2)}),
+                el('td', {class:'mono', text: String(s.intake_count || 0)}),
+                el('td', {class:'mono', text: fmt.dt(s.last_polled_at)}),
+                el('td', {class:'actions'},
+                  C.btn('✎', { sm:true, onClick: () => helpers.action('editFilters', s) }),
+                  C.btn(s.enabled ? '⏸' : '▶', { sm:true,
+                    onClick: () => helpers.action('toggle', s) }),
+                  C.btn('×', { sm:true, kind:'danger',
+                    onClick: () => helpers.action('delete', s) }),
+                ),
+              ))),
+            ),
+          ),
+    );
+    return el('div', {}, gmailCard, sourcesCard);
+  },
+  actions: {
+    async newSource() {
+      const type = await C.ask('Тип (telegram | gmail | bank | instagram | generic)', {defaultValue:'telegram'});
+      if (!type) return;
+      const name = await C.ask('Имя источника (уникальное, без пробелов)');
+      if (!name) return;
+      const acc = await C.ask('Account (опц.)', {defaultValue:''});
+      try {
+        await api('/api/sources', {method:'POST',
+          body:{type:type.trim(), name:name.trim(), account:acc || null,
+                filters:[{match:{chat_type:'private'}, action:'include'}]}});
+        C.toast('Создан источник ' + name);
+        refreshActivePage();
+      } catch (e) { C.toast(e.message, 'err'); }
+    },
+    async toggle(s) {
+      try { await api('/api/sources/' + s.id, {method:'PUT', body:{enabled: !s.enabled}});
+            refreshActivePage(); } catch (e) { C.toast(e.message, 'err'); }
+    },
+    async delete(s) {
+      if (!await C.confirm('Удалить источник «' + s.name + '»?')) return;
+      try { await api('/api/sources/' + s.id, {method:'DELETE'});
+            C.toast('Удалён', 'ok'); refreshActivePage(); } catch (e) { C.toast(e.message, 'err'); }
+    },
+    async editFilters(s) {
+      const ta = el('textarea', {class:'input ta', rows:'18'},
+        JSON.stringify(s.filters || [], null, 2));
+      const thr = el('input', {class:'input', type:'number', step:'0.01',
+        min:'0', max:'1', value:String(s.base_threshold ?? 0.95),
+        style:'width:120px'});
+      const m = C.modal({
+        title: 'Фильтры — ' + s.name,
+        body: el('div', {},
+          el('div', {class:'card-sub'}, 'Массив правил {match, action}. '+
+            'Действия: include | exclude | priority. Последнее совпавшее побеждает.'),
+          ta,
+          el('div', {class:'row', style:'margin-top:10px'},
+            el('label', {class:'card-sub', text:'Threshold:'}),
+            thr,
+          ),
+        ),
+        foot: [
+          C.btn('Отмена', {onClick: () => m.close()}),
+          C.btn('Сохранить', {kind:'primary', onClick: async () => {
+            let parsed;
+            try { parsed = JSON.parse(ta.value); }
+            catch (e) { return C.toast('JSON: ' + e.message, 'err'); }
+            try {
+              await api('/api/sources/' + s.id, {method:'PUT',
+                body:{filters: parsed, base_threshold: parseFloat(thr.value) || 0.95}});
+              m.close(); C.toast('Сохранено'); refreshActivePage();
+            } catch (e) { C.toast(e.message, 'err'); }
+          }}),
+        ],
+      });
+    },
+  },
+};
+
+PAGES.mcp = {
+  title: 'MCP', icon: '🧩', refreshSec: 15,
+  fetch: () => Promise.all([api('/api/mcp/servers'), api('/api/mcp/presets')])
+                     .then(([s, p]) => ({servers:s, presets:p})),
+  render: ({servers, presets}, helpers) => {
+    const installed = new Set((servers || []).map(s => s.name));
+    const presetsCard = C.card('📦 Пресеты',
+      el('div', {class:'card-sub'}, 'Готовые MCP-сервера. Если есть env_required — спросит при установке.'),
+      el('div', {class:'grid cols-auto'},
+        ...(presets || []).map(p => el('div', {class:'card compact'},
+          el('div', {class:'row', style:'justify-content:space-between'},
+            el('strong', {text:p.label}),
+            installed.has(p.id)
+              ? C.pill('установлен', 'ok')
+              : C.btn('+ Поставить', {kind:'primary', sm:true,
+                  onClick: () => helpers.action('installPreset', p)}),
+          ),
+          el('div', {class:'card-sub', text: p.description}),
+          (p.env_required && p.env_required.length)
+            ? el('div', {class:'card-sub', text:'env: ' + p.env_required.join(', ')})
+            : null,
+        )),
+      ),
+    );
+
+    const tbl = (servers || []).length === 0
+      ? C.empty('Нет MCP-серверов')
+      : el('div', {class:'table-wrap'}, el('table', {},
+          el('thead', {}, el('tr', {},
+            el('th', {text:'Name'}), el('th', {text:'Status'}),
+            el('th', {text:'Tools'}), el('th', {text:'Calls'}),
+            el('th', {text:'Last call'}), el('th', {text:'Source'}),
+            el('th', {text:''}))),
+          el('tbody', {}, servers.map(m => el('tr', {},
+            el('td', {text:m.name}),
+            el('td', {}, statusPill(m.status)),
+            el('td', {text: String(m.tools_count || 0)}),
+            el('td', {class:'mono', text: String(m.tool_calls_count || 0)}),
+            el('td', {class:'mono', text: fmt.dt(m.last_tool_call_at)}),
+            el('td', {}, C.pill(m.installed_by || 'manual', 'mute')),
+            el('td', {class:'actions'},
+              C.btn('⟳', {sm:true, onClick: () => helpers.action('restart', m)}),
+              C.btn('×', {sm:true, kind:'danger', onClick: () => helpers.action('remove', m)}),
+            ),
+          ))),
+        ));
+
+    return el('div', {}, presetsCard,
+      C.card('Установленные', tbl),
+    );
+  },
+  actions: {
+    async installPreset(p) {
+      const env = {};
+      for (const k of (p.env_required || [])) {
+        const v = await C.ask(`${p.label} → ${k}`);
+        if (!v) return;
+        env[k] = v;
+      }
+      const name = await C.ask('Имя сервера', {defaultValue: p.id});
+      if (!name) return;
+      try {
+        await api('/api/mcp/presets/' + encodeURIComponent(p.id),
+          {method:'POST', body:{name: name.trim(), env}});
+        C.toast('Установлено, проверь статус через ~10с');
+        setTimeout(refreshActivePage, 10_000);
+      } catch (e) { C.toast(e.message, 'err'); }
+    },
+    async restart(m) {
+      try { await api('/api/mcp/servers/' + encodeURIComponent(m.name) + '/restart', {method:'POST'});
+            C.toast('⟳ ' + m.name); refreshActivePage(); } catch (e) { C.toast(e.message, 'err'); }
+    },
+    async remove(m) {
+      if (!await C.confirm('Удалить MCP «' + m.name + '»?')) return;
+      try { await api('/api/mcp/servers/' + encodeURIComponent(m.name), {method:'DELETE'});
+            refreshActivePage(); } catch (e) { C.toast(e.message, 'err'); }
+    },
+  },
+};
+
+PAGES.self_extend = {
+  title: 'Self-extend', icon: '✨', refreshSec: 20,
+  fetch: () => api('/api/self_extend/status'),
+  render: (st, helpers) => {
+    const rate = (st && st.rate) || {};
+    const props = (st && st.proposals) || [];
+    const idle = (st && st.idle_30d) || [];
+    const expired = (st && st.expired_auth) || [];
+
+    const discover = C.card('🔎 Найти инструмент',
+      el('div', {class:'card-sub'}, 'Опиши задачу — Vera найдёт MCP-сервер и предложит установку в DM.'),
+      (() => {
+        const inp = el('input', {class:'input', placeholder:'например, отправлять DM в Instagram'});
+        const btn = C.btn('Поискать', { kind:'primary', onClick: async () => {
+          const cap = inp.value.trim(); if (!cap) return;
+          try {
+            const r = await api('/api/self_extend/discover', {method:'POST', body:{capability:cap}});
+            if (!r || !r.ok) C.toast('Не нашла: ' + (r?.reason || 'unknown'), 'err');
+            else C.toast('Предложение #' + r.proposal_id + ' отправлено в DM');
+            refreshActivePage();
+          } catch (e) { C.toast(e.message, 'err'); }
+        }});
+        return el('div', {class:'row'}, inp, btn);
+      })(),
+    );
+
+    const limits = C.card('Лимиты',
+      el('div', {class:'card-sub'},
+        `За час: ${rate.events_last_hour ?? 0}/${rate.hour_limit ?? 1} · ` +
+        `За сутки: ${rate.events_24h ?? 0}/${rate.day_limit ?? 5}` +
+        (rate.next_allowed_at ? ` · Next: ${fmt.dt(rate.next_allowed_at)}` : '')),
+    );
+
+    const cards = [discover, limits];
+    if (expired.length) cards.push(C.card('🔐 Просрочены токены',
+      el('div', {}, ...expired.map(e =>
+        el('div', {class:'card-sub'}, e.name + ' (last: ' + fmt.dt(e.since) + ')'))),
+    ));
+    if (idle.length) cards.push(C.card('💤 Не использовались 30 дней',
+      el('div', {class:'table-wrap'}, el('table', {},
+        el('thead', {}, el('tr', {},
+          el('th', {text:'Name'}), el('th', {text:'Calls'}), el('th', {text:'Last'}), el('th'))),
+        el('tbody', {}, idle.map(m => el('tr', {},
+          el('td', {text:m.name}),
+          el('td', {class:'mono', text:String(m.tool_calls)}),
+          el('td', {class:'mono', text: fmt.dt(m.last_used) || 'никогда'}),
+          el('td', {class:'actions'},
+            C.btn('×', {sm:true, kind:'danger', onClick: async () => {
+              if (!await C.confirm('Удалить MCP ' + m.name + '?')) return;
+              await api('/api/self_extend/uninstall/' + encodeURIComponent(m.name), {method:'POST'});
+              refreshActivePage();
+            }})),
+        ))),
+      )),
+    ));
+    cards.push(C.card('История предложений',
+      props.length === 0
+        ? C.empty('Ещё нет предложений')
+        : el('div', {class:'table-wrap'}, el('table', {},
+            el('thead', {}, el('tr', {},
+              el('th', {text:'#'}), el('th', {text:'Capability'}),
+              el('th', {text:'Package'}), el('th', {text:'Status'}),
+              el('th', {text:'When'}), el('th', {text:'Error'}))),
+            el('tbody', {}, props.map(p => el('tr', {},
+              el('td', {class:'mono', text:'#'+p.id}),
+              el('td', {text: p.capability}),
+              el('td', {class:'mono', text: p.package_name || '—'}),
+              el('td', {}, statusPill(p.status)),
+              el('td', {class:'mono', text: fmt.dt(p.created_at)}),
+              el('td', {text: fmt.trunc(p.error, 60)}),
+            ))),
+          )),
+    ));
+    return el('div', {}, ...cards);
+  },
+};
+
+PAGES.research = {
+  title: 'Память', icon: '🧠',
+  fetch: () => Promise.resolve(null),
+  render: () => {
+    const fileInput = el('input', {type:'file', multiple:true, accept:'.md,.txt,.json',
+      class:'input', style:'margin-bottom:8px'});
+    const source = el('select', {class:'input', style:'max-width:200px'},
+      el('option', {value:'perplexity', text:'Perplexity'}),
+      el('option', {value:'chatgpt', text:'ChatGPT'}),
+      el('option', {value:'notes', text:'Заметки'}),
+    );
+    const status = el('div', {class:'card-sub'},
+      'Выбери .md/.txt/.json из экспорта. Каждый файл = эпизод в мозг.');
+    const btn = C.btn('Загрузить в мозг', { kind:'primary', onClick: async () => {
       const files = Array.from(fileInput.files || []);
-      if (!files.length) { alert('Сначала выбери файлы'); return; }
-      status.textContent = `Читаю ${files.length} файлов…`;
+      if (!files.length) return C.toast('Выбери файлы', 'err');
+      status.textContent = 'Читаю ' + files.length + ' файлов…';
       const docs = [];
       for (const f of files) {
         const text = await f.text();
         if (f.name.endsWith('.json')) {
           try {
-            const arr = JSON.parse(text);
-            const list = Array.isArray(arr) ? arr : (arr.threads || arr.documents || []);
-            for (const x of list) {
-              docs.push({title: x.title || x.name || f.name,
-                         body: x.body || x.content || x.text || '',
-                         url: x.url || x.share_url,
-                         date: x.date || x.created_at});
-            }
-          } catch (e) { docs.push({title: f.name, body: text}); }
+            const a = JSON.parse(text);
+            const list = Array.isArray(a) ? a : (a.threads || a.documents || []);
+            for (const x of list) docs.push({title: x.title || x.name || f.name,
+              body: x.body || x.content || x.text || '', url: x.url || x.share_url,
+              date: x.date || x.created_at});
+          } catch { docs.push({title: f.name, body: text}); }
         } else {
-          // Strip Markdown front-matter if present
-          const m = text.match(/^---\s*\n([\s\S]*?)\n---\s*\n/);
-          const front = m ? m[1] : '';
+          const m = text.match(/^---\s*\n[\s\S]*?\n---\s*\n/);
           const body = m ? text.slice(m[0].length) : text;
-          let title = f.name.replace(/\.(md|txt)$/, '');
-          const titleMatch = body.match(/^#\s+(.+)$/m) || front.match(/title:\s*(.+)/);
-          if (titleMatch) title = titleMatch[1].trim();
-          docs.push({title, body});
+          const t = body.match(/^#\s+(.+)$/m);
+          docs.push({title: t ? t[1].trim() : f.name.replace(/\.(md|txt)$/,''), body});
         }
       }
-      const batches = [];
-      for (let i = 0; i < docs.length; i += 40) batches.push(docs.slice(i, i+40));
       let total = 0;
-      for (const b of batches) {
-        const r = await api('/api/research/import', {
-          method:'POST',
-          body: JSON.stringify({source: sourceInput.value, documents: b}),
-        });
-        total += (r && r.queued) || 0;
+      for (let i = 0; i < docs.length; i += 40) {
+        const batch = docs.slice(i, i + 40);
+        const r = await api('/api/research/import', {method:'POST',
+          body:{source: source.value, documents: batch}});
+        total += (r?.queued || 0);
         status.textContent = `Залила ${total}/${docs.length}…`;
       }
-      status.textContent = `Готово, ${total} эпизодов поставлены в очередь Graphiti.`;
+      status.textContent = `✅ Готово: ${total} эпизодов в очереди Graphiti.`;
       fileInput.value = '';
-    }}, 'Загрузить в мозг');
-  return el('section',{class:'active'},
-    el('div',{class:'card'},
-      el('strong',{style:'font-size:15px'}, '📚 Загрузка дампов в мозг'),
-      el('div',{style:'color:var(--mute);font-size:12px;margin-top:6px'},
-        'Источник:'),
-      el('div',{style:'margin-top:6px'}, sourceInput, uploadBtn),
-      fileInput,
-      status,
-      el('details',{style:'margin-top:12px;color:var(--mute);font-size:12px'},
-        el('summary',{style:'cursor:pointer'}, 'Как экспортировать Perplexity Spaces'),
-        el('ol',{style:'padding-left:18px;margin-top:6px'},
-          el('li',{},'Chrome → Web Store → «Perplexity to Notion - Batch Export»'),
-          el('li',{},'Установи, открой Perplexity, выбери Space или Library'),
-          el('li',{},'Жми Export → Markdown → скачается папка с .md'),
-          el('li',{},'Возвращайся сюда, выбери все .md, жми «Загрузить в мозг»')),
+    }});
+    return el('div', {},
+      C.card('📚 Загрузка дампов',
+        el('div', {class:'card-sub'},
+          'Используй «Perplexity to Notion - Batch Export» (Chrome) для скачивания Spaces/Threads в Markdown.'),
+        el('div', {class:'row'}, source, btn),
+        fileInput,
+        status,
       ),
+    );
+  },
+};
+
+PAGES.tokens = {
+  title: 'Токены', icon: '🔑', refreshSec: 30,
+  fetch: () => api('/api/tokens'),
+  render: tokens => {
+    if (!tokens || !tokens.length) return C.empty('Нет токенов');
+    return el('div', {class:'table-wrap'}, el('table', {},
+      el('thead', {}, el('tr', {},
+        el('th', {text:'Provider'}), el('th', {text:'Label'}),
+        el('th', {text:'Caps'}), el('th', {text:'Active'}),
+        el('th', {text:'Used / Limit'}), el('th', {text:'Last used'}))),
+      el('tbody', {}, tokens.map(t => el('tr', {},
+        el('td', {text:t.provider}),
+        el('td', {text:t.label}),
+        el('td', {}, ...(t.capabilities || []).map(c => C.pill(c, 'mute'))),
+        el('td', {}, C.pill(t.is_active ? 'on' : 'off', t.is_active ? 'ok' : 'mute')),
+        el('td', {class:'mono', text: `${t.daily_used || 0} / ${t.daily_limit || '∞'}`}),
+        el('td', {class:'mono', text: fmt.dt(t.last_used_at)}),
+      ))),
+    ));
+  },
+};
+
+PAGES.agents = {
+  title: 'Агенты', icon: '🤖', refreshSec: 20,
+  fetch: () => api('/api/agents'),
+  render: agents => {
+    if (!agents || !agents.length) return C.empty('Нет агентов');
+    return el('div', {}, ...agents.map(a => C.card(
+      el('div', {class:'row'},
+        el('strong', {text:a.name}),
+        C.pill(a.status, a.status === 'online' ? 'ok' : 'mute'),
+      ),
+      el('div', {class:'card-sub'},
+        a.id + ' · ' + a.http_url + ' · last hb: ' + fmt.dt(a.last_heartbeat)),
+      el('div', {class:'row'},
+        ...(a.tools || []).map(t => C.pill(t.name, 'info'))),
+    )));
+  },
+};
+
+/* ============================================================
+   5. SHELL — sidebar + router
+   ============================================================ */
+const NAV_ORDER = ['stats','events','sources','mcp','self_extend','research','tokens','agents'];
+
+function setPage(name) {
+  state.page = name;
+  state.navOpen = false;
+  localStorage.setItem('vera.page', name);
+  renderApp();
+  refreshActivePage();
+}
+
+async function refreshActivePage(opts={}) {
+  if (state.modalOpen && !opts.force) return;
+  const page = PAGES[state.page];
+  if (!page) return;
+  try {
+    const data = await page.fetch();
+    state.cache[state.page] = data;
+    const body = $('#page-body');
+    if (!body) return;
+    body.replaceChildren(page.render(data, {
+      action: (kind, arg) => page.actions?.[kind]?.(arg),
+    }));
+  } catch (e) {
+    console.warn('refresh failed', e);
+  }
+}
+
+function startPolling() {
+  if (state.pollHandle) clearInterval(state.pollHandle);
+  state.pollHandle = setInterval(() => {
+    if (state.loggedIn !== true) return;
+    const p = PAGES[state.page];
+    if (p && p.refreshSec) refreshActivePage();
+  }, 5_000);
+}
+
+function renderApp() {
+  const root = $('#root');
+  root.replaceChildren();
+  if (state.loggedIn === false) return root.append(renderLogin());
+  if (state.loggedIn !== true)  return root.append(renderLogin());  // first paint
+
+  const shell = el('div', {class:'shell'},
+    renderSidebar(),
+    state.navOpen ? el('div', {class:'scrim show', onclick: () => { state.navOpen = false; renderApp(); }}) : null,
+    el('div', {style:'display:flex;flex-direction:column;min-width:0'},
+      el('div', {class:'topbar'},
+        el('button', {class:'burger', onclick: () => { state.navOpen = true; renderApp(); }}, '☰'),
+        el('div', {class:'ttl', text: PAGES[state.page]?.title || 'Vera'}),
+        C.btn('↻', { sm:true, onClick: () => refreshActivePage({force:true}) }),
+      ),
+      renderMain(),
+    ),
+  );
+  root.append(shell);
+
+  refreshActivePage();
+}
+
+function renderSidebar() {
+  const navBtns = NAV_ORDER.map(name => {
+    const p = PAGES[name]; if (!p) return null;
+    return el('button', { class: state.page === name ? 'active' : '',
+        onclick: () => setPage(name) },
+      el('span', {class:'icon', text: p.icon || '·'}),
+      el('span', {text: p.title}),
+    );
+  });
+  return el('aside', {class:'sidebar ' + (state.navOpen ? 'open' : '')},
+    el('div', {class:'brand'},
+      el('span', {}, el('span', {class:'dot'}), 'Vera'),
+      el('span', {style:'color:var(--mute);font-size:11px'}, 'v2'),
+    ),
+    el('nav', {}, ...navBtns),
+    el('div', {class:'foot'},
+      el('span', {text:'live'}),
+      el('a', {href:'/api/logout', text:'выход'}),
     ),
   );
 }
 
-function renderSelfExtend() {
-  const se = state.self_extend || {};
-  const rate = se.rate || {};
-  const props = se.proposals || [];
-  const idle = se.idle_30d || [];
-  const expired = se.expired_auth || [];
-
-  const discoverBox = el('div',{class:'card', style:'margin-bottom:16px'},
-    el('strong',{style:'font-size:15px'}, '🔎 Найти новый инструмент'),
-    el('div',{style:'color:var(--mute);font-size:12px;margin-bottom:8px'},
-      'Опиши что нужно — Vera поищет MCP-сервер и предложит установку в DM.'),
-    el('div',{style:'display:flex;gap:8px'},
-      el('input',{id:'se-cap', placeholder:'например, "отправлять DM в Instagram"',
-        style:'flex:1;background:#0a0a0a;color:#eee;border:1px solid #333;padding:8px'}),
-      el('button',{class:'btn', style:'background:var(--info);color:#fff;border:none',
-        onclick: async () => {
-          const cap = document.getElementById('se-cap').value.trim();
-          if (!cap) return;
-          const data = await api('/api/self_extend/discover', {
-            method:'POST', body: JSON.stringify({capability: cap}),
-          });
-          if (!data.ok) alert('Не нашла: ' + (data.reason || 'unknown'));
-          else alert('Предложение #' + data.proposal_id + ' отправлено в DM');
-          await refresh();
-        }}, 'Поискать'),
+function renderMain() {
+  const p = PAGES[state.page];
+  if (!p) return el('main', {}, C.empty('Страница не найдена'));
+  return el('main', {},
+    el('div', {class:'page-head'},
+      el('div', {},
+        el('h2', {text: p.title}),
+        p.lead ? el('div', {class:'lead', text:p.lead}) : null,
+      ),
+      el('div', {class:'ctrl'},
+        C.btn('↻ Обновить', { sm:true, onClick: () => refreshActivePage({force:true}) }),
+      ),
     ),
+    el('div', {id:'page-body'}, C.spinner()),
   );
-
-  const limits = el('div',{class:'card', style:'margin-bottom:16px'},
-    el('strong',{style:'font-size:15px'}, '📊 Лимиты'),
-    el('div',{style:'color:var(--mute);font-size:12px;margin-top:6px'},
-      `Установок за час: ${rate.events_last_hour ?? 0}/${rate.hour_limit ?? 1}, ` +
-      `за сутки: ${rate.events_24h ?? 0}/${rate.day_limit ?? 5}` +
-      (rate.next_allowed_at ? `. Следующая после ${fmt.date(rate.next_allowed_at)}` : '')),
-  );
-
-  const propsTable = el('div',{class:'card', style:'margin-bottom:16px'},
-    el('strong',{style:'font-size:15px'}, '📜 История предложений'),
-    props.length === 0
-      ? el('div',{class:'empty',style:'padding:20px'}, 'Ещё нет предложений.')
-      : el('table',{},
-          el('thead',{}, el('tr',{},
-            el('th',{},'#'), el('th',{},'Capability'),
-            el('th',{},'Пакет'), el('th',{},'Статус'),
-            el('th',{},'Создано'), el('th',{},'Ошибка'),
-          )),
-          el('tbody',{}, props.map(p => el('tr',{},
-            el('td',{}, String(p.id)),
-            el('td',{}, p.capability),
-            el('td',{style:'font-family:monospace;font-size:12px'}, p.package_name || '—'),
-            el('td',{}, pill(p.status, p.status === 'active' ? 'ok' :
-                              p.status === 'failed' || p.status === 'rejected' ? 'err' : 'mute')),
-            el('td',{style:'color:var(--mute)'}, fmt.date(p.created_at)),
-            el('td',{style:'color:var(--err);font-size:12px'}, (p.error || '').substring(0,80)),
-          ))),
-        ),
-  );
-
-  const idleSection = idle.length === 0 ? null : el('div',{class:'card', style:'margin-bottom:16px'},
-    el('strong',{style:'font-size:15px'}, '💤 Неиспользуемые MCP (>30д)'),
-    el('div',{style:'color:var(--mute);font-size:12px;margin-bottom:8px'},
-      'Кандидаты на удаление. Жми ✕ если больше не нужны.'),
-    el('table',{},
-      el('thead',{}, el('tr',{},
-        el('th',{},'Имя'), el('th',{},'Вызовов'), el('th',{},'Последний'), el('th',{}, ''),
-      )),
-      el('tbody',{}, idle.map(m => el('tr',{},
-        el('td',{}, m.name), el('td',{}, String(m.tool_calls)),
-        el('td',{style:'color:var(--mute)'}, fmt.date(m.last_used) || 'никогда'),
-        el('td',{style:'text-align:right'},
-          el('button',{class:'btn', style:'color:var(--err)',
-            onclick: async () => {
-              if (!confirm('Удалить MCP ' + m.name + '?')) return;
-              await api('/api/self_extend/uninstall/' + encodeURIComponent(m.name),
-                        {method:'POST'});
-              await refresh();
-            }}, '✕'),
-        ),
-      ))),
-    ),
-  );
-
-  const expSection = expired.length === 0 ? null : el('div',{class:'card', style:'margin-bottom:16px'},
-    el('strong',{style:'font-size:15px;color:var(--err)'}, '🔐 Токены протухли'),
-    el('ul',{}, expired.map(e => el('li',{},
-      e.name + (e.since ? ' (последний вызов: ' + fmt.date(e.since) + ')' : '')))),
-  );
-
-  const kids = [discoverBox, limits];
-  if (expSection) kids.push(expSection);
-  if (idleSection) kids.push(idleSection);
-  kids.push(propsTable);
-  return el('section',{class:'active'}, ...kids);
 }
 
 function renderLogin() {
-  const app = $('#app');
-  app.innerHTML = '';
-  const box = el('div', {class:'login'},
-    el('h2', {}, 'Vera Dashboard'),
-    el('p', {}, 'Войти можно только владельцу аккаунта в Telegram'),
-    el('div', {id:'tg-widget', style:'display:flex;justify-content:center;margin:20px 0'}),
-  );
-  app.append(box);
-
-  const s = document.createElement('script');
-  s.async = true;
-  s.src = 'https://telegram.org/js/telegram-widget.js?22';
-  s.setAttribute('data-telegram-login', 'Dimondra_Ai_Bot');
-  s.setAttribute('data-size', 'large');
-  s.setAttribute('data-radius', '6');
-  s.setAttribute('data-auth-url', '/api/tg_login');
-  s.setAttribute('data-request-access', 'write');
-  $('#tg-widget').append(s);
-}
-
-function statCard(label, value, sub) {
-  return el('div', {class:'card'},
-    el('div',{class:'label'}, label),
-    el('div',{class:'value'}, value ?? '—'),
-    sub ? el('div',{class:'value muted'}, sub) : '',
-  );
-}
-
-function pill(text, cls='') { return el('span', {class:`pill ${cls}`}, text); }
-
-function renderStats() {
-  const s = state.stats || {};
-  const grid = el('div', {class:'grid cards'},
-    statCard('Запросов всего', fmt.num(s.tasks_total)),
-    statCard('За 24 часа', fmt.num(s.tasks_24h)),
-    statCard('Средняя длительность', fmt.ms(s.avg_duration_ms)),
-    statCard('Агентов онлайн', fmt.num(s.agents_online)),
-    statCard('Активных токенов', fmt.num(s.tokens_active)),
-  );
-  return el('section', {class:'active'}, grid);
-}
-
-function renderTasks() {
-  if (!state.tasks.length) return el('section', {class:'active'}, el('div',{class:'empty'}, 'Пока нет задач'));
-  const rows = state.tasks.map(t => el('tr', {},
-    el('td', {}, '#' + t.id),
-    el('td', {style:'color:var(--mute)'}, fmt.date(t.created_at)),
-    el('td', {style:'max-width:300px'}, el('div',{html: escapeHtml(t.input_text)})),
-    el('td', {}, (t.agents_used||[]).map(a => pill(a,'mute'))),
-    el('td', {}, fmt.ms(t.duration_ms)),
-    el('td', {}, pill(t.status || '?', t.status==='done'?'ok':'mute')),
-    el('td', {style:'max-width:400px'}, el('pre',{}, t.final_result || '—')),
-  ));
-  const table = el('table', {},
-    el('thead', {}, el('tr',{},
-      el('th',{},'#'), el('th',{},'Время'), el('th',{},'Запрос'),
-      el('th',{},'Агенты'), el('th',{},'Длит.'), el('th',{},'Статус'), el('th',{},'Ответ'),
-    )),
-    el('tbody', {}, rows),
-  );
-  return el('section', {class:'active'}, table);
-}
-
-function renderBalances() {
-  const providers = Object.keys(state.balances || {});
-  if (!providers.length) return el('div',{},'');
-  const cards = providers.sort().map(p => {
-    const b = state.balances[p];
-    const live = b.live_balance;
-    let liveBlock = '';
-    if (live && live.total_balance != null) {
-      liveBlock = el('div',{style:'margin-top:8px'},
-        el('div',{class:'label'}, 'Баланс на сервисе (live)'),
-        el('div',{class:'value'}, '$' + Number(live.total_balance).toFixed(2)),
-        el('div',{style:'color:var(--mute);font-size:11px;margin-top:4px'},
-          `granted: $${Number(live.granted_balance||0).toFixed(2)} · topped up: $${Number(live.topped_up_balance||0).toFixed(2)}`),
-      );
-    } else if (live && live.error) {
-      liveBlock = el('div',{style:'margin-top:8px;color:var(--warn);font-size:12px'}, '⚠ live balance: ' + live.error);
-    }
-    return el('div',{class:'card'},
-      el('div',{style:'display:flex;justify-content:space-between;align-items:baseline;margin-bottom:8px'},
-        el('strong',{style:'font-size:15px'}, p),
-        el('span',{class:'pill mute'}, `${b.tokens_active}/${b.tokens_count} ключей`),
-      ),
-      el('div',{class:'label'}, 'Потрачено (оценка)'),
-      el('div',{class:'value'}, fmt.usd(b.spent_usd)),
-      el('div',{style:'color:var(--mute);font-size:12px;margin-top:4px'},
-        `${fmt.toks(b.tokens_in)} in · ${fmt.toks(b.tokens_out)} out · ${fmt.num(b.requests)} запросов`),
-      liveBlock,
-    );
-  });
-  return el('div', {class:'grid cards', style:'margin-bottom:24px'}, cards);
-}
-
-function renderTokens() {
-  const rows = state.tokens.map(t => {
-    const pctUsed = t.daily_limit ? t.daily_used / t.daily_limit : 0;
-    const barCls = pctUsed >= 0.9 ? 'err' : pctUsed >= 0.6 ? 'warn' : '';
-    let status = pill('активен','ok');
-    if (!t.is_active) status = pill('отключён','err');
-    else if (t.in_cooldown) status = pill('cooldown','warn');
-    return el('tr', {},
-      el('td', {}, '#' + t.id),
-      el('td', {}, t.provider),
-      el('td', {}, t.label),
-      el('td', {}, (t.capabilities||[]).map(c => pill(c,'mute'))),
-      el('td', {},
-        el('div',{}, `${fmt.num(t.daily_used)} / ${fmt.num(t.daily_limit)}`),
-        el('div',{class:'bar'}, el('div',{class:barCls, style:`width:${Math.min(pctUsed*100,100)}%`})),
-      ),
-      el('td', {style:'font-size:12px;color:var(--mute)'},
-        el('div',{}, `${fmt.toks(t.tokens_in)} in`),
-        el('div',{}, `${fmt.toks(t.tokens_out)} out`),
-      ),
-      el('td', {}, fmt.usd(t.cost_usd)),
-      el('td', {}, status),
-      el('td', {}, t.error_count || 0),
-      el('td', {style:'color:var(--mute)'}, fmt.date(t.last_used_at)),
-    );
-  });
-  const table = el('table', {},
-    el('thead', {}, el('tr',{},
-      el('th',{},'#'), el('th',{},'Провайдер'), el('th',{},'Label'),
-      el('th',{},'Capabilities'), el('th',{},'Запросов'),
-      el('th',{},'Токены'), el('th',{},'Стоимость'),
-      el('th',{},'Статус'), el('th',{},'Ошибки'), el('th',{},'Последнее'),
-    )),
-    el('tbody', {}, rows),
-  );
-  return el('section', {class:'active'}, renderBalances(), table);
-}
-
-function renderSources() {
-  const gmailCard = el('div',{class:'card', style:'margin-bottom:16px'},
-    el('div',{style:'display:flex;justify-content:space-between;align-items:center;margin-bottom:12px'},
-      el('strong',{style:'font-size:15px'}, '📧 Gmail'),
-      el('a',{href:'/api/gmail/oauth/start',
-              class:'btn',
-              style:'text-decoration:none;background:var(--info);color:#fff;border:none'},
-        '+ Подключить аккаунт'),
+  return el('div', {class:'login-wrap'},
+    el('div', {class:'login'},
+      el('h1', {text: 'Vera'}),
+      el('p', {text: 'Войди через Telegram'}),
+      (() => {
+        const div = el('div', {id:'tg-login'});
+        const s = el('script', {async:'', src:'https://telegram.org/js/telegram-widget.js?22',
+          'data-telegram-login':'Dimondra_Ai_Bot', 'data-size':'large',
+          'data-auth-url':'/api/tg_login', 'data-request-access':'write'});
+        div.append(s);
+        return div;
+      })(),
     ),
-    state.gmail.length === 0
-      ? el('div',{class:'empty',style:'padding:20px'}, 'Ещё нет подключённых Gmail-аккаунтов')
-      : el('table',{},
-          el('thead',{}, el('tr',{},
-            el('th',{},'Email'), el('th',{},'Статус'),
-            el('th',{},'Авто-рассылки'),
-            el('th',{},'Последний опрос'), el('th',{},'Подключён'),
-          )),
-          el('tbody',{}, state.gmail.map(g => {
-            const cb = el('input', {type:'checkbox', style:'cursor:pointer'});
-            cb.checked = !!g.include_automated;
-            const lbl = el('span', {style:'color:var(--mute);font-size:12px'},
-              g.include_automated ? 'noreply пропускаются' : 'noreply фильтруются');
-            cb.onchange = async () => {
-              try {
-                await api('/api/gmail/include_automated?email=' +
-                  encodeURIComponent(g.email) + '&value=' + cb.checked,
-                  {method:'POST'});
-                g.include_automated = cb.checked;
-                lbl.textContent = cb.checked ? 'noreply пропускаются' : 'noreply фильтруются';
-              } catch(e) { cb.checked = !cb.checked; }
-            };
-            const wrap = el('label', {style:'display:flex;gap:6px;align-items:center;cursor:pointer'}, cb, lbl);
-            return el('tr',{},
-              el('td',{}, g.email),
-              el('td',{}, pill(g.is_active ? 'активен' : 'отключён', g.is_active ? 'ok' : 'mute')),
-              el('td',{}, wrap),
-              el('td',{style:'color:var(--mute)'}, fmt.date(g.last_polled_at)),
-              el('td',{style:'color:var(--mute)'}, fmt.date(g.created_at)),
-            );
-          })),
-        ),
-  );
-  return el('section',{class:'active'},
-    el('div',{style:'margin-bottom:8px;color:var(--mute);font-size:12px'},
-      'Источники событий, которые Vera будет читать и о которых принимать решения.'),
-    gmailCard,
-    renderConfigurableSources(),
   );
 }
 
-function renderConfigurableSources() {
-  const newBtn = el('button',{class:'btn',
-      style:'background:var(--info);color:#fff;border:none',
-      onclick: () => promptCreateSource()}, '+ Новый источник');
-  const header = el('div',{style:'display:flex;justify-content:space-between;align-items:center;margin-bottom:12px'},
-    el('strong',{style:'font-size:15px'}, '🔌 Источники с фильтрами'),
-    newBtn);
-  const list = (state.sources || []);
-  const body = list.length === 0
-    ? el('div',{class:'empty',style:'padding:20px'},
-        'Пока нет настроенных источников. Создай первый — например, Telegram.')
-    : el('table',{},
-        el('thead',{}, el('tr',{},
-          el('th',{},'Имя'), el('th',{},'Тип'), el('th',{},'Статус'),
-          el('th',{},'Правил'), el('th',{},'Threshold'),
-          el('th',{},'Поток (всего)'), el('th',{},'Последний опрос'), el('th',{},''),
-        )),
-        el('tbody',{}, list.map(s =>
-          el('tr',{},
-            el('td',{}, s.name),
-            el('td',{}, s.type),
-            el('td',{}, pill(s.enabled ? 'on' : 'off', s.enabled ? 'ok' : 'mute')),
-            el('td',{}, String((s.filters || []).length)),
-            el('td',{}, (s.base_threshold ?? 0.95).toFixed(2)),
-            el('td',{style:'color:var(--mute)'}, String(s.intake_count || 0)),
-            el('td',{style:'color:var(--mute)'}, fmt.date(s.last_polled_at)),
-            el('td',{style:'text-align:right'},
-              el('button',{class:'btn', style:'margin-right:6px',
-                onclick: ()=>editSourceFilters(s)}, '✎ Фильтры'),
-              el('button',{class:'btn',
-                onclick: ()=>toggleSource(s)}, s.enabled ? '⏸' : '▶'),
-              el('button',{class:'btn', style:'margin-left:6px;color:var(--err)',
-                onclick: ()=>deleteSource(s)}, '×'),
-            ),
-          ),
-        )),
-      );
-  return el('div',{class:'card'}, header, body);
-}
-
-async function promptCreateSource() {
-  const type = prompt('Тип источника? (telegram | gmail | bank | instagram | generic)', 'telegram');
-  if (!type) return;
-  const name = prompt('Имя источника (уникальное, например "tg-main"):');
-  if (!name) return;
-  const account = prompt('Account (опционально — для гмейла e-mail, для tg оставь пустым):', '');
+/* ============================================================
+   6. BOOT
+   ============================================================ */
+async function boot() {
+  // Probe session
   try {
-    await api('/api/sources', {
-      method:'POST',
-      body: JSON.stringify({type, name, account: account || null,
-                            filters: defaultFilters(type)}),
-    });
-    await refresh();
-  } catch(e) { alert('Не удалось: ' + e); }
+    const r = await fetch('/api/whoami', {credentials:'include'});
+    state.loggedIn = r.ok;
+    if (r.ok) await fetchCsrf();
+  } catch { state.loggedIn = false; }
+  renderApp();
+  startPolling();
 }
-
-function defaultFilters(type) {
-  if (type === 'telegram') return [
-    {match: {chat_type: "private"}, action: "include"},
-    {match: {chat_type: "private", from_username: "spambot"}, action: "exclude"},
-  ];
-  return [];
-}
-
-async function toggleSource(s) {
-  await api('/api/sources/' + s.id, {
-    method:'PUT', body: JSON.stringify({enabled: !s.enabled}),
-  });
-  await refresh();
-}
-
-async function deleteSource(s) {
-  if (!confirm('Удалить источник «' + s.name + '»? Это не удалит уже сохранённые события.')) return;
-  await api('/api/sources/' + s.id, {method:'DELETE'});
-  await refresh();
-}
-
-function editSourceFilters(s) {
-  state.modalOpen = true;
-  const closeModal = () => {
-    state.modalOpen = false;
-    try { closeModal(); } catch (e) {}
-  };
-  const txt = JSON.stringify(s.filters || [], null, 2);
-  const dialog = el('div',{style:'position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:99;'+
-                            'display:flex;align-items:center;justify-content:center'},
-    el('div',{class:'card', style:'width:min(720px,92vw);max-height:90vh;overflow:auto'},
-      el('h3',{style:'margin:0 0 6px'}, 'Фильтры — ' + s.name),
-      el('div',{style:'color:var(--mute);font-size:12px;margin-bottom:8px'},
-        'Массив правил. Последнее совпавшее правило выигрывает. По умолчанию exclude.'),
-      el('textarea',{id:'flt-edit', rows:'18',
-        style:'width:100%;font-family:monospace;font-size:12px;padding:8px;background:#0a0a0a;color:#eee;border:1px solid #333;border-radius:4px'},
-        txt),
-      el('div',{style:'display:flex;gap:8px;margin-top:10px'},
-        el('label',{style:'display:flex;align-items:center;gap:6px;color:var(--mute);font-size:12px'},
-          'Threshold (auto при confidence ≥)',
-          el('input',{id:'flt-thr', type:'number', step:'0.01', min:'0', max:'1',
-                     value:String(s.base_threshold ?? 0.95),
-                     style:'width:80px;background:#0a0a0a;color:#eee;border:1px solid #333;padding:4px'}),
-        ),
-        el('div',{style:'flex:1'}),
-        el('button',{class:'btn', onclick: ()=>closeModal()}, 'Отмена'),
-        el('button',{class:'btn', style:'background:var(--info);color:#fff;border:none',
-                     onclick: async ()=>{
-          let parsed;
-          try { parsed = JSON.parse(document.getElementById('flt-edit').value); }
-          catch(e) { alert('JSON error: ' + e.message); return; }
-          const thr = parseFloat(document.getElementById('flt-thr').value);
-          await api('/api/sources/' + s.id, {
-            method:'PUT',
-            body: JSON.stringify({filters: parsed, base_threshold: isFinite(thr) ? thr : 0.95}),
-          });
-          closeModal();
-          await refresh();
-        }}, 'Сохранить'),
-      ),
-    ),
-  );
-  document.body.append(dialog);
-}
-
-function renderMCP() {
-  const addForm = el('div', {class:'card', style:'margin-bottom:16px'},
-    el('div', {style:'display:flex;gap:8px;align-items:center;margin-bottom:8px'},
-      el('strong', {style:'font-size:15px'}, '+ Добавить MCP-сервер'),
-    ),
-    el('div', {style:'color:var(--mute);font-size:12px;margin-bottom:12px'},
-      'Пример команды для стандартных серверов: '
-      + 'npx -y @modelcontextprotocol/server-fetch'),
-    (() => {
-      const name = el('input', {placeholder:'name (e.g. fetch)', style:'width:200px;padding:6px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;margin-right:8px'});
-      const cmd = el('input', {placeholder:'command (npx, -y, @org/server)', style:'flex:1;padding:6px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;margin-right:8px'});
-      const env = el('input', {placeholder:'env (KEY=val; KEY2=val2)', style:'flex:1;padding:6px;background:var(--bg);color:var(--fg);border:1px solid var(--line);border-radius:4px;margin-right:8px'});
-      const btn = el('button', {class:'btn',
-                                style:'background:var(--info);color:#fff;border:none',
-                                onclick: async () => {
-        try {
-          const envObj = {};
-          (env.value || '').split(';').map(s=>s.trim()).filter(Boolean).forEach(p => {
-            const [k, ...v] = p.split('=');
-            if (k) envObj[k.trim()] = v.join('=').trim();
-          });
-          await api('/api/mcp/servers', {
-            method: 'POST',
-            body: JSON.stringify({
-              name: name.value.trim(),
-              command: cmd.value.trim().split(/\s+/).filter(Boolean),
-              env: envObj,
-            }),
-          });
-          name.value = ''; cmd.value = ''; env.value = '';
-          await refresh();
-        } catch (e) { alert('Ошибка: ' + e.message); }
-      }}, 'Добавить');
-      return el('div',{style:'display:flex;flex-wrap:wrap;gap:8px;align-items:center'}, name, cmd, env, btn);
-    })(),
-  );
-
-  const table = state.mcp.length === 0
-    ? el('div', {class:'empty', style:'padding:30px'}, 'Нет MCP-серверов. Добавь первый выше.')
-    : el('table', {},
-        el('thead', {}, el('tr', {},
-          el('th', {}, 'Name'), el('th', {}, 'Команда'),
-          el('th', {}, 'Статус'), el('th', {}, 'Tools'),
-          el('th', {}, 'Last start'), el('th', {}, 'Действия'),
-        )),
-        el('tbody', {}, state.mcp.map(s => el('tr', {},
-          el('td', {}, el('strong',{}, s.name),
-                       s.env_keys.length ? el('div',{style:'color:var(--mute);font-size:11px'}, 'env: ' + s.env_keys.join(', ')) : ''),
-          el('td', {style:'font-family:ui-monospace,monospace;font-size:12px;color:var(--mute)'},
-                   (s.command || []).join(' ')),
-          el('td', {}, pill(s.status,
-            s.status === 'running' ? 'ok' :
-            s.status === 'error'   ? 'err' :
-            s.status === 'starting'? 'warn' : 'mute')),
-          el('td', {}, String(s.tools_count || 0)),
-          el('td', {style:'color:var(--mute);font-size:11px'}, fmt.date(s.last_started_at)),
-          el('td', {},
-            el('button', {class:'btn', style:'margin-right:4px',
-              onclick: async () => {
-                await api(`/api/mcp/servers/${encodeURIComponent(s.name)}/restart`,
-                          {method:'POST'});
-                refresh();
-              }}, '⟳'),
-            el('button', {class:'btn',
-              onclick: async () => {
-                if (!confirm(`Удалить MCP-сервер «${s.name}»?`)) return;
-                await api(`/api/mcp/servers/${encodeURIComponent(s.name)}`,
-                          {method:'DELETE'});
-                refresh();
-              }}, '✕'),
-            s.error_message ? el('div',{style:'color:var(--err);font-size:11px;margin-top:4px'},
-                                  escapeHtml(s.error_message.slice(0,120))) : '',
-          ),
-        ))),
-      );
-
-  return el('section', {class:'active'}, renderMCPPresets(), addForm, table);
-}
-
-
-function renderMCPPresets() {
-  const card = el('div', {class:'card', style:'margin-bottom:16px'},
-    el('strong',{style:'font-size:15px'}, '📦 Готовые пресеты'),
-    el('div',{style:'color:var(--mute);font-size:12px;margin-bottom:12px'},
-      'Curated MCP-сервера в один клик. Если нужны env — спросит при установке.'),
-    el('div',{id:'mcp-presets-grid', style:'display:grid;grid-template-columns:repeat(auto-fill,minmax(280px,1fr));gap:8px'},
-      el('div',{style:'color:var(--mute)'}, 'Загружаю…'),
-    ),
-  );
-  // Async fetch + populate
-  fetch('/api/mcp/presets', {credentials:'include'}).then(r => r.json()).then(presets => {
-    const grid = card.querySelector('#mcp-presets-grid');
-    grid.innerHTML = '';
-    const installed = new Set((state.mcp || []).map(s => s.name));
-    presets.forEach(p => {
-      const ins = installed.has(p.id);
-      const tile = el('div',{style:'border:1px solid var(--line);border-radius:6px;padding:10px;background:var(--bg)'},
-        el('div',{style:'display:flex;justify-content:space-between;align-items:start;gap:8px'},
-          el('strong',{}, p.label),
-          ins ? pill('установлен','ok')
-              : el('button',{class:'btn',
-                  style:'background:var(--info);color:#fff;border:none;font-size:12px',
-                  onclick: () => installPreset(p)}, '+ Поставить'),
-        ),
-        el('div',{style:'color:var(--mute);font-size:12px;margin-top:4px'}, p.description),
-        p.env_required && p.env_required.length
-          ? el('div',{style:'color:var(--mute);font-size:11px;margin-top:6px'},
-              'Нужен env: ' + p.env_required.join(', '))
-          : '',
-        p.notes ? el('details',{style:'margin-top:6px;font-size:11px;color:var(--mute)'},
-                    el('summary',{style:'cursor:pointer'}, 'Как получить'),
-                    el('div',{style:'margin-top:4px'}, p.notes))
-                : '',
-      );
-      grid.append(tile);
-    });
-  }).catch(e => {
-    const grid = card.querySelector('#mcp-presets-grid');
-    grid.innerHTML = '';
-    grid.append(el('div',{style:'color:var(--err)'}, 'Ошибка загрузки пресетов: ' + e.message));
-  });
-  return card;
-}
-
-
-async function installPreset(p) {
-  const env = {};
-  for (const key of (p.env_required || [])) {
-    const val = prompt(`${p.label} — введи ${key}:`, '');
-    if (val === null) return;
-    if (!val.trim()) { alert(`${key} обязателен`); return; }
-    env[key] = val.trim();
-  }
-  const name = prompt('Имя для этого MCP-сервера:', p.id);
-  if (!name) return;
-  try {
-    await api(`/api/mcp/presets/${encodeURIComponent(p.id)}`, {
-      method:'POST', body: JSON.stringify({name: name.trim(), env}),
-    });
-    alert(`Поставила ${name}. Жми ⟳ на карточке если не стартует, или проверь логи.`);
-    await refresh();
-  } catch (e) { alert('Не получилось: ' + e.message); }
-}
-
-
-function renderAgents() {
-  if (!state.agents.length) return el('section', {class:'active'}, el('div',{class:'empty'}, 'Нет агентов'));
-  const cards = state.agents.map(a => {
-    const toolList = (a.tools || []).map(t =>
-      el('div', {style:'margin:6px 0'},
-        el('span',{class:'toolchip'}, t.name),
-        el('span',{style:'color:var(--mute);font-size:12px'}, ' — ' + (t.description || '').slice(0,120))
-      )
-    );
-    return el('div', {class:'card', style:'margin-bottom:16px'},
-      el('div', {style:'display:flex;justify-content:space-between;align-items:center;margin-bottom:8px'},
-        el('div', {},
-          el('strong',{}, a.name),
-          el('span',{style:'color:var(--mute);margin-left:8px'}, a.id),
-        ),
-        pill(a.status, a.status==='online'?'ok':'err'),
-      ),
-      el('div', {style:'color:var(--mute);font-size:12px;margin-bottom:12px'},
-        `${a.http_url} · последний heartbeat: ${fmt.date(a.last_heartbeat)}`,
-      ),
-      el('div', {}, toolList),
-    );
-  });
-  return el('section', {class:'active'}, cards);
-}
-
-function escapeHtml(s) {
-  if (s == null) return '';
-  return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
-}
-
-const URGENCY_ICON = {low:'🟢', medium:'🟡', high:'🟠', critical:'🔴'};
-
-function renderEvents() {
-  if (!state.events.length)
-    return el('section', {class:'active'}, el('div',{class:'empty'}, 'Ещё нет событий. Когда адаптеры начнут слать /event — они появятся здесь.'));
-  const rows = state.events.map(ev => {
-    const tr = ev.triage_result || {};
-    const urg = (tr.urgency || '').toLowerCase();
-    const icon = URGENCY_ICON[urg] || '⚪';
-    const decided = tr.user_choice || null;
-    let statusPill;
-    if (ev.triage_status === 'decided') statusPill = pill('решено','ok');
-    else if (ev.triage_status === 'awaiting_user') statusPill = pill('ждёт','warn');
-    else if (ev.triage_status === 'failed') statusPill = pill('triage fail','err');
-    else if (ev.triage_status === 'pending') statusPill = pill('обработка','mute');
-    else statusPill = pill(ev.triage_status || '?', 'mute');
-
-    const actions = (tr.actions || []).map(a =>
-      el('div', {style:'margin:2px 0;font-size:12px;color:var(--mute)'},
-        (a.default ? '⭐ ' : '· ') + a.label
-      ),
-    );
-    return el('tr', {},
-      el('td', {style:'white-space:nowrap'}, '#' + ev.id),
-      el('td', {style:'color:var(--mute);white-space:nowrap'}, fmt.date(ev.occurred_at)),
-      el('td', {}, el('div',{}, pill(ev.source,'mute'), ' ', el('span',{style:'color:var(--mute);font-size:11px'}, ev.category))),
-      el('td', {style:'max-width:400px'},
-        el('div',{}, icon + ' ' + escapeHtml(tr.summary || ev.content_text || '—')),
-        tr.reasoning ? el('div',{style:'color:var(--mute);font-size:12px;margin-top:4px'}, escapeHtml(tr.reasoning)) : '',
-      ),
-      el('td', {style:'min-width:180px'}, actions),
-      el('td', {}, statusPill,
-        decided ? el('div',{style:'margin-top:4px;font-size:12px;color:var(--acc)'}, '→ ' + escapeHtml(decided.label || '')) : ''),
-      el('td', {style:'color:var(--mute);font-size:11px'},
-        tr.confidence != null ? Math.round(tr.confidence*100) + '%' : '—'),
-    );
-  });
-  const table = el('table',{},
-    el('thead',{}, el('tr',{},
-      el('th',{},'#'), el('th',{},'Когда'), el('th',{},'Источник'),
-      el('th',{},'Сводка'), el('th',{},'Варианты Vera'),
-      el('th',{},'Статус'), el('th',{},'Уверенность'),
-    )),
-    el('tbody',{}, rows),
-  );
-  return el('section',{class:'active'}, table);
-}
-
-function render() {
-  const app = $('#app');
-  app.innerHTML = '';
-
-  const tabs = [
-    ['stats','Статистика'],
-    ['events','События'],
-    ['sources','Источники'],
-    ['mcp','MCP'],
-    ['self_extend','Self-extend'],
-    ['research','Память'],
-    ['tokens','Токены'],
-    ['agents','Агенты'],
-    // 'tasks' (legacy chat-pipeline trace) hidden from nav
-  ];
-  const header = el('header', {},
-    el('div', {},
-      el('h1', {}, 'Vera'),
-      el('span', {class:'sub'}, 'orchestrator dashboard'),
-    ),
-    el('nav', {}, tabs.map(([id,name]) =>
-      el('button',{class: state.tab===id?'active':'', onclick: ()=>{state.tab=id; render();}}, name))),
-    el('div', {class:'actions'},
-      el('button', {class:'btn', onclick: refresh}, '↻ Обновить'),
-      el('a', {href:'/api/logout', class:'btn', style:'text-decoration:none'}, 'Выход'),
-    ),
-  );
-  app.append(header);
-
-  const main = el('main', {});
-  let body;
-  if (state.tab === 'stats') body = renderStats();
-  else if (state.tab === 'events') body = renderEvents();
-  else if (state.tab === 'sources') body = renderSources();
-  else if (state.tab === 'mcp') body = renderMCP();
-  else if (state.tab === 'self_extend') body = renderSelfExtend();
-  else if (state.tab === 'research') body = renderResearch();
-  else if (state.tab === 'tokens') body = renderTokens();
-  else if (state.tab === 'agents') body = renderAgents();
-  main.append(body);
-  app.append(main);
-}
-
-refresh().catch(err => {
-  console.error(err);
-  document.body.append(el('div',{class:'toast'}, 'Ошибка загрузки: ' + err.message));
-});
-setInterval(() => { if (state.stats) refresh().catch(()=>{}); }, 8000);
+boot();
 </script>
 </body>
 </html>
