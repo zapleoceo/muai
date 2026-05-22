@@ -22,14 +22,16 @@ async def test_events_idempotent_on_source_event_id():
     """save_event is the dedupe point for incoming events."""
     from datetime import datetime
     from app.events.store import save_event
-    e1 = await save_event(
+    e1, new1 = await save_event(
         source="test", source_event_id="dup-1", account=None, category="x",
         content_text="hello", content_extra=None, entity_hints=None,
         metadata=None, occurred_at=datetime.utcnow(),
     )
-    e2 = await save_event(
+    e2, new2 = await save_event(
         source="test", source_event_id="dup-1", account=None, category="x",
         content_text="hello again", content_extra=None, entity_hints=None,
         metadata=None, occurred_at=datetime.utcnow(),
     )
     assert e1.id == e2.id
+    assert new1 is True
+    assert new2 is False
