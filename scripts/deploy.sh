@@ -81,7 +81,15 @@ docker exec vera-vera-core-1 pytest /app/tests -q --tb=short \
     || { echo "tests failed" >&2; exit 82; }
 
 echo "--- cleanup ---"
-docker image prune -f --filter "until=168h" >/dev/null 2>&1 || true
-docker builder prune -f --filter "unused-for=168h" >/dev/null 2>&1 || true
+# Tight: 19GB VPS fills in days with images from frequent deploys.
+docker image prune -af --filter "until=24h" >/dev/null 2>&1 || true
+docker builder prune -af --filter "unused-for=24h" >/dev/null 2>&1 || true
+# Hard floor: if disk >85%, nuke everything dangling regardless of age.
+USE=$(df / | awk 'NR==2 {gsub("%","",$5); print $5}')
+if [ "${USE:-0}" -gt 85 ]; then
+    echo "disk ${USE}% — aggressive prune"
+    docker image prune -af >/dev/null 2>&1 || true
+    docker builder prune -af >/dev/null 2>&1 || true
+fi
 
 echo "DEPLOY OK ($prev_sha → $(git rev-parse HEAD))"
