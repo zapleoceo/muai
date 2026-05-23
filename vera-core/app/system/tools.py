@@ -121,9 +121,87 @@ async def vera_get_prefs() -> dict:
     return {"ok": True, "result": await preferences.get_all()}
 
 
+# ---------- bot admin tools (forum topic + message management) ----------
+
+
+async def bot_delete_message(chat_id: int, message_id: int) -> dict:
+    """Delete a specific message in any chat where the bot has rights.
+    Works for bot's own messages always; for others needs admin
+    can_delete_messages."""
+    from app.bot.sender import get_bot
+    try:
+        await get_bot().delete_message(chat_id, message_id)
+        return {"ok": True, "chat_id": chat_id, "message_id": message_id}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+async def bot_delete_forum_topic(chat_id: int, message_thread_id: int) -> dict:
+    """Delete an entire forum topic (and all its messages). Bot must have
+    manage_topics + can_delete_messages."""
+    from app.bot.sender import get_bot
+    try:
+        await get_bot().delete_forum_topic(
+            chat_id=chat_id, message_thread_id=message_thread_id)
+        return {"ok": True, "chat_id": chat_id,
+                "message_thread_id": message_thread_id}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
+async def bot_clear_topic_messages(chat_id: int, message_thread_id: int,
+                                    limit: int = 100) -> dict:
+    """Sweep recent messages within a forum topic. Best-effort: iterates
+    msg ids backwards from latest, deletes those the bot can reach.
+    Stops on the first hard failure (typically too-old)."""
+    from app.bot.sender import get_bot
+    bot = get_bot()
+    # Telegram doesn't expose 'iter messages' to bots; we sweep by id
+    # delta from a known anchor we get from chat.last_message.
+    # Cheapest fallback: try the last N message_ids relative to a probe.
+    # The cleaner route is delete_forum_topic, then re-create the topic.
+    deleted = 0
+    errors: list[str] = []
+    try:
+        # Probe last message id by sending+deleting a marker.
+        marker = await bot.send_message(
+            chat_id=chat_id, text="·",
+            message_thread_id=message_thread_id,
+        )
+        latest = marker.message_id
+        await bot.delete_message(chat_id, latest)
+        deleted += 1
+        for mid in range(latest - 1, max(latest - limit, 0), -1):
+            try:
+                await bot.delete_message(chat_id, mid)
+                deleted += 1
+            except Exception as exc:
+                errors.append(f"msg {mid}: {type(exc).__name__}")
+                if len(errors) > 5:
+                    break
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+    return {"ok": True, "deleted": deleted, "errors": errors[:3]}
+
+
+async def bot_close_forum_topic(chat_id: int, message_thread_id: int) -> dict:
+    """Lock a forum topic (no new messages, but content stays)."""
+    from app.bot.sender import get_bot
+    try:
+        await get_bot().close_forum_topic(
+            chat_id=chat_id, message_thread_id=message_thread_id)
+        return {"ok": True}
+    except Exception as exc:
+        return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
+
+
 HANDLERS = {
     "system_deploy": system_deploy,
     "system_status": system_status,
     "vera_set_pref": vera_set_pref,
     "vera_get_prefs": vera_get_prefs,
+    "bot_delete_message": bot_delete_message,
+    "bot_delete_forum_topic": bot_delete_forum_topic,
+    "bot_close_forum_topic": bot_close_forum_topic,
+    "bot_clear_topic_messages": bot_clear_topic_messages,
 }

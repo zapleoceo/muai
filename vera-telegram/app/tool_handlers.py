@@ -6,6 +6,7 @@ from app.tools.list_dialogs import list_recent_dialogs
 from app.tools.read_messages import read_messages, _resolve_peer_by_id_or_name
 from app.tools.send_message import send_message_to
 from app.tools.get_dialog_info import get_dialog_info_for
+from app.tools.delete_messages import delete_messages, clear_history
 
 log = logging.getLogger(__name__)
 
@@ -48,10 +49,33 @@ async def _t_info(chat_id: int = 0, peer: str = "") -> Any:
     return await get_dialog_info_for(target)
 
 
+async def _t_delete(chat_id: int = 0, peer: str = "",
+                    message_ids: list[int] | None = None,
+                    revoke: bool = True) -> Any:
+    target = str(chat_id) if chat_id else peer
+    if not target:
+        raise ValueError("chat_id or peer is required")
+    if not message_ids:
+        raise ValueError("message_ids list is required")
+    return await delete_messages(target, list(message_ids), revoke=bool(revoke))
+
+
+async def _t_clear_history(chat_id: int = 0, peer: str = "",
+                            just_clear: bool = False, revoke: bool = False,
+                            max_id: int = 0) -> Any:
+    target = str(chat_id) if chat_id else peer
+    if not target:
+        raise ValueError("chat_id or peer is required")
+    return await clear_history(target, just_clear=bool(just_clear),
+                                revoke=bool(revoke), max_id=int(max_id))
+
+
 HANDLERS: dict[str, Callable[..., Awaitable[Any]]] = {
     "telegram_list_recent_dialogs": _t_list_recent,
     "telegram_search_dialogs":      _t_search,
     "telegram_read_messages":       _t_read,
     "telegram_send_message":        _t_send,
     "telegram_get_dialog_info":     _t_info,
+    "telegram_delete_messages":     _t_delete,
+    "telegram_clear_history":       _t_clear_history,
 }

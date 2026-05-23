@@ -78,4 +78,43 @@ TOOLS: list[ToolSpec] = [
             ToolParam("peer", "string", "Target chat name.", required=False, default=""),
         ],
     ),
+    ToolSpec(
+        name="telegram_delete_messages",
+        description=(
+            "Delete specific Telegram messages by id. Own messages always "
+            "deletable; others require admin with delete_messages right. "
+            "revoke=True deletes from both sides; False — only from your view."
+        ),
+        params=[
+            ToolParam("chat_id", "integer", "Target chat id.", required=False, default=0),
+            ToolParam("peer", "string", "Target chat name.", required=False, default=""),
+            ToolParam("message_ids", "array",
+                      "List of message ids to delete (integers)."),
+            ToolParam("revoke", "boolean",
+                      "Delete for both sides (default true).",
+                      required=False, default=True),
+        ],
+    ),
+    ToolSpec(
+        name="telegram_clear_history",
+        description=(
+            "Wipe entire chat history with a peer. Use carefully — "
+            "destructive. just_clear=True hides from your side only. "
+            "revoke=True attempts both-side deletion (works in personal "
+            "chats; in groups needs admin)."
+        ),
+        params=[
+            ToolParam("chat_id", "integer", "Target chat id.", required=False, default=0),
+            ToolParam("peer", "string", "Target chat name.", required=False, default=""),
+            ToolParam("just_clear", "boolean",
+                      "Hide from your side only (safe).",
+                      required=False, default=False),
+            ToolParam("revoke", "boolean",
+                      "Delete for both sides (irreversible).",
+                      required=False, default=False),
+            ToolParam("max_id", "integer",
+                      "Delete up to this msg id (0 = all).",
+                      required=False, default=0),
+        ],
+    ),
 ]

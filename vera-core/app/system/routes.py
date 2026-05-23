@@ -67,6 +67,52 @@ TOOL_SPECS = [
         "description": "Read all current behaviour preferences.",
         "params": [],
     },
+    {
+        "name": "bot_delete_message",
+        "description": (
+            "Delete a specific message in any chat where the bot has rights. "
+            "Use for own bot messages (always works) or when admin with "
+            "can_delete_messages."
+        ),
+        "params": [
+            {"name": "chat_id", "type": "integer", "description": "Target chat id.", "required": True},
+            {"name": "message_id", "type": "integer", "description": "Message id to delete.", "required": True},
+        ],
+    },
+    {
+        "name": "bot_delete_forum_topic",
+        "description": (
+            "Delete an entire forum topic and all its messages. Bot must "
+            "have manage_topics + can_delete_messages in the supergroup."
+        ),
+        "params": [
+            {"name": "chat_id", "type": "integer", "description": "Supergroup id.", "required": True},
+            {"name": "message_thread_id", "type": "integer", "description": "Topic id.", "required": True},
+        ],
+    },
+    {
+        "name": "bot_close_forum_topic",
+        "description": "Lock a forum topic (no new messages, content stays).",
+        "params": [
+            {"name": "chat_id", "type": "integer", "description": "Supergroup id.", "required": True},
+            {"name": "message_thread_id", "type": "integer", "description": "Topic id.", "required": True},
+        ],
+    },
+    {
+        "name": "bot_clear_topic_messages",
+        "description": (
+            "Sweep recent messages in a forum topic. Best-effort: tries to "
+            "delete messages by id backwards from latest. For full wipe of "
+            "a topic prefer bot_delete_forum_topic (deletes everything in "
+            "one call)."
+        ),
+        "params": [
+            {"name": "chat_id", "type": "integer", "description": "Supergroup id.", "required": True},
+            {"name": "message_thread_id", "type": "integer", "description": "Topic id.", "required": True},
+            {"name": "limit", "type": "integer", "description": "Max msgs to scan back (default 100).",
+             "required": False, "default": 100},
+        ],
+    },
 ]
 
 
