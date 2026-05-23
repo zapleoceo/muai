@@ -68,6 +68,8 @@ async def snapshot(_=Depends(require_owner)) -> dict:
     graph_counts = await _graph_counts()
     identity = await ID.list_active()
     v3_shadow = await _v3_shadow_distribution()
+    tokens_summary = await _tokens_summary()
+    patterns_top = await _top_patterns()
 
     return {
         "events": {"total": n_events, "by_source": per_src,
@@ -80,7 +82,41 @@ async def snapshot(_=Depends(require_owner)) -> dict:
         "identity": {k: len(v) for k, v in identity.items()},
         "identity_detail": identity,
         "v3_shadow": v3_shadow,
+        "tokens": tokens_summary,
+        "top_patterns": patterns_top,
     }
+
+
+async def _tokens_summary() -> dict:
+    """Per-provider count of active vs inactive LLM tokens."""
+    from vera_shared.db.models import Token
+    out: dict[str, dict[str, int]] = {}
+    async with get_session() as s:
+        rs = (await s.execute(
+            select(Token.provider, Token.is_active, func.count())
+            .group_by(Token.provider, Token.is_active)
+        )).all()
+    for provider, active, n in rs:
+        out.setdefault(provider, {"active": 0, "inactive": 0})
+        out[provider]["active" if active else "inactive"] = n
+    return out
+
+
+async def _top_patterns(limit: int = 10) -> list[dict]:
+    from app.graph.client import get_graphiti
+    client = await get_graphiti()
+    db = get_settings().neo4j_database
+    async with client.driver.session(database=db) as ses:
+        r = await ses.run(
+            "MATCH (p:Pattern) "
+            "RETURN p.id AS sig, p.action_label AS label, p.tool AS tool, "
+            "  p.observation_count AS obs, p.confirmation_count AS conf, "
+            "  p.correction_count AS corr "
+            "ORDER BY (coalesce(p.confirmation_count,0)) DESC LIMIT $n",
+            n=limit,
+        )
+        rows = [dict(rec) async for rec in r]
+    return rows
 
 
 async def _v3_shadow_distribution() -> dict:

@@ -3,944 +3,338 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Vera</title>
+<title>Vera v3</title>
 <style>
-  :root {
-    --bg:#0d0e10; --panel:#16181c; --line:#22262d; --fg:#e6edf3;
-    --mute:#8b949e; --dim:#5b6470;
-    --ok:#3fb950; --warn:#d29922; --err:#f85149; --info:#58a6ff;
-    --r:6px;
-  }
+  :root{--bg:#0d0e10;--panel:#16181c;--line:#22262d;--fg:#e6edf3;
+        --mute:#8b949e;--dim:#5b6470;--ok:#3fb950;--warn:#d29922;
+        --err:#f85149;--info:#58a6ff;--r:8px}
   *{box-sizing:border-box;margin:0;padding:0}
-  html,body{height:100%;background:var(--bg);color:var(--fg);
-    font:14px/1.45 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;
+  html,body{background:var(--bg);color:var(--fg);
+    font:14px/1.5 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;
     -webkit-font-smoothing:antialiased}
-  a{color:var(--info);text-decoration:none}
-  a:hover{text-decoration:underline}
-  button,input,select,textarea{font:inherit;color:inherit}
-  button{cursor:pointer}
+  a{color:var(--info);text-decoration:none} a:hover{text-decoration:underline}
+  button,input,textarea,select{font:inherit;color:inherit}
+  button{cursor:pointer;background:var(--panel);border:1px solid var(--line);
+    color:var(--fg);padding:6px 14px;border-radius:var(--r)}
+  button:hover{border-color:var(--mute)}
+  button.primary{background:var(--info);border-color:var(--info);color:#fff}
+  input,textarea{background:var(--panel);border:1px solid var(--line);
+    color:var(--fg);padding:8px 12px;border-radius:var(--r);width:100%}
+  textarea{resize:vertical;min-height:60px;font-family:inherit}
 
-  /* layout */
-  .shell{display:grid;grid-template-columns:220px 1fr;min-height:100vh}
-  .sidebar{background:var(--panel);border-right:1px solid var(--line);
-    display:flex;flex-direction:column;position:sticky;top:0;height:100vh}
-  .sidebar .brand{padding:18px 20px;border-bottom:1px solid var(--line);
-    font-weight:600;letter-spacing:.5px;display:flex;align-items:center;justify-content:space-between}
-  .sidebar .brand .dot{width:6px;height:6px;border-radius:50%;background:var(--ok);
-    display:inline-block;margin-right:8px;vertical-align:middle}
-  .sidebar nav{flex:1;padding:8px;overflow:auto}
-  .sidebar nav button{display:flex;width:100%;align-items:center;gap:10px;
-    background:none;border:none;color:var(--mute);padding:9px 12px;
-    border-radius:var(--r);text-align:left;margin-bottom:2px;font-size:13px}
-  .sidebar nav button:hover{color:var(--fg);background:var(--bg)}
-  .sidebar nav button.active{color:var(--fg);background:var(--bg)}
-  .sidebar nav button .icon{width:16px;text-align:center;opacity:.7}
-  .sidebar .foot{border-top:1px solid var(--line);padding:12px 20px;
-    color:var(--dim);font-size:11px;display:flex;justify-content:space-between}
-  .topbar{display:none}
-  main{padding:24px 32px;overflow-x:auto;min-width:0}
-  main h2{font-size:18px;font-weight:600;margin-bottom:4px}
-  main .lead{color:var(--mute);font-size:13px;margin-bottom:20px}
-  .page-head{display:flex;justify-content:space-between;align-items:flex-start;
-    margin-bottom:20px;flex-wrap:wrap;gap:12px}
-  .page-head .ctrl{display:flex;gap:8px;align-items:center}
+  header{padding:18px 24px;border-bottom:1px solid var(--line);
+    display:flex;justify-content:space-between;align-items:center;
+    background:var(--panel)}
+  header .brand{font-weight:600;font-size:16px}
+  header .brand .dot{display:inline-block;width:7px;height:7px;
+    border-radius:50%;background:var(--ok);margin-right:8px;
+    vertical-align:middle;animation:pulse 2s infinite}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
+  header .meta{color:var(--mute);font-size:12px;display:flex;gap:14px}
+  header .meta button{padding:4px 12px;font-size:12px}
 
-  /* atoms */
-  .row{display:flex;gap:12px;flex-wrap:wrap;align-items:center}
-  .card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:16px;margin-bottom:12px}
-  .card.compact{padding:12px}
-  .card.tight{padding:10px 14px}
-  .card-title{font-weight:600;font-size:13px;margin-bottom:8px;display:flex;
-    justify-content:space-between;align-items:center;gap:8px}
-  .card-sub{color:var(--mute);font-size:12px;margin-bottom:10px}
-  .grid{display:grid;gap:12px}
-  .grid.cols-auto{grid-template-columns:repeat(auto-fit,minmax(180px,1fr))}
-  .grid.cols-2{grid-template-columns:repeat(2,1fr)}
-  .grid.cols-3{grid-template-columns:repeat(3,1fr)}
-  .stat{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:14px 16px}
-  .stat .k{color:var(--mute);font-size:11px;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
-  .stat .v{font-size:22px;font-weight:600;font-variant-numeric:tabular-nums}
-  .stat .v.dim{color:var(--mute);font-size:14px;font-weight:400}
-  .stat .delta{color:var(--mute);font-size:11px;margin-top:2px}
+  main{max-width:1100px;margin:0 auto;padding:24px 20px 80px}
+  section{margin-bottom:32px}
+  section>h2{font-size:13px;font-weight:600;color:var(--mute);
+    text-transform:uppercase;letter-spacing:.7px;margin-bottom:10px;
+    border-bottom:1px solid var(--line);padding-bottom:6px}
 
-  .btn{background:transparent;border:1px solid var(--line);color:var(--fg);
-    padding:6px 12px;border-radius:var(--r);transition:.1s background}
-  .btn:hover{background:var(--bg)}
-  .btn.primary{background:var(--info);border-color:var(--info);color:#fff}
-  .btn.primary:hover{filter:brightness(1.1)}
-  .btn.danger{color:var(--err);border-color:var(--line)}
-  .btn.danger:hover{background:var(--bg);border-color:var(--err)}
-  .btn.sm{padding:4px 8px;font-size:12px}
-  .btn[disabled]{opacity:.4;cursor:not-allowed}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
+        gap:10px;margin-bottom:10px}
+  .card{background:var(--panel);border:1px solid var(--line);
+        border-radius:var(--r);padding:14px 16px}
+  .card .v{font-size:24px;font-weight:600;letter-spacing:-.5px}
+  .card .k{color:var(--mute);font-size:11px;text-transform:uppercase;
+            letter-spacing:.5px;margin-top:4px}
+  .card .sub{color:var(--dim);font-size:11px;margin-top:2px}
 
-  .pill{display:inline-flex;align-items:center;padding:1px 8px;border-radius:10px;
-    font-size:11px;border:1px solid var(--line);color:var(--mute);white-space:nowrap}
-  .pill.ok{color:var(--ok);border-color:rgba(63,185,80,.35)}
-  .pill.warn{color:var(--warn);border-color:rgba(210,153,34,.35)}
-  .pill.err{color:var(--err);border-color:rgba(248,81,73,.35)}
-  .pill.info{color:var(--info);border-color:rgba(88,166,255,.35)}
+  table{width:100%;border-collapse:collapse;background:var(--panel);
+        border-radius:var(--r);overflow:hidden}
+  th,td{padding:8px 12px;text-align:left;border-bottom:1px solid var(--line);
+        vertical-align:top;font-size:13px}
+  th{color:var(--mute);font-weight:500;text-transform:uppercase;
+      font-size:11px;letter-spacing:.5px;background:rgba(255,255,255,.02)}
+  tr:last-child td{border-bottom:none}
+  td.dim{color:var(--mute)} td.mono{font-family:ui-monospace,monospace;font-size:12px}
 
-  .input{background:var(--bg);border:1px solid var(--line);color:var(--fg);
-    padding:8px 10px;border-radius:var(--r);width:100%}
-  .input:focus{outline:none;border-color:var(--info)}
-  .ta{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;min-height:200px;resize:vertical}
+  .pill{display:inline-block;padding:1px 9px;border-radius:11px;
+        font-size:11px;background:var(--line);color:var(--mute)}
+  .pill.ok,.pill.done{background:rgba(63,185,80,.15);color:var(--ok)}
+  .pill.warn,.pill.pending{background:rgba(210,153,34,.15);color:var(--warn)}
+  .pill.err,.pill.error,.pill.failed{background:rgba(248,81,73,.15);color:var(--err)}
+  .pill.info,.pill.running,.pill.executed,.pill.auto{background:rgba(88,166,255,.15);color:var(--info)}
+  .pill.silenced,.pill.expired{background:var(--line);color:var(--dim)}
 
-  table{width:100%;border-collapse:collapse;font-size:13px}
-  th,td{text-align:left;padding:9px 10px;border-bottom:1px solid var(--line);vertical-align:top}
-  th{color:var(--mute);font-weight:500;text-transform:uppercase;font-size:10.5px;letter-spacing:.5px}
-  tr:hover td{background:var(--bg)}
-  td.right,th.right{text-align:right}
-  td.mono{font:12px ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--mute)}
-  td.actions{white-space:nowrap}
-  .table-wrap{overflow-x:auto;background:var(--panel);border:1px solid var(--line);border-radius:var(--r)}
+  .editor{background:var(--panel);border:1px solid var(--line);
+    border-radius:var(--r);padding:14px;margin-bottom:10px}
+  .editor p{color:var(--mute);font-size:12px;margin-bottom:8px}
+  .editor .actions{display:flex;gap:8px;margin-top:8px;align-items:center}
+  .editor .result{margin-top:8px;font-size:12px;color:var(--ok)}
+  .editor .result.err{color:var(--err)}
 
-  pre{font:12px ui-monospace,Menlo,monospace;white-space:pre-wrap;word-break:break-word;
-    color:var(--mute);max-height:220px;overflow:auto;background:var(--bg);padding:8px;border-radius:4px}
-  code{font:12px ui-monospace,Menlo,monospace;color:var(--info);background:var(--bg);padding:1px 5px;border-radius:3px}
+  .empty{color:var(--dim);font-size:13px;font-style:italic;padding:14px 4px}
 
-  .empty{text-align:center;color:var(--mute);padding:48px 20px;font-size:13px}
-  .spinner{display:inline-block;width:14px;height:14px;border:2px solid var(--line);
-    border-top-color:var(--info);border-radius:50%;animation:s .8s linear infinite}
-  @keyframes s{to{transform:rotate(360deg)}}
+  .threshold{display:flex;gap:8px;align-items:center;margin-top:8px}
+  .threshold input{max-width:120px}
 
-  /* modal */
-  .modal-bg{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:100;
-    display:flex;align-items:center;justify-content:center;padding:20px}
-  .modal{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
-    width:min(720px,100%);max-height:90vh;display:flex;flex-direction:column}
-  .modal-head{padding:14px 18px;border-bottom:1px solid var(--line);
-    display:flex;justify-content:space-between;align-items:center}
-  .modal-head h3{font-size:15px;font-weight:600}
-  .modal-body{padding:18px;overflow:auto;flex:1}
-  .modal-foot{padding:12px 18px;border-top:1px solid var(--line);
-    display:flex;gap:8px;justify-content:flex-end}
+  details{background:var(--panel);border:1px solid var(--line);
+    border-radius:var(--r);padding:0;margin-bottom:8px}
+  details>summary{padding:10px 14px;cursor:pointer;color:var(--mute);
+    font-size:12px;list-style:none;text-transform:uppercase;letter-spacing:.5px}
+  details>summary::-webkit-details-marker{display:none}
+  details>summary::before{content:"▸ ";color:var(--dim)}
+  details[open]>summary::before{content:"▾ "}
+  details>div{padding:0 14px 14px}
 
-  /* toast */
-  .toasts{position:fixed;bottom:16px;right:16px;z-index:200;display:flex;flex-direction:column;gap:6px}
-  .toast{background:var(--panel);border:1px solid var(--line);padding:10px 14px;
-    border-radius:var(--r);font-size:12px;color:var(--fg);max-width:360px;
-    animation:slide .2s ease-out}
-  .toast.ok{border-left:3px solid var(--ok)}
-  .toast.err{border-left:3px solid var(--err)}
-  @keyframes slide{from{transform:translateX(20px);opacity:0}to{transform:none;opacity:1}}
-
-  /* login */
-  .login-wrap{display:flex;align-items:center;justify-content:center;min-height:100vh;padding:20px}
-  .login{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);
-    padding:36px 32px;width:min(380px,100%);text-align:center}
-  .login h1{font-size:18px;margin-bottom:8px}
-  .login p{color:var(--mute);font-size:13px;margin-bottom:20px}
-
-  /* responsive */
-  @media (max-width:880px){
-    .shell{grid-template-columns:1fr}
-    .sidebar{position:fixed;left:-260px;width:240px;transition:left .2s;z-index:50;box-shadow:2px 0 8px rgba(0,0,0,.4)}
-    .sidebar.open{left:0}
-    .topbar{display:flex;align-items:center;justify-content:space-between;
-      padding:12px 16px;border-bottom:1px solid var(--line);background:var(--panel);
-      position:sticky;top:0;z-index:40}
-    .topbar .burger{background:none;border:none;color:var(--fg);font-size:18px;padding:4px 8px}
-    .topbar .ttl{font-weight:600;font-size:14px}
-    main{padding:16px}
-    .grid.cols-2,.grid.cols-3{grid-template-columns:1fr}
-    .scrim{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:45;display:none}
-    .scrim.show{display:block}
-  }
+  .preview{color:var(--mute);font-size:12px;max-width:480px;
+    overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 </style>
 </head>
 <body>
-<div id="root"></div>
-<div id="toasts" class="toasts"></div>
+<header>
+  <div class="brand"><span class="dot"></span>Vera v3</div>
+  <div class="meta">
+    <span id="updated">—</span>
+    <button onclick="loadAll()">↻ обновить</button>
+    <a href="/api/observability">JSON</a>
+    <a href="#" onclick="logout()">выйти</a>
+  </div>
+</header>
+
+<main>
+
+<!-- 1. МОЗГ -->
+<section>
+  <h2>🧠 Мозг — что Вера знает</h2>
+  <div class="grid" id="graph-cards"></div>
+  <div class="grid" id="identity-cards"></div>
+</section>
+
+<!-- 2. ПОТОК -->
+<section>
+  <h2>📥 Поток — что приходит</h2>
+  <div class="grid" id="flow-cards"></div>
+  <table id="backfill-table" style="margin-top:10px">
+    <thead><tr>
+      <th>backfill job</th><th>source</th><th>since</th>
+      <th>status</th><th>ingested</th>
+    </tr></thead><tbody></tbody>
+  </table>
+</section>
+
+<!-- 3. ОБУЧЕНИЕ -->
+<section>
+  <h2>🎯 Обучение — научи Веру</h2>
+
+  <div class="editor">
+    <p>Напиши Вере правило, цель или запрет — LLM распарсит в граф.<br>
+       Примеры: «всегда отвечай маме за час», «никогда не отправляй деньги без подтверждения», «цель недели — закрыть 3 сделки в Veranda Payments»</p>
+    <textarea id="editor-text" placeholder="Свободный текст по-русски…"></textarea>
+    <div class="actions">
+      <button class="primary" onclick="submitEditor()">→ записать в граф</button>
+      <span id="editor-result" class="result"></span>
+    </div>
+  </div>
+
+  <div class="editor">
+    <p>Порог карточек: если v3 score &lt; <b id="thr-cur">5.0</b> — событие тихо. Меньше = громче, больше = тише.</p>
+    <div class="threshold">
+      <button onclick="setThreshold(3.0)">3 (громче)</button>
+      <button onclick="setThreshold(5.0)">5 (default)</button>
+      <button onclick="setThreshold(7.0)">7 (тише)</button>
+    </div>
+  </div>
+
+  <h3 style="font-size:12px;color:var(--mute);margin:14px 0 6px;
+              text-transform:uppercase;letter-spacing:.5px">
+    Топ паттерны (что выучила)
+  </h3>
+  <table id="patterns-table">
+    <thead><tr>
+      <th>label</th><th>tool</th><th>obs</th><th>confirm</th><th>correct</th>
+    </tr></thead><tbody></tbody>
+  </table>
+</section>
+
+<!-- 4. КЛЮЧИ -->
+<section>
+  <h2>🔑 Ключи — LLM пул</h2>
+  <table id="tokens-table"><thead><tr>
+    <th>provider</th><th>active</th><th>inactive</th>
+  </tr></thead><tbody></tbody></table>
+</section>
+
+<!-- 5. ЛОГ -->
+<section>
+  <h2>📋 Лог — последние события</h2>
+  <table id="events-table">
+    <thead><tr>
+      <th>id</th><th>src</th><th>status</th><th>preview</th><th>когда</th>
+    </tr></thead><tbody></tbody>
+  </table>
+</section>
+
+<details>
+  <summary>🛠 legacy admin (старые разделы — для технических нужд)</summary>
+  <div>
+    <ul style="margin-left:20px;color:var(--mute);font-size:13px">
+      <li><a href="/api/sources">/api/sources</a> — CRUD источников</li>
+      <li><a href="/api/tokens">/api/tokens</a> — LLM токены (raw)</li>
+      <li><a href="/api/mcp">/api/mcp</a> — MCP серверы</li>
+      <li><a href="/api/jobs/backfill">/api/jobs/backfill</a> — backfill queue</li>
+      <li><a href="/api/jobs/ingest">/api/jobs/ingest</a> — ingest queue</li>
+      <li><a href="/api/brain/identity">/api/brain/identity</a> — узлы L3</li>
+      <li><a href="/api/decide/1">/api/decide/{event_id}</a> — что v3 решил бы</li>
+    </ul>
+  </div>
+</details>
+
+</main>
 
 <script>
-"use strict";
+const $ = (id) => document.getElementById(id);
 
-/* ============================================================
-   1. UTIL
-   ============================================================ */
-const $  = (s, r=document) => r.querySelector(s);
-const el = (tag, attrs={}, ...kids) => {
-  const n = document.createElement(tag);
-  for (const [k, v] of Object.entries(attrs || {})) {
-    if (v == null || v === false) continue;
-    if (k === 'class')      n.className = v;
-    else if (k === 'text')  n.textContent = v;
-    else if (k.startsWith('on')) n.addEventListener(k.slice(2).toLowerCase(), v);
-    else n.setAttribute(k, v);
-  }
-  for (const c of kids.flat()) {
-    if (c == null || c === false) continue;
-    n.append(c instanceof Node ? c : document.createTextNode(String(c)));
-  }
-  return n;
-};
-const fmt = {
-  num: n => n == null ? '—' : Number(n).toLocaleString('ru-RU'),
-  dt: s => {
-    if (!s) return '—';
-    const d = new Date(s); if (isNaN(d)) return s;
-    const ms = Date.now() - d.getTime();
-    if (ms < 60_000) return 'только что';
-    if (ms < 3_600_000) return Math.round(ms/60_000) + 'м';
-    if (ms < 86_400_000) return Math.round(ms/3_600_000) + 'ч';
-    return d.toLocaleDateString('ru-RU') + ' ' +
-           d.toLocaleTimeString('ru-RU',{hour:'2-digit',minute:'2-digit'});
-  },
-  trunc: (s, n=80) => !s ? '' : (s.length <= n ? s : s.slice(0, n) + '…'),
-};
-
-/* ============================================================
-   2. STATE + API
-   ============================================================ */
-const state = {
-  page: localStorage.getItem('vera.page') || 'stats',
-  csrf: null,
-  loggedIn: null,            // null=unknown, true/false
-  modalOpen: false,
-  navOpen: false,
-  cache: {},                 // per-page data cache
-  pollHandle: null,
-};
-
-async function rawFetch(path, opts={}) {
-  const init = { credentials:'include', headers:{} };
-  const method = (opts.method || 'GET').toUpperCase();
-  init.method = method;
-  if (opts.body != null) {
-    init.body = typeof opts.body === 'string' ? opts.body : JSON.stringify(opts.body);
-    init.headers['Content-Type'] = 'application/json';
-  }
-  if (method !== 'GET' && method !== 'HEAD' && state.csrf) init.headers['X-CSRF'] = state.csrf;
-  return fetch(path, init);
-}
-
-async function api(path, opts={}) {
-  const r = await rawFetch(path, opts);
-  if (r.status === 401) { onUnauthorized(); return null; }
-  if (r.status === 403) {                       // stale csrf — refresh + retry
-    state.csrf = null;
-    await fetchCsrf();
-    const r2 = await rawFetch(path, opts);
-    if (!r2.ok) throw new Error(r2.status + ' ' + path);
-    if (r2.status === 204) return null;
-    const ct = r2.headers.get('content-type') || '';
-    return ct.includes('json') ? r2.json() : r2.text();
-  }
-  if (!r.ok) throw new Error(r.status + ' ' + path);
-  if (r.status === 204) return null;
-  const ct = r.headers.get('content-type') || '';
-  return ct.includes('json') ? r.json() : r.text();
-}
-
-async function fetchCsrf() {
+async function loadAll() {
+  $('updated').textContent = 'загрузка…';
   try {
-    const r = await fetch('/api/csrf', {credentials:'include'});
-    if (r.ok) { const j = await r.json(); state.csrf = j.csrf; }
-  } catch {}
-}
+    const r = await fetch('/api/observability', {credentials:'same-origin'});
+    if (r.status === 401) {
+      renderLogin();
+      return;
+    }
+    const d = await r.json();
 
-function onUnauthorized() {
-  if (state.pollHandle) { clearInterval(state.pollHandle); state.pollHandle = null; }
-  state.loggedIn = false;
-  state.csrf = null;
-  renderApp();
-}
+    // graph cards
+    $('graph-cards').innerHTML = Object.entries(d.graph || {})
+      .map(([k,n]) => `<div class="card"><div class="v">${n}</div>
+                        <div class="k">${k}</div></div>`).join('');
 
-/* ============================================================
-   3. COMPONENTS
-   ============================================================ */
-const C = {
-  pill: (text, kind='') => el('span', {class:'pill ' + kind, text}),
-  spinner: () => el('span', {class:'spinner'}),
-  empty: msg => el('div', {class:'empty', text: msg || 'Пусто'}),
-  card: (title, ...body) => el('div', {class:'card'},
-    title ? el('div', {class:'card-title'}, title) : null, ...body),
-  stat: (k, v, dim=false, sub=null) => el('div', {class:'stat'},
-    el('div', {class:'k', text:k}),
-    el('div', {class:'v' + (dim ? ' dim' : ''), text:String(v ?? '—')}),
-    sub ? el('div', {class:'delta', text:sub}) : null,
-  ),
-  row: (...kids) => el('div', {class:'row'}, ...kids),
-  btn: (text, opts={}) => el('button', {
-    class:'btn ' + (opts.kind || '') + (opts.sm ? ' sm' : ''),
-    onclick: opts.onClick, disabled: opts.disabled,
-  }, text),
+    // identity cards
+    $('identity-cards').innerHTML = Object.entries(d.identity || {})
+      .map(([k,n]) => `<div class="card"><div class="v">${n}</div>
+                        <div class="k">${k}</div></div>`).join('');
 
-  toast(msg, kind='ok', ttl=3500) {
-    const n = el('div', {class:'toast ' + kind, text: msg});
-    $('#toasts').append(n);
-    setTimeout(() => n.remove(), ttl);
-  },
+    // flow
+    const ev = d.events || {};
+    const flow = [
+      `<div class="card"><div class="v">${ev.total||0}</div>
+        <div class="k">всего событий</div></div>`,
+    ];
+    for (const [src,n] of Object.entries(ev.by_source||{})) {
+      flow.push(`<div class="card"><div class="v">${n}</div>
+                  <div class="k">${src}</div></div>`);
+    }
+    for (const [st,n] of Object.entries(ev.by_status||{})) {
+      flow.push(`<div class="card"><div class="v">${n}</div>
+                  <div class="k"><span class="pill ${st}">${st}</span></div></div>`);
+    }
+    for (const [b,n] of Object.entries(d.v3_shadow||{})) {
+      flow.push(`<div class="card"><div class="v">${n}</div>
+                  <div class="k">v3 → ${b}</div></div>`);
+    }
+    $('flow-cards').innerHTML = flow.join('');
 
-  modal({title, body, foot, onClose}) {
-    state.modalOpen = true;
-    const close = () => {
-      state.modalOpen = false;
-      try { bg.remove(); } catch {}
-      onClose && onClose();
-    };
-    const bg = el('div', {class:'modal-bg',
-      onclick: e => { if (e.target === bg) close(); }},
-      el('div', {class:'modal'},
-        el('div', {class:'modal-head'},
-          el('h3', {text:title || ''}),
-          el('button', {class:'btn sm', onclick: close}, '×'),
-        ),
-        el('div', {class:'modal-body'}, body),
-        foot ? el('div', {class:'modal-foot'}, foot) : null,
-      ),
-    );
-    document.body.append(bg);
-    return { close };
-  },
+    // backfill
+    const bft = document.querySelector('#backfill-table tbody');
+    bft.innerHTML = (d.backfill_jobs||[]).map(j => `
+      <tr><td>#${j.id}</td><td>${j.source}</td><td class="dim">${j.since||''}</td>
+          <td><span class="pill ${j.status}">${j.status}</span></td>
+          <td>${j.events_ingested||0}</td></tr>
+    `).join('') || '<tr><td colspan=5 class="empty">— нет —</td></tr>';
 
-  /** Prompt(label) → Promise<string|null>. Custom modal, not browser prompt. */
-  ask(label, {placeholder='', defaultValue='', multiline=false}={}) {
-    return new Promise(res => {
-      const input = multiline
-        ? el('textarea', {class:'input ta', placeholder, rows:'4'}, defaultValue)
-        : el('input', {class:'input', placeholder, value:defaultValue});
-      setTimeout(() => input.focus(), 50);
-      const submit = () => { mod.close(); res(input.value.trim() || null); };
-      input.addEventListener('keydown', e => {
-        if (e.key === 'Enter' && !multiline) submit();
-        if (e.key === 'Escape') { mod.close(); res(null); }
-      });
-      const mod = C.modal({
-        title: label,
-        body: input,
-        foot: [
-          C.btn('Отмена', { onClick: () => { mod.close(); res(null); }}),
-          C.btn('OK', { kind:'primary', onClick: submit }),
-        ],
-        onClose: () => res(null),
-      });
-    });
-  },
+    // patterns
+    const ptt = document.querySelector('#patterns-table tbody');
+    ptt.innerHTML = (d.top_patterns||[]).map(p => `
+      <tr><td>${esc(p.label||'?')}</td>
+          <td class="mono dim">${esc(p.tool||'')}</td>
+          <td>${p.obs||0}</td><td>${p.conf||0}</td><td>${p.corr||0}</td></tr>
+    `).join('') || '<tr><td colspan=5 class="empty">— ещё нет паттернов; нажми любую кнопку в форум-чате —</td></tr>';
 
-  confirm(label) {
-    return new Promise(res => {
-      const m = C.modal({
-        title: label,
-        body: el('div', {class:'card-sub', text:'Подтверди действие.'}),
-        foot: [
-          C.btn('Отмена', { onClick: () => { m.close(); res(false); }}),
-          C.btn('Подтвердить', { kind:'danger', onClick: () => { m.close(); res(true); }}),
-        ],
-        onClose: () => res(false),
-      });
-    });
-  },
-};
+    // tokens
+    const tt = document.querySelector('#tokens-table tbody');
+    tt.innerHTML = Object.entries(d.tokens||{}).map(([p,n]) => `
+      <tr><td>${esc(p)}</td>
+          <td><span class="pill ok">${n.active||0}</span></td>
+          <td><span class="pill expired">${n.inactive||0}</span></td></tr>
+    `).join('') || '<tr><td colspan=3 class="empty">нет токенов</td></tr>';
 
-/* ============================================================
-   4. PAGE REGISTRY
-   Each page: { title, lead?, icon, fetch(): data,
-                render(data, helpers): node, refreshSec? }
-   ============================================================ */
-const PAGES = {};
+    // events log
+    const evt = document.querySelector('#events-table tbody');
+    evt.innerHTML = (ev.recent||[]).map(e => `
+      <tr><td class="mono">#${e.id}</td>
+          <td>${e.source}</td>
+          <td><span class="pill ${e.status||''}">${e.status||''}</span></td>
+          <td class="preview">${esc(e.preview||'')}</td>
+          <td class="dim">${(e.occurred_at||'').slice(0,16).replace('T',' ')}</td></tr>
+    `).join('') || '<tr><td colspan=5 class="empty">— пусто —</td></tr>';
 
-PAGES.stats = {
-  title: 'Статистика', icon: '📊', refreshSec: 10,
-  fetch: () => Promise.all([api('/api/stats'), api('/api/balances')])
-                     .then(([s, b]) => ({stats:s, balances:b})),
-  render: ({stats, balances}) => {
-    const s = stats || {};
-    const grid = el('div', {class:'grid cols-auto'},
-      C.stat('Запросов всего', fmt.num(s.tasks_total)),
-      C.stat('За 24 часа', fmt.num(s.tasks_24h)),
-      C.stat('Источники активны', fmt.num(s.sources_active ?? '—'), true),
-      C.stat('Cost (USD, сегодня)', (s.cost_today ?? 0).toFixed(4), true),
-    );
-    const bal = balances || {};
-    const balCard = C.card('Балансы провайдеров',
-      Object.keys(bal).length === 0
-        ? C.empty('Нет балансовых данных')
-        : el('div', {class:'grid cols-2'},
-            ...Object.entries(bal).map(([prov, info]) =>
-              el('div', {class:'card tight'},
-                el('div', {class:'card-title'}, prov,
-                  C.pill(info.ok ? 'ok' : 'err', info.ok ? 'ok' : 'err')),
-                el('pre', {text: JSON.stringify(info, null, 2)}),
-              ),
-            ),
-          ),
-    );
-    return el('div', {}, grid, balCard);
-  },
-};
-
-PAGES.events = {
-  title: 'События', icon: '📥', refreshSec: 8,
-  fetch: () => api('/api/events?limit=50'),
-  render: events => {
-    if (!events || !events.length) return C.empty('Ещё нет событий');
-    const rows = events.map(e => el('tr', {},
-      el('td', {class:'mono', text:'#'+e.id}),
-      el('td', {}, C.pill(e.source, 'info')),
-      el('td', {text: e.account || '—'}),
-      el('td', {text: fmt.trunc(e.content_text, 100)}),
-      el('td', {}, statusPill(e.triage_status)),
-      el('td', {class:'mono', text: fmt.dt(e.occurred_at)}),
-    ));
-    return el('div', {class:'table-wrap'},
-      el('table', {},
-        el('thead', {}, el('tr', {},
-          el('th', {text:'#'}), el('th', {text:'Source'}), el('th', {text:'Acct'}),
-          el('th', {text:'Preview'}), el('th', {text:'Status'}), el('th', {text:'When'}))),
-        el('tbody', {}, rows),
-      ),
-    );
-  },
-};
-function statusPill(s) {
-  if (!s) return C.pill('—', 'mute');
-  if (['decided','executed','auto_executed'].includes(s)) return C.pill(s, 'ok');
-  if (['failed','execute_failed','auto_failed'].includes(s)) return C.pill(s, 'err');
-  if (['awaiting_user','proposal_only'].includes(s)) return C.pill(s, 'warn');
-  return C.pill(s, '');
-}
-
-PAGES.sources = {
-  title: 'Источники', icon: '🔌', refreshSec: 15,
-  fetch: () => Promise.all([api('/api/sources'), api('/api/gmail/accounts')])
-                     .then(([s, g]) => ({sources:s, gmail:g})),
-  render: ({sources, gmail}, helpers) => {
-    const gmailCard = C.card(
-      el('div', {class:'row'},
-        el('span', {text:'Gmail аккаунты'}),
-        C.pill((gmail||[]).length + ' подключено', 'info'),
-      ),
-      (gmail || []).length === 0
-        ? C.empty('Нет подключённых ящиков')
-        : el('div', {class:'table-wrap'},
-            el('table', {},
-              el('thead', {}, el('tr', {},
-                el('th', {text:'Email'}), el('th', {text:'Active'}),
-                el('th', {text:'Принимать авто-рассылки'}), el('th', {text:'Last poll'}))),
-              el('tbody', {}, (gmail||[]).map(g => {
-                const tog = el('input', {type:'checkbox', style:'cursor:pointer'});
-                tog.checked = !!g.include_automated;
-                tog.onchange = async () => {
-                  try {
-                    await api('/api/gmail/include_automated?email=' +
-                      encodeURIComponent(g.email) + '&value=' + tog.checked, {method:'POST'});
-                    C.toast('Настройка сохранена');
-                  } catch (e) { tog.checked = !tog.checked; C.toast(e.message, 'err'); }
-                };
-                return el('tr', {},
-                  el('td', {text:g.email}),
-                  el('td', {}, C.pill(g.is_active ? 'active' : 'off', g.is_active ? 'ok' : 'mute')),
-                  el('td', {}, tog),
-                  el('td', {class:'mono', text: fmt.dt(g.last_polled_at)}),
-                );
-              })),
-            ),
-          ),
-      el('div', {class:'row', style:'margin-top:10px'},
-        el('a', {href:'/api/gmail/oauth/start', class:'btn primary'}, '+ Подключить Gmail'),
-      ),
-    );
-
-    const list = sources || [];
-    const sourcesCard = C.card(
-      el('div', {class:'row'},
-        el('span', {text:'Кастомные источники (с фильтрами)'}),
-        C.btn('+ Новый', { kind:'primary', sm:true,
-          onClick: () => helpers.action('newSource') }),
-      ),
-      el('div', {class:'card-sub'},
-        'Filter rules: last-matching wins. Predicates: chat_type, chat_id, '+
-        'from_user_id, from_username, mention_me, reply_to_me, folder, '+
-        'mutual_chat_contains, text_contains, has_attachment.'),
-      list.length === 0
-        ? C.empty('Пока нет — добавь Telegram source через кнопку +')
-        : el('div', {class:'table-wrap'},
-            el('table', {},
-              el('thead', {}, el('tr', {},
-                el('th', {text:'Name'}), el('th', {text:'Type'}),
-                el('th', {text:'Status'}), el('th', {text:'Rules'}),
-                el('th', {text:'Thresh'}), el('th', {text:'In/Out'}),
-                el('th', {text:'Last poll'}), el('th', {text:''}))),
-              el('tbody', {}, list.map(s => el('tr', {},
-                el('td', {text:s.name}),
-                el('td', {}, C.pill(s.type, 'info')),
-                el('td', {}, C.pill(s.enabled ? 'on' : 'off', s.enabled ? 'ok' : 'mute')),
-                el('td', {text:String((s.filters||[]).length)}),
-                el('td', {text:(s.base_threshold ?? 0.95).toFixed(2)}),
-                el('td', {class:'mono', text: String(s.intake_count || 0)}),
-                el('td', {class:'mono', text: fmt.dt(s.last_polled_at)}),
-                el('td', {class:'actions'},
-                  C.btn('✎', { sm:true, onClick: () => helpers.action('editFilters', s) }),
-                  C.btn(s.enabled ? '⏸' : '▶', { sm:true,
-                    onClick: () => helpers.action('toggle', s) }),
-                  C.btn('×', { sm:true, kind:'danger',
-                    onClick: () => helpers.action('delete', s) }),
-                ),
-              ))),
-            ),
-          ),
-    );
-    return el('div', {}, gmailCard, sourcesCard);
-  },
-  actions: {
-    async newSource() {
-      const type = await C.ask('Тип (telegram | gmail | bank | instagram | generic)', {defaultValue:'telegram'});
-      if (!type) return;
-      const name = await C.ask('Имя источника (уникальное, без пробелов)');
-      if (!name) return;
-      const acc = await C.ask('Account (опц.)', {defaultValue:''});
-      try {
-        await api('/api/sources', {method:'POST',
-          body:{type:type.trim(), name:name.trim(), account:acc || null,
-                filters:[{match:{chat_type:'private'}, action:'include'}]}});
-        C.toast('Создан источник ' + name);
-        refreshActivePage();
-      } catch (e) { C.toast(e.message, 'err'); }
-    },
-    async toggle(s) {
-      try { await api('/api/sources/' + s.id, {method:'PUT', body:{enabled: !s.enabled}});
-            refreshActivePage(); } catch (e) { C.toast(e.message, 'err'); }
-    },
-    async delete(s) {
-      if (!await C.confirm('Удалить источник «' + s.name + '»?')) return;
-      try { await api('/api/sources/' + s.id, {method:'DELETE'});
-            C.toast('Удалён', 'ok'); refreshActivePage(); } catch (e) { C.toast(e.message, 'err'); }
-    },
-    async editFilters(s) {
-      const ta = el('textarea', {class:'input ta', rows:'18'},
-        JSON.stringify(s.filters || [], null, 2));
-      const thr = el('input', {class:'input', type:'number', step:'0.01',
-        min:'0', max:'1', value:String(s.base_threshold ?? 0.95),
-        style:'width:120px'});
-      const m = C.modal({
-        title: 'Фильтры — ' + s.name,
-        body: el('div', {},
-          el('div', {class:'card-sub'}, 'Массив правил {match, action}. '+
-            'Действия: include | exclude | priority. Последнее совпавшее побеждает.'),
-          ta,
-          el('div', {class:'row', style:'margin-top:10px'},
-            el('label', {class:'card-sub', text:'Threshold:'}),
-            thr,
-          ),
-        ),
-        foot: [
-          C.btn('Отмена', {onClick: () => m.close()}),
-          C.btn('Сохранить', {kind:'primary', onClick: async () => {
-            let parsed;
-            try { parsed = JSON.parse(ta.value); }
-            catch (e) { return C.toast('JSON: ' + e.message, 'err'); }
-            try {
-              await api('/api/sources/' + s.id, {method:'PUT',
-                body:{filters: parsed, base_threshold: parseFloat(thr.value) || 0.95}});
-              m.close(); C.toast('Сохранено'); refreshActivePage();
-            } catch (e) { C.toast(e.message, 'err'); }
-          }}),
-        ],
-      });
-    },
-  },
-};
-
-PAGES.mcp = {
-  title: 'MCP', icon: '🧩', refreshSec: 15,
-  fetch: () => Promise.all([api('/api/mcp/servers'), api('/api/mcp/presets')])
-                     .then(([s, p]) => ({servers:s, presets:p})),
-  render: ({servers, presets}, helpers) => {
-    const installed = new Set((servers || []).map(s => s.name));
-    const presetsCard = C.card('📦 Пресеты',
-      el('div', {class:'card-sub'}, 'Готовые MCP-сервера. Если есть env_required — спросит при установке.'),
-      el('div', {class:'grid cols-auto'},
-        ...(presets || []).map(p => el('div', {class:'card compact'},
-          el('div', {class:'row', style:'justify-content:space-between'},
-            el('strong', {text:p.label}),
-            installed.has(p.id)
-              ? C.pill('установлен', 'ok')
-              : C.btn('+ Поставить', {kind:'primary', sm:true,
-                  onClick: () => helpers.action('installPreset', p)}),
-          ),
-          el('div', {class:'card-sub', text: p.description}),
-          (p.env_required && p.env_required.length)
-            ? el('div', {class:'card-sub', text:'env: ' + p.env_required.join(', ')})
-            : null,
-        )),
-      ),
-    );
-
-    const tbl = (servers || []).length === 0
-      ? C.empty('Нет MCP-серверов')
-      : el('div', {class:'table-wrap'}, el('table', {},
-          el('thead', {}, el('tr', {},
-            el('th', {text:'Name'}), el('th', {text:'Status'}),
-            el('th', {text:'Tools'}), el('th', {text:'Calls'}),
-            el('th', {text:'Last call'}), el('th', {text:'Source'}),
-            el('th', {text:''}))),
-          el('tbody', {}, servers.map(m => el('tr', {},
-            el('td', {text:m.name}),
-            el('td', {}, statusPill(m.status)),
-            el('td', {text: String(m.tools_count || 0)}),
-            el('td', {class:'mono', text: String(m.tool_calls_count || 0)}),
-            el('td', {class:'mono', text: fmt.dt(m.last_tool_call_at)}),
-            el('td', {}, C.pill(m.installed_by || 'manual', 'mute')),
-            el('td', {class:'actions'},
-              C.btn('⟳', {sm:true, onClick: () => helpers.action('restart', m)}),
-              C.btn('×', {sm:true, kind:'danger', onClick: () => helpers.action('remove', m)}),
-            ),
-          ))),
-        ));
-
-    return el('div', {}, presetsCard,
-      C.card('Установленные', tbl),
-    );
-  },
-  actions: {
-    async installPreset(p) {
-      const env = {};
-      for (const k of (p.env_required || [])) {
-        const v = await C.ask(`${p.label} → ${k}`);
-        if (!v) return;
-        env[k] = v;
-      }
-      const name = await C.ask('Имя сервера', {defaultValue: p.id});
-      if (!name) return;
-      try {
-        await api('/api/mcp/presets/' + encodeURIComponent(p.id),
-          {method:'POST', body:{name: name.trim(), env}});
-        C.toast('Установлено, проверь статус через ~10с');
-        setTimeout(refreshActivePage, 10_000);
-      } catch (e) { C.toast(e.message, 'err'); }
-    },
-    async restart(m) {
-      try { await api('/api/mcp/servers/' + encodeURIComponent(m.name) + '/restart', {method:'POST'});
-            C.toast('⟳ ' + m.name); refreshActivePage(); } catch (e) { C.toast(e.message, 'err'); }
-    },
-    async remove(m) {
-      if (!await C.confirm('Удалить MCP «' + m.name + '»?')) return;
-      try { await api('/api/mcp/servers/' + encodeURIComponent(m.name), {method:'DELETE'});
-            refreshActivePage(); } catch (e) { C.toast(e.message, 'err'); }
-    },
-  },
-};
-
-PAGES.self_extend = {
-  title: 'Self-extend', icon: '✨', refreshSec: 20,
-  fetch: () => api('/api/self_extend/status'),
-  render: (st, helpers) => {
-    const rate = (st && st.rate) || {};
-    const props = (st && st.proposals) || [];
-    const idle = (st && st.idle_30d) || [];
-    const expired = (st && st.expired_auth) || [];
-
-    const discover = C.card('🔎 Найти инструмент',
-      el('div', {class:'card-sub'}, 'Опиши задачу — Vera найдёт MCP-сервер и предложит установку в DM.'),
-      (() => {
-        const inp = el('input', {class:'input', placeholder:'например, отправлять DM в Instagram'});
-        const btn = C.btn('Поискать', { kind:'primary', onClick: async () => {
-          const cap = inp.value.trim(); if (!cap) return;
-          try {
-            const r = await api('/api/self_extend/discover', {method:'POST', body:{capability:cap}});
-            if (!r || !r.ok) C.toast('Не нашла: ' + (r?.reason || 'unknown'), 'err');
-            else C.toast('Предложение #' + r.proposal_id + ' отправлено в DM');
-            refreshActivePage();
-          } catch (e) { C.toast(e.message, 'err'); }
-        }});
-        return el('div', {class:'row'}, inp, btn);
-      })(),
-    );
-
-    const limits = C.card('Лимиты',
-      el('div', {class:'card-sub'},
-        `За час: ${rate.events_last_hour ?? 0}/${rate.hour_limit ?? 1} · ` +
-        `За сутки: ${rate.events_24h ?? 0}/${rate.day_limit ?? 5}` +
-        (rate.next_allowed_at ? ` · Next: ${fmt.dt(rate.next_allowed_at)}` : '')),
-    );
-
-    const cards = [discover, limits];
-    if (expired.length) cards.push(C.card('🔐 Просрочены токены',
-      el('div', {}, ...expired.map(e =>
-        el('div', {class:'card-sub'}, e.name + ' (last: ' + fmt.dt(e.since) + ')'))),
-    ));
-    if (idle.length) cards.push(C.card('💤 Не использовались 30 дней',
-      el('div', {class:'table-wrap'}, el('table', {},
-        el('thead', {}, el('tr', {},
-          el('th', {text:'Name'}), el('th', {text:'Calls'}), el('th', {text:'Last'}), el('th'))),
-        el('tbody', {}, idle.map(m => el('tr', {},
-          el('td', {text:m.name}),
-          el('td', {class:'mono', text:String(m.tool_calls)}),
-          el('td', {class:'mono', text: fmt.dt(m.last_used) || 'никогда'}),
-          el('td', {class:'actions'},
-            C.btn('×', {sm:true, kind:'danger', onClick: async () => {
-              if (!await C.confirm('Удалить MCP ' + m.name + '?')) return;
-              await api('/api/self_extend/uninstall/' + encodeURIComponent(m.name), {method:'POST'});
-              refreshActivePage();
-            }})),
-        ))),
-      )),
-    ));
-    cards.push(C.card('История предложений',
-      props.length === 0
-        ? C.empty('Ещё нет предложений')
-        : el('div', {class:'table-wrap'}, el('table', {},
-            el('thead', {}, el('tr', {},
-              el('th', {text:'#'}), el('th', {text:'Capability'}),
-              el('th', {text:'Package'}), el('th', {text:'Status'}),
-              el('th', {text:'When'}), el('th', {text:'Error'}))),
-            el('tbody', {}, props.map(p => el('tr', {},
-              el('td', {class:'mono', text:'#'+p.id}),
-              el('td', {text: p.capability}),
-              el('td', {class:'mono', text: p.package_name || '—'}),
-              el('td', {}, statusPill(p.status)),
-              el('td', {class:'mono', text: fmt.dt(p.created_at)}),
-              el('td', {text: fmt.trunc(p.error, 60)}),
-            ))),
-          )),
-    ));
-    return el('div', {}, ...cards);
-  },
-};
-
-PAGES.research = {
-  title: 'Память', icon: '🧠',
-  fetch: () => Promise.resolve(null),
-  render: () => {
-    const fileInput = el('input', {type:'file', multiple:true, accept:'.md,.txt,.json',
-      class:'input', style:'margin-bottom:8px'});
-    const source = el('select', {class:'input', style:'max-width:200px'},
-      el('option', {value:'perplexity', text:'Perplexity'}),
-      el('option', {value:'chatgpt', text:'ChatGPT'}),
-      el('option', {value:'notes', text:'Заметки'}),
-    );
-    const status = el('div', {class:'card-sub'},
-      'Выбери .md/.txt/.json из экспорта. Каждый файл = эпизод в мозг.');
-    const btn = C.btn('Загрузить в мозг', { kind:'primary', onClick: async () => {
-      const files = Array.from(fileInput.files || []);
-      if (!files.length) return C.toast('Выбери файлы', 'err');
-      status.textContent = 'Читаю ' + files.length + ' файлов…';
-      const docs = [];
-      for (const f of files) {
-        const text = await f.text();
-        if (f.name.endsWith('.json')) {
-          try {
-            const a = JSON.parse(text);
-            const list = Array.isArray(a) ? a : (a.threads || a.documents || []);
-            for (const x of list) docs.push({title: x.title || x.name || f.name,
-              body: x.body || x.content || x.text || '', url: x.url || x.share_url,
-              date: x.date || x.created_at});
-          } catch { docs.push({title: f.name, body: text}); }
-        } else {
-          const m = text.match(/^---\s*\n[\s\S]*?\n---\s*\n/);
-          const body = m ? text.slice(m[0].length) : text;
-          const t = body.match(/^#\s+(.+)$/m);
-          docs.push({title: t ? t[1].trim() : f.name.replace(/\.(md|txt)$/,''), body});
-        }
-      }
-      let total = 0;
-      for (let i = 0; i < docs.length; i += 40) {
-        const batch = docs.slice(i, i + 40);
-        const r = await api('/api/research/import', {method:'POST',
-          body:{source: source.value, documents: batch}});
-        total += (r?.queued || 0);
-        status.textContent = `Залила ${total}/${docs.length}…`;
-      }
-      status.textContent = `✅ Готово: ${total} эпизодов в очереди Graphiti.`;
-      fileInput.value = '';
-    }});
-    return el('div', {},
-      C.card('📚 Загрузка дампов',
-        el('div', {class:'card-sub'},
-          'Используй «Perplexity to Notion - Batch Export» (Chrome) для скачивания Spaces/Threads в Markdown.'),
-        el('div', {class:'row'}, source, btn),
-        fileInput,
-        status,
-      ),
-    );
-  },
-};
-
-PAGES.tokens = {
-  title: 'Токены', icon: '🔑', refreshSec: 30,
-  fetch: () => api('/api/tokens'),
-  render: tokens => {
-    if (!tokens || !tokens.length) return C.empty('Нет токенов');
-    return el('div', {class:'table-wrap'}, el('table', {},
-      el('thead', {}, el('tr', {},
-        el('th', {text:'Provider'}), el('th', {text:'Label'}),
-        el('th', {text:'Caps'}), el('th', {text:'Active'}),
-        el('th', {text:'Used / Limit'}), el('th', {text:'Last used'}))),
-      el('tbody', {}, tokens.map(t => el('tr', {},
-        el('td', {text:t.provider}),
-        el('td', {text:t.label}),
-        el('td', {}, ...(t.capabilities || []).map(c => C.pill(c, 'mute'))),
-        el('td', {}, C.pill(t.is_active ? 'on' : 'off', t.is_active ? 'ok' : 'mute')),
-        el('td', {class:'mono', text: `${t.daily_used || 0} / ${t.daily_limit || '∞'}`}),
-        el('td', {class:'mono', text: fmt.dt(t.last_used_at)}),
-      ))),
-    ));
-  },
-};
-
-PAGES.agents = {
-  title: 'Агенты', icon: '🤖', refreshSec: 20,
-  fetch: () => api('/api/agents'),
-  render: agents => {
-    if (!agents || !agents.length) return C.empty('Нет агентов');
-    return el('div', {}, ...agents.map(a => C.card(
-      el('div', {class:'row'},
-        el('strong', {text:a.name}),
-        C.pill(a.status, a.status === 'online' ? 'ok' : 'mute'),
-      ),
-      el('div', {class:'card-sub'},
-        a.id + ' · ' + a.http_url + ' · last hb: ' + fmt.dt(a.last_heartbeat)),
-      el('div', {class:'row'},
-        ...(a.tools || []).map(t => C.pill(t.name, 'info'))),
-    )));
-  },
-};
-
-/* ============================================================
-   5. SHELL — sidebar + router
-   ============================================================ */
-const NAV_ORDER = ['stats','events','sources','mcp','self_extend','research','tokens','agents'];
-
-function setPage(name) {
-  state.page = name;
-  state.navOpen = false;
-  localStorage.setItem('vera.page', name);
-  renderApp();
-  refreshActivePage();
-}
-
-async function refreshActivePage(opts={}) {
-  if (state.modalOpen && !opts.force) return;
-  const page = PAGES[state.page];
-  if (!page) return;
-  try {
-    const data = await page.fetch();
-    state.cache[state.page] = data;
-    const body = $('#page-body');
-    if (!body) return;
-    body.replaceChildren(page.render(data, {
-      action: (kind, arg) => page.actions?.[kind]?.(arg),
-    }));
+    $('updated').textContent = 'обновлено ' + new Date().toLocaleTimeString();
   } catch (e) {
-    console.warn('refresh failed', e);
+    $('updated').textContent = 'ошибка: ' + e.message;
   }
 }
 
-function startPolling() {
-  if (state.pollHandle) clearInterval(state.pollHandle);
-  state.pollHandle = setInterval(() => {
-    if (state.loggedIn !== true) return;
-    const p = PAGES[state.page];
-    if (p && p.refreshSec) refreshActivePage();
-  }, 5_000);
+function esc(s) { return String(s).replace(/[<>&]/g,c=>({"<":"&lt;",">":"&gt;","&":"&amp;"})[c]); }
+
+async function submitEditor() {
+  const txt = $('editor-text').value.trim();
+  if (!txt) return;
+  $('editor-result').textContent = '…';
+  $('editor-result').className = 'result';
+  try {
+    const r = await fetch('/api/brain/editor', {
+      method:'POST', credentials:'same-origin',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({text: txt}),
+    });
+    const d = await r.json();
+    if (d.op && d.op !== 'none') {
+      $('editor-result').textContent = `✓ создан ${d.op}: ${d.id || JSON.stringify(d.raw)}`;
+      $('editor-text').value = '';
+      loadAll();
+    } else {
+      $('editor-result').textContent = '⚠ ' + (d.reason || JSON.stringify(d));
+      $('editor-result').className = 'result err';
+    }
+  } catch (e) {
+    $('editor-result').textContent = 'err: ' + e.message;
+    $('editor-result').className = 'result err';
+  }
 }
 
-function renderApp() {
-  const root = $('#root');
-  root.replaceChildren();
-  if (state.loggedIn === false) return root.append(renderLogin());
-  if (state.loggedIn !== true)  return root.append(renderLogin());  // first paint
-
-  const shell = el('div', {class:'shell'},
-    renderSidebar(),
-    state.navOpen ? el('div', {class:'scrim show', onclick: () => { state.navOpen = false; renderApp(); }}) : null,
-    el('div', {style:'display:flex;flex-direction:column;min-width:0'},
-      el('div', {class:'topbar'},
-        el('button', {class:'burger', onclick: () => { state.navOpen = true; renderApp(); }}, '☰'),
-        el('div', {class:'ttl', text: PAGES[state.page]?.title || 'Vera'}),
-        C.btn('↻', { sm:true, onClick: () => refreshActivePage({force:true}) }),
-      ),
-      renderMain(),
-    ),
-  );
-  root.append(shell);
-
-  refreshActivePage();
+function setThreshold(v) {
+  $('thr-cur').textContent = v.toFixed(1);
+  alert(`Поменяй на сервере: ssh hetzner-root "sed -i '/^VERA_CARD_MIN_SCORE/d' /var/www/vera/.env && echo VERA_CARD_MIN_SCORE=${v} >> /var/www/vera/.env && docker compose -f /var/www/vera/docker-compose.yml restart vera-core"`);
 }
 
-function renderSidebar() {
-  const navBtns = NAV_ORDER.map(name => {
-    const p = PAGES[name]; if (!p) return null;
-    return el('button', { class: state.page === name ? 'active' : '',
-        onclick: () => setPage(name) },
-      el('span', {class:'icon', text: p.icon || '·'}),
-      el('span', {text: p.title}),
-    );
-  });
-  return el('aside', {class:'sidebar ' + (state.navOpen ? 'open' : '')},
-    el('div', {class:'brand'},
-      el('span', {}, el('span', {class:'dot'}), 'Vera'),
-      el('span', {style:'color:var(--mute);font-size:11px'}, 'v2'),
-    ),
-    el('nav', {}, ...navBtns),
-    el('div', {class:'foot'},
-      el('span', {text:'live'}),
-      el('a', {href:'/api/logout', text:'выход'}),
-    ),
-  );
-}
-
-function renderMain() {
-  const p = PAGES[state.page];
-  if (!p) return el('main', {}, C.empty('Страница не найдена'));
-  return el('main', {},
-    el('div', {class:'page-head'},
-      el('div', {},
-        el('h2', {text: p.title}),
-        p.lead ? el('div', {class:'lead', text:p.lead}) : null,
-      ),
-      el('div', {class:'ctrl'},
-        C.btn('↻ Обновить', { sm:true, onClick: () => refreshActivePage({force:true}) }),
-      ),
-    ),
-    el('div', {id:'page-body'}, C.spinner()),
-  );
+function logout() {
+  window.location.href = '/api/logout';
 }
 
 function renderLogin() {
-  // Telegram widget needs to be inserted from a parsed-HTML <script> tag,
-  // dynamically-appended script elements don't trigger the widget bootstrap.
-  // Use innerHTML which goes through the HTML parser.
-  const host = el('div', {class:'login-wrap'},
-    el('div', {class:'login'},
-      el('h1', {text: 'Vera'}),
-      el('p', {text: 'Войди через Telegram'}),
-      el('div', {id:'tg-login-slot'}),
-    ),
-  );
-  setTimeout(() => {
-    const slot = host.querySelector('#tg-login-slot');
-    if (!slot) return;
-    slot.innerHTML =
-      '<script async src="https://telegram.org/js/telegram-widget.js?22"' +
-      ' data-telegram-login="Dimondra_Ai_Bot" data-size="large"' +
-      ' data-auth-url="/api/tg_login" data-request-access="write"></scr' + 'ipt>';
-    // innerHTML doesn't execute scripts — manually re-create + replace.
-    const oldScript = slot.querySelector('script');
-    if (oldScript) {
-      const fresh = document.createElement('script');
-      for (const a of oldScript.attributes) fresh.setAttribute(a.name, a.value);
-      oldScript.replaceWith(fresh);
-    }
-  }, 0);
-  return host;
+  document.querySelector('main').innerHTML = `
+    <section style="max-width:480px;margin:60px auto;text-align:center">
+      <h2 style="font-size:18px;margin-bottom:8px">Войти в Vera v3</h2>
+      <p style="color:var(--mute);margin-bottom:24px">
+        Только для владельца. Авторизация через Telegram.
+      </p>
+      <div id="tg-login-widget"></div>
+    </section>
+  `;
+  // Telegram Login Widget
+  const s = document.createElement('script');
+  s.src = 'https://telegram.org/js/telegram-widget.js?22';
+  s.async = true;
+  s.setAttribute('data-telegram-login', 'Dimondra_Ai_Bot');
+  s.setAttribute('data-size', 'large');
+  s.setAttribute('data-radius', '8');
+  s.setAttribute('data-auth-url', '/api/tg_login');
+  s.setAttribute('data-request-access', 'write');
+  document.getElementById('tg-login-widget').appendChild(s);
 }
 
-/* ============================================================
-   6. BOOT
-   ============================================================ */
-async function boot() {
-  // Probe session
-  try {
-    const r = await fetch('/api/whoami', {credentials:'include'});
-    state.loggedIn = r.ok;
-    if (r.ok) await fetchCsrf();
-  } catch { state.loggedIn = false; }
-  renderApp();
-  startPolling();
-}
-boot();
+loadAll();
+setInterval(loadAll, 30000);
 </script>
 </body>
 </html>
