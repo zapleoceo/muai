@@ -101,3 +101,40 @@ def schedule_ingest(event_id: int, **kw) -> None:
         schedule_triage(event_id)
     except Exception as exc:
         log.warning("Triage schedule failed for event %d: %s", event_id, exc)
+    # v3 shadow — run decide() in background, save result into
+    # Event.triage_result['v3_shadow']. Pure observability; v2 still
+    # owns the live UX. Lets us A/B compare per-event without risk.
+    spawn(_v3_shadow_decide(event_id), name=f"v3-shadow-{event_id}")
+
+
+async def _v3_shadow_decide(event_id: int) -> None:
+    try:
+        from sqlalchemy import select
+        from vera_shared.db.engine import get_session
+        from vera_shared.db.models import Event
+        from app.decide.dispatch import decide
+        async with get_session() as s:
+            ev = (await s.execute(
+                select(Event).where(Event.id == event_id)
+            )).scalar_one_or_none()
+            if ev is None:
+                return
+            hints = ev.entity_hints or []
+        d = await decide(hints)
+        shadow = {
+            "band": d.band,
+            "score": round(d.chosen.score, 3) if d.chosen else None,
+            "label": d.chosen.candidate.label if d.chosen else None,
+            "tool": d.chosen.candidate.tool if d.chosen else None,
+            "n_candidates": len(d.candidates),
+        }
+        async with get_session() as s:
+            ev = await s.get(Event, event_id)
+            if ev is None:
+                return
+            tr = dict(ev.triage_result or {})
+            tr["v3_shadow"] = shadow
+            ev.triage_result = tr
+            await s.commit()
+    except Exception as exc:
+        log.debug("v3 shadow decide failed for event %s: %s", event_id, exc)

@@ -63,6 +63,7 @@ async def snapshot(_=Depends(require_owner)) -> dict:
 
     graph_counts = await _graph_counts()
     identity = await ID.list_active()
+    v3_shadow = await _v3_shadow_distribution()
 
     return {
         "events": {"total": n_events, "by_source": per_src,
@@ -73,7 +74,28 @@ async def snapshot(_=Depends(require_owner)) -> dict:
         "graph": graph_counts,
         "identity": {k: len(v) for k, v in identity.items()},
         "identity_detail": identity,
+        "v3_shadow": v3_shadow,
     }
+
+
+async def _v3_shadow_distribution() -> dict:
+    """Count how often v3 shadow decide would have hit each band, on the
+    most recent N events. Empty when no shadow data yet."""
+    async with get_session() as s:
+        rs = (await s.execute(
+            select(Event.triage_result).order_by(desc(Event.id)).limit(200)
+        )).scalars().all()
+    bands = {"auto": 0, "propose": 0, "ask": 0, "missing": 0}
+    for tr in rs:
+        if not tr:
+            bands["missing"] += 1
+            continue
+        sh = (tr or {}).get("v3_shadow") if isinstance(tr, dict) else None
+        if not sh:
+            bands["missing"] += 1
+            continue
+        bands[sh.get("band", "missing")] = bands.get(sh.get("band", "missing"), 0) + 1
+    return bands
 
 
 async def _graph_counts() -> dict:
