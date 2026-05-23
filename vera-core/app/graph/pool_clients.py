@@ -89,10 +89,12 @@ def make_llm_client(model: str = "gemini-2.0-flash", capability: str = "chat:fas
                 return await fallback._generate_response(*args, **kwargs)
             except Exception as exc:
                 status = _status_from_exc(exc)
-                if status:
+                # Don't cooldown the key on 429 — Gemini's per-minute
+                # quota refreshes quickly. Only cooldown on hard auth
+                # errors (401/403). Cooldown on 429 makes the pool
+                # falsely report exhausted for hours.
+                if status and status not in (429, 503):
                     await get_pool().on_error(token.id, status)
-                # Free-tier Gemini → 429 / 503 / quota: fall back to
-                # DeepSeek for THIS call rather than re-raising.
                 if status in (429, 503):
                     fallback = await _build_deepseek_fallback()
                     if fallback is not None:
