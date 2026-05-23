@@ -33,17 +33,47 @@ async def _refresh_gemini_client(holder, *, capability: str = "chat:fast"):
 # -------- LLM ---------------------------------------------------------------
 
 
+async def _build_deepseek_fallback() -> object | None:
+    """Lazy DeepSeek-via-OpenAI Graphiti client; rebuilt per call so we
+    pick a fresh deepseek key from the pool each time."""
+    from graphiti_core.llm_client.config import LLMConfig
+    from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
+    from openai import AsyncOpenAI
+    try:
+        token = await get_token("deepseek", "chat:fast")
+    except TokensExhausted:
+        return None
+    aclient = AsyncOpenAI(api_key=token.token,
+                          base_url="https://api.deepseek.com")
+    client = OpenAIGenericClient(
+        config=LLMConfig(api_key=token.token, model="deepseek-chat"),
+        client=aclient,
+    )
+    return client
+
+
 def make_llm_client(model: str = "gemini-2.5-flash-lite", capability: str = "chat:fast"):
     from graphiti_core.llm_client.config import LLMConfig
     from graphiti_core.llm_client.gemini_client import GeminiClient
 
     class PoolGeminiClient(GeminiClient):
         async def _generate_response(self, *args, **kwargs):
-            token = await _refresh_gemini_client(self, capability=capability)
+            try:
+                token = await _refresh_gemini_client(self, capability=capability)
+            except TokensExhausted:
+                fallback = await _build_deepseek_fallback()
+                if fallback is None:
+                    raise
+                log.warning("Gemini exhausted — falling back to DeepSeek for this call")
+                return await fallback._generate_response(*args, **kwargs)
             try:
                 return await super()._generate_response(*args, **kwargs)
             except TokensExhausted:
-                raise
+                fallback = await _build_deepseek_fallback()
+                if fallback is None:
+                    raise
+                log.warning("Gemini exhausted mid-call — falling back to DeepSeek")
+                return await fallback._generate_response(*args, **kwargs)
             except Exception as exc:
                 status = _status_from_exc(exc)
                 if status:
