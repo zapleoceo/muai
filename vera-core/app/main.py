@@ -79,6 +79,13 @@ async def lifespan(app: FastAPI):
     import asyncio
     asyncio.create_task(register_self_loop())
 
+    # v3 background workers: deep-extract queue + backfill queue.
+    try:
+        from app.jobs.runner import start_all as start_jobs
+        start_jobs()
+    except Exception as exc:
+        log.exception("jobs.runner failed to start: %s", exc)
+
     yield
 
     try:
