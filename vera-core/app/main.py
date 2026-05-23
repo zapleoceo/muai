@@ -20,6 +20,7 @@ from app.dashboard.static import router as dashboard_static_router
 from app.events.routes import router as events_router
 from app.jobs.routes import router as jobs_router
 from app.decide.routes import router as decide_router
+from app.brain.routes import router as brain_router
 from app.gmail.routes import router as gmail_router
 from app.graph.routes import router as graph_router
 from app.internal.agents import router as agents_router
@@ -106,6 +107,7 @@ app.include_router(agents_router)
 app.include_router(events_router)
 app.include_router(jobs_router)
 app.include_router(decide_router)
+app.include_router(brain_router)
 app.include_router(gmail_router)
 app.include_router(graph_router)
 app.include_router(mcp_router)

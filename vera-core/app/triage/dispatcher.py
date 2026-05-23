@@ -186,6 +186,18 @@ async def record_user_decision(event_id: int, choice: str) -> dict | None:
         event.triage_status = "decided"
         await session.commit()
 
+    # v3 shim: write a Pattern confirmation so v3 decide.scoring learns
+    # from this user click. Best-effort; failures don't break v2 path.
+    try:
+        from app.brain import patterns as P
+        sig = P.signature_for(event.entity_hints or [], chosen.get("label", ""))
+        await P.upsert_confirmation(
+            sig, action_label=chosen.get("label", ""),
+            tool=chosen.get("tool"), args=chosen.get("args"),
+        )
+    except Exception as exc:
+        log.debug("v3 Pattern confirm shim failed: %s", exc)
+
         # Persist decision to Graphiti so future similar events surface it.
         from app.graph import write as gw
         from app.triage import replay
@@ -238,6 +250,19 @@ async def record_undo(event_id: int) -> str:
         await rp.reset(event, reason="auto-action undone")
     except Exception as exc:
         log.warning("replay reset failed: %s", exc)
+
+    # v3 shim: record correction so v3 Pattern weight drops.
+    try:
+        from app.brain import patterns as P
+        chosen = (merged.get("user_choice") or {})
+        sig = P.signature_for(event.entity_hints or [], chosen.get("label", ""))
+        await P.upsert_correction(
+            sig, action_label=chosen.get("label", ""),
+            tool=chosen.get("tool"), args=chosen.get("args"),
+        )
+    except Exception as exc:
+        log.debug("v3 Pattern correction shim failed: %s", exc)
+
     return f"замена счётчика повторов для {sender or 'отправителя'}"
 
 
