@@ -124,7 +124,17 @@ async def vera_get_prefs() -> dict:
 # ---------- bot admin tools (forum topic + message management) ----------
 
 
+def _normalise_chat_id(chat_id: int) -> int:
+    """Telegram Bot API requires supergroup ids in the form -100xxxxxxxxxx.
+    If we get a bare positive id that looks like a supergroup channel id
+    (10+ digits), prefix it. Leave usernames / negative ids untouched."""
+    if isinstance(chat_id, int) and chat_id > 0 and len(str(chat_id)) >= 10:
+        return int(f"-100{chat_id}")
+    return chat_id
+
+
 async def bot_delete_message(chat_id: int, message_id: int) -> dict:
+    chat_id = _normalise_chat_id(chat_id)
     """Delete a specific message in any chat where the bot has rights.
     Works for bot's own messages always; for others needs admin
     can_delete_messages."""
@@ -139,6 +149,7 @@ async def bot_delete_message(chat_id: int, message_id: int) -> dict:
 async def bot_delete_forum_topic(chat_id: int, message_thread_id: int) -> dict:
     """Delete an entire forum topic (and all its messages). Bot must have
     manage_topics + can_delete_messages."""
+    chat_id = _normalise_chat_id(chat_id)
     from app.bot.sender import get_bot
     try:
         await get_bot().delete_forum_topic(
@@ -154,6 +165,7 @@ async def bot_clear_topic_messages(chat_id: int, message_thread_id: int,
     """Sweep recent messages within a forum topic. Best-effort: iterates
     msg ids backwards from latest, deletes those the bot can reach.
     Stops on the first hard failure (typically too-old)."""
+    chat_id = _normalise_chat_id(chat_id)
     from app.bot.sender import get_bot
     bot = get_bot()
     # Telegram doesn't expose 'iter messages' to bots; we sweep by id
@@ -191,12 +203,16 @@ async def bot_wipe_forum(chat_id: int, exclude_general: bool = True) -> dict:
     import httpx
     from app.config import get_settings
     from app.bot.sender import get_bot
+    chat_id = _normalise_chat_id(chat_id)
+    # vera-telegram (userbot side) wants the raw int as Telethon expects;
+    # negative-100 prefix isn't needed there. Pass both forms.
+    raw_id = chat_id if chat_id > 0 else int(str(chat_id).replace("-100", ""))
     cfg = get_settings()
     url = (getattr(cfg, "vera_telegram_url", None)
            or "http://vera-telegram:8001").rstrip("/")
     async with httpx.AsyncClient(timeout=30) as c:
         r = await c.post(f"{url}/tool/telegram_list_forum_topics",
-                          json={"chat_id": chat_id, "limit": 200},
+                          json={"chat_id": raw_id, "limit": 200},
                           headers={"X-Internal-Secret": cfg.internal_secret})
     if r.status_code != 200:
         return {"ok": False, "error": f"list_topics HTTP {r.status_code}"}
@@ -220,6 +236,7 @@ async def bot_wipe_forum(chat_id: int, exclude_general: bool = True) -> dict:
 
 async def bot_close_forum_topic(chat_id: int, message_thread_id: int) -> dict:
     """Lock a forum topic (no new messages, but content stays)."""
+    chat_id = _normalise_chat_id(chat_id)
     from app.bot.sender import get_bot
     try:
         await get_bot().close_forum_topic(
