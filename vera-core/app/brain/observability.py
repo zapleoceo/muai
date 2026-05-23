@@ -34,6 +34,10 @@ async def snapshot(_=Depends(require_owner)) -> dict:
         per_src = dict((await s.execute(
             select(Event.source, func.count()).group_by(Event.source)
         )).all())
+        per_status = dict((await s.execute(
+            select(Event.triage_status, func.count())
+            .group_by(Event.triage_status)
+        )).all())
         recent_events = [
             {"id": e.id, "source": e.source, "category": e.category,
              "preview": (e.content_text or "")[:120],
@@ -67,6 +71,7 @@ async def snapshot(_=Depends(require_owner)) -> dict:
 
     return {
         "events": {"total": n_events, "by_source": per_src,
+                    "by_status": per_status,
                     "recent": recent_events},
         "ingest_queue": ij_status,
         "backfill_jobs": bf,

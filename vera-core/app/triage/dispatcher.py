@@ -46,6 +46,34 @@ async def _run_triage(event_id: int) -> None:
                 await session.commit()
         return
 
+    # Silence mode: skip card if event is below importance threshold.
+    # Vera still ingests + writes Pattern shadows + cheap edges; she just
+    # doesn't spam the forum chat. Override with VERA_CARD_MIN_SCORE env.
+    import os
+    min_score = float(os.environ.get("VERA_CARD_MIN_SCORE", "5.0"))
+    try:
+        from app.decide.dispatch import decide as v3_decide
+        v3 = await v3_decide(e.entity_hints or [])
+        v3_score = v3.chosen.score if v3.chosen else 0.0
+    except Exception as exc:
+        log.debug("v3 score lookup failed for event %s: %s", event_id, exc)
+        v3_score = 999.0  # fall back to showing card if v3 broken
+    if v3_score < min_score:
+        log.info("Event %d silenced (v3=%.2f < %.2f) — no card",
+                 event_id, v3_score, min_score)
+        async with get_session() as session:
+            row = await session.get(Event, event_id)
+            if row:
+                row.triage_status = "silenced"
+                row.triage_result = {
+                    "silenced": True, "v3_score": v3_score,
+                    "summary": proposal.summary,
+                    "urgency": proposal.urgency,
+                    "actions": proposal.actions,
+                }
+                await session.commit()
+        return
+
     auto_action = await _pick_auto_action(e, proposal)
     card_msg_id = None
     auto_exec: dict | None = None
