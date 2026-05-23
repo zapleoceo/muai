@@ -48,9 +48,13 @@ async def _run_triage(event_id: int) -> None:
 
     # Silence mode: skip card if event is below importance threshold.
     # Vera still ingests + writes Pattern shadows + cheap edges; she just
-    # doesn't spam the forum chat. Override with VERA_CARD_MIN_SCORE env.
-    import os
-    min_score = float(os.environ.get("VERA_CARD_MIN_SCORE", "5.0"))
+    # doesn't spam the forum chat. Threshold lives in Setting; tunable
+    # live from the dashboard.
+    try:
+        from app.brain.observability import get_card_threshold
+        min_score = await get_card_threshold()
+    except Exception:
+        min_score = 5.0
     try:
         from app.decide.dispatch import decide as v3_decide
         v3 = await v3_decide(e.entity_hints or [])

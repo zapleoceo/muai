@@ -7,7 +7,7 @@
 <style>
   :root{--bg:#0d0e10;--panel:#16181c;--line:#22262d;--fg:#e6edf3;
         --mute:#8b949e;--dim:#5b6470;--ok:#3fb950;--warn:#d29922;
-        --err:#f85149;--info:#58a6ff;--r:8px}
+        --err:#f85149;--info:#58a6ff;--hl:#58a6ff;--r:8px}
   *{box-sizing:border-box;margin:0;padding:0}
   html,body{background:var(--bg);color:var(--fg);
     font:14px/1.5 -apple-system,BlinkMacSystemFont,"Inter","Segoe UI",sans-serif;
@@ -15,41 +15,49 @@
   a{color:var(--info);text-decoration:none} a:hover{text-decoration:underline}
   button,input,textarea,select{font:inherit;color:inherit}
   button{cursor:pointer;background:var(--panel);border:1px solid var(--line);
-    color:var(--fg);padding:6px 14px;border-radius:var(--r)}
-  button:hover{border-color:var(--mute)}
+    color:var(--fg);padding:7px 14px;border-radius:var(--r);transition:.15s}
+  button:hover:not(:disabled){border-color:var(--mute);background:#1e2228}
+  button:disabled{opacity:.5;cursor:not-allowed}
   button.primary{background:var(--info);border-color:var(--info);color:#fff}
+  button.primary:hover:not(:disabled){background:#4493e3}
+  button.active{border-color:var(--info);color:var(--info)}
   input,textarea{background:var(--panel);border:1px solid var(--line);
     color:var(--fg);padding:8px 12px;border-radius:var(--r);width:100%}
+  input:focus,textarea:focus{outline:none;border-color:var(--info)}
   textarea{resize:vertical;min-height:60px;font-family:inherit}
 
-  header{padding:18px 24px;border-bottom:1px solid var(--line);
+  header{padding:14px 24px;border-bottom:1px solid var(--line);
     display:flex;justify-content:space-between;align-items:center;
-    background:var(--panel)}
-  header .brand{font-weight:600;font-size:16px}
-  header .brand .dot{display:inline-block;width:7px;height:7px;
-    border-radius:50%;background:var(--ok);margin-right:8px;
-    vertical-align:middle;animation:pulse 2s infinite}
+    background:var(--panel);position:sticky;top:0;z-index:10}
+  header .brand{font-weight:600;font-size:16px;display:flex;align-items:center;gap:10px}
+  header .brand .dot{width:7px;height:7px;border-radius:50%;background:var(--ok);
+    animation:pulse 2s infinite}
   @keyframes pulse{0%,100%{opacity:1}50%{opacity:.4}}
-  header .meta{color:var(--mute);font-size:12px;display:flex;gap:14px}
-  header .meta button{padding:4px 12px;font-size:12px}
+  header .meta{color:var(--mute);font-size:12px;display:flex;gap:12px;align-items:center}
+  header .meta button{padding:5px 12px;font-size:12px}
+  header .help-btn{width:30px;height:30px;border-radius:50%;padding:0;
+    display:inline-flex;align-items:center;justify-content:center;
+    font-weight:700;border:1px solid var(--info);color:var(--info)}
 
-  main{max-width:1100px;margin:0 auto;padding:24px 20px 80px}
-  section{margin-bottom:32px}
+  main{max-width:1100px;margin:0 auto;padding:24px 20px 100px}
+  section{margin-bottom:36px;position:relative}
   section>h2{font-size:13px;font-weight:600;color:var(--mute);
-    text-transform:uppercase;letter-spacing:.7px;margin-bottom:10px;
-    border-bottom:1px solid var(--line);padding-bottom:6px}
+    text-transform:uppercase;letter-spacing:.7px;margin-bottom:12px;
+    border-bottom:1px solid var(--line);padding-bottom:8px;
+    display:flex;justify-content:space-between;align-items:baseline}
+  section>h2 .sub{font-size:11px;color:var(--dim);text-transform:none;
+    letter-spacing:0;font-weight:400}
 
   .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));
         gap:10px;margin-bottom:10px}
   .card{background:var(--panel);border:1px solid var(--line);
-        border-radius:var(--r);padding:14px 16px}
+        border-radius:var(--r);padding:14px 16px;transition:.15s}
   .card .v{font-size:24px;font-weight:600;letter-spacing:-.5px}
   .card .k{color:var(--mute);font-size:11px;text-transform:uppercase;
             letter-spacing:.5px;margin-top:4px}
-  .card .sub{color:var(--dim);font-size:11px;margin-top:2px}
 
   table{width:100%;border-collapse:collapse;background:var(--panel);
-        border-radius:var(--r);overflow:hidden}
+        border-radius:var(--r);overflow:hidden;margin-top:8px}
   th,td{padding:8px 12px;text-align:left;border-bottom:1px solid var(--line);
         vertical-align:top;font-size:13px}
   th{color:var(--mute);font-weight:500;text-transform:uppercase;
@@ -57,37 +65,44 @@
   tr:last-child td{border-bottom:none}
   td.dim{color:var(--mute)} td.mono{font-family:ui-monospace,monospace;font-size:12px}
 
-  .pill{display:inline-block;padding:1px 9px;border-radius:11px;
-        font-size:11px;background:var(--line);color:var(--mute)}
-  .pill.ok,.pill.done{background:rgba(63,185,80,.15);color:var(--ok)}
-  .pill.warn,.pill.pending{background:rgba(210,153,34,.15);color:var(--warn)}
-  .pill.err,.pill.error,.pill.failed{background:rgba(248,81,73,.15);color:var(--err)}
-  .pill.info,.pill.running,.pill.executed,.pill.auto{background:rgba(88,166,255,.15);color:var(--info)}
-  .pill.silenced,.pill.expired{background:var(--line);color:var(--dim)}
+  .pill{display:inline-block;padding:1px 9px;border-radius:11px;font-size:11px;
+        background:var(--line);color:var(--mute)}
+  .pill.ok,.pill.done,.pill.decided,.pill.executed,.pill.auto_executed{
+    background:rgba(63,185,80,.15);color:var(--ok)}
+  .pill.warn,.pill.pending,.pill.awaiting_user{background:rgba(210,153,34,.15);color:var(--warn)}
+  .pill.err,.pill.error,.pill.failed,.pill.execute_failed,.pill.auto_failed{
+    background:rgba(248,81,73,.15);color:var(--err)}
+  .pill.info,.pill.running{background:rgba(88,166,255,.15);color:var(--info)}
+  .pill.silenced,.pill.expired,.pill.proposal_only{background:var(--line);color:var(--dim)}
 
-  .editor{background:var(--panel);border:1px solid var(--line);
-    border-radius:var(--r);padding:14px;margin-bottom:10px}
-  .editor p{color:var(--mute);font-size:12px;margin-bottom:8px}
-  .editor .actions{display:flex;gap:8px;margin-top:8px;align-items:center}
-  .editor .result{margin-top:8px;font-size:12px;color:var(--ok)}
-  .editor .result.err{color:var(--err)}
+  .panel{background:var(--panel);border:1px solid var(--line);
+    border-radius:var(--r);padding:14px 16px;margin-bottom:10px}
+  .panel .hint{color:var(--mute);font-size:12px;margin-bottom:8px}
+  .panel .actions{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap;align-items:center}
+  .panel .result{font-size:12px;color:var(--ok);margin-left:auto}
+  .panel .result.err{color:var(--err)}
 
-  .empty{color:var(--dim);font-size:13px;font-style:italic;padding:14px 4px}
-
-  .threshold{display:flex;gap:8px;align-items:center;margin-top:8px}
-  .threshold input{max-width:120px}
-
-  details{background:var(--panel);border:1px solid var(--line);
-    border-radius:var(--r);padding:0;margin-bottom:8px}
-  details>summary{padding:10px 14px;cursor:pointer;color:var(--mute);
-    font-size:12px;list-style:none;text-transform:uppercase;letter-spacing:.5px}
-  details>summary::-webkit-details-marker{display:none}
-  details>summary::before{content:"▸ ";color:var(--dim)}
-  details[open]>summary::before{content:"▾ "}
-  details>div{padding:0 14px 14px}
-
+  .empty{color:var(--dim);font-size:13px;font-style:italic;padding:14px;text-align:center}
   .preview{color:var(--mute);font-size:12px;max-width:480px;
     overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+
+  /* TOUR overlay */
+  #tour-backdrop{position:fixed;inset:0;background:rgba(0,0,0,.7);
+    z-index:1000;display:none}
+  #tour-backdrop.show{display:block}
+  #tour-popup{position:fixed;z-index:1001;max-width:420px;
+    background:var(--panel);border:2px solid var(--info);
+    border-radius:var(--r);padding:18px;
+    box-shadow:0 8px 32px rgba(0,0,0,.5);display:none}
+  #tour-popup.show{display:block}
+  #tour-popup h3{font-size:15px;margin-bottom:6px;color:var(--info)}
+  #tour-popup p{font-size:13px;color:var(--fg);margin-bottom:12px;line-height:1.5}
+  #tour-popup .nav{display:flex;justify-content:space-between;align-items:center;
+    margin-top:14px}
+  #tour-popup .step{color:var(--dim);font-size:11px}
+  .tour-highlight{position:relative;z-index:1002;
+    box-shadow:0 0 0 9999px rgba(0,0,0,.7),0 0 0 3px var(--info);
+    border-radius:var(--r)}
 </style>
 </head>
 <body>
@@ -95,8 +110,8 @@
   <div class="brand"><span class="dot"></span>Vera v3</div>
   <div class="meta">
     <span id="updated">—</span>
-    <button onclick="loadAll()">↻ обновить</button>
-    <a href="/api/observability">JSON</a>
+    <button onclick="loadAll()">↻</button>
+    <button class="help-btn" onclick="startTour()" title="Помощь">?</button>
     <a href="#" onclick="logout()">выйти</a>
   </div>
 </header>
@@ -104,31 +119,33 @@
 <main>
 
 <!-- 1. МОЗГ -->
-<section>
-  <h2>🧠 Мозг — что Вера знает</h2>
+<section id="sec-brain">
+  <h2>🧠 Мозг <span class="sub">что Вера знает прямо сейчас</span></h2>
   <div class="grid" id="graph-cards"></div>
   <div class="grid" id="identity-cards"></div>
 </section>
 
 <!-- 2. ПОТОК -->
-<section>
-  <h2>📥 Поток — что приходит</h2>
+<section id="sec-flow">
+  <h2>📥 Поток <span class="sub">что приходит и как Вера это сортирует</span></h2>
   <div class="grid" id="flow-cards"></div>
-  <table id="backfill-table" style="margin-top:10px">
+  <table id="backfill-table">
     <thead><tr>
-      <th>backfill job</th><th>source</th><th>since</th>
-      <th>status</th><th>ingested</th>
+      <th>backfill</th><th>источник</th><th>с какой даты</th>
+      <th>статус</th><th>событий</th>
     </tr></thead><tbody></tbody>
   </table>
 </section>
 
 <!-- 3. ОБУЧЕНИЕ -->
-<section>
-  <h2>🎯 Обучение — научи Веру</h2>
+<section id="sec-learn">
+  <h2>🎯 Обучение <span class="sub">научи Веру правилам, целям, запретам</span></h2>
 
-  <div class="editor">
-    <p>Напиши Вере правило, цель или запрет — LLM распарсит в граф.<br>
-       Примеры: «всегда отвечай маме за час», «никогда не отправляй деньги без подтверждения», «цель недели — закрыть 3 сделки в Veranda Payments»</p>
+  <div class="panel" id="panel-editor">
+    <div class="hint">
+      Напиши Вере свободным текстом — LLM распарсит в узел графа.<br>
+      Примеры: «всегда отвечай маме за час», «никогда не отправляй деньги без подтверждения», «цель недели — закрыть 3 сделки в Veranda Payments»
+    </div>
     <textarea id="editor-text" placeholder="Свободный текст по-русски…"></textarea>
     <div class="actions">
       <button class="primary" onclick="submitEditor()">→ записать в граф</button>
@@ -136,102 +153,103 @@
     </div>
   </div>
 
-  <div class="editor">
-    <p>Порог карточек: если v3 score &lt; <b id="thr-cur">5.0</b> — событие тихо. Меньше = громче, больше = тише.</p>
-    <div class="threshold">
-      <button onclick="setThreshold(3.0)">3 (громче)</button>
-      <button onclick="setThreshold(5.0)">5 (default)</button>
-      <button onclick="setThreshold(7.0)">7 (тише)</button>
+  <div class="panel" id="panel-threshold">
+    <div class="hint">
+      Порог карточек в форум-чате: если v3 score &lt; <b id="thr-cur">5.0</b> — событие в graph, но <b>без карточки</b>. Меньше = громче, больше = тише.
+    </div>
+    <div class="actions">
+      <button data-thr="2.0" onclick="setThreshold(2.0)">2 (всё)</button>
+      <button data-thr="3.0" onclick="setThreshold(3.0)">3</button>
+      <button data-thr="5.0" onclick="setThreshold(5.0)">5 (норм)</button>
+      <button data-thr="7.0" onclick="setThreshold(7.0)">7</button>
+      <button data-thr="9.0" onclick="setThreshold(9.0)">9 (только критичное)</button>
+      <span id="thr-result" class="result"></span>
     </div>
   </div>
 
   <h3 style="font-size:12px;color:var(--mute);margin:14px 0 6px;
               text-transform:uppercase;letter-spacing:.5px">
-    Топ паттерны (что выучила)
+    Топ паттерны — что выучила
   </h3>
   <table id="patterns-table">
     <thead><tr>
-      <th>label</th><th>tool</th><th>obs</th><th>confirm</th><th>correct</th>
+      <th>действие</th><th>tool</th><th>видела</th><th>подтверждал</th><th>откатывал</th>
     </tr></thead><tbody></tbody>
   </table>
 </section>
 
 <!-- 4. КЛЮЧИ -->
-<section>
-  <h2>🔑 Ключи — LLM пул</h2>
+<section id="sec-keys">
+  <h2>🔑 Ключи <span class="sub">LLM провайдеры, рабочие vs заблокированные</span></h2>
   <table id="tokens-table"><thead><tr>
-    <th>provider</th><th>active</th><th>inactive</th>
+    <th>провайдер</th><th>работает</th><th>отключено</th>
   </tr></thead><tbody></tbody></table>
 </section>
 
 <!-- 5. ЛОГ -->
-<section>
-  <h2>📋 Лог — последние события</h2>
+<section id="sec-log">
+  <h2>📋 Лог <span class="sub">последние 10 событий</span></h2>
   <table id="events-table">
     <thead><tr>
-      <th>id</th><th>src</th><th>status</th><th>preview</th><th>когда</th>
+      <th>id</th><th>источник</th><th>статус</th><th>превью</th><th>когда</th>
     </tr></thead><tbody></tbody>
   </table>
 </section>
 
-<details>
-  <summary>🛠 legacy admin (старые разделы — для технических нужд)</summary>
-  <div>
-    <ul style="margin-left:20px;color:var(--mute);font-size:13px">
-      <li><a href="/api/sources">/api/sources</a> — CRUD источников</li>
-      <li><a href="/api/tokens">/api/tokens</a> — LLM токены (raw)</li>
-      <li><a href="/api/mcp">/api/mcp</a> — MCP серверы</li>
-      <li><a href="/api/jobs/backfill">/api/jobs/backfill</a> — backfill queue</li>
-      <li><a href="/api/jobs/ingest">/api/jobs/ingest</a> — ingest queue</li>
-      <li><a href="/api/brain/identity">/api/brain/identity</a> — узлы L3</li>
-      <li><a href="/api/decide/1">/api/decide/{event_id}</a> — что v3 решил бы</li>
-    </ul>
-  </div>
-</details>
-
 </main>
+
+<!-- TOUR -->
+<div id="tour-backdrop"></div>
+<div id="tour-popup">
+  <h3 id="tour-title"></h3>
+  <p id="tour-body"></p>
+  <div class="nav">
+    <span class="step" id="tour-step"></span>
+    <div>
+      <button onclick="tourEnd()">пропустить</button>
+      <button class="primary" onclick="tourNext()" id="tour-next-btn">далее →</button>
+    </div>
+  </div>
+</div>
 
 <script>
 const $ = (id) => document.getElementById(id);
+let CSRF = null;
+
+async function fetchCsrf() {
+  try {
+    const r = await fetch('/api/csrf', {credentials:'same-origin'});
+    if (r.ok) CSRF = (await r.json()).csrf;
+  } catch {}
+}
 
 async function loadAll() {
   $('updated').textContent = 'загрузка…';
   try {
     const r = await fetch('/api/observability', {credentials:'same-origin'});
-    if (r.status === 401) {
-      renderLogin();
-      return;
-    }
+    if (r.status === 401) { renderLogin(); return; }
     const d = await r.json();
+    if (!CSRF) await fetchCsrf();
 
-    // graph cards
+    // 1. Мозг — graph
     $('graph-cards').innerHTML = Object.entries(d.graph || {})
-      .map(([k,n]) => `<div class="card"><div class="v">${n}</div>
-                        <div class="k">${k}</div></div>`).join('');
+      .filter(([_,n]) => n > 0)
+      .map(([k,n]) => `<div class="card"><div class="v">${n}</div><div class="k">${k}</div></div>`)
+      .join('') || '<div class="empty">граф пустой</div>';
 
-    // identity cards
-    $('identity-cards').innerHTML = Object.entries(d.identity || {})
-      .map(([k,n]) => `<div class="card"><div class="v">${n}</div>
-                        <div class="k">${k}</div></div>`).join('');
+    // identity
+    const idn = Object.entries(d.identity || {}).filter(([_,n])=>n>0);
+    $('identity-cards').innerHTML = idn.length
+      ? idn.map(([k,n]) => `<div class="card"><div class="v">${n}</div><div class="k">${k}</div></div>`).join('')
+      : '<div class="empty">никаких целей/правил пока не задано — напиши Вере в разделе «Обучение»</div>';
 
-    // flow
+    // 2. Поток
     const ev = d.events || {};
-    const flow = [
-      `<div class="card"><div class="v">${ev.total||0}</div>
-        <div class="k">всего событий</div></div>`,
-    ];
-    for (const [src,n] of Object.entries(ev.by_source||{})) {
-      flow.push(`<div class="card"><div class="v">${n}</div>
-                  <div class="k">${src}</div></div>`);
-    }
-    for (const [st,n] of Object.entries(ev.by_status||{})) {
-      flow.push(`<div class="card"><div class="v">${n}</div>
-                  <div class="k"><span class="pill ${st}">${st}</span></div></div>`);
-    }
-    for (const [b,n] of Object.entries(d.v3_shadow||{})) {
-      flow.push(`<div class="card"><div class="v">${n}</div>
-                  <div class="k">v3 → ${b}</div></div>`);
-    }
+    const flow = [`<div class="card"><div class="v">${ev.total||0}</div><div class="k">всего событий</div></div>`];
+    for (const [src,n] of Object.entries(ev.by_source||{}))
+      flow.push(`<div class="card"><div class="v">${n}</div><div class="k">${src}</div></div>`);
+    for (const [st,n] of Object.entries(ev.by_status||{}))
+      flow.push(`<div class="card"><div class="v">${n}</div><div class="k"><span class="pill ${st}">${st}</span></div></div>`);
     $('flow-cards').innerHTML = flow.join('');
 
     // backfill
@@ -240,17 +258,24 @@ async function loadAll() {
       <tr><td>#${j.id}</td><td>${j.source}</td><td class="dim">${j.since||''}</td>
           <td><span class="pill ${j.status}">${j.status}</span></td>
           <td>${j.events_ingested||0}</td></tr>
-    `).join('') || '<tr><td colspan=5 class="empty">— нет —</td></tr>';
+    `).join('') || '<tr><td colspan=5 class="empty">backfill-задач нет</td></tr>';
+
+    // 3. Обучение — threshold
+    const thr = d.threshold || 5.0;
+    $('thr-cur').textContent = thr.toFixed(1);
+    document.querySelectorAll('[data-thr]').forEach(b => {
+      b.classList.toggle('active', Math.abs(parseFloat(b.dataset.thr) - thr) < 0.01);
+    });
 
     // patterns
     const ptt = document.querySelector('#patterns-table tbody');
     ptt.innerHTML = (d.top_patterns||[]).map(p => `
       <tr><td>${esc(p.label||'?')}</td>
-          <td class="mono dim">${esc(p.tool||'')}</td>
+          <td class="mono dim">${esc(p.tool||'—')}</td>
           <td>${p.obs||0}</td><td>${p.conf||0}</td><td>${p.corr||0}</td></tr>
-    `).join('') || '<tr><td colspan=5 class="empty">— ещё нет паттернов; нажми любую кнопку в форум-чате —</td></tr>';
+    `).join('') || '<tr><td colspan=5 class="empty">паттернов ещё нет — нажми кнопку в карточке форум-чата, чтобы научить</td></tr>';
 
-    // tokens
+    // 4. Ключи
     const tt = document.querySelector('#tokens-table tbody');
     tt.innerHTML = Object.entries(d.tokens||{}).map(([p,n]) => `
       <tr><td>${esc(p)}</td>
@@ -258,7 +283,7 @@ async function loadAll() {
           <td><span class="pill expired">${n.inactive||0}</span></td></tr>
     `).join('') || '<tr><td colspan=3 class="empty">нет токенов</td></tr>';
 
-    // events log
+    // 5. Лог
     const evt = document.querySelector('#events-table tbody');
     evt.innerHTML = (ev.recent||[]).map(e => `
       <tr><td class="mono">#${e.id}</td>
@@ -266,7 +291,7 @@ async function loadAll() {
           <td><span class="pill ${e.status||''}">${e.status||''}</span></td>
           <td class="preview">${esc(e.preview||'')}</td>
           <td class="dim">${(e.occurred_at||'').slice(0,16).replace('T',' ')}</td></tr>
-    `).join('') || '<tr><td colspan=5 class="empty">— пусто —</td></tr>';
+    `).join('') || '<tr><td colspan=5 class="empty">пусто</td></tr>';
 
     $('updated').textContent = 'обновлено ' + new Date().toLocaleTimeString();
   } catch (e) {
@@ -282,18 +307,19 @@ async function submitEditor() {
   $('editor-result').textContent = '…';
   $('editor-result').className = 'result';
   try {
+    if (!CSRF) await fetchCsrf();
     const r = await fetch('/api/brain/editor', {
       method:'POST', credentials:'same-origin',
-      headers:{'Content-Type':'application/json'},
+      headers:{'Content-Type':'application/json', 'X-CSRF': CSRF || ''},
       body: JSON.stringify({text: txt}),
     });
     const d = await r.json();
     if (d.op && d.op !== 'none') {
-      $('editor-result').textContent = `✓ создан ${d.op}: ${d.id || JSON.stringify(d.raw)}`;
+      $('editor-result').textContent = `✓ создан узел ${d.op}: ${d.id || ''}`;
       $('editor-text').value = '';
       loadAll();
     } else {
-      $('editor-result').textContent = '⚠ ' + (d.reason || JSON.stringify(d));
+      $('editor-result').textContent = '⚠ ' + (d.reason || d.detail || JSON.stringify(d));
       $('editor-result').className = 'result err';
     }
   } catch (e) {
@@ -302,14 +328,34 @@ async function submitEditor() {
   }
 }
 
-function setThreshold(v) {
-  $('thr-cur').textContent = v.toFixed(1);
-  alert(`Поменяй на сервере: ssh hetzner-root "sed -i '/^VERA_CARD_MIN_SCORE/d' /var/www/vera/.env && echo VERA_CARD_MIN_SCORE=${v} >> /var/www/vera/.env && docker compose -f /var/www/vera/docker-compose.yml restart vera-core"`);
+async function setThreshold(v) {
+  $('thr-result').textContent = '…';
+  $('thr-result').className = 'result';
+  try {
+    if (!CSRF) await fetchCsrf();
+    const r = await fetch('/api/observability/threshold', {
+      method:'POST', credentials:'same-origin',
+      headers:{'Content-Type':'application/json', 'X-CSRF': CSRF || ''},
+      body: JSON.stringify({value: v}),
+    });
+    if (r.ok) {
+      $('thr-result').textContent = `✓ порог: ${v}`;
+      $('thr-cur').textContent = v.toFixed(1);
+      document.querySelectorAll('[data-thr]').forEach(b => {
+        b.classList.toggle('active', Math.abs(parseFloat(b.dataset.thr) - v) < 0.01);
+      });
+    } else {
+      const t = await r.text();
+      $('thr-result').textContent = '⚠ ' + t;
+      $('thr-result').className = 'result err';
+    }
+  } catch (e) {
+    $('thr-result').textContent = 'err: ' + e.message;
+    $('thr-result').className = 'result err';
+  }
 }
 
-function logout() {
-  window.location.href = '/api/logout';
-}
+function logout() { window.location.href = '/api/logout'; }
 
 function renderLogin() {
   document.querySelector('main').innerHTML = `
@@ -319,9 +365,7 @@ function renderLogin() {
         Только для владельца. Авторизация через Telegram.
       </p>
       <div id="tg-login-widget"></div>
-    </section>
-  `;
-  // Telegram Login Widget
+    </section>`;
   const s = document.createElement('script');
   s.src = 'https://telegram.org/js/telegram-widget.js?22';
   s.async = true;
@@ -331,6 +375,63 @@ function renderLogin() {
   s.setAttribute('data-auth-url', '/api/tg_login');
   s.setAttribute('data-request-access', 'write');
   document.getElementById('tg-login-widget').appendChild(s);
+}
+
+/* === ОБУЧАЛКА (TOUR) === */
+const TOUR = [
+  { sel:'#sec-brain',
+    title:'🧠 Мозг',
+    body:'Здесь видно сколько узлов в графе Веры. Event — события. Person/Account/Container — кто/где/что. Pattern — выученные шаблоны (триггер→действие). Goal/Value/NoGo/Style — твоя личность.' },
+  { sel:'#sec-flow',
+    title:'📥 Поток',
+    body:'Сколько событий пришло, по источникам и статусам. silenced = тихо в графе; awaiting_user = ждёт твоего клика; expired = старое, проехало. Backfill — историческая загрузка.' },
+  { sel:'#panel-editor',
+    title:'🎯 Научи Веру',
+    body:'Любой текст по-русски: правило, цель или запрет. Маленький LLM распарсит и создаст :Goal / :Value / :NoGo / :Style узел. После этого scoring начнёт учитывать.' },
+  { sel:'#panel-threshold',
+    title:'🔇 Порог карточек',
+    body:'Карточка в форум-чат «Вера бот» появляется только если v3 alignment ≥ порога. Меньше — больше шума. Больше — глубже тишина. Меняется живьём, без перезапуска.' },
+  { sel:'#sec-keys',
+    title:'🔑 Ключи',
+    body:'Сколько LLM-токенов работает / заблокировано по каждому провайдеру. Когда падает в 0 — Вера не сможет принимать решения; добавь ключ через /api/tokens.' },
+  { sel:'#sec-log',
+    title:'📋 Лог',
+    body:'Последние 10 событий с pill-статусами. Кликабельных действий тут нет — это просто видимость потока.' },
+];
+let tourIdx = 0;
+function startTour() { tourIdx = 0; showTourStep(); }
+function showTourStep() {
+  document.querySelectorAll('.tour-highlight').forEach(e => e.classList.remove('tour-highlight'));
+  if (tourIdx >= TOUR.length) { tourEnd(); return; }
+  const step = TOUR[tourIdx];
+  const target = document.querySelector(step.sel);
+  if (!target) { tourIdx++; return showTourStep(); }
+  target.classList.add('tour-highlight');
+  target.scrollIntoView({behavior:'smooth', block:'center'});
+  $('tour-title').textContent = step.title;
+  $('tour-body').textContent = step.body;
+  $('tour-step').textContent = `${tourIdx+1} / ${TOUR.length}`;
+  $('tour-next-btn').textContent = (tourIdx === TOUR.length - 1) ? '✓ готово' : 'далее →';
+  $('tour-backdrop').classList.add('show');
+  const pop = $('tour-popup');
+  pop.classList.add('show');
+  // position below target
+  const rect = target.getBoundingClientRect();
+  const top = Math.min(window.innerHeight - 280, Math.max(20, rect.bottom + 12));
+  pop.style.top = top + 'px';
+  pop.style.left = Math.max(20, Math.min(window.innerWidth - 460, rect.left)) + 'px';
+}
+function tourNext() { tourIdx++; showTourStep(); }
+function tourEnd() {
+  document.querySelectorAll('.tour-highlight').forEach(e => e.classList.remove('tour-highlight'));
+  $('tour-backdrop').classList.remove('show');
+  $('tour-popup').classList.remove('show');
+}
+$('tour-backdrop').onclick = tourEnd;
+
+// First-visit tour
+if (!localStorage.getItem('vera_tour_seen')) {
+  setTimeout(() => { startTour(); localStorage.setItem('vera_tour_seen', '1'); }, 800);
 }
 
 loadAll();

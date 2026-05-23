@@ -18,11 +18,52 @@ from sqlalchemy import desc, func, select
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import (BackfillJob, Event, IngestJob, Source)
 
+from vera_shared.db.models import Setting
+
 from app.brain import identity as ID
 from app.config import get_settings
 from app.dashboard.auth import require_owner
 
 router = APIRouter(prefix="/api/observability")
+
+
+_THRESHOLD_KEY = "vera_card_min_score"
+
+
+async def get_card_threshold() -> float:
+    """Read threshold from Setting; fall back to env, then default 5.0."""
+    import os
+    async with get_session() as s:
+        row = await s.get(Setting, _THRESHOLD_KEY)
+        if row and row.value is not None:
+            try:
+                return float(row.value)
+            except (TypeError, ValueError):
+                pass
+    try:
+        return float(os.environ.get("VERA_CARD_MIN_SCORE", "5.0"))
+    except ValueError:
+        return 5.0
+
+
+@router.post("/threshold")
+async def set_threshold(payload: dict, _=Depends(require_owner)) -> dict:
+    """Live-tune card threshold without container restart."""
+    from fastapi import HTTPException
+    try:
+        v = float(payload.get("value"))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "value must be a number")
+    if v < 0 or v > 10:
+        raise HTTPException(400, "value must be 0..10")
+    async with get_session() as s:
+        row = await s.get(Setting, _THRESHOLD_KEY)
+        if row is None:
+            s.add(Setting(key=_THRESHOLD_KEY, value=v))
+        else:
+            row.value = v
+        await s.commit()
+    return {"ok": True, "threshold": v}
 
 
 @router.get("")
@@ -70,6 +111,7 @@ async def snapshot(_=Depends(require_owner)) -> dict:
     v3_shadow = await _v3_shadow_distribution()
     tokens_summary = await _tokens_summary()
     patterns_top = await _top_patterns()
+    threshold = await get_card_threshold()
 
     return {
         "events": {"total": n_events, "by_source": per_src,
@@ -84,6 +126,7 @@ async def snapshot(_=Depends(require_owner)) -> dict:
         "v3_shadow": v3_shadow,
         "tokens": tokens_summary,
         "top_patterns": patterns_top,
+        "threshold": threshold,
     }
 
 
