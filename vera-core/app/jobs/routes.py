@@ -57,6 +57,22 @@ async def start_backfill(payload: dict = Body(...),
     return _bf_row(job)
 
 
+@router.post("/ingest/reset-errors")
+async def reset_errors(max_attempts: int = 6,
+                        _=Depends(require_owner)) -> dict:
+    """Move rate-limited errors back to pending so the runner retries.
+    Only resets rows whose attempts < max_attempts."""
+    from sqlalchemy import update
+    async with get_session() as s:
+        stmt = (update(IngestJob)
+                .where(IngestJob.status == "error")
+                .where(IngestJob.attempts < max_attempts)
+                .values(status="pending", started_at=None, last_error=None))
+        r = await s.execute(stmt)
+        await s.commit()
+    return {"ok": True, "requeued": r.rowcount or 0}
+
+
 @router.get("/ingest")
 async def ingest_status(_=Depends(require_owner)) -> dict:
     """Counts by status — quick health view of the deep-extract queue."""

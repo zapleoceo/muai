@@ -87,14 +87,38 @@ async def _claim_backfill_job() -> BackfillJob | None:
         return row
 
 
+_MAX_INGEST_ATTEMPTS = 6
+_RATE_LIMIT_BACKOFF_SEC = 60.0
+
+
 async def _run_ingest(job: IngestJob) -> None:
     from app.brain import ingest as brain_ingest
     try:
         await brain_ingest.deep_extract(job.event_id)
         await _finish(IngestJob, job.id, status="done")
     except Exception as exc:
+        msg = str(exc)
+        is_rate = ("rate limit" in msg.lower() or "429" in msg
+                   or "quota" in msg.lower() or "TokensExhausted" in msg)
+        if is_rate and job.attempts < _MAX_INGEST_ATTEMPTS:
+            log.warning("deep_extract rate-limited event=%s attempt=%s — "
+                         "requeueing + sleeping %ds",
+                         job.event_id, job.attempts, int(_RATE_LIMIT_BACKOFF_SEC))
+            await _requeue(IngestJob, job.id)
+            await asyncio.sleep(_RATE_LIMIT_BACKOFF_SEC)
+            return
         log.exception("deep_extract failed for event=%s: %s", job.event_id, exc)
-        await _finish(IngestJob, job.id, status="error", error=str(exc)[:500])
+        await _finish(IngestJob, job.id, status="error", error=msg[:500])
+
+
+async def _requeue(model: type, job_id: int) -> None:
+    async with get_session() as s:
+        row = await s.get(model, job_id)
+        if row is None:
+            return
+        row.status = "pending"
+        row.started_at = None
+        await s.commit()
 
 
 async def _run_backfill(job: BackfillJob) -> None:
