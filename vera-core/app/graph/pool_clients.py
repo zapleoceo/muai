@@ -45,9 +45,16 @@ async def _build_deepseek_fallback() -> object | None:
     from graphiti_core.llm_client.config import LLMConfig
     from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
     from openai import AsyncOpenAI
-    try:
-        token = await get_token("deepseek", "chat:fast")
-    except TokensExhausted:
+    # Deepseek capabilities are chat:smart / chat:code in our pool —
+    # try them in order; any working key is fine for Graphiti's calls.
+    token = None
+    for cap in ("chat:smart", "chat:code", "chat:fast"):
+        try:
+            token = await get_token("deepseek", cap)
+            break
+        except TokensExhausted:
+            continue
+    if token is None:
         return None
     aclient = AsyncOpenAI(api_key=token.token,
                           base_url="https://api.deepseek.com")
