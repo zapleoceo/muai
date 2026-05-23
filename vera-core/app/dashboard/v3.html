@@ -1,0 +1,112 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>Vera v3 — observability</title>
+<style>
+  body{font:14px/1.4 -apple-system,system-ui,sans-serif;max-width:1000px;
+        margin:24px auto;padding:0 16px;color:#222}
+  h1{font-size:20px;margin:0 0 4px}
+  h2{font-size:14px;margin:18px 0 6px;color:#666;text-transform:uppercase;
+      letter-spacing:.5px}
+  .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));
+        gap:10px;margin-bottom:8px}
+  .card{background:#f7f7f8;border-radius:8px;padding:10px 12px}
+  .card .v{font-size:22px;font-weight:600}
+  .card .k{color:#777;font-size:12px;text-transform:uppercase;letter-spacing:.5px}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{padding:6px 8px;text-align:left;border-bottom:1px solid #eee;
+        vertical-align:top}
+  th{color:#777;font-weight:500;text-transform:uppercase;font-size:11px;
+      letter-spacing:.5px}
+  .preview{color:#666;font-size:12px}
+  .pill{display:inline-block;padding:1px 8px;border-radius:10px;font-size:11px;
+        background:#e5e7eb;color:#444}
+  .pill.done{background:#d1fae5;color:#065f46}
+  .pill.running{background:#dbeafe;color:#1e40af}
+  .pill.error{background:#fee2e2;color:#991b1b}
+  .pill.pending{background:#fef3c7;color:#92400e}
+  pre{background:#1e1e1e;color:#dcdcdc;padding:10px;border-radius:6px;
+       overflow:auto;font-size:12px}
+  button{padding:6px 12px;border-radius:6px;border:1px solid #ddd;
+          background:#fff;cursor:pointer;font-size:13px}
+  button:hover{background:#f5f5f5}
+</style>
+<h1>Vera v3 — observability</h1>
+<div id="time" style="color:#999;font-size:12px"></div>
+<div style="margin:10px 0"><button onclick="load()">↻ refresh</button></div>
+
+<h2>graph</h2>
+<div class="grid" id="graph-cards"></div>
+
+<h2>events</h2>
+<div class="grid" id="event-cards"></div>
+
+<h2>backfill jobs</h2>
+<table id="bf-table"><thead><tr>
+  <th>id</th><th>source</th><th>since</th><th>status</th><th>ingested</th>
+</tr></thead><tbody></tbody></table>
+
+<h2>recent events</h2>
+<table id="ev-table"><thead><tr>
+  <th>id</th><th>src</th><th>status</th><th>preview</th><th>when</th>
+</tr></thead><tbody></tbody></table>
+
+<h2>identity</h2>
+<pre id="identity-json"></pre>
+
+<script>
+async function load() {
+  document.getElementById('time').textContent = 'loading…';
+  const r = await fetch('/api/observability', {credentials:'same-origin'});
+  if (!r.ok) {
+    document.getElementById('time').textContent =
+      'auth required — login first at /';
+    return;
+  }
+  const data = await r.json();
+  document.getElementById('time').textContent = 'updated ' + new Date().toLocaleTimeString();
+
+  // graph cards
+  const g = document.getElementById('graph-cards');
+  g.innerHTML = '';
+  for (const [label, n] of Object.entries(data.graph || {})) {
+    g.insertAdjacentHTML('beforeend',
+      `<div class="card"><div class="v">${n}</div><div class="k">${label}</div></div>`);
+  }
+
+  // event totals
+  const e = document.getElementById('event-cards');
+  e.innerHTML = `<div class="card"><div class="v">${data.events.total}</div>
+                  <div class="k">total events</div></div>`;
+  for (const [src, n] of Object.entries(data.events.by_source || {})) {
+    e.insertAdjacentHTML('beforeend',
+      `<div class="card"><div class="v">${n}</div><div class="k">${src}</div></div>`);
+  }
+  for (const [st, n] of Object.entries(data.ingest_queue || {})) {
+    e.insertAdjacentHTML('beforeend',
+      `<div class="card"><div class="v">${n}</div><div class="k">queue: ${st}</div></div>`);
+  }
+
+  // backfill table
+  const bft = document.querySelector('#bf-table tbody');
+  bft.innerHTML = (data.backfill_jobs || []).map(j => `
+    <tr><td>${j.id}</td><td>${j.source}</td><td>${j.since||''}</td>
+        <td><span class="pill ${j.status}">${j.status}</span></td>
+        <td>${j.events_ingested}</td></tr>
+  `).join('') || '<tr><td colspan=5 class="preview">— нет —</td></tr>';
+
+  // recent events
+  const evt = document.querySelector('#ev-table tbody');
+  evt.innerHTML = (data.events.recent || []).map(e => `
+    <tr><td>${e.id}</td><td>${e.source}</td>
+        <td><span class="pill ${e.status}">${e.status||''}</span></td>
+        <td class="preview">${(e.preview||'').replace(/</g,'&lt;')}</td>
+        <td class="preview">${e.occurred_at||''}</td></tr>
+  `).join('');
+
+  // identity dump
+  document.getElementById('identity-json').textContent =
+    JSON.stringify(data.identity_detail, null, 2);
+}
+load();
+setInterval(load, 30000);
+</script>

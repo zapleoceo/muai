@@ -143,7 +143,7 @@ async def _run_backfill(job: BackfillJob) -> None:
         async for envelope in src.backfill(job.since):
             await brain_ingest.ingest(envelope)
             n += 1
-            if n % 25 == 0:
+            if n % 5 == 0:
                 await _bump_backfill_count(job.id, n)
         await _bump_backfill_count(job.id, n)
         await _finish(BackfillJob, job.id, status="done")
