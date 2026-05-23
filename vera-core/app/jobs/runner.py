@@ -100,8 +100,11 @@ async def _run_ingest(job: IngestJob) -> None:
         await _finish(IngestJob, job.id, status="done")
     except Exception as exc:
         msg = str(exc)
-        is_rate = ("rate limit" in msg.lower() or "429" in msg
-                   or "quota" in msg.lower() or "TokensExhausted" in msg)
+        lo = msg.lower()
+        is_rate = ("rate limit" in lo or "429" in msg or "quota" in lo
+                   or "tokensexhausted" in lo or "tokens available" in lo
+                   or "retry after" in lo or isinstance(exc, type(exc))
+                   and exc.__class__.__name__ == "TokensExhausted")
         if is_rate and job.attempts < _MAX_INGEST_ATTEMPTS:
             # Extract "retry after Ns" hint from the pool — it's the only
             # honest signal of when keys will replenish.
