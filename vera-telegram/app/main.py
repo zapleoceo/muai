@@ -1,13 +1,17 @@
 import asyncio
+import json
 import logging
 import os
 from contextlib import asynccontextmanager
+from datetime import date
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import StreamingResponse
 
 from vera_shared.db.engine import get_engine
 from vera_shared.db.migrations import run_migrations
 
+from app.backfill import stream_envelopes
 from app.poller import poll_loop
 from app.registration import register_loop
 from app.tool_handlers import HANDLERS
@@ -54,3 +58,18 @@ async def call_tool(name: str, payload: dict) -> dict:
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok", "agent": "vera-telegram", "tools": list(HANDLERS.keys())}
+
+
+@app.get("/backfill")
+async def backfill(source: str = Query(...), since: str = Query(...)) -> StreamingResponse:
+    """NDJSON stream of envelopes for one Telegram source row since YYYY-MM-DD."""
+    try:
+        since_date = date.fromisoformat(since)
+    except ValueError:
+        raise HTTPException(400, "since must be YYYY-MM-DD")
+
+    async def gen():
+        async for env in stream_envelopes(source, since_date):
+            yield (json.dumps(env, ensure_ascii=False, default=str) + "\n").encode()
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
