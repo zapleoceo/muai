@@ -91,20 +91,92 @@ async def ingest_episode(event_id: int, *, source: str, category: str,
 
 
 def schedule_ingest(event_id: int, **kw) -> None:
-    """Fire-and-forget ingest + triage in PARALLEL.
-    Triage no longer waits for graph write — it reads whatever is already
-    there. The graph fills in over time as ingests complete."""
+    """Fire-and-forget ingest + decision in PARALLEL.
+    Decision path is controlled by env VERA_LIVE_DISPATCHER:
+      'v2' (default) — old triage runs the show, v3 stays as shadow
+      'v3'           — v3 decide owns the UX, v2 disabled
+    Both paths always write to the graph; only the card-creation path differs.
+    """
+    import os
     from app.common.bg import spawn
     spawn(ingest_episode(event_id, **kw), name=f"ingest-{event_id}")
+    mode = os.environ.get("VERA_LIVE_DISPATCHER", "v2").lower()
+    if mode == "v3":
+        spawn(_v3_live_dispatch(event_id), name=f"v3-live-{event_id}")
+    else:
+        try:
+            from app.triage.dispatcher import schedule_triage
+            schedule_triage(event_id)
+        except Exception as exc:
+            log.warning("Triage schedule failed for event %d: %s", event_id, exc)
+        # Shadow v3 so we keep the A/B comparison even in v2 mode.
+        spawn(_v3_shadow_decide(event_id), name=f"v3-shadow-{event_id}")
+
+
+async def _v3_live_dispatch(event_id: int) -> None:
+    """v3-owned decision flow. Runs decide(), and based on the band:
+       auto    — execute tool + post post-fact card
+       propose — build proposal-shaped object + send_card v2-compatible
+       ask/silent — write status, no card
+    Reuses v2's send_card so the UX surface stays identical for now.
+    """
     try:
-        from app.triage.dispatcher import schedule_triage
-        schedule_triage(event_id)
+        from sqlalchemy import select
+        from vera_shared.db.engine import get_session
+        from vera_shared.db.models import Event
+        from app.decide.dispatch import decide
+        from app.decide.explain import explain
+        async with get_session() as s:
+            ev = (await s.execute(
+                select(Event).where(Event.id == event_id)
+            )).scalar_one_or_none()
+            if ev is None:
+                return
+            hints = ev.entity_hints or []
+        d = await decide(hints)
+        explanation = explain(d)
+        # Map v3 Decision back to v2 ProposalLike shape and reuse send_card.
+        if d.band in ("ask", "silent"):
+            async with get_session() as s:
+                row = await s.get(Event, event_id)
+                if row:
+                    row.triage_status = "silenced" if d.band == "silent" else "awaiting_user"
+                    row.triage_result = {
+                        "v3_live": True, "band": d.band,
+                        "explanation": explanation,
+                        "score": d.chosen.score if d.chosen else None,
+                    }
+                    await s.commit()
+            return
+        # propose/auto: build a v2-compatible proposal object from candidates
+        actions = [{
+            "label": c.candidate.label, "tool": c.candidate.tool,
+            "args": c.candidate.args, "default": (i == 0),
+            "replay": True,
+        } for i, c in enumerate(d.candidates[:4]) if c.candidate.tool]
+        if not actions:
+            return
+        from types import SimpleNamespace
+        proposal = SimpleNamespace(
+            actions=actions, confidence=(d.chosen.score / 10.0 if d.chosen else 0.0),
+            summary=explanation,
+            reasoning=str(d.chosen.breakdown if d.chosen else {}),
+            urgency="medium", context_used=[],
+        )
+        from app.triage.card import send_card
+        await send_card(event_id, ev.source, ev.category, proposal)
+        async with get_session() as s:
+            row = await s.get(Event, event_id)
+            if row:
+                row.triage_status = "awaiting_user"
+                row.triage_result = {
+                    "v3_live": True, "band": d.band,
+                    "actions": actions, "summary": explanation,
+                    "score": d.chosen.score if d.chosen else None,
+                }
+                await s.commit()
     except Exception as exc:
-        log.warning("Triage schedule failed for event %d: %s", event_id, exc)
-    # v3 shadow — run decide() in background, save result into
-    # Event.triage_result['v3_shadow']. Pure observability; v2 still
-    # owns the live UX. Lets us A/B compare per-event without risk.
-    spawn(_v3_shadow_decide(event_id), name=f"v3-shadow-{event_id}")
+        log.exception("v3 live dispatch failed for event %s: %s", event_id, exc)
 
 
 async def _v3_shadow_decide(event_id: int) -> None:

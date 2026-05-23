@@ -19,9 +19,13 @@ _PAGE_SIZE = 100
 
 async def stream_envelopes(email: str, since: date) -> AsyncIterator[dict]:
     """Yield one envelope dict per Gmail thread >= since (oldest first
-    is not guaranteed — Gmail returns newest first; we page until empty)."""
+    is not guaranteed — Gmail returns newest first; we page until empty).
+
+    Includes BOTH inbox (incoming) and sent (Dima's own writing) — sent
+    messages carry the strongest learning signal for Vera's voice + style
+    cloning, marked with metadata.direction='sent'."""
     q = (
-        f"after:{since.strftime('%Y/%m/%d')} in:inbox "
+        f"after:{since.strftime('%Y/%m/%d')} (in:inbox OR in:sent) "
         "-category:promotions -category:social -category:updates"
     )
     page_token: str | None = None
@@ -67,18 +71,25 @@ async def _envelope_for_thread(email: str, thread_id: str) -> dict | None:
     last = msgs[-1]
     subject = last.get("subject") or "(без темы)"
     sender = last.get("from") or "?"
+    recipient = last.get("to") or ""
     body = (last.get("text") or last.get("snippet") or "")[:1500]
-    text = f"From: {sender}\nSubject: {subject}\nDate: {last.get('date','')}\n---\n{body}"
+    # Direction: is Dima the sender? Compare normalised lower-cased addresses.
+    direction = "sent" if email.lower() in sender.lower() else "received"
+    text = (f"From: {sender}\nTo: {recipient}\nSubject: {subject}\n"
+             f"Date: {last.get('date','')}\nDirection: {direction}\n---\n{body}")
 
     occurred_iso = last.get("date_iso") or last.get("date") or datetime.utcnow().isoformat()
+    # For sent messages, the "person" hint should be the recipient (whom
+    # Dima talked to), not himself. That's what voice/Style cares about.
+    person_hint = (recipient if direction == "sent" else sender) or sender
     return {
         "source": "gmail",
-        "source_event_id": f"{email}:{thread_id}",
+        "source_event_id": f"{email}:{thread_id}:{last.get('id', '')}",
         "account": email,
         "occurred_at": occurred_iso,
         "content_text": text,
         "entity_hints": [
-            {"type": "person", "identifier": sender, "name": sender},
+            {"type": "person", "identifier": person_hint, "name": person_hint},
             {"type": "account", "identifier": email, "name": email},
             {"type": "topic", "identifier": f"thread:{thread_id}", "name": subject},
         ],
@@ -86,5 +97,6 @@ async def _envelope_for_thread(email: str, thread_id: str) -> dict | None:
             "subject": subject,
             "thread_id": thread_id,
             "messages_count": full.get("messages_count"),
+            "direction": direction,
         },
     }

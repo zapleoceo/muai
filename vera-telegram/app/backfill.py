@@ -56,14 +56,18 @@ async def stream_envelopes(source_name: str, since: date) -> AsyncIterator[dict]
                     continue
                 if msg.date and msg.date < since_dt:
                     break  # iter is newest-first, so we're done with this dialog
-                # Skip own messages
-                if (getattr(msg, "from_id", None)
-                        and getattr(msg.from_id, "user_id", None) == me.id):
-                    continue
+                # Keep own (sent) messages — strongest learning signal.
+                # Mark direction in metadata so brain can use it.
+                is_sent = (getattr(msg, "from_id", None)
+                            and getattr(msg.from_id, "user_id", None) == me.id)
                 try:
                     payload = await _build_payload(
                         src.name, dialog, msg, me.id, folder_map
                     )
+                    if payload is not None:
+                        payload.setdefault("metadata", {})["direction"] = (
+                            "sent" if is_sent else "received"
+                        )
                 except Exception as exc:
                     log.debug("build_payload failed in backfill: %s", exc)
                     continue

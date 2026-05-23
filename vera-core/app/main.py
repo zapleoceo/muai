@@ -12,6 +12,7 @@ from vera_shared.db.engine import init_engine
 from vera_shared.db.migrations import run_migrations
 
 from app.bot.callbacks import router as callbacks_router
+from app.bot.digest_callbacks import router as digest_callbacks_router
 from app.bot.handler import router as bot_router
 from app.bot.sender import init_bot
 from app.config import get_settings
@@ -68,6 +69,7 @@ async def lifespan(app: FastAPI):
 
     _dp = Dispatcher()
     _dp.include_router(callbacks_router)  # match callbacks before message handler
+    _dp.include_router(digest_callbacks_router)
     _dp.include_router(bot_router)
 
     webhook_url = f"{settings.webhook_base_url}/bot/webhook"

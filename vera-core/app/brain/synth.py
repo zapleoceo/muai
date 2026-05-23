@@ -33,16 +33,42 @@ log = logging.getLogger(__name__)
 _DAILY_HOUR = 8  # local time, Asia/Bangkok offset handled by Telegram
 
 
-_SYNTH_SYSTEM = """Ты — Вера, проактивный ассистент Димы. Ниже — данные
-из его графа за прошедшие сутки. Составь короткий русский дайджест
-(до 8 пунктов, маркированный список):
-  - аномалии в потоке событий
-  - прогресс по активным целям
-  - 1-2 вопроса где не хватает данных
-Каждую строку начинай с эмодзи. Без воды."""
+_SYNTH_SYSTEM = """Ты — Вера, второе я Димы. Ниже — данные из его графа
+за сутки. Составь компактный русский дайджест в формате:
+
+🌅 *Доброе утро* (одна строка с твоим стилем)
+
+📊 *Итоги суток:*
+• Общая статистика (1-2 строки)
+
+👥 *Топ-контакты:* (если есть)
+• Имя — N сообщений, контекст
+
+💬 *Главные диалоги:*
+• Чат/тема — N событий, о чём
+
+⚠️ *Требует решения:*
+• #ID — короткое описание (если есть awaiting_user)
+
+🎯 *Цели и дедлайны:*
+• Прогресс по активным целям
+
+❓ *Вопросы/наблюдения:*
+• 1-2 пункта где не хватает данных или замечена аномалия
+
+Стиль: краткий, дружеский, по делу. Без эмодзи кроме заголовков
+разделов. Без воды. Если данных по разделу нет — пропусти раздел."""
 
 
 async def build_digest() -> str:
+    """Build a grouped daily digest.
+
+    Groups events by sender/chat (top noisy talkers), highlights:
+      - actionable (status=awaiting_user, silenced with high score)
+      - top conversations (by event count)
+      - active goals with deadline pressure
+    Asks LLM to render a compact markdown bullet list.
+    """
     since = datetime.utcnow() - timedelta(hours=24)
     async with get_session() as s:
         n_events = (await s.execute(
@@ -53,32 +79,77 @@ async def build_digest() -> str:
             select(Event.source, func.count()).where(Event.occurred_at >= since)
             .group_by(Event.source)
         )).all())
-        pending = (await s.execute(
-            select(func.count()).select_from(Event)
-            .where(Event.triage_status == "pending",
-                    Event.occurred_at >= since - timedelta(days=2))
-        )).scalar() or 0
+        per_status = dict((await s.execute(
+            select(Event.triage_status, func.count())
+            .where(Event.occurred_at >= since)
+            .group_by(Event.triage_status)
+        )).all())
+        awaiting = (await s.execute(
+            select(Event).where(Event.triage_status == "awaiting_user",
+                                  Event.occurred_at >= since - timedelta(days=2))
+            .order_by(Event.id.desc()).limit(10)
+        )).scalars().all()
+        # Recent events for grouping (last 24h)
+        recent = (await s.execute(
+            select(Event).where(Event.occurred_at >= since)
+            .order_by(Event.id.desc()).limit(300)
+        )).scalars().all()
+
+    # Group by first person hint
+    by_person: dict[str, int] = {}
+    by_chat: dict[str, int] = {}
+    for ev in recent:
+        hints = ev.entity_hints or []
+        for h in hints:
+            if h.get("type") == "person":
+                pid = h.get("name") or h.get("identifier") or "?"
+                by_person[pid] = by_person.get(pid, 0) + 1
+                break
+        for h in hints:
+            if h.get("type") in ("chat", "topic", "folder"):
+                cid = h.get("name") or h.get("identifier") or "?"
+                by_chat[cid] = by_chat.get(cid, 0) + 1
+                break
+    top_people = sorted(by_person.items(), key=lambda x: -x[1])[:8]
+    top_chats = sorted(by_chat.items(), key=lambda x: -x[1])[:5]
 
     identity = await ID.list_active()
     goals = identity.get("Goal", [])
 
-    facts = (
-        f"События за 24ч: {n_events} (по источникам: {per_src})\n"
-        f"Не разобранных карточек: {pending}\n"
-        f"Активных целей: {len(goals)}\n"
-    )
-    for g in goals[:5]:
-        facts += f"  - {g.get('title','?')}: deadline={g.get('deadline','?')}\n"
+    facts = [
+        f"СУТОЧНАЯ СВОДКА для дайджеста.",
+        f"События: {n_events} (источники: {per_src}, статусы: {per_status}).",
+        f"Активных целей: {len(goals)}.",
+    ]
+    if goals:
+        facts.append("Цели:")
+        for g in goals[:5]:
+            facts.append(f"  - {g.get('title','?')} (deadline: {g.get('deadline','?')})")
+    if top_people:
+        facts.append("Топ собеседники по числу сообщений:")
+        for name, n in top_people:
+            facts.append(f"  - {name}: {n}")
+    if top_chats:
+        facts.append("Топ чаты/потоки:")
+        for name, n in top_chats:
+            facts.append(f"  - {name}: {n}")
+    if awaiting:
+        facts.append(f"Карточки ждут решения ({len(awaiting)}):")
+        for ev in awaiting[:5]:
+            preview = (ev.content_text or "")[:80].replace("\n", " ")
+            facts.append(f"  - #{ev.id} {ev.source}: {preview}")
 
+    facts_text = "\n".join(facts)
     digest = await llm_chat(
-        messages=[{"role": "user", "content": facts}],
+        messages=[{"role": "user", "content": facts_text}],
         system=_SYNTH_SYSTEM, capability="chat:smart",
     )
-    return digest.strip() or facts
+    return digest.strip() or facts_text
 
 
 async def post_digest(text: str) -> bool:
-    """Post digest into the forum chat. Returns True on success."""
+    """Post digest into the forum chat with feedback buttons."""
+    from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
     from app.bot.sender import get_bot
     prefs = await preferences.get_all()
     chat_id = int(prefs.get("forum_chat_id") or 0)
@@ -86,8 +157,15 @@ async def post_digest(text: str) -> bool:
         log.warning("synth: no forum_chat_id configured — skipping post")
         return False
     bot = get_bot()
+    kb = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="👍 норм", callback_data="dig:ok"),
+        InlineKeyboardButton(text="🔍 подробнее", callback_data="dig:more"),
+        InlineKeyboardButton(text="🤫 тише", callback_data="dig:quiet"),
+        InlineKeyboardButton(text="📢 громче", callback_data="dig:loud"),
+    ]])
     try:
-        await bot.send_message(chat_id=chat_id, text=text)
+        await bot.send_message(chat_id=chat_id, text=text,
+                                parse_mode="Markdown", reply_markup=kb)
         return True
     except Exception as exc:
         log.exception("synth: post failed: %s", exc)
