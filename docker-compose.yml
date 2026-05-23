@@ -39,6 +39,18 @@ services:
     networks: [vera]
     depends_on: [vera-core]
 
+  vera-coder:
+    build:
+      context: .
+      dockerfile: vera-coder/Dockerfile
+    restart: unless-stopped
+    volumes:
+      - vera_data:/data
+      - vera_coder_work:/work
+    env_file: .env
+    networks: [vera]
+    depends_on: [vera-core]
+
 volumes:
   vera_data:
     driver: local
@@ -46,6 +58,8 @@ volumes:
       type: none
       o: bind
       device: /var/www/vera/data
+  vera_coder_work:
+    driver: local
 
 networks:
   vera:
