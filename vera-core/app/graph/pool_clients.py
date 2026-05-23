@@ -65,7 +65,7 @@ async def _build_deepseek_fallback() -> object | None:
     return client
 
 
-def make_llm_client(model: str = "gemini-2.5-flash-lite", capability: str = "chat:fast"):
+def make_llm_client(model: str = "gemini-2.0-flash", capability: str = "chat:fast"):
     from graphiti_core.llm_client.config import LLMConfig
     from graphiti_core.llm_client.gemini_client import GeminiClient
 
@@ -139,7 +139,7 @@ def make_embedder(embedding_model: str = "gemini-embedding-001"):
 # -------- Reranker ----------------------------------------------------------
 
 
-def make_reranker(model: str = "gemini-2.5-flash-lite"):
+def make_reranker(model: str = "gemini-2.0-flash"):
     from graphiti_core.cross_encoder.gemini_reranker_client import GeminiRerankerClient
     from graphiti_core.llm_client.config import LLMConfig
 
