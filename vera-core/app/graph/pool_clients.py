@@ -78,6 +78,13 @@ def make_llm_client(model: str = "gemini-2.5-flash-lite", capability: str = "cha
                 status = _status_from_exc(exc)
                 if status:
                     await get_pool().on_error(token.id, status)
+                # Free-tier Gemini → 429 / 503 / quota: fall back to
+                # DeepSeek for THIS call rather than re-raising.
+                if status in (429, 503):
+                    fallback = await _build_deepseek_fallback()
+                    if fallback is not None:
+                        log.warning("Gemini %s — falling back to DeepSeek", status)
+                        return await fallback._generate_response(*args, **kwargs)
                 raise
 
     # placeholder key satisfies parent __init__; rebuilt per call
