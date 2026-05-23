@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     gmail_client_id: str = ""
     gmail_client_secret: str = ""
 
+    vera_gmail_url: str = "http://vera-gmail:8000"
+    vera_telegram_url: str = "http://vera-telegram:8000"
+
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
 
