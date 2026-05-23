@@ -96,6 +96,19 @@ TOOLS: list[ToolSpec] = [
         ],
     ),
     ToolSpec(
+        name="telegram_list_forum_topics",
+        description=(
+            "List all forum topics (threads) in a supergroup with their "
+            "ids and titles. Use this BEFORE bot_delete_forum_topic when "
+            "the user asks to clear all topics — you need the ids first."
+        ),
+        params=[
+            ToolParam("chat_id", "integer", "Target supergroup id.", required=False, default=0),
+            ToolParam("peer", "string", "Group name as fallback.", required=False, default=""),
+            ToolParam("limit", "integer", "Max topics.", required=False, default=100),
+        ],
+    ),
+    ToolSpec(
         name="telegram_clear_history",
         description=(
             "Wipe entire chat history with a peer. Use carefully — "

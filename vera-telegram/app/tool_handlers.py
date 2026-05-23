@@ -7,6 +7,7 @@ from app.tools.read_messages import read_messages, _resolve_peer_by_id_or_name
 from app.tools.send_message import send_message_to
 from app.tools.get_dialog_info import get_dialog_info_for
 from app.tools.delete_messages import delete_messages, clear_history
+from app.tools.list_topics import list_forum_topics
 
 log = logging.getLogger(__name__)
 
@@ -70,6 +71,14 @@ async def _t_clear_history(chat_id: int = 0, peer: str = "",
                                 revoke=bool(revoke), max_id=int(max_id))
 
 
+async def _t_list_topics(chat_id: int = 0, peer: str = "",
+                          limit: int = 100) -> Any:
+    target = str(chat_id) if chat_id else peer
+    if not target:
+        raise ValueError("chat_id or peer is required")
+    return await list_forum_topics(target, limit=int(limit))
+
+
 HANDLERS: dict[str, Callable[..., Awaitable[Any]]] = {
     "telegram_list_recent_dialogs": _t_list_recent,
     "telegram_search_dialogs":      _t_search,
@@ -78,4 +87,5 @@ HANDLERS: dict[str, Callable[..., Awaitable[Any]]] = {
     "telegram_get_dialog_info":     _t_info,
     "telegram_delete_messages":     _t_delete,
     "telegram_clear_history":       _t_clear_history,
+    "telegram_list_forum_topics":   _t_list_topics,
 }

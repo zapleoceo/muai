@@ -184,6 +184,40 @@ async def bot_clear_topic_messages(chat_id: int, message_thread_id: int,
     return {"ok": True, "deleted": deleted, "errors": errors[:3]}
 
 
+async def bot_wipe_forum(chat_id: int, exclude_general: bool = True) -> dict:
+    """High-level: delete EVERY forum topic in this supergroup.
+    Calls telegram_list_forum_topics via vera-telegram, then loops
+    bot_delete_forum_topic. Single tool call from the LLM loop's POV."""
+    import httpx
+    from app.config import get_settings
+    from app.bot.sender import get_bot
+    cfg = get_settings()
+    url = (getattr(cfg, "vera_telegram_url", None)
+           or "http://vera-telegram:8001").rstrip("/")
+    async with httpx.AsyncClient(timeout=30) as c:
+        r = await c.post(f"{url}/tool/telegram_list_forum_topics",
+                          json={"chat_id": chat_id, "limit": 200},
+                          headers={"X-Internal-Secret": cfg.internal_secret})
+    if r.status_code != 200:
+        return {"ok": False, "error": f"list_topics HTTP {r.status_code}"}
+    data = r.json().get("result") or []
+    bot = get_bot()
+    deleted, errors = [], []
+    for t in data:
+        tid = t.get("id")
+        if not tid:
+            continue
+        if exclude_general and tid == 1:
+            continue  # General topic in supergroups is id=1, can't delete
+        try:
+            await bot.delete_forum_topic(chat_id=chat_id, message_thread_id=tid)
+            deleted.append({"id": tid, "title": t.get("title")})
+        except Exception as exc:
+            errors.append({"id": tid, "error": f"{type(exc).__name__}: {exc}"})
+    return {"ok": True, "deleted_count": len(deleted),
+            "deleted": deleted, "errors": errors}
+
+
 async def bot_close_forum_topic(chat_id: int, message_thread_id: int) -> dict:
     """Lock a forum topic (no new messages, but content stays)."""
     from app.bot.sender import get_bot
@@ -204,4 +238,5 @@ HANDLERS = {
     "bot_delete_forum_topic": bot_delete_forum_topic,
     "bot_close_forum_topic": bot_close_forum_topic,
     "bot_clear_topic_messages": bot_clear_topic_messages,
+    "bot_wipe_forum": bot_wipe_forum,
 }

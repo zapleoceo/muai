@@ -99,6 +99,21 @@ TOOL_SPECS = [
         ],
     },
     {
+        "name": "bot_wipe_forum",
+        "description": (
+            "ONE-SHOT: wipe ALL forum topics in a supergroup. Internally "
+            "lists topics via vera-telegram, then deletes each. Use this "
+            "(NOT a loop of bot_delete_forum_topic) when Dima says «очисти "
+            "все темы» / «удали всё» / «снеси форум». Returns deleted_count."
+        ),
+        "params": [
+            {"name": "chat_id", "type": "integer", "description": "Supergroup id.", "required": True},
+            {"name": "exclude_general", "type": "boolean",
+             "description": "Skip General topic (id=1, undeletable). Default true.",
+             "required": False, "default": True},
+        ],
+    },
+    {
         "name": "bot_clear_topic_messages",
         "description": (
             "Sweep recent messages in a forum topic. Best-effort: tries to "
