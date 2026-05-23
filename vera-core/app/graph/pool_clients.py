@@ -9,8 +9,14 @@ log = logging.getLogger(__name__)
 
 
 def _status_from_exc(exc: Exception) -> int:
+    # Graphiti normalises 429 → RateLimitError; detect by class first so
+    # we don't depend on substring matching.
+    cls = type(exc).__name__
+    if cls in ("RateLimitError", "TokensExhausted"):
+        return 429
     text = str(exc).lower()
-    if "429" in text or "quota" in text or "rate" in text or "resource_exhausted" in text:
+    if ("429" in text or "quota" in text or "rate" in text
+            or "resource_exhausted" in text or "rate limit" in text):
         return 429
     if "503" in text or "unavailable" in text or "high demand" in text:
         return 503
