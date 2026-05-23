@@ -1,37 +1,34 @@
-# Vera 2.0 — Single Source of Truth
+# Vera v3 — Single Source of Truth
 
-> Everything about the project lives here. CLAUDE.md and docs/ARCHITECTURE.md
-> are now stubs pointing to this file. Update this — not them.
+> Canonical doc. CLAUDE.md and docs/ARCHITECTURE.md are stubs.
+> If you change behavior, change this first.
 
 ---
 
 ## 1. Vision
 
-Vera is an **AI brain that decides, not a menu generator**.
+Vera is a **second self** — not a chatbot, not a menu, not a triage queue.
+She holds Dima's entire knowable context (events, people, projects, goals,
+values, voice) in a single graph and makes decisions against the **whole
+picture**, not the latest event in isolation.
 
-She receives signals from many sources (Gmail, Telegram, bank alerts, Instagram,
-Facebook, …), records them as episodes in a bi-temporal knowledge graph
-(Graphiti + Neo4j), and **picks one action per event** with a self-assessed
-confidence score:
+### Hard rules
 
-| Confidence | Behaviour |
-|---|---|
-| **≥ 0.95** | Executes immediately. Sends Dima a post-fact card with [✋ Откати] |
-| **0.50 — 0.95** | Proposes 1-3 actions in a card. Dima clicks or replies free-text |
-| **< 0.50** | Silent notification card, no buttons |
-
-Dima only corrects errors. Silence = nothing happens (no implicit approval).
-Every explicit 👍 / ✋ / ✍️ is written back to Graphiti as an annotation
-episode and surfaces in retrieval for the next similar event.
-
-**Hard rules:**
-
-- Source-agnostic core — everything flows through one /event endpoint
-- MCP-first integrations — community MCP > custom adapter
-- Tools, not commands — Vera composes tool calls; no hardcoded if-else
-- All decisions are training data
-- No hallucination — args come from event metadata, not LLM imagination
-- Owner-only authority — `OWNER_TELEGRAM_ID` is the single privileged identity
+1. **Everything Vera knows lives in the graph.** No config files of
+   preferences, no scattered tables of rules. If it influences a
+   decision, it's a node.
+2. **No manual thresholds.** Confidence is alignment with the graph —
+   how well a candidate action matches values, goals, past patterns.
+3. **One trigger → one decision → graph updated.** Re-processing the
+   same event is a bug. Decisions feed back as edges, strengthening or
+   weakening future ones.
+4. **Source-agnostic.** Every input (Gmail, Telegram, bank, Instagram,
+   anything next) implements the same two-method contract; no per-source
+   custom branching in the core.
+5. **Tool-first.** Vera composes tool calls; she does not contain
+   hardcoded business logic.
+6. **Owner-only authority.** `OWNER_TELEGRAM_ID` is the single
+   privileged identity.
 
 ---
 
@@ -40,317 +37,249 @@ episode and surfaces in retrieval for the next similar event.
 | Item | Value |
 |---|---|
 | Live URL | https://dima.veranda.my |
-| Server | Hetzner VPS, SSH alias `hetzner-root`, port 9617 |
-| Project dir on server | `/var/www/vera` |
-| DB | SQLite (WAL) at `/data/vera.db` — single file, all services |
-| Graph | Neo4j Aura Free |
+| Server | Hetzner VPS, SSH alias `hetzner-root` (port 9617) |
+| Project dir | `/var/www/vera` |
+| SQL | SQLite (WAL) at `/data/vera.db` — minimal, only stateful infra |
+| Graph | Neo4j Aura Free → self-host Community when capacity needed |
 | Owner Telegram ID | `169510539` |
-| Bot username | `@vera_lifemind_bot` (token in env) |
+| Bot | `@Dimondra_Ai_Bot` |
+| Forum group for triage | `-1003979512448` («Вера бот»), topics-mode |
 
 ---
 
-## 3. Service topology
+## 3. The single graph — three layers
 
 ```
-                          ┌─────────────────────────────┐
-                          │  vera-core (FastAPI+aiogram) │
-                          │  - /bot/webhook              │
-                          │  - /event ingest             │
-                          │  - dashboard /api/*          │
-                          │  - orchestrator + triage     │
-                          │  - MCP client manager (stdio)│
-                          └────────────┬─────────────────┘
-                                       │
-            ┌──────────────────────────┼──────────────────────────┐
-            │                          │                          │
-   ┌────────▼─────────┐      ┌─────────▼────────┐       ┌─────────▼─────────┐
-   │  vera-telegram   │      │   vera-gmail     │       │  MCP children     │
-   │  - Telethon      │      │  - OAuth poll    │       │  spawned in-proc: │
-   │  - tools/* HTTP  │      │  - tools/* HTTP  │       │  fetch, git,      │
-   │  - source poller │      │                  │       │  github, ...      │
-   └──────────────────┘      └──────────────────┘       └───────────────────┘
+┌─ L1: Reality (events & entities) ──────────────────────┐
+│  Event nodes — every email, message, transaction, etc.  │
+│  Person, Project, Domain, Account, Topic, Folder, Chat  │
+│  Cheap deterministic edges (regex-extracted) + LLM-     │
+│  extracted edges (via Graphiti, in background queue)    │
+└─────────────────────────────────────────────────────────┘
+┌─ L2: Patterns (learned, not configured) ────────────────┐
+│  Pattern nodes — recurring (trigger, action) pairs       │
+│  with observation_count, your_correction_count, weight   │
+│  Built incrementally from L1 + Dima's decisions          │
+└─────────────────────────────────────────────────────────┘
+┌─ L3: Identity (who Dima is) ────────────────────────────┐
+│  Goal nodes — current week / quarter / year targets      │
+│  Value nodes — principles ('respond to customers <4h')   │
+│  NoGo nodes — hard prohibitions ('never auto-send $')    │
+│  Style nodes — per-relationship tone & voice profile     │
+│  Identity nodes — roles, contexts ('CTO Veranda')        │
+└─────────────────────────────────────────────────────────┘
 ```
 
-Vera-git and vera-web were removed once MCP equivalents (fetch, git, github)
-covered their functionality.
+All three layers live in the same Neo4j. Vera reads from L1+L2+L3 on
+every decision. Writes happen continuously: events flow into L1, edges
+emerge into L2, conversations with Dima update L3.
 
 ---
 
-## 4. Core domain models
+## 4. Decision flow (the only flow)
 
-### `sources` — configurable event sources
-Per-source filter rules + poll interval + base threshold. Filter format:
-
-```json
-[
-  {"match": {"chat_type": "private"}, "action": "include"},
-  {"match": {"chat_id_not_in": [-100123]}, "action": "exclude"},
-  {"match": {"mention_me": true}, "action": "priority"}
-]
+```
+New event arrives via /event
+  ↓
+brain.ingest:
+  - save Event row in SQL (dedup by source_event_id)
+  - cheap_extract → write deterministic edges to graph
+  - enqueue deep_extract job (LLM entities, ~30s budget)
+  ↓
+decide.dispatch:
+  - graph query: who+what+when+where+related-to (L1)
+  - + pattern matches for this signature (L2)
+  - + active goals, applicable values, relevant style (L3)
+  ↓
+decide.scoring:
+  Each candidate action scored on:
+    - value alignment (does this match what Dima cares about?)
+    - goal contribution (does this help an active goal?)
+    - pattern match (have I done this N times before?)
+    - NoGo violation (hard block)
+    - reversibility (auto only if low-risk)
+  → alignment score 0..10
+  ↓
+Action selection:
+  ≥ 7    → auto-execute, post-fact card with [✋ Откати] [❓ Почему]
+  3 – 6  → propose with reasoning, card with buttons + Свой ответ
+  < 3    → ask plain: «впервые такое: как поступить?»
+  ↓
+Result is recorded as graph edge:
+  Event —[DECIDED_BY {action, score, reversed?}]→ Decision —[REINFORCES]→ Pattern
 ```
 
-Last matching rule wins, default `exclude`. Predicates: `chat_type`,
-`chat_id`/`chat_id_not_in`, `from_user_id`, `from_username`, `from_contact_known`,
-`mention_me`, `reply_to_me`, `text_contains`, `text_regex`, `from_contains`,
-`subject_contains`, `time_of_day_between`, `has_attachment`.
-
-### `events` — every triggered signal
-`source`, `category`, `content_text`, `entity_hints[]`, `metadata{}`,
-`triage_status` (pending → awaiting_user → decided/executed/auto_executed),
-`triage_result` (LLM proposal + user_choice + executions[]).
-
-### `mcp_servers` — runtime-registered MCP children
-Stdio subprocess specs. `command[]`, `env{}`, `enabled`, status, `tools_count`.
-Lifecycle: `app.mcp.manager.refresh_from_db()` at startup + on dashboard change.
-
-### `tokens` — encrypted LLM/provider keys
-LiteLLM router builds a model list dynamically from this table.
-Capabilities: `chat:fast`, `chat:smart`, `chat:code`, `embed`, `prefilter`.
-
-### `gmail_accounts` — OAuth refresh tokens (encrypted)
-### `agents` — registered HTTP tool providers (vera-telegram, vera-gmail)
-### `settings` — kv blob (e.g. `persona` digest)
+No `auto_threshold` setting. The 7/3 split is itself a Value node
+("Vera's autonomy threshold") that Dima can override in conversation:
+*«будь смелее — 6 уже делай»* → Value node updated.
 
 ---
 
-## 5. Event flow (the brain loop)
+## 5. Learning loops (no per-event configuration)
 
-```
-External signal (Gmail/Telegram poller / webhook)
-    │
-    ▼
-POST /event   (X-Internal-Secret required)
-    │
-    ▼
-save_event   →  schedule_ingest (background)
-                    │
-                    ├─ Graphiti add_episode (30s timeout, won't block)
-                    │
-                    ▼
-                schedule_triage
-                    │
-                    ▼
-            Graphiti retrieval (related episodes across ALL sources)
-                    │
-                    ▼
-            LLM (chat:fast) with persona + tools + context
-                    │
-                    ▼
-            Decision(action, alternatives[], confidence)
-                    │
-                ┌───┴───┐
-                │       │
-              ≥0.95    <0.95
-                │       │
-              auto-   card with buttons
-              execute  + free-text path
-```
+| Signal | What graph operation |
+|---|---|
+| Dima taps action button | Pattern weight += 1, strengthen edge |
+| Dima taps ✋ Откати | Pattern weight −= 2, write Correction node |
+| Dima writes "no — should be X" | brain.editor LLM-parses → drop old Pattern, create new + Correction |
+| Dima writes "always X for Y" | Value node created with high weight |
+| Vera notices "you did X 5× — should I learn this?" | If Dima says yes → Pattern promoted to Value |
+| Weekly conversation about focus | Goal nodes (re)created with deadline + metric |
+| Daily Vera reads sent messages | Style nodes per relationship updated |
 
-Cards: `vera-core/app/triage/card.py`. Callback handler: `bot/callbacks.py`
-(owner-only, group-bound, calls `record_user_decision` then `call_tool`).
+No `Trigger` table. No `DecisionReplay` table. No `preferences` for
+behavior. All learning lives in graph nodes that Vera both reads and
+writes.
 
 ---
 
-## 6. Tool registry
+## 6. Standard source contract
 
-Unified via `app/orchestrator/tool_router.py:collect_tools()`:
-1. HTTP agents — `Agent` rows with `tools[]`, last heartbeat <5min ago
-2. MCP children — `mcp.manager.get_routed_tools()`
+Every input source (existing or future) implements two methods:
 
-HTTP wins on name collision. Tool spec: `{name, description, params:[{name,type,description,required,default}]}`.
+```python
+class Source(ABC):
+    async def poll(self) -> AsyncIterator[EventEnvelope]:
+        """Yield events newer than last_polled_at."""
 
-Destructive tools have **server-side arg resolution**
-(`tool_router._resolve_safe_args`) — e.g. `gmail_send_reply.to` is overridden
-with the actual last-sender from the thread. Prevents prompt-injection
-from email body changing recipient.
+    async def backfill(self, since: date) -> AsyncIterator[EventEnvelope]:
+        """Yield events from `since` to now, oldest first."""
+```
+
+`EventEnvelope` is a normalised dict with:
+```
+{
+  source: str,               # 'gmail' | 'telegram' | 'instagram' | …
+  source_event_id: str,      # stable, for dedup
+  account: str | None,
+  occurred_at: datetime,
+  content_text: str,         # plain text + OCR'd attachments
+  attachments: [{kind, sha, ocr_text, ...}],
+  entity_hints: [{type, identifier, name, ...}],
+  metadata: {...},           # rich, source-specific
+}
+```
+
+Adding a new source = implement the class + register. The backfill button
+in the dashboard, the poll loop, the brain ingest — all already work for
+it. No core changes.
 
 ---
 
-## 7. Security invariants (the review-driven shortlist)
+## 7. Bootstrap (Phase 0 → Phase 5)
+
+| Phase | Duration | What Vera can do at the end |
+|---|---|---|
+| **0 — Foundation** | 1 week | Graph populated via 6-month backfill of 3 mailboxes + 4 TG categories. Cheap edges built at ingest. Standard source contract live. Old `triage/persona/Trigger/DecisionReplay` removed. |
+| **1 — Patterns** | 1 week | L2 Pattern nodes inferred. Replay/confidence via graph traversal, not SQL. Alignment scoring replaces `auto_threshold`. |
+| **2 — Values & Goals** | 1 week | Weekly Goal conversation. L3 Goal/Value/NoGo nodes. Brain Editor agent parses Dima's text into graph operations. |
+| **3 — Voice** | 1 week | Daily scan of sent. Style nodes per relationship. Outgoing messages style-filtered → sound like Dima. |
+| **4 — Proactive** | 1 week | Daily synthesis topic: anomalies vs patterns + goal-progress + suggestions. Vera initiates, not waits. |
+| **5 — Polish** | 1 week | Dashboard rebuilt as pure observability. All legacy paths removed. Stress test. |
+
+---
+
+## 8. What we keep from v2
+
+- Gmail OAuth flow + `vera_shared/tokens` encryption
+- Telethon userbot session
+- HTTP+MCP tool registry (`app/orchestrator/tool_router.py`)
+- Topics-mode UX in forum chat
+- `app/self_extend/*` (autonomous MCP discovery & install)
+- `app/bot/{callbacks, handler, sender, progress}` (minor edits)
+- Deploy pipeline (`scripts/deploy.sh` + `.github/workflows/deploy.yml`)
+- Security: CSRF, owner-only routes, destructive-args resolver,
+  AUTO_SAFE_TOOLS whitelist
+
+## 9. What we remove
+
+- `app/triage/*` → replaced by `app/brain` + `app/decide`
+- `app/persona/*` → replaced by `app/brain/identity`
+- `app/research/*` → merged into `app/brain/import`
+- `app/admin/*` → no manual triage replay anymore
+- Tables: `triggers`, `decision_replay` (data migrates to graph)
+- `preferences` keys for behaviour (auto_threshold, auto_min_repeats,
+  delete_card_after_decision, close_topic_on_decision,
+  delete_topic_on_decision, execution_recap_in_dm) — become Value nodes
+- Remaining `preferences` keys: `forum_chat_id`, `use_topics` (one-shot
+  UX placement, not behaviour)
+
+## 10. Code layout (post-Phase 5)
+
+```
+vera-core/app/
+├── brain/
+│   ├── ingest.py        # event → graph (cheap + queued deep)
+│   ├── identity.py      # Goal/Value/NoGo/Style/Identity nodes
+│   ├── patterns.py      # Pattern node mining + maintenance
+│   ├── editor.py        # text → graph ops via LLM
+│   ├── synth.py         # daily proactive synthesis
+│   ├── voice.py         # outgoing style filter
+│   └── import_.py       # bulk imports (Perplexity etc.)
+├── decide/
+│   ├── dispatch.py      # event → query → score → act
+│   ├── scoring.py       # alignment-based confidence
+│   └── explain.py       # rationale for UX ("why")
+├── sources/
+│   ├── base.py          # Source ABC, EventEnvelope
+│   ├── gmail.py
+│   ├── telegram.py
+│   └── registry.py      # discovery + jobs
+├── jobs/
+│   ├── runner.py        # backfill + ingest queue worker
+│   └── models.py        # BackfillJob, IngestJob
+├── bot/                 # callbacks, handler, sender (unchanged)
+├── orchestrator/        # tool_router, loop (unchanged)
+├── mcp/                 # MCP manager (unchanged)
+├── self_extend/         # tool discovery & install (unchanged)
+├── events/routes.py     # /event ingest, dedup
+└── dashboard/           # rebuilt — observability only
+```
+
+## 11. Security invariants (carried over)
 
 | Boundary | Enforcement |
 |---|---|
-| `/internal/agents/register` | X-Internal-Secret + host allowlist |
-| `/internal/agents` GET | `Depends(require_owner)` |
-| `/api/admin/*` | `Depends(require_owner)` |
-| `/api/sources`, `/api/mcp/*`, `/api/persona/*` | `Depends(require_owner)` |
-| `/event` | X-Internal-Secret (shared by pollers) |
-| `/bot/webhook` | aiogram secret header |
-| `triage_callback` | from_user.id == OWNER_TELEGRAM_ID + chat.id == VERA_GROUP_ID |
-| Destructive tool args | server-side resolution overrides LLM choice |
-| Tokens at rest | AES-CTR + HMAC via `crypto.py` |
-| Deploy webhook | DEPLOY_SECRET bearer |
+| `/internal/*` | X-Internal-Secret + host allowlist + Depends(require_owner) for GET |
+| `/api/*` mutating | Depends(require_owner) + CSRF X-CSRF header |
+| Owner cookie | session_secret HMAC, samesite=strict, 7d TTL |
+| Tokens at rest | AES-CTR + HMAC |
+| Destructive tool args (`*send*`, `*reply*`, `*delete*`) | re-derived server-side, LLM-chosen recipient overridden + logged |
+| Auto-execution | only tools in AUTO_SAFE_TOOLS may auto-fire |
+| Triage callback | owner_id + chat_id check |
 
----
+## 12. Deploy
 
-## 8. Deploy (CI/CD)
-
-`.github/workflows/deploy.yml` triggers on push to master:
-
-1. webfactory/ssh-agent — SSH key into runner
-2. ssh-keyscan port 9617 (NOT 22)
-3. `flock /tmp/vera-deploy.lock` — serialise concurrent deploys
-4. `git fetch + git reset --hard origin/master` (no merge surprises)
-5. `docker compose build --pull && up -d --remove-orphans`
-6. Smoke ping `https://dima.veranda.my/` (5 attempts × 5s)
-7. `docker exec vera-vera-core-1 pytest /app/tests -q`
-
-Manual: `ssh hetzner-root "cd /var/www/vera && git pull && docker compose build && docker compose up -d"`
-
----
-
-## 9. MCP presets (one-click in dashboard)
-
-| ID | Package | Env required |
-|---|---|---|
-| fetch | `uvx mcp-server-fetch` | — |
-| git | `uvx mcp-server-git --repository /var/www/vera` | — |
-| filesystem | `@modelcontextprotocol/server-filesystem /data` | — |
-| memory | `@modelcontextprotocol/server-memory` | — |
-| github | `@modelcontextprotocol/server-github` | `GITHUB_PERSONAL_ACCESS_TOKEN` |
-| instagram | `@pinkpixel/instagram-engagement-mcp` | IG token + business id |
-| facebook | `@pinkpixel/facebook-pages-mcp` | Page token + page id |
-
-Add via dashboard → MCP tab → preset. `vera-core` Dockerfile bundles `node 20`
-and `uv` so both npm and Python MCP servers can be lazy-installed.
-
----
-
-## 10. Adding a new source
-
-1. Either: register an MCP server providing the data tools, or write a poller
-   service like `vera-gmail/app/poller.py` that POSTs `/event`
-2. Create a `Source` row via `/api/sources` with `type`, `filters[]`,
-   `base_threshold`
-3. Dashboard → Источники → edit filters. Done.
-
-No code changes in vera-core needed — `Source` model + filter engine in
-`shared/vera_shared/sources/filters.py` are source-agnostic.
-
----
-
-## 11. Pending / open
-
-- R2-R5: Decision-instead-of-menu triage; explicit-feedback calibration via
-  Graphiti annotations; auto-execution at threshold; UI «Память» (graph
-  browser)
-- Self-extension (semi-autonomous MCP discovery + install with owner approval)
-  — see separate proposal `docs/SELF_EXTENSION.md`
-- Dedup `registration.py` / FastAPI boot into `shared/base_bot/`
-- Performance: SQL filter for TokenPool, cache `collect_tools()`, drop
-  `google-generativeai` SDK (already replaced by LiteLLM)
-- M3 PII redaction in logs
-
----
-
-## 11.5. Telegram context enrichment
-
-Telegram poller decorates each event with:
-- `folder`: dialog filter (folder) where the chat lives, e.g. «Работа»,
-  «Личное». Cached 30min.
-- `mutual_chats`: for private DMs, list of groups Vera shares with the
-  sender. Cached 12h per-user via Telegram's `GetCommonChats`. Surfaces
-  in `entity_hints` so Graphiti binds the person to their groups.
-
-Filter predicates added: `folder`, `folder_in`, `folder_not_in`,
-`mutual_chat_contains`. See `shared/vera_shared/sources/filters.py`.
-
-## 11.6. Retrieval relevance gate
-
-Graphiti `search()` returns top-N regardless of similarity. On a sparse
-graph this surfaces unrelated episodes (the «veranda leak» — a message
-from Marina was dragging in `domain veranda.my…namecheap` fact because
-it was the only thing the graph had).
-
-`triage/engine._is_relevant` post-filters retrievals:
-- keep if any `entity_hint.identifier` appears in the fact, OR
-- keep if persona/instruction/rejection signal present, OR
-- keep if ≥10% of event content tokens (len≥3) overlap with fact tokens.
-
-## 11.65. Auto-execution: when Vera acts without asking
-
-Single knob: **`preferences.auto_threshold`** (default 0.95).
-
-Confidence is derived from the count of identical past decisions for
-the same sender (normalised — email or @username):
-
-```
-confidence = 1 - 0.5 / count
+```bash
+git push origin master   # GH Action → scripts/deploy.sh
+# or
+ssh hetzner-root "/var/www/vera/scripts/deploy.sh"
 ```
 
-| count | confidence |
-|---|---|
-| 1 | 0.50 |
-| 3 | 0.83 |
-| 5 | 0.90 |
-| 10 | 0.95 |
-| 20 | 0.975 |
-| 50 | 0.99 |
+`scripts/deploy.sh` does: lock → git pull → build → up -d → smoke
+(dashboard + per-service health) → pytest → cleanup. On failure GH
+Action posts to Telegram and runs ROLLBACK_SHA reset.
 
-Vera auto-executes iff **all** of:
-- default action came from replay history (not LLM guess)
-- tool is in `AUTO_SAFE_TOOLS` (read-only or idempotent label ops — never
-  send/post/reply)
-- confidence ≥ `auto_threshold`
+## 13. Migration log
 
-So `auto_threshold=0.95` means *«after I've done the same thing 10+
-times for this sender, Vera does it herself»*. Drop to `0.85` to make
-her bolder (4 repeats), raise to `0.99` to make her cautious (50).
+- **2026-05-22**: v3 spec adopted — single graph, no per-event config,
+  6-week phased rebuild. Triage/persona/Trigger/DecisionReplay deprecated.
+- 2026-05-21 → 2026-05-22: v2 (current production) — topics, replay
+  table, threshold-based auto, scattered prefs. Now legacy.
 
-### Topic-mode delivery
+---
 
-When `preferences.use_topics=true` and `forum_chat_id=<supergroup>`,
-every event lands in its own forum topic in that supergroup. The
-`message_thread_id` IS the event scope — no global pending state, no
-context bleed across conversations. Topic is **deleted** after Dima's
-decision (`delete_topic_on_decision=true`), so the topic list = your
-open to-do.
+## Appendix A — Why no manual thresholds
 
-### Card-deletion in DM mode
+Past lesson: every numeric knob (`auto_threshold`, `auto_min_repeats`,
+trigger predicates) became an out-of-date config that conflicted with
+the graph state. Single rule going forward: if a setting influences
+decisions, it's a node. If it's just UX placement (DM vs group), it's
+a pref. Two-line rule, no middle ground.
 
-`delete_card_after_decision=true` — after action, card is removed
-instead of edited with «Решено». Add `execution_recap_in_dm=true` to
-get the tool result as a separate DM message.
+## Appendix B — Why one trigger = one triage (enforced at the code level)
 
-### Self-modification
-
-Vera can flip any pref via `vera_set_pref(key, value)` when Dima asks
-in plain text. Examples Vera handles automatically:
-- *«удаляй карточки после реакции»* → `delete_card_after_decision=true`
-- *«ставь порог auto на 0.99»* → `auto_threshold=0.99`
-- *«не закрывай темы после решения»* → `close_topic_on_decision=false`
-
-## 11.7. Research dump import
-
-`POST /api/research/import` accepts `{source, documents: [{title, body,
-url?, date?}]}` and enqueues each document as a Graphiti episode.
-Dashboard «Память» tab provides a file upload widget.
-
-Workflow for Perplexity Spaces backfill:
-1. Install Chrome extension «Perplexity to Notion — Batch Export»
-2. Export Space/Library → Markdown folder
-3. Dashboard → Память → выбрать все .md → Загрузить в мозг
-
-JSON exports (Perplexity API thread dumps, ChatGPT exports) are
-auto-parsed if they look like `[{title, body, ...}]` or
-`{threads: [...]}`.
-
-## 12. Migration log (recent significant changes)
-
-- 2026-05-21: Pack S/D/R/N — destructive-tools args resolved server-side
-  for telegram_send_* too; AUTO_SAFE_TOOLS whitelist gates auto-mode;
-  CSRF header on dashboard; deploy script gets rollback + image cleanup
-  + Telegram failure DM
-- 2026-05-21: Brain feedback loops (R3+R4) — decisions/rejections/
-  instructions persist to Graphiti; hybrid retrieval with relevance
-  gate; DM instructions inline-written
-- 2026-05-21: Telegram folder + mutual_chats context, /api/research/import
-- 2026-05-21: vera-git + vera-web removed (replaced by MCP fetch/git/github)
-- 2026-05-21: Source model + filter engine + Telegram poller + dashboard editor
-- 2026-05-21: Triage callback security (owner+chat check, server-side arg
-  resolution, internal/agents require_owner, registration host allowlist)
-- 2026-05-21: Custom-reply followup via reply-to-message or inline `#N`
-- 2026-05-21: Gmail batch tools (`gmail_modify_threads`, `gmail_apply_label`)
-- 2026-05-20: MCP foundation + dashboard CRUD + presets
-- 2026-05-20: LiteLLM router replaces custom TokenPool for chat calls
-- 2026-05-20: SSH-based GitHub Actions deploy (replaces self-deploy)
+`_run_triage` checks `event.triage_status` and returns early if not
+'pending'. `save_event` returns `(event, is_new)` and `/event` only
+schedules ingestion when new. The flood-of-cards bug (event #477 got
+20+ cards) was caused by violating this in two places at once.
