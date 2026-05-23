@@ -45,7 +45,14 @@ async def ingest(env: EventEnvelope) -> int | None:
     except Exception as exc:
         log.warning("cheap edges failed for event=%s: %s", event.id, exc)
 
-    await _enqueue_deep(event.id)
+    # Deep LLM-based entity extraction (Graphiti.add_episode) is OFF
+    # by default. Cheap edges already give us L1 (Event/Person/Account/
+    # Topic) which Phase 0/1/2/3 build on. Deep extract is enqueued
+    # only when DEEP_EXTRACT_ENABLED=1 in env — turn it back on in
+    # Phase 4 (proactive synthesis) when richer entity types are needed.
+    import os
+    if os.environ.get("DEEP_EXTRACT_ENABLED") == "1":
+        await _enqueue_deep(event.id)
     return event.id
 
 
