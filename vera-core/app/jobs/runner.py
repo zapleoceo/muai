@@ -58,9 +58,11 @@ async def backfill_loop() -> None:
 
 async def _claim_ingest_job() -> IngestJob | None:
     async with get_session() as s:
+        # Prefer least-attempted jobs first so a rate-limited row doesn't
+        # immediately re-claim itself ahead of fresh work.
         row = (await s.execute(
             select(IngestJob).where(IngestJob.status == "pending")
-            .order_by(IngestJob.id).limit(1)
+            .order_by(IngestJob.attempts, IngestJob.id).limit(1)
         )).scalar_one_or_none()
         if row is None:
             return None
@@ -101,11 +103,12 @@ async def _run_ingest(job: IngestJob) -> None:
         is_rate = ("rate limit" in msg.lower() or "429" in msg
                    or "quota" in msg.lower() or "TokensExhausted" in msg)
         if is_rate and job.attempts < _MAX_INGEST_ATTEMPTS:
-            log.warning("deep_extract rate-limited event=%s attempt=%s — "
-                         "requeueing + sleeping %ds",
-                         job.event_id, job.attempts, int(_RATE_LIMIT_BACKOFF_SEC))
+            # Don't block the loop — requeue and let token pool rotation
+            # find a fresh key. Brief pause yields cooperatively only.
+            log.warning("deep_extract rate-limited event=%s attempt=%s — requeue",
+                         job.event_id, job.attempts)
             await _requeue(IngestJob, job.id)
-            await asyncio.sleep(_RATE_LIMIT_BACKOFF_SEC)
+            await asyncio.sleep(2.0)
             return
         log.exception("deep_extract failed for event=%s: %s", job.event_id, exc)
         await _finish(IngestJob, job.id, status="error", error=msg[:500])
