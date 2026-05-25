@@ -26,6 +26,7 @@ from app.brain.observability import router as observability_router
 from app.gmail.routes import router as gmail_router
 from app.graph.routes import router as graph_router
 from app.internal.agents import router as agents_router
+from app.internal.llm_proxy import router as llm_proxy_router
 from app.internal.coder import router as coder_router
 from app.mcp.routes import router as mcp_router
 from app.persona.routes import router as persona_router
@@ -115,6 +116,7 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="vera-core", lifespan=lifespan)
 app.include_router(agents_router)
+app.include_router(llm_proxy_router)
 app.include_router(coder_router)
 app.include_router(events_router)
 app.include_router(jobs_router)

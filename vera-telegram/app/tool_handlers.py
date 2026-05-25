@@ -10,6 +10,7 @@ from app.tools.delete_messages import delete_messages, clear_history
 from app.tools.list_topics import list_forum_topics
 from app.tools.list_folders import list_folders as _list_folders
 from app.tools.read_messages_batch import read_messages_batch
+from app.tools.folder_digest import folder_digest
 
 log = logging.getLogger(__name__)
 
@@ -95,4 +96,7 @@ HANDLERS: dict[str, Callable[..., Awaitable[Any]]] = {
         read_messages_batch(chat_ids=list(chat_ids), days=int(days),
                              limit_per_chat=int(limit_per_chat),
                              ocr_images=bool(ocr_images)),
+    "telegram_folder_digest":       lambda folder_title, days=1, limit_per_chat=50:
+        folder_digest(folder_title=str(folder_title), days=int(days),
+                       limit_per_chat=int(limit_per_chat)),
 }

@@ -96,6 +96,29 @@ TOOLS: list[ToolSpec] = [
         ],
     ),
     ToolSpec(
+        name="telegram_folder_digest",
+        description=(
+            "ИДЕАЛЬНЫЙ инструмент для запросов «что в папке X сегодня», "
+            "«саммари по группе чатов», «о чём говорили в Work за неделю». "
+            "Map-reduce: читает ВСЕ чаты папки полностью (без потери "
+            "контекста), для каждого активного чата делает отдельный "
+            "LLM-вызов для краткого саммари (1-3 строки), возвращает "
+            "агрегированный dict {folder, chats_total, active:[{chat,"
+            "summary,...}], silent_chats:[...]}. Используй ВМЕСТО ручной "
+            "цепочки list_folders → read_messages_batch когда нужен "
+            "именно саммари по папке."
+        ),
+        params=[
+            ToolParam("folder_title", "string",
+                      "Название папки (case-insensitive, loose match)."),
+            ToolParam("days", "integer", "Окно в днях.",
+                      required=False, default=1),
+            ToolParam("limit_per_chat", "integer",
+                      "Максимум сообщений на чат.",
+                      required=False, default=50),
+        ],
+    ),
+    ToolSpec(
         name="telegram_read_messages_batch",
         description=(
             "Read messages from MULTIPLE chats in one call — for folder "

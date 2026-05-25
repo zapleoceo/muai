@@ -193,10 +193,11 @@ def format_tools_for_prompt(specs: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def truncate_for_llm(obj: Any, max_chars: int = 32000) -> str:
-    """Default raised to 32k chars — Gemini/DeepSeek have ≥128k context;
-    8k was capping batch-aggregations (e.g. read_messages_batch over
-    20+ chats) at 3-4 chats visible."""
+def truncate_for_llm(obj: Any, max_chars: int = 16000) -> str:
+    """16k chars — баланс между «не теряем контекст» и «не жрём весь
+    бюджет». Для большого агрегирования (саммари по 20+ чатам) используй
+    purpose-built tool типа telegram_folder_digest, который map-reduce-ит
+    результат на стороне сервиса и возвращает уже сжатое."""
     s = json.dumps(obj, ensure_ascii=False, default=str)
     if len(s) <= max_chars:
         return s
