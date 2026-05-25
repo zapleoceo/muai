@@ -43,8 +43,12 @@ async def _process_account(email: str, include_automated: bool) -> None:
     # Promotions/social/updates are bulk marketing — always skip; include_automated
     # only affects per-sender noreply filter (so business automation like payment
     # receipts can still reach Vera).
+    # Capture BOTH incoming (in:inbox) and outgoing (in:sent) so the
+    # brain knows what Дима writes — sent IS the strongest learning
+    # signal. is:unread is dropped (used to gate noise, but sent never
+    # has unread state and we don't want to miss it).
     q = (
-        f"newer_than:{max(minutes // 60, 1)}h in:inbox is:unread "
+        f"newer_than:{max(minutes // 60, 1)}h (in:inbox OR in:sent) "
         "-category:promotions -category:social -category:updates"
     )
     threads = await list_threads(email, query=q, max_results=10)
@@ -65,26 +69,32 @@ async def _process_account(email: str, include_automated: bool) -> None:
         last = (full.get("messages") or [{}])[-1]
         subject = last.get("subject") or "(без темы)"
         sender = last.get("from") or "?"
+        recipient = last.get("to") or ""
+        direction = "sent" if email.lower() in sender.lower() else "received"
 
-        if not include_automated and _is_noise(sender):
+        # noise filter applies only to incoming — never skip own sent.
+        if direction == "received" and not include_automated and _is_noise(sender):
             log.info("Skip noise: %s (include_automated=False)", sender)
             continue
 
         body_excerpt = (last.get("text") or last.get("snippet") or "")[:1500]
         text = (
             f"From: {sender}\n"
+            f"To: {recipient}\n"
             f"Subject: {subject}\n"
             f"Date: {last.get('date','')}\n"
+            f"Direction: {direction}\n"
             f"---\n{body_excerpt}"
         )
+        person_hint = (recipient if direction == "sent" else sender) or sender
         entity_hints = [
-            {"type": "person", "identifier": sender, "via": "gmail"},
+            {"type": "person", "identifier": person_hint, "via": "gmail"},
             {"type": "account", "identifier": email, "platform": "gmail"},
             {"type": "thread", "identifier": thread_id, "platform": "gmail"},
         ]
         await _post_event({
             "source": "gmail",
-            "source_event_id": f"{email}:{thread_id}",
+            "source_event_id": f"{email}:{thread_id}:{last.get('id','')}",
             "account": email,
             "category": "communication",
             "content_text": text,
@@ -93,6 +103,7 @@ async def _process_account(email: str, include_automated: bool) -> None:
                 "subject": subject,
                 "thread_id": thread_id,
                 "messages_count": full.get("messages_count"),
+                "direction": direction,
             },
         })
 

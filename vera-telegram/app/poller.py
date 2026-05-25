@@ -246,11 +246,14 @@ async def _process_source(source: Source, me_id: int,
             for msg in messages:
                 if not isinstance(msg, Message) or msg.id <= last_seen:
                     continue
-                if (getattr(msg, "from_id", None)
-                        and getattr(msg.from_id, "user_id", None) == me_id):
-                    max_id_for_chat = max(max_id_for_chat, msg.id)
-                    continue  # skip own messages
+                is_sent = (getattr(msg, "from_id", None)
+                            and getattr(msg.from_id, "user_id", None) == me_id)
+                # Keep sent messages too — sent IS the strongest learning
+                # signal: that's what Дима actually wrote. Tag direction.
                 payload = await _build_payload(source.name, dialog, msg, me_id, folder_map)
+                payload.setdefault("metadata", {})["direction"] = (
+                    "sent" if is_sent else "received"
+                )
                 filter_p = payload.pop("_filter_payload")
                 decision = evaluate(source.filters, filter_p)
                 if decision == "exclude":
