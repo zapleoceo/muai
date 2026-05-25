@@ -193,7 +193,10 @@ def format_tools_for_prompt(specs: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def truncate_for_llm(obj: Any, max_chars: int = 8000) -> str:
+def truncate_for_llm(obj: Any, max_chars: int = 32000) -> str:
+    """Default raised to 32k chars — Gemini/DeepSeek have ≥128k context;
+    8k was capping batch-aggregations (e.g. read_messages_batch over
+    20+ chats) at 3-4 chats visible."""
     s = json.dumps(obj, ensure_ascii=False, default=str)
     if len(s) <= max_chars:
         return s

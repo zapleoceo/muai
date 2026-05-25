@@ -38,11 +38,18 @@ async def read_messages_batch(
         msgs = r.get("messages") or [] if isinstance(r, dict) else []
         if msgs:
             with_msgs += 1
+        # Compact each message to keep aggregated payload LLM-friendly.
+        compact = [{
+            "date": (m.get("date") or "")[:16],
+            "from": (m.get("from") or "")[:40],
+            "out": m.get("out", False),
+            "text": (m.get("text") or m.get("message") or "")[:300],
+        } for m in msgs]
         out.append({
             "chat_id": r.get("chat_id"),
             "chat_name": r.get("chat_name"),
             "messages_count": len(msgs),
-            "messages": msgs,
+            "messages": compact,
         })
 
     return {
