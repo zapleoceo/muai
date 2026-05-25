@@ -68,6 +68,49 @@ TOOL_SPECS = [
         "params": [],
     },
     {
+        "name": "vera_query_events",
+        "description": (
+            "ЧИТАЕТ из мозга Веры (Event store + cheap edges в графе), "
+            "НЕ из источников (TG/Gmail). Идеально для запросов про "
+            "историю: «что писали в чате X», «сообщения от Y за неделю». "
+            "Все фильтры AND-комбинируются. Возвращает события с "
+            "{id, chat, person, text, direction, occurred_at}."
+        ),
+        "params": [
+            {"name": "source", "type": "string",
+             "description": "gmail | telegram", "required": False},
+            {"name": "account", "type": "string", "required": False},
+            {"name": "folder", "type": "string",
+             "description": "TG folder name (case-insensitive)", "required": False},
+            {"name": "chat_name", "type": "string", "required": False},
+            {"name": "person", "type": "string",
+             "description": "имя или username/email", "required": False},
+            {"name": "days", "type": "integer",
+             "description": "сколько последних дней", "required": False},
+            {"name": "since", "type": "string",
+             "description": "ISO date YYYY-MM-DD", "required": False},
+            {"name": "until", "type": "string",
+             "description": "ISO date YYYY-MM-DD", "required": False},
+            {"name": "limit", "type": "integer", "required": False},
+        ],
+    },
+    {
+        "name": "vera_folder_digest",
+        "description": (
+            "ПРАВИЛЬНЫЙ путь для «что в папке X сегодня». Читает из "
+            "МОЗГА (Event store), не из TG. Группирует по чатам, делает "
+            "map-reduce LLM-саммари per-chat. Без обращения к Telethon, "
+            "без FloodWait. Используй ВСЕГДА вместо telegram_folder_digest "
+            "когда нужна история (а не самые свежие сообщения за минуту)."
+        ),
+        "params": [
+            {"name": "folder", "type": "string",
+             "description": "название папки", "required": True},
+            {"name": "days", "type": "integer",
+             "description": "сколько последних дней", "required": False},
+        ],
+    },
+    {
         "name": "bot_delete_message",
         "description": (
             "Delete a specific message in any chat where the bot has rights. "

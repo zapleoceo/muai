@@ -246,11 +246,23 @@ async def bot_close_forum_topic(chat_id: int, message_thread_id: int) -> dict:
         return {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
 
 
+async def _vera_query_events(**kw):
+    from app.brain.query import vera_query_events
+    return await vera_query_events(**kw)
+
+
+async def _vera_folder_digest(folder: str, days: int = 1):
+    from app.brain.query import vera_folder_digest
+    return await vera_folder_digest(folder=str(folder), days=int(days))
+
+
 HANDLERS = {
     "system_deploy": system_deploy,
     "system_status": system_status,
     "vera_set_pref": vera_set_pref,
     "vera_get_prefs": vera_get_prefs,
+    "vera_query_events": _vera_query_events,
+    "vera_folder_digest": _vera_folder_digest,
     "bot_delete_message": bot_delete_message,
     "bot_delete_forum_topic": bot_delete_forum_topic,
     "bot_close_forum_topic": bot_close_forum_topic,
