@@ -24,12 +24,12 @@ TOOLS: list[ToolSpec] = [
     ToolSpec(
         name="telegram_search_dialogs",
         description=(
-            "Find Telegram chats/channels/users whose name contains the query. "
-            "Returns a list of candidates with id, name, type (user/bot/group/"
-            "supergroup/channel) and username. Use this FIRST when the user "
-            "mentions someone by partial name and you need to know the chat_id "
-            "before reading or sending. Searches both Cyrillic and Latin "
-            "transliterations automatically."
+            "Find Telegram chats/channels/users by name OR by folder "
+            "membership. Returns candidates with id, name, type, folders, "
+            "and 'match' field showing whether matched by title or folder. "
+            "If nothing matches, the result includes a _note with all known "
+            "folder titles — use telegram_list_folders for the full view. "
+            "Searches Cyrillic + Latin transliterations + loose spacing."
         ),
         params=[
             ToolParam("query", "string", "Search string (case-insensitive substring on dialog names)."),
@@ -94,6 +94,17 @@ TOOLS: list[ToolSpec] = [
                       "Delete for both sides (default true).",
                       required=False, default=True),
         ],
+    ),
+    ToolSpec(
+        name="telegram_list_folders",
+        description=(
+            "List all Telegram folders (Dialog Filters) with their titles "
+            "and chat counts. Use BEFORE telegram_search_dialogs when the "
+            "user asks about a group/category that might be a folder name "
+            "(e.g. 'все чаты в группу ItStep' — first list_folders, then "
+            "use the matched folder's peer_ids)."
+        ),
+        params=[],
     ),
     ToolSpec(
         name="telegram_list_forum_topics",

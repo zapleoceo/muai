@@ -8,6 +8,7 @@ from app.tools.send_message import send_message_to
 from app.tools.get_dialog_info import get_dialog_info_for
 from app.tools.delete_messages import delete_messages, clear_history
 from app.tools.list_topics import list_forum_topics
+from app.tools.list_folders import list_folders as _list_folders
 
 log = logging.getLogger(__name__)
 
@@ -88,4 +89,5 @@ HANDLERS: dict[str, Callable[..., Awaitable[Any]]] = {
     "telegram_delete_messages":     _t_delete,
     "telegram_clear_history":       _t_clear_history,
     "telegram_list_forum_topics":   _t_list_topics,
+    "telegram_list_folders":        lambda: _list_folders(),
 }
