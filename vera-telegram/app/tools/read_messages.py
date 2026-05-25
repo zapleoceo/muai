@@ -84,9 +84,34 @@ def _entity_name(entity) -> str:
 
 
 async def _resolve_peer_by_id_or_name(peer: str):
+    """Resolve a peer string to a Telethon entity.
+
+    For numeric ids — try as User (positive), basic Chat (negative),
+    and Channel/Supergroup (-100 prefix). DialogFilters store raw
+    entity ids (positive), so a channel_id 1234567890 must be looked
+    up as -1001234567890. Without this, get_entity(positive) defaults
+    to PeerUser → silently returns wrong entity / 0 messages.
+    """
+    from telethon.tl.types import PeerChannel, PeerChat, PeerUser
     client = get_client()
     if peer.lstrip("-").isdigit():
-        return await client.get_entity(int(peer))
+        pid = int(peer)
+        # Try as channel/supergroup first if id is large (channel_ids
+        # are usually > 10^9; user ids span the whole range too, so we
+        # try multiple).
+        candidates = []
+        if pid > 0:
+            candidates = [PeerChannel(pid), PeerChat(pid), PeerUser(pid)]
+        else:
+            candidates = [int(peer)]  # already-marked id
+        last_exc = None
+        for c in candidates:
+            try:
+                return await client.get_entity(c)
+            except Exception as exc:
+                last_exc = exc
+                continue
+        raise LookupError(f"cannot resolve peer {peer}: {last_exc}")
     # Search ONLY user's own dialogs (no global Telegram search)
     q = peer.lower()
     try:
