@@ -96,6 +96,26 @@ TOOLS: list[ToolSpec] = [
         ],
     ),
     ToolSpec(
+        name="telegram_read_messages_batch",
+        description=(
+            "Read messages from MULTIPLE chats in one call — for folder "
+            "digests like «что обсудили в папке ItStep сегодня». MUCH "
+            "better than N separate telegram_read_messages calls. After "
+            "telegram_list_folders, pass the entire peer_ids array here. "
+            "Returns aggregated dict with chats_total, chats_with_messages, "
+            "and per-chat results."
+        ),
+        params=[
+            ToolParam("chat_ids", "array", "List of chat ids (integers)."),
+            ToolParam("days", "integer", "Lookback window in days.",
+                      required=False, default=1),
+            ToolParam("limit_per_chat", "integer",
+                      "Max messages per chat.", required=False, default=30),
+            ToolParam("ocr_images", "boolean",
+                      "Run OCR on images (slow).", required=False, default=False),
+        ],
+    ),
+    ToolSpec(
         name="telegram_list_folders",
         description=(
             "List all Telegram folders (Dialog Filters) with their titles "
