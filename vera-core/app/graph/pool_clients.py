@@ -121,13 +121,19 @@ def make_embedder(embedding_model: str = "voyage-3"):
     async def _voyage_token():
         return await get_token("voyage", "embed")
 
+    async def _swap_voyage_client(holder):
+        """voyageai.AsyncClient is built once in VoyageAIEmbedder.__init__
+        from config.api_key. Rebuilding ONLY config.api_key won't reach
+        the cached self.client — must replace the client object too."""
+        import voyageai
+        tok = await _voyage_token()
+        holder.config.api_key = tok.token
+        holder.client = voyageai.AsyncClient(api_key=tok.token)
+        return tok
+
     class PoolVoyageEmbedder(VoyageAIEmbedder):
         async def create(self, input_data):
-            try:
-                tok = await _voyage_token()
-                self.config.api_key = tok.token
-            except TokensExhausted:
-                raise
+            tok = await _swap_voyage_client(self)
             try:
                 return await super().create(input_data)
             except Exception as exc:
@@ -137,11 +143,7 @@ def make_embedder(embedding_model: str = "voyage-3"):
                 raise
 
         async def create_batch(self, input_data_list):
-            try:
-                tok = await _voyage_token()
-                self.config.api_key = tok.token
-            except TokensExhausted:
-                raise
+            tok = await _swap_voyage_client(self)
             try:
                 return await super().create_batch(input_data_list)
             except Exception as exc:
