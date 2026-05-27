@@ -31,9 +31,11 @@ def test_openrouter_registered_with_openai_compat():
     assert ":free" in model  # we want a free-tier model on OpenRouter
 
 
-def test_paid_label_known():
-    # demoniwwwe is the only paid Gemini key right now.
-    assert "demoniwwwe" in r._PAID_LABELS
+def test_paid_keys_provider_scoped():
+    # ONLY gemini-demoniwwwe is paid. DeepSeek/Voyage even though same
+    # label «demoniwwwe» are free tier — must not be flagged paid.
+    assert ("gemini", "demoniwwwe") in r._PAID_KEYS
+    assert ("deepseek", "demoniwwwe") not in r._PAID_KEYS
 
 
 def test_gemini_uses_2_5_flash():

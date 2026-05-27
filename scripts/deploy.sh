@@ -53,7 +53,9 @@ docker compose ps
 
 echo "--- smoke: HTTPS dashboard ---"
 ok=0
-for i in 1 2 3 4 5 6 7 8; do
+# Boot can take ~60s now with the bigger LiteLLM router (7+ providers).
+# 24 attempts × 5s = up to 2min — generous but not infinite.
+for i in $(seq 1 24); do
     code=$(curl -sk -o /dev/null -w '%{http_code}' https://dima.veranda.my/ || true)
     if [ "$code" = "200" ]; then ok=1; break; fi
     echo "  attempt $i: HTTP $code"

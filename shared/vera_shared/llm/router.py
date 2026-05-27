@@ -41,9 +41,13 @@ _CAPABILITY_ORDER = {
 }
 
 
-# Labels that indicate a PAID account — keep them last so free quotas
-# burn before we touch user's wallet. Single source of truth (no env).
-_PAID_LABELS = {"demoniwwwe"}
+# (provider, label) pairs that indicate a PAID account — keep them
+# last so free quotas burn before we touch user's wallet. Single source
+# of truth (no env). NOTE: label «demoniwwwe» is used both for paid
+# Gemini AND for FREE DeepSeek — must be (provider, label) pair.
+_PAID_KEYS: set[tuple[str, str]] = {
+    ("gemini", "demoniwwwe"),  # paid Google AI billing account
+}
 
 
 async def _build_model_list() -> list[dict]:
@@ -63,7 +67,7 @@ async def _build_model_list() -> list[dict]:
             params["model"] = base_model  # litellm doesn't know "openrouter/"
             params["api_base"] = "https://openrouter.ai/api/v1"
             params["custom_llm_provider"] = "openai"
-        is_paid = r.label in _PAID_LABELS
+        is_paid = (r.provider, r.label) in _PAID_KEYS
         # Weight: huge for free (round-robin), tiny for paid (only when
         # free pool exhausted, since LiteLLM weights bias selection).
         params["weight"] = 1 if is_paid else 100
