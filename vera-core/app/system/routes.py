@@ -95,6 +95,43 @@ TOOL_SPECS = [
         ],
     },
     {
+        "name": "vera_remember",
+        "description": (
+            "Запомнить факт/правило/контекст БЕЗ предопределённой схемы. "
+            "Используй когда Дима говорит «запомни», «помни», «у меня X = Y», "
+            "«не путай A с B», «правило: ...». Создаёт :Memo узел в графе "
+            "с произвольным statement-текстом. Не требует чтобы ключ был в "
+            "каком-то allowed-list (в отличие от vera_set_pref). Идеально "
+            "для контекста: «почта itstep.org — это работа в IT Step "
+            "Indonesia, не путать с veranda.my»."
+        ),
+        "params": [
+            {"name": "statement", "type": "string",
+             "description": "Свободный текст что запомнить.", "required": True},
+            {"name": "scope", "type": "string",
+             "description": "Краткий ярлык темы (email_routing, debtors_workflow, etc.)",
+             "required": False},
+            {"name": "related", "type": "array",
+             "description": "Список entity ids (email-адреса, @username, домены) к которым relate-нуть memo.",
+             "required": False},
+        ],
+    },
+    {
+        "name": "vera_recall",
+        "description": (
+            "Найти что Вера запомнила. Используй когда нужно вспомнить "
+            "правило или факт записанный через vera_remember. Можно по "
+            "подстроке (query) или по scope-ярлыку."
+        ),
+        "params": [
+            {"name": "query", "type": "string",
+             "description": "Подстрока в statement (case-insensitive).",
+             "required": False},
+            {"name": "scope", "type": "string", "required": False},
+            {"name": "limit", "type": "integer", "required": False},
+        ],
+    },
+    {
         "name": "vera_folder_digest",
         "description": (
             "ПРАВИЛЬНЫЙ путь для «что в папке X сегодня». Читает из "

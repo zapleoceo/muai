@@ -65,6 +65,51 @@ async def upsert_style(*, id: str | None = None, relationship_id: str,
     }, edge_targets={"FOR": [relationship_id]} if relationship_id else None)
 
 
+async def remember(statement: str, *, scope: str | None = None,
+                    related: list[str] | None = None) -> str:
+    """Generic «remember this fact/rule» node — for things Дима tells Vera
+    that don't fit Goal/Value/NoGo/Style. Free-form memory.
+
+    Example: «почта itstep.org относится к работе в IT Step (Indonesia),
+    не путать с veranda.my (Veranda)».
+
+      scope:    краткий ярлык темы («email_routing», «debtors_workflow»)
+      related:  list of entity ids этот memo должен связаться с (через :MENTIONS)
+    """
+    return await _upsert("Memo", id=None, props={
+        "statement": statement,
+        "scope": scope or "general",
+        "weight": 1.0,
+    }, edge_targets={"MENTIONS": related or []})
+
+
+async def search_memos(query: str | None = None,
+                        scope: str | None = None,
+                        limit: int = 50) -> list[dict]:
+    """Read Memo nodes (+optional scope filter)."""
+    from app.graph.client import get_graphiti
+    client = await get_graphiti()
+    db = get_settings().neo4j_database
+    async with client.driver.session(database=db) as ses:
+        where: list[str] = []
+        params: dict = {"limit": int(limit)}
+        if scope:
+            where.append("n.scope = $scope")
+            params["scope"] = scope
+        if query:
+            where.append("toLower(n.statement) CONTAINS toLower($q)")
+            params["q"] = query
+        where_sql = (" WHERE " + " AND ".join(where)) if where else ""
+        r = await ses.run(
+            f"MATCH (n:Memo){where_sql} "
+            f"RETURN n.id AS id, n.statement AS statement, n.scope AS scope, "
+            f"n.created_at AS created_at "
+            f"ORDER BY coalesce(n.updated_at, n.created_at) DESC LIMIT $limit",
+            **params,
+        )
+        return [dict(rec) async for rec in r]
+
+
 async def list_active() -> dict:
     """Return everything Vera knows about herself right now."""
     from app.graph.client import get_graphiti

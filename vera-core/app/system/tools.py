@@ -256,6 +256,21 @@ async def _vera_folder_digest(folder: str, days: int = 1):
     return await vera_folder_digest(folder=str(folder), days=int(days))
 
 
+async def _vera_remember(statement: str, scope: str | None = None,
+                          related: list | None = None):
+    from app.brain.identity import remember
+    nid = await remember(statement=str(statement), scope=scope,
+                          related=list(related) if related else None)
+    return {"ok": True, "id": nid, "remembered": str(statement)[:200]}
+
+
+async def _vera_recall(query: str | None = None, scope: str | None = None,
+                        limit: int = 20):
+    from app.brain.identity import search_memos
+    rs = await search_memos(query=query, scope=scope, limit=int(limit))
+    return {"count": len(rs), "memos": rs}
+
+
 HANDLERS = {
     "system_deploy": system_deploy,
     "system_status": system_status,
@@ -263,6 +278,8 @@ HANDLERS = {
     "vera_get_prefs": vera_get_prefs,
     "vera_query_events": _vera_query_events,
     "vera_folder_digest": _vera_folder_digest,
+    "vera_remember": _vera_remember,
+    "vera_recall": _vera_recall,
     "bot_delete_message": bot_delete_message,
     "bot_delete_forum_topic": bot_delete_forum_topic,
     "bot_close_forum_topic": bot_close_forum_topic,
