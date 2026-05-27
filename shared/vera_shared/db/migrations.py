@@ -10,9 +10,10 @@ log = logging.getLogger(__name__)
 
 _DEFAULT_CAPS: dict[str, list[str]] = {
     "gemini": ["chat:fast", "prefilter"],
-    "deepseek": ["chat:smart", "chat:code"],
+    "deepseek": ["chat:fast", "chat:smart", "chat:code"],
     "voyage": ["embed"],
     "anthropic": ["chat:smart", "chat:code"],
+    "openrouter": ["chat:fast", "chat:smart", "prefilter"],
 }
 
 

@@ -17,9 +17,30 @@ async def test_build_model_list_picks_active_tokens(sample_tokens):
 async def test_capability_order_has_known_aliases():
     assert "chat:fast" in r._CAPABILITY_ORDER
     assert "chat:smart" in r._CAPABILITY_ORDER
-    # Smart should try Anthropic first, fast tries Gemini first
-    assert r._CAPABILITY_ORDER["chat:smart"][0] == "anthropic"
+    # fast tries free Gemini pool first; smart leans on openrouter+deepseek
+    # before touching anthropic. Paid keys are deprioritised via weight.
     assert r._CAPABILITY_ORDER["chat:fast"][0] == "gemini"
+    assert "openrouter" in r._CAPABILITY_ORDER["chat:fast"]
+
+
+def test_openrouter_registered_with_openai_compat():
+    info = r._PROVIDER_MODEL.get("openrouter")
+    assert info is not None
+    provider_prefix, model = info
+    assert provider_prefix == "openrouter"
+    assert ":free" in model  # we want a free-tier model on OpenRouter
+
+
+def test_paid_label_known():
+    # demoniwwwe is the only paid Gemini key right now.
+    assert "demoniwwwe" in r._PAID_LABELS
+
+
+def test_gemini_uses_2_5_flash():
+    """2.0-flash deprecated 2026-06-01. Must use 2.5 or newer."""
+    info = r._PROVIDER_MODEL["gemini"]
+    _, model = info
+    assert "2.5" in model or "3" in model, f"got {model}, must be ≥2.5"
 
 
 @pytest.mark.asyncio

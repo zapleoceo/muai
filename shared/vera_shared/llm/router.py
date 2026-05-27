@@ -21,18 +21,29 @@ _lock = asyncio.Lock()
 # Per-provider model name + LiteLLM provider prefix.
 _PROVIDER_MODEL: dict[str, tuple[str, str]] = {
     # provider → (litellm_provider, model)
-    "gemini":    ("gemini",      "gemini-flash-lite-latest"),
-    "deepseek":  ("deepseek",    "deepseek-chat"),
-    "anthropic": ("anthropic",   "claude-haiku-4-5"),
+    # gemini-2.5-flash: 1500 RPD on free tier (vs 1000 for 2.0; 2.0 deprecated 2026-06-01)
+    "gemini":     ("gemini",      "gemini-2.5-flash"),
+    "deepseek":   ("deepseek",    "deepseek-chat"),
+    "anthropic":  ("anthropic",   "claude-haiku-4-5"),
+    # OpenRouter via OpenAI-compatible API — extra free pool independent
+    # of Google quota. Primary: gpt-oss-120b (verified non-rate-limited).
+    "openrouter": ("openrouter",  "openai/gpt-oss-120b:free"),
 }
 
-# Map our capability tag → list of providers in fallback order.
+# Capability → fallback order. FREE pools first, PAID demoniwwwe Gemini
+# inside «gemini» bucket (LiteLLM round-robins within the bucket, but we
+# can hint via routing strategy).
 _CAPABILITY_ORDER = {
-    "chat:fast":  ["gemini", "deepseek", "anthropic"],
-    "prefilter":  ["gemini", "deepseek", "anthropic"],
-    "chat:smart": ["anthropic", "deepseek", "gemini"],
-    "chat:code":  ["anthropic", "deepseek", "gemini"],
+    "chat:fast":  ["gemini", "openrouter", "deepseek", "anthropic"],
+    "prefilter":  ["gemini", "openrouter", "deepseek", "anthropic"],
+    "chat:smart": ["openrouter", "deepseek", "anthropic", "gemini"],
+    "chat:code":  ["openrouter", "deepseek", "anthropic", "gemini"],
 }
+
+
+# Labels that indicate a PAID account — keep them last so free quotas
+# burn before we touch user's wallet. Single source of truth (no env).
+_PAID_LABELS = {"demoniwwwe"}
 
 
 async def _build_model_list() -> list[dict]:
@@ -43,14 +54,24 @@ async def _build_model_list() -> list[dict]:
         if info is None:
             continue
         provider_prefix, base_model = info
+        # OpenRouter needs base_url override (it's OpenAI-compatible).
+        params: dict = {
+            "model": f"{provider_prefix}/{base_model}",
+            "api_key": r.token,
+        }
+        if r.provider == "openrouter":
+            params["model"] = base_model  # litellm doesn't know "openrouter/"
+            params["api_base"] = "https://openrouter.ai/api/v1"
+            params["custom_llm_provider"] = "openai"
+        is_paid = r.label in _PAID_LABELS
+        # Weight: huge for free (round-robin), tiny for paid (only when
+        # free pool exhausted, since LiteLLM weights bias selection).
+        params["weight"] = 1 if is_paid else 100
         out.append({
             "model_name": f"chat:fast::{r.provider}",  # group alias
-            "litellm_params": {
-                "model": f"{provider_prefix}/{base_model}",
-                "api_key": r.token,
-                "rpm": 60,  # LiteLLM throttle hint; not enforced strictly
-            },
-            "model_info": {"db_token_id": r.id, "provider": r.provider},
+            "litellm_params": params,
+            "model_info": {"db_token_id": r.id, "provider": r.provider,
+                           "label": r.label, "is_paid": is_paid},
         })
     return out
 
@@ -83,7 +104,10 @@ async def _get_router() -> Router:
             num_retries=2,
             retry_after=5,
             timeout=60,
-            routing_strategy="usage-based-routing-v2",
+            # simple-shuffle respects per-deployment `weight`. Paid keys
+            # get weight=1, free get weight=100 → paid is touched ~1% of
+            # the time only, when free pool got picked-around already.
+            routing_strategy="simple-shuffle",
         )
 
         # Hook usage callback so we update our tokens table
