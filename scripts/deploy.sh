@@ -51,17 +51,23 @@ docker compose up -d --remove-orphans
 sleep 5
 docker compose ps
 
-echo "--- smoke: HTTPS dashboard ---"
+echo "--- smoke: vera-core /health (fast probe) ---"
 ok=0
-# Boot can take ~60s now with the bigger LiteLLM router (7+ providers).
-# 24 attempts × 5s = up to 2min — generous but not infinite.
-for i in $(seq 1 24); do
-    code=$(curl -sk -o /dev/null -w '%{http_code}' https://dima.veranda.my/ || true)
+# /health is the lightest endpoint — returns 200 as soon as FastAPI bound
+# the port. With async boot the process is ready in <3s; we still allow
+# up to 60s for cold-start variability (uvicorn import, migrations).
+for i in $(seq 1 30); do
+    code=$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8000/health || true)
     if [ "$code" = "200" ]; then ok=1; break; fi
-    echo "  attempt $i: HTTP $code"
-    sleep 5
+    sleep 2
 done
-[ "$ok" = "1" ] || { echo "dashboard not responding" >&2; exit 81; }
+[ "$ok" = "1" ] || { echo "vera-core /health not responding after 60s" >&2; exit 81; }
+echo "  vera-core up in ${i}×2s"
+
+echo "--- smoke: HTTPS dashboard ---"
+code=$(curl -sk -o /dev/null -w '%{http_code}' https://dima.veranda.my/ || true)
+[ "$code" = "200" ] || { echo "dashboard $code" >&2; exit 81; }
+echo "  dashboard $code"
 
 echo "--- smoke: per-service status ---"
 for svc in "${SERVICES[@]}"; do

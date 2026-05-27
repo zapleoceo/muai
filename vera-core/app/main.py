@@ -45,61 +45,41 @@ _dp: Dispatcher | None = None
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    """Boot sequence — keep BLOCKING path to the absolute minimum so
+    FastAPI starts accepting traffic in <2s. Anything that does network
+    I/O (Telegram webhook, MCP servers, agent self-registration) goes
+    into a background task and the dashboard becomes responsive immediately."""
     global _bot, _dp
     settings = get_settings()
 
+    # BLOCKING (must run before app accepts traffic): DB schema, token
+    # encryption. Both are local I/O, fast (<200ms cold).
     engine = await init_engine()
     await run_migrations(engine)
-
     from vera_shared.tokens.repository import migrate_plaintext_tokens
     migrated = await migrate_plaintext_tokens()
     if migrated:
         log.info("Encrypted %d plaintext tokens at rest", migrated)
 
-    # Boot MCP servers from DB; failures here must not crash vera-core
-    try:
-        from app.mcp.manager import refresh_from_db
-        await refresh_from_db()
-    except Exception as exc:
-        log.exception("MCP boot failed: %s", exc)
-
+    # Bot instance + dispatcher routes must be wired BEFORE we
+    # background-set the webhook, since webhook callback → dispatcher.
     _bot = Bot(
         token=settings.telegram_bot_token_vera,
         default=DefaultBotProperties(parse_mode=ParseMode.HTML),
     )
     init_bot(_bot)
-
     _dp = Dispatcher()
-    _dp.include_router(callbacks_router)  # match callbacks before message handler
+    _dp.include_router(callbacks_router)
     _dp.include_router(digest_callbacks_router)
     _dp.include_router(bot_router)
 
-    webhook_url = f"{settings.webhook_base_url}/bot/webhook"
-    await _bot.set_webhook(
-        webhook_url, drop_pending_updates=True,
-        allowed_updates=["message", "edited_message", "callback_query",
-                         "my_chat_member", "chat_join_request"],
-    )
-    log.info("Webhook set to %s", webhook_url)
-
-    # Spawn self-registration so vera-core's own tools (system_deploy,
-    # system_status) appear in collect_tools().
+    # ASYNC (run in background, don't block boot):
+    #   - MCP server boot (network: spawn N processes)
+    #   - Telegram webhook registration (network: TG API call)
+    #   - Self-loop agent registration (network: own HTTP)
+    #   - jobs runner + synth (CPU-light loops)
     import asyncio
-    asyncio.create_task(register_self_loop())
-
-    # v3 background workers: deep-extract queue + backfill queue.
-    try:
-        from app.jobs.runner import start_all as start_jobs
-        start_jobs()
-    except Exception as exc:
-        log.exception("jobs.runner failed to start: %s", exc)
-
-    # Phase 4: proactive daily digest.
-    try:
-        from app.brain.synth import start as start_synth
-        start_synth()
-    except Exception as exc:
-        log.exception("brain.synth failed to start: %s", exc)
+    asyncio.create_task(_boot_async(settings))
 
     yield
 
@@ -114,7 +94,55 @@ async def lifespan(app: FastAPI):
     log.info("Bot shutdown complete")
 
 
+async def _boot_async(settings) -> None:
+    """All slow boot tasks. Errors logged, never crash core."""
+    # MCP servers
+    try:
+        from app.mcp.manager import refresh_from_db
+        await refresh_from_db()
+    except Exception as exc:
+        log.exception("MCP boot failed: %s", exc)
+    # Telegram webhook
+    try:
+        webhook_url = f"{settings.webhook_base_url}/bot/webhook"
+        await _bot.set_webhook(
+            webhook_url, drop_pending_updates=True,
+            allowed_updates=["message", "edited_message", "callback_query",
+                             "my_chat_member", "chat_join_request"],
+        )
+        log.info("Webhook set to %s", webhook_url)
+    except Exception as exc:
+        log.exception("set_webhook failed: %s", exc)
+    # Self-loop registration so vera's own tools surface in collect_tools().
+    # register_self_loop() is an infinite loop — spawn, don't await.
+    import asyncio as _asyncio
+    _asyncio.create_task(register_self_loop())
+
+
 app = FastAPI(title="vera-core", lifespan=lifespan)
+
+
+@app.get("/health")
+async def health() -> dict:
+    """Fast deploy smoke check — always 200 once FastAPI bound the port.
+    Does NOT touch DB or external services; tells you the process is up."""
+    return {"ok": True}
+
+
+@app.on_event("startup")
+async def _start_bg_loops() -> None:
+    """Background workers — spawned AFTER FastAPI starts so binding is
+    not blocked. Failures logged but don't crash boot."""
+    try:
+        from app.jobs.runner import start_all as start_jobs
+        start_jobs()
+    except Exception as exc:
+        log.exception("jobs.runner failed to start: %s", exc)
+    try:
+        from app.brain.synth import start as start_synth
+        start_synth()
+    except Exception as exc:
+        log.exception("brain.synth failed to start: %s", exc)
 app.include_router(agents_router)
 app.include_router(llm_proxy_router)
 app.include_router(coder_router)

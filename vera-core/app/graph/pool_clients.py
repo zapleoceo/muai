@@ -109,32 +109,50 @@ def make_llm_client(model: str = "gemini-2.5-flash", capability: str = "chat:fas
 # -------- Embedder ----------------------------------------------------------
 
 
-def make_embedder(embedding_model: str = "gemini-embedding-001"):
-    from graphiti_core.embedder.gemini import GeminiEmbedder, GeminiEmbedderConfig
+def make_embedder(embedding_model: str = "voyage-3"):
+    """Voyage embeddings via dedicated free-tier pool (5 keys).
 
-    class PoolGeminiEmbedder(GeminiEmbedder):
+    Was: Gemini embedder, which burned the SAME pool used by chat
+    requests. Each retrieval call took a chat:fast token slot. Now
+    embeddings live in their own provider, freeing all Gemini quota
+    for actual LLM calls."""
+    from graphiti_core.embedder.voyage import VoyageAIEmbedder, VoyageAIEmbedderConfig
+
+    async def _voyage_token():
+        return await get_token("voyage", "embed")
+
+    class PoolVoyageEmbedder(VoyageAIEmbedder):
         async def create(self, input_data):
-            token = await _refresh_gemini_client(self, capability="chat:fast")
+            try:
+                tok = await _voyage_token()
+                self.config.api_key = tok.token
+            except TokensExhausted:
+                raise
             try:
                 return await super().create(input_data)
             except Exception as exc:
                 status = _status_from_exc(exc)
                 if status:
-                    await get_pool().on_error(token.id, status)
+                    await get_pool().on_error(tok.id, status)
                 raise
 
         async def create_batch(self, input_data_list):
-            token = await _refresh_gemini_client(self, capability="chat:fast")
+            try:
+                tok = await _voyage_token()
+                self.config.api_key = tok.token
+            except TokensExhausted:
+                raise
             try:
                 return await super().create_batch(input_data_list)
             except Exception as exc:
                 status = _status_from_exc(exc)
                 if status:
-                    await get_pool().on_error(token.id, status)
+                    await get_pool().on_error(tok.id, status)
                 raise
 
-    return PoolGeminiEmbedder(
-        config=GeminiEmbedderConfig(api_key="placeholder", embedding_model=embedding_model),
+    return PoolVoyageEmbedder(
+        config=VoyageAIEmbedderConfig(api_key="placeholder",
+                                        embedding_model=embedding_model),
     )
 
 
