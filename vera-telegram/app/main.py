@@ -13,6 +13,8 @@ from vera_shared.db.migrations import run_migrations
 
 from app.backfill import stream_envelopes
 from app.poller import poll_loop
+from app.dialog_cache import refresh_loop as dialog_refresh_loop
+from app.push_handler import start_push_listener
 from app.registration import register_loop
 from app.tool_handlers import HANDLERS
 from app.userbot.client import start_client, stop_client
@@ -29,8 +31,13 @@ async def lifespan(app: FastAPI):
     os.environ.setdefault("DB_PATH", "/data/vera.db")
     await run_migrations(get_engine())
     await start_client()
+    # Push handler — real-time, covers ALL chats incl. sent.
+    await start_push_listener()
     asyncio.create_task(register_loop())
+    # Poll loop kept as safety net (catches anything missed during outages).
     asyncio.create_task(poll_loop())
+    # Dialog cache — periodic refresh; search_dialogs hits SQLite first.
+    asyncio.create_task(dialog_refresh_loop())
     yield
     await stop_client()
 

@@ -55,8 +55,17 @@ def _name(entity) -> str:
 
 async def search_dialogs(query: str, limit: int = 15) -> list[dict]:
     """Search USER's own dialogs — by chat title AND folder name.
-    Scans ALL dialogs (not first 500) so big accounts find everything.
-    Also matches loose forms: case-insensitive, no-space, with translit."""
+    FAST PATH: query SQLite cache (always populated). Slow fallback
+    only if cache empty (first boot before refresh_all completed)."""
+    # Fast path — cache.
+    try:
+        from app.dialog_cache import search_cached
+        cached = await search_cached(query, limit=limit)
+        if cached:
+            return cached
+    except Exception:
+        pass  # fall through to slow scan
+
     client = get_client()
     variants = _expand_variants(query)
     out: list[dict] = []

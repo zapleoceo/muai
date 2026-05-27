@@ -234,6 +234,23 @@ class BackfillJob(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 
 
+class TgDialog(Base):
+    """Cache of Telegram dialogs (chats/users/groups/channels) so
+    search_dialogs is instant — no iter_dialogs scan per request.
+    Refreshed by a background loop in vera-telegram."""
+    __tablename__ = "tg_dialogs"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)  # peer_id
+    name: Mapped[str] = mapped_column(String, nullable=False)
+    type: Mapped[str] = mapped_column(String, nullable=False)  # user|bot|group|supergroup|channel
+    username: Mapped[str | None] = mapped_column(String, nullable=True)
+    folders: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    unread_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_message_date: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    refreshed_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow,
+                                                     onupdate=datetime.utcnow)
+
+
 class IngestJob(Base):
     """Queued deep-extraction job. Cheap deterministic edges are written
     synchronously at /event time; this row defers the expensive LLM
