@@ -19,7 +19,8 @@ async def test_remember_creates_memo_node():
         return AsyncMock()
     fake_session.run = fake_run
     fake_client.driver.session = lambda **kw: fake_session
-    with patch("app.brain.identity.get_graphiti",
+    # identity.py imports get_graphiti inside the function — patch the source.
+    with patch("app.graph.client.get_graphiti",
                 new=AsyncMock(return_value=fake_client)), \
          patch("app.config.get_settings") as gs:
         gs.return_value.neo4j_database = "test"
