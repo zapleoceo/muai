@@ -1,4 +1,9 @@
-"""Instagram account management + auto-reply rules API."""
+"""Instagram account management + auto-reply rules API.
+
+Connect flow:
+  POST /api/instagram/accounts  {username, password}
+  → instagrapi login → session saved encrypted → status=ok
+"""
 from __future__ import annotations
 
 import logging
@@ -16,24 +21,43 @@ log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/instagram")
 
 
-# ---------------------------------------------------------------------------
-# Accounts
-# ---------------------------------------------------------------------------
+# ── accounts ─────────────────────────────────────────────────────────────────
 
 @router.get("/accounts")
 async def list_accounts(_=Depends(require_owner)) -> list[dict]:
     async with get_session() as s:
-        rows = (await s.execute(select(IgAccount).order_by(IgAccount.id))).scalars().all()
+        rows = (await s.execute(
+            select(IgAccount).order_by(IgAccount.id)
+        )).scalars().all()
     return [_account_dict(a) for a in rows]
 
 
 @router.post("/accounts")
-async def upsert_account(payload: dict, _=Depends(require_owner)) -> dict:
+async def connect_account(payload: dict, _=Depends(require_owner)) -> dict:
+    """Login via instagrapi and persist encrypted session."""
     username = (payload.get("username") or "").strip().lstrip("@")
-    if not username:
-        raise HTTPException(400, "username required")
-    access_token = (payload.get("access_token") or "").strip()
-    business_id = (payload.get("business_account_id") or "").strip()
+    password = (payload.get("password") or "").strip()
+    if not username or not password:
+        raise HTTPException(400, "username and password required")
+
+    from app.instagram.client import login, evict
+    try:
+        enc_session, user_id = await login(username, password)
+    except Exception as exc:
+        err = str(exc)
+        # Persist error state so dashboard shows it
+        async with get_session() as s:
+            row = (await s.execute(
+                select(IgAccount).where(IgAccount.username == username)
+            )).scalar_one_or_none()
+            if row is None:
+                row = IgAccount(username=username)
+                s.add(row)
+            row.status = "error"
+            row.last_error = err[:500]
+            row.updated_at = datetime.utcnow()
+            await s.commit()
+        raise HTTPException(400, f"Instagram login failed: {err}")
 
     async with get_session() as s:
         row = (await s.execute(
@@ -42,32 +66,23 @@ async def upsert_account(payload: dict, _=Depends(require_owner)) -> dict:
         if row is None:
             row = IgAccount(username=username)
             s.add(row)
-        if access_token:
-            # Encrypt token same way as Gmail tokens
-            try:
-                from vera_shared.tokens.repository import _encrypt
-                row.access_token_enc = _encrypt(access_token)
-            except Exception:
-                row.access_token_enc = access_token  # fallback plain if encrypt unavailable
-        if business_id:
-            row.business_account_id = business_id
-        if payload.get("display_name"):
-            row.display_name = payload["display_name"]
-        if "enabled" in payload:
-            row.enabled = bool(payload["enabled"])
-        row.status = "ok" if row.access_token_enc else "disconnected"
+        row.access_token_enc = enc_session
+        row.business_account_id = user_id    # reuse field for instagrapi user_id
+        row.status = "ok"
+        row.last_error = None
+        row.enabled = True
         row.updated_at = datetime.utcnow()
         await s.commit()
         await s.refresh(row)
-    log.info("Instagram account upserted: @%s status=%s", username, row.status)
-    # Wire up MCP server for this account if token present
-    if access_token and business_id:
-        await _ensure_mcp_server(username, access_token, business_id)
+
+    log.info("Instagram @%s connected (user_id=%s)", username, user_id)
     return _account_dict(row)
 
 
 @router.delete("/accounts/{username}")
 async def delete_account(username: str, _=Depends(require_owner)) -> dict:
+    from app.instagram.client import evict
+    evict(username)
     async with get_session() as s:
         row = (await s.execute(
             select(IgAccount).where(IgAccount.username == username)
@@ -79,9 +94,7 @@ async def delete_account(username: str, _=Depends(require_owner)) -> dict:
     return {"ok": True}
 
 
-# ---------------------------------------------------------------------------
-# Auto-reply rules
-# ---------------------------------------------------------------------------
+# ── auto-reply rules ──────────────────────────────────────────────────────────
 
 @router.get("/autoreplies")
 async def list_autoreplies(
@@ -115,8 +128,8 @@ async def create_autoreply(payload: dict, _=Depends(require_owner)) -> dict:
 
 
 @router.patch("/autoreplies/{rule_id}")
-async def toggle_autoreply(rule_id: int, payload: dict,
-                            _=Depends(require_owner)) -> dict:
+async def update_autoreply(rule_id: int, payload: dict,
+                           _=Depends(require_owner)) -> dict:
     async with get_session() as s:
         row = await s.get(IgAutoReply, rule_id)
         if row is None:
@@ -126,7 +139,8 @@ async def toggle_autoreply(rule_id: int, payload: dict,
         if "response_template" in payload:
             row.response_template = payload["response_template"]
         if "trigger_keywords" in payload:
-            row.trigger_keywords = [k.strip().lower() for k in payload["trigger_keywords"] if k.strip()]
+            row.trigger_keywords = [k.strip().lower()
+                                    for k in payload["trigger_keywords"] if k.strip()]
         await s.commit()
         await s.refresh(row)
     return _rule_dict(row)
@@ -143,17 +157,15 @@ async def delete_autoreply(rule_id: int, _=Depends(require_owner)) -> dict:
     return {"ok": True}
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
+# ── helpers ───────────────────────────────────────────────────────────────────
 
 def _account_dict(a: IgAccount) -> dict:
     return {
         "id": a.id,
         "username": a.username,
         "display_name": a.display_name,
-        "has_token": bool(a.access_token_enc),
-        "business_account_id": a.business_account_id,
+        "has_session": bool(a.access_token_enc),
+        "user_id": a.business_account_id,
         "enabled": a.enabled,
         "status": a.status,
         "last_polled_at": a.last_polled_at.isoformat() if a.last_polled_at else None,
@@ -172,35 +184,3 @@ def _rule_dict(r: IgAutoReply) -> dict:
         "match_count": r.match_count,
         "last_matched_at": r.last_matched_at.isoformat() if r.last_matched_at else None,
     }
-
-
-async def _ensure_mcp_server(username: str, access_token: str,
-                              business_id: str) -> None:
-    """Create or update the MCP server row for this Instagram account."""
-    from vera_shared.db.models import MCPServer
-    server_name = f"instagram-{username}"
-    async with get_session() as s:
-        row = (await s.execute(
-            select(MCPServer).where(MCPServer.name == server_name)
-        )).scalar_one_or_none()
-        if row is None:
-            row = MCPServer(
-                name=server_name,
-                transport="stdio",
-                command=["npx", "-y", "@pinkpixel/instagram-engagement-mcp"],
-                enabled=True,
-                installed_by="instagram_module",
-            )
-            s.add(row)
-        row.env = {
-            "INSTAGRAM_ACCESS_TOKEN": access_token,
-            "INSTAGRAM_BUSINESS_ACCOUNT_ID": business_id,
-        }
-        await s.commit()
-    log.info("MCP server %s upserted for @%s", server_name, username)
-    # Kick the MCP manager to reload
-    try:
-        from app.mcp.manager import refresh_from_db
-        await refresh_from_db()
-    except Exception as exc:
-        log.warning("MCP refresh after IG account update failed: %s", exc)

@@ -12,6 +12,8 @@ UI rebuild is intentionally minimal: one page reads this JSON.
 """
 from __future__ import annotations
 
+import asyncio
+
 from fastapi import APIRouter, Depends
 from sqlalchemy import desc, func, select
 
@@ -154,12 +156,47 @@ async def _top_patterns(limit: int = 10) -> list[dict]:
             "MATCH (p:Pattern) "
             "RETURN p.id AS sig, p.action_label AS label, p.tool AS tool, "
             "  p.observation_count AS obs, p.confirmation_count AS conf, "
-            "  p.correction_count AS corr "
+            "  p.correction_count AS corr, p.description AS description "
             "ORDER BY (coalesce(p.confirmation_count,0)) DESC LIMIT $n",
             n=limit,
         )
         rows = [dict(rec) async for rec in r]
+
+    # Lazily generate + cache AI description for patterns that lack one.
+    undescribed = [r for r in rows if not r.get("description")]
+    if undescribed:
+        descs = await asyncio.gather(
+            *[_generate_description(r) for r in undescribed],
+            return_exceptions=True,
+        )
+        async with client.driver.session(database=db) as ses:
+            for row, desc in zip(undescribed, descs):
+                if isinstance(desc, Exception):
+                    desc = (row.get("label") or "")[:90]
+                row["description"] = str(desc)
+                await ses.run(
+                    "MATCH (p:Pattern {id: $sig}) SET p.description = $desc",
+                    sig=row["sig"], desc=str(desc),
+                )
     return rows
+
+
+async def _generate_description(row: dict) -> str:
+    """One-sentence AI description of the behaviour pattern captures."""
+    from vera_shared.llm.router import chat
+    label = row.get("label") or ""
+    tool  = row.get("tool") or "—"
+    conf  = row.get("conf") or 0
+    corr  = row.get("corr") or 0
+    return await chat(
+        [{"role": "user", "content":
+          f"Паттерн поведения: действие='{label}', инструмент='{tool}', "
+          f"подтверждений={conf}, исправлений={corr}. "
+          "Одно короткое предложение по-русски — что именно пользователь делает "
+          "по этому паттерну? Только суть, без технических слов. Максимум 90 символов."}],
+        capability="chat:fast",
+        max_tokens=64,
+    )
 
 
 async def _v3_shadow_distribution() -> dict:

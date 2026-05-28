@@ -153,6 +153,33 @@ main { max-width: 1080px; margin: 0 auto; padding: 24px 20px 80px; }
 .add-rule-form { display: none; flex-direction: column; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--border); }
 .add-rule-form.open { display: flex; }
 
+/* ─── pattern spoilers ───────────────────────────────────── */
+.pat-spoiler {
+  background: var(--panel); border: 1px solid var(--border);
+  border-radius: var(--r); margin-bottom: 6px; overflow: hidden;
+}
+.pat-spoiler summary {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 12px; cursor: pointer; list-style: none;
+  font-size: 12px; user-select: none;
+  transition: background .1s;
+}
+.pat-spoiler summary::-webkit-details-marker { display: none; }
+.pat-spoiler summary::before {
+  content: '▶'; font-size: 9px; color: var(--dim);
+  transition: transform .15s; flex-shrink: 0;
+}
+.pat-spoiler[open] summary::before { transform: rotate(90deg); }
+.pat-spoiler summary:hover { background: rgba(255,255,255,.03); }
+.pat-summary { flex: 1; color: var(--fg); }
+.pat-pills { display: flex; gap: 4px; flex-shrink: 0; }
+.pat-body {
+  padding: 4px 12px 10px 26px; border-top: 1px solid var(--border);
+}
+.pat-row { display: flex; gap: 8px; padding: 3px 0; font-size: 12px; }
+.pat-k { color: var(--mute); width: 110px; flex-shrink: 0; }
+.pat-v { color: var(--fg); word-break: break-all; }
+
 /* ─── threshold btns ─────────────────────────────────────── */
 .thr-btns { display: flex; gap: 6px; flex-wrap: wrap; }
 .thr-btns button.active { border-color: var(--blue); color: var(--blue); }
@@ -256,10 +283,7 @@ main { max-width: 1080px; margin: 0 auto; padding: 24px 20px 80px; }
     </div>
     <div>
       <div style="font-size:11px;color:var(--mute);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">Топ паттерны</div>
-      <table class="tbl" id="patterns-table">
-        <thead><tr><th>действие</th><th>инструмент</th><th>✓</th><th>✕</th></tr></thead>
-        <tbody></tbody>
-      </table>
+      <div id="patterns-list"></div>
     </div>
   </div>
   <div id="v3-dist" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"></div>
@@ -398,11 +422,32 @@ function renderGraph(d) {
 }
 
 function renderPatterns(d) {
-  const tb = document.querySelector('#patterns-table tbody');
-  tb.innerHTML = (d.top_patterns||[]).map(p =>
-    `<tr><td>${esc(p.label)}</td><td class="mono mute">${esc(p.tool||'—')}</td>
-     <td class="ok">${p.conf||0}</td><td class="err">${p.corr||0}</td></tr>`
-  ).join('') || '<tr><td colspan="4" class="empty">паттернов нет — жми кнопки на карточках</td></tr>';
+  const el = $('patterns-list');
+  const pats = d.top_patterns || [];
+  if (!pats.length) {
+    el.innerHTML = '<div class="empty">паттернов нет — жми кнопки на карточках</div>';
+    return;
+  }
+  el.innerHTML = pats.map(p => {
+    const summary = esc(p.description || p.label || '…');
+    const corrCls = (p.corr||0) > 0 ? 'err' : 'muted';
+    return `<details class="pat-spoiler">
+      <summary>
+        <span class="pat-summary">${summary}</span>
+        <span class="pat-pills">
+          <span class="pill ok" title="подтверждено">${p.conf||0}✓</span>
+          <span class="pill ${corrCls}" title="исправлено">${p.corr||0}✕</span>
+        </span>
+      </summary>
+      <div class="pat-body">
+        <div class="pat-row"><span class="pat-k">действие</span><span class="pat-v mono">${esc(p.label||'—')}</span></div>
+        <div class="pat-row"><span class="pat-k">инструмент</span><span class="pat-v mono mute">${esc(p.tool||'—')}</span></div>
+        <div class="pat-row"><span class="pat-k">наблюдений</span><span class="pat-v">${p.obs||0}</span></div>
+        <div class="pat-row"><span class="pat-k">подтверждено</span><span class="pat-v ok">${p.conf||0}</span></div>
+        <div class="pat-row"><span class="pat-k">исправлено</span><span class="pat-v ${corrCls}">${p.corr||0}</span></div>
+      </div>
+    </details>`;
+  }).join('');
 }
 
 function renderV3(d) {
@@ -457,32 +502,32 @@ async function renderIG(accounts, obs) {
         <div class="ig-avatar">${a.username[0].toUpperCase()}</div>
         <div>
           <div class="name">@${esc(a.username)}</div>
-          <div style="font-size:11px;color:var(--mute)">${a.has_token ? 'токен есть' : 'не подключён'}</div>
+          <div style="font-size:11px;color:var(--mute)">${
+            a.status === 'ok' ? 'подключён ✓' : 'не подключён'
+          }</div>
         </div>
         <div class="status-dot ${a.status}" title="${a.status}"></div>
       </div>
       ${a.last_error ? `<div style="font-size:11px;color:var(--err);margin-bottom:6px">${esc(a.last_error)}</div>` : ''}
       <button class="sm" onclick="toggleConnect('${a.username}')">
-        ${a.has_token ? '⚙ обновить токен' : '🔗 подключить'}
+        ${a.has_session ? '⚙ переподключить' : '🔗 подключить'}
       </button>
       <div id="connect-${a.username}" class="ig-connect-form">
         <div>
-          <label>Access Token (Meta Graph API)</label>
-          <input type="password" id="tok-${a.username}" placeholder="EAAxxxxx...">
+          <label>Логин Instagram</label>
+          <input id="iglogin-${a.username}" placeholder="${a.username}" value="${a.username}">
         </div>
         <div>
-          <label>Business Account ID</label>
-          <input id="bid-${a.username}" placeholder="17841400455970207" value="${a.business_account_id||''}">
+          <label>Пароль</label>
+          <input type="password" id="igpwd-${a.username}" placeholder="••••••••">
         </div>
         <div style="display:flex;gap:6px">
-          <button class="primary sm" onclick="connectIG('${a.username}')">сохранить</button>
+          <button class="primary sm" onclick="connectIG('${a.username}')">войти</button>
           <button class="sm" onclick="toggleConnect('${a.username}')">отмена</button>
         </div>
         <div id="ig-msg-${a.username}" class="msg"></div>
         <div style="font-size:11px;color:var(--dim);margin-top:4px;line-height:1.5">
-          Нужен Business/Creator аккаунт → привязан к Facebook Page →
-          <a href="https://developers.facebook.com/tools/explorer" target="_blank">Graph Explorer</a>:
-          instagram_basic + instagram_manage_messages + pages_show_list
+          Сессия сохраняется зашифрованной и живёт месяцами. Работает с личными, Creator и Business аккаунтами.
         </div>
       </div>
     </div>
@@ -502,18 +547,19 @@ function toggleConnect(u) {
 }
 
 async function connectIG(username) {
-  const tok = $(`tok-${username}`).value.trim();
-  const bid = $(`bid-${username}`).value.trim();
-  const msg = $(`ig-msg-${username}`);
-  msg.textContent = '…';
+  const login = $(`iglogin-${username}`).value.trim() || username;
+  const pwd   = $(`igpwd-${username}`).value;
+  const msg   = $(`ig-msg-${username}`);
+  if (!pwd) { msg.textContent = 'введи пароль'; msg.className = 'msg err'; return; }
+  msg.textContent = '⏳ подключаю…'; msg.className = 'msg';
   try {
     const r = await api('/api/instagram/accounts', {
-      method:'POST', body:{username, access_token:tok, business_account_id:bid}
+      method:'POST', body:{username: login, password: pwd}
     });
     const d = await r.json();
     if (r.ok) {
-      msg.textContent = '✓ сохранено'; msg.className = 'msg ok';
-      setTimeout(loadAll, 1000);
+      msg.textContent = '✓ подключено'; msg.className = 'msg ok';
+      setTimeout(loadAll, 1200);
     } else {
       msg.textContent = d.detail || JSON.stringify(d); msg.className = 'msg err';
     }
