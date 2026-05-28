@@ -86,15 +86,18 @@ async def mine_once() -> dict:
     upd_n = 0
     from app.brain import patterns as P
     for (chat, stem), bucket in recurring:
-        sig = _signature(["chat:" + chat, "stem:" + stem])
+        # context: the chat entity (no person hint for outgoing mining)
+        hints = [{"type": "chat", "identifier": chat}]
+        ctx   = P.context_key_for(hints)
+        sig   = P.signature_for(hints, stem[:60])
         existing = await P.get_pattern(sig)
         action_label = (bucket[0]["text"] or "")[:60]
         # Reuse upsert_observation N times so weight reflects bucket size.
         # (We can't bulk-write count, only +1 — accept that.)
         for _ in range(len(bucket)):
-            await P._bump(sig, action_label, tool="telegram_send_message",
-                           args={"peer": chat, "text_template": stem},
-                           field="observation_count")
+            await P.upsert_observation(sig, ctx, action_label,
+                                        tool="telegram_send_message",
+                                        args={"peer": chat, "text_template": stem})
         if existing is None:
             new_n += 1
         else:

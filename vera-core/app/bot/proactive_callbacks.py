@@ -43,9 +43,11 @@ async def proactive_callback(callback: CallbackQuery, bot: Bot) -> None:
                   f"Скопируй и отправь — или скажи мне как поправить.",
             parse_mode="HTML",
         )
-        # Bump confirmation
+        # Bump confirmation — pass empty hints (proactive has no event_hints)
         try:
-            await P.upsert_confirmation(sig, action_label=template, tool=None, args=None)
+            ctx = P.context_key_for([])
+            await P.upsert_confirmation(sig, ctx, action_label=template,
+                                         tool=None, args=None)
         except Exception as exc:
             log.debug("proactive confirm shim: %s", exc)
     elif action == "skip":
@@ -53,8 +55,9 @@ async def proactive_callback(callback: CallbackQuery, bot: Bot) -> None:
     elif action == "mute":
         from app.brain import patterns as P
         try:
-            await P.upsert_correction(sig, action_label="muted by user",
-                                        tool=None, args=None)
+            ctx = P.context_key_for([])
+            await P.upsert_correction(sig, ctx, action_label="muted by user",
+                                       tool=None, args=None)
         except Exception:
             pass
         await callback.answer("больше не предлагаю этот шаблон")

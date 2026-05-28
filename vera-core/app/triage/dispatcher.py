@@ -4,11 +4,10 @@ import logging
 from sqlalchemy import select
 
 from vera_shared.db.engine import get_session
-from vera_shared.db.models import Event, Trigger
+from vera_shared.db.models import Event
 
 from app.triage.card import send_card
 from app.triage.engine import triage
-from app.triggers.predicates import matches
 
 log = logging.getLogger(__name__)
 
@@ -26,11 +25,6 @@ async def _run_triage(event_id: int) -> None:
         event = await session.get(Event, event_id)
         if event is None:
             return
-        # GUARD: one trigger → one triage. If this event has already been
-        # processed (any non-pending status), refuse to re-do it. Decisions
-        # live in the brain via graph episodes (write_decision / write_
-        # rejection) — that's where future similar events should pull from,
-        # not by re-running triage on the same row.
         if event.triage_status in _FINAL_STATUSES:
             log.info("Triage skip: event %d already in status %s",
                      event_id, event.triage_status)
@@ -46,10 +40,7 @@ async def _run_triage(event_id: int) -> None:
                 await session.commit()
         return
 
-    # Silence mode: skip card if event is below importance threshold.
-    # Vera still ingests + writes Pattern shadows + cheap edges; she just
-    # doesn't spam the forum chat. Threshold lives in Setting; tunable
-    # live from the dashboard.
+    # Silence mode: skip card if v3 brain scores this event below threshold.
     try:
         from app.brain.observability import get_card_threshold
         min_score = await get_card_threshold()
@@ -61,10 +52,9 @@ async def _run_triage(event_id: int) -> None:
         v3_score = v3.chosen.score if v3.chosen else 0.0
     except Exception as exc:
         log.debug("v3 score lookup failed for event %s: %s", event_id, exc)
-        v3_score = 999.0  # fall back to showing card if v3 broken
+        v3_score = 999.0  # show card if v3 is broken
     if v3_score < min_score:
-        log.info("Event %d silenced (v3=%.2f < %.2f) — no card",
-                 event_id, v3_score, min_score)
+        log.info("Event %d silenced (v3=%.2f < %.2f)", event_id, v3_score, min_score)
         async with get_session() as session:
             row = await session.get(Event, event_id)
             if row:
@@ -79,16 +69,12 @@ async def _run_triage(event_id: int) -> None:
         return
 
     auto_action = await _pick_auto_action(e, proposal)
-    card_msg_id = None
     auto_exec: dict | None = None
 
     if auto_action is not None:
         auto_exec = await _execute_auto(event_id, auto_action)
         res = (auto_exec.get("result") or {})
-        if isinstance(res, dict):
-            preview = str(res.get("result") or res.get("error") or "")
-        else:
-            preview = str(res)
+        preview = str(res.get("result") or res.get("error") or "") if isinstance(res, dict) else str(res)
         card = await send_card(
             event_id, e.source, e.category, proposal,
             auto_exec={"label": auto_action["label"], "ok": auto_exec.get("ok"),
@@ -97,9 +83,9 @@ async def _run_triage(event_id: int) -> None:
     else:
         card = await send_card(event_id, e.source, e.category, proposal)
 
-    card_msg_id = card.get("msg_id") if card else None
+    card_msg_id    = card.get("msg_id")    if card else None
     card_thread_id = card.get("thread_id") if card else None
-    card_chat_id = card.get("chat_id") if card else None
+    card_chat_id   = card.get("chat_id")   if card else None
 
     async with get_session() as session:
         row = await session.get(Event, event_id)
@@ -109,18 +95,18 @@ async def _run_triage(event_id: int) -> None:
             else:
                 row.triage_status = "awaiting_user" if card_msg_id else "proposal_only"
             payload = {
-                "urgency": proposal.urgency,
-                "summary": proposal.summary,
-                "actions": proposal.actions,
-                "confidence": proposal.confidence,
-                "reasoning": proposal.reasoning,
+                "urgency":      proposal.urgency,
+                "summary":      proposal.summary,
+                "actions":      proposal.actions,
+                "confidence":   proposal.confidence,
+                "reasoning":    proposal.reasoning,
                 "context_used": proposal.context_used,
                 "card_message_id": card_msg_id,
-                "card_thread_id": card_thread_id,
-                "card_chat_id": card_chat_id,
+                "card_thread_id":  card_thread_id,
+                "card_chat_id":    card_chat_id,
             }
             if auto_exec is not None:
-                payload["executions"] = [auto_exec]
+                payload["executions"]  = [auto_exec]
                 payload["user_choice"] = {"label": auto_action["label"], "auto": True}
             row.triage_result = payload
             await session.commit()
@@ -157,9 +143,9 @@ async def _pick_auto_action(event: Event, proposal) -> dict | None:
 
 def _event_payload(event: Event) -> dict:
     return {
-        "source": event.source,
-        "category": event.category,
-        "account": event.account,
+        "source":       event.source,
+        "category":     event.category,
+        "account":      event.account,
         "content_text": event.content_text or "",
         "entity_hints": event.entity_hints or [],
     }
@@ -169,22 +155,14 @@ async def _execute_auto(event_id: int, action: dict) -> dict:
     from app.orchestrator.tool_router import call_tool, collect_tools, is_auto_safe
     tool = action["tool"]
     if not is_auto_safe(tool):
-        log.warning("auto-skip: tool %r not in AUTO_SAFE_TOOLS for event %d",
-                    tool, event_id)
+        log.warning("auto-skip: tool %r not in AUTO_SAFE_TOOLS for event %d", tool, event_id)
         return {"tool": tool, "args": action.get("args") or {},
                 "result": {"ok": False, "error": f"tool '{tool}' not auto-safe"},
                 "ok": False, "auto": True, "skipped": True}
     _, route = await collect_tools()
     result = await call_tool(route, tool, action.get("args") or {})
-    return {"tool": tool, "args": action.get("args") or {}, "result": result,
-            "ok": bool(result.get("ok")), "auto": True}
-
-
-def _format_auto_note(action: dict, exec_result: dict) -> str:
-    """Legacy helper kept for backward compat; new card path uses
-    send_card(..., auto_exec={...}) instead."""
-    mark = "✅" if exec_result.get("ok") else "⚠️"
-    return f"{mark} <b>Auto:</b> {action['label']}"
+    return {"tool": tool, "args": action.get("args") or {},
+            "result": result, "ok": bool(result.get("ok")), "auto": True}
 
 
 def schedule_triage(event_id: int) -> None:
@@ -193,7 +171,13 @@ def schedule_triage(event_id: int) -> None:
 
 
 async def record_user_decision(event_id: int, choice: str) -> dict | None:
-    """choice = action_index | 'custom' | 'ignore'. Returns the chosen action dict."""
+    """Record Dima's explicit choice for an event.
+
+    Three writes, always in this order:
+      1. DB status update (synchronous, blocking — must succeed)
+      2. Graphiti episode + DecisionReplay (learning signal — always runs)
+      3. Pattern node bump in Neo4j (v3 brain — best-effort, won't break 1+2)
+    """
     async with get_session() as session:
         event = await session.get(Event, event_id)
         if not event or not event.triage_result:
@@ -218,33 +202,37 @@ async def record_user_decision(event_id: int, choice: str) -> dict | None:
         event.triage_status = "decided"
         await session.commit()
 
-    # v3 shim: write a Pattern confirmation so v3 decide.scoring learns
-    # from this user click. Best-effort; failures don't break v2 path.
+    # --- 2. Learning signal: Graphiti + DecisionReplay ----------------------
+    # Must run unconditionally — this is the feedback loop that makes Vera
+    # smarter. Not inside any try/except that could accidentally swallow it.
+    sender  = _sender_of(event)
+    summary = result.get("summary") or (event.content_text or "")[:200]
+
+    from app.graph import write as gw
+    from app.triage import replay
+    if choice == "ignore":
+        gw.write_rejection(event_id, event.source, sender, summary)
+        await replay.record(event, "Игнорировать", None, None)
+    else:
+        label = chosen.get("label", "?")
+        gw.write_decision(event_id, event.source, sender,
+                          label, chosen.get("tool"), summary)
+        await replay.record(event, label, chosen.get("tool"), chosen.get("args"))
+
+    # --- 3. v3 Pattern node (best-effort, isolated) -------------------------
     try:
         from app.brain import patterns as P
-        sig = P.signature_for(event.entity_hints or [], chosen.get("label", ""))
-        await P.upsert_confirmation(
-            sig, action_label=chosen.get("label", ""),
-            tool=chosen.get("tool"), args=chosen.get("args"),
-        )
+        hints = event.entity_hints or []
+        ctx   = P.context_key_for(hints)
+        sig   = P.signature_for(hints, chosen.get("label", ""))
+        await P.upsert_confirmation(sig, ctx,
+                                     action_label=chosen.get("label", ""),
+                                     tool=chosen.get("tool"),
+                                     args=chosen.get("args"))
     except Exception as exc:
-        log.debug("v3 Pattern confirm shim failed: %s", exc)
+        log.debug("Pattern confirm failed for event %d: %s", event_id, exc)
 
-        # Persist decision to Graphiti so future similar events surface it.
-        from app.graph import write as gw
-        from app.triage import replay
-        sender = _sender_of(event)
-        summary = result.get("summary") or (event.content_text or "")[:200]
-        if choice == "ignore":
-            gw.write_rejection(event_id, event.source, sender, summary)
-            await replay.record(event, "Игнорировать", None, None)
-        else:
-            label = chosen.get("label", "?")
-            gw.write_decision(event_id, event.source, sender,
-                              label, chosen.get("tool"), summary)
-            await replay.record(event, label, chosen.get("tool"),
-                                 chosen.get("args"))
-        return chosen
+    return chosen
 
 
 def _sender_of(event: Event) -> str | None:
@@ -257,9 +245,7 @@ def _sender_of(event: Event) -> str | None:
 async def record_undo(event_id: int) -> str:
     """Undo an auto-executed decision: mark status, write strong rejection
     episode + decrement the replay count so confidence drops below the
-    auto threshold next time. Tool-level undo is best-effort and depends
-    on the tool (some are reversible, some not — we only invalidate the
-    learning signal, leaving Dima to manually undo side-effects if any)."""
+    auto threshold next time."""
     async with get_session() as session:
         event = await session.get(Event, event_id)
         if event is None:
@@ -276,26 +262,26 @@ async def record_undo(event_id: int) -> str:
     summary = merged.get("summary") or (event.content_text or "")[:200]
     gw.write_rejection(event_id, event.source, sender,
                        f"АВТО-ДЕЙСТВИЕ ОТКАЧЕНО. {summary}")
-    # Reset replay count for this sender so we don't auto-fire again
-    # until Dima rebuilds trust manually.
     try:
         await rp.reset(event, reason="auto-action undone")
     except Exception as exc:
         log.warning("replay reset failed: %s", exc)
 
-    # v3 shim: record correction so v3 Pattern weight drops.
+    # v3: correct the Pattern so its weight drops
     try:
         from app.brain import patterns as P
         chosen = (merged.get("user_choice") or {})
-        sig = P.signature_for(event.entity_hints or [], chosen.get("label", ""))
-        await P.upsert_correction(
-            sig, action_label=chosen.get("label", ""),
-            tool=chosen.get("tool"), args=chosen.get("args"),
-        )
+        hints  = event.entity_hints or []
+        ctx    = P.context_key_for(hints)
+        sig    = P.signature_for(hints, chosen.get("label", ""))
+        await P.upsert_correction(sig, ctx,
+                                   action_label=chosen.get("label", ""),
+                                   tool=chosen.get("tool"),
+                                   args=chosen.get("args"))
     except Exception as exc:
-        log.debug("v3 Pattern correction shim failed: %s", exc)
+        log.debug("Pattern correction failed for event %d: %s", event_id, exc)
 
-    return f"замена счётчика повторов для {sender or 'отправителя'}"
+    return f"счётчик сброшен для {sender or 'отправителя'}"
 
 
 async def save_execution(event_id: int, tool: str, args: dict, result: dict) -> None:
@@ -311,6 +297,6 @@ async def save_execution(event_id: int, tool: str, args: dict, result: dict) -> 
         event.triage_status = "executed" if result.get("ok") else "execute_failed"
         await session.commit()
 
-        from app.graph import write as gw
-        gw.write_execution(event_id, tool, bool(result.get("ok")), args,
-                           _sender_of(event))
+    from app.graph import write as gw
+    gw.write_execution(event_id, tool, bool(result.get("ok")), args,
+                       _sender_of(event))

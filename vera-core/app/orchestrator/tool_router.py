@@ -106,15 +106,93 @@ DESTRUCTIVE_TOOLS: set[str] = {
 # this set requires explicit user click — never auto-execute from triage.
 AUTO_SAFE_TOOLS: set[str] = {
     "gmail_modify_thread", "gmail_modify_threads", "gmail_apply_label",
-    "telegram_read_messages", "telegram_search_dialogs",
-    "telegram_list_recent_dialogs", "telegram_get_dialog_info",
+    "gmail_add_label", "gmail_remove_label",
+    "telegram_read_messages", "telegram_mark_read",
+    "telegram_search_dialogs", "telegram_list_recent_dialogs",
+    "telegram_get_dialog_info",
     "gmail_list_threads", "gmail_read_thread", "gmail_list_accounts",
     "fetch", "git_status", "git_log", "git_diff",
 }
 
+# Per-tool reversibility (0 = irreversible, 1 = fully safe to undo).
+# Used by decide.scoring to compute alignment score without string heuristics.
+_REVERSIBILITY: dict[str, float] = {
+    "gmail_modify_thread":          0.9,
+    "gmail_modify_threads":         0.9,
+    "gmail_add_label":              0.9,
+    "gmail_apply_label":            0.9,
+    "gmail_remove_label":           0.9,
+    "gmail_archive":                0.9,
+    "telegram_mark_read":           1.0,
+    "telegram_read_messages":       1.0,
+    "telegram_search_dialogs":      1.0,
+    "telegram_list_recent_dialogs": 1.0,
+    "telegram_get_dialog_info":     1.0,
+    "gmail_list_threads":           1.0,
+    "gmail_read_thread":            1.0,
+    "gmail_list_accounts":          1.0,
+    "fetch":                        1.0,
+    "git_status":                   1.0,
+    "git_log":                      1.0,
+    "git_diff":                     1.0,
+    "gmail_send_reply":             0.1,
+    "gmail_send_message":           0.05,
+    "telegram_send_message":        0.05,
+    "telegram_send_reply":          0.1,
+    "telegram_forward_message":     0.2,
+    "telegram_edit_message":        0.3,
+    "telegram_delete_messages":     0.0,
+    "telegram_pin_message":         0.5,
+    "telegram_unpin_message":       0.6,
+    "ig_reply_to_comment":          0.15,
+    "ig_send_dm":                   0.05,
+    "ig_delete_comment":            0.0,
+    "fb_reply_to_comment":          0.15,
+    "fb_send_dm":                   0.05,
+    "system_deploy":                0.3,
+    "bot_delete_message":           0.0,
+    "bot_delete_forum_topic":       0.0,
+    "bot_wipe_forum":               0.0,
+}
+
+_REVERSIBILITY_BY_PATTERN: list[tuple[str, float]] = [
+    ("delete",    0.0),
+    ("permanent", 0.0),
+    ("wipe",      0.0),
+    ("send",      0.1),
+    ("reply",     0.15),
+    ("post",      0.1),
+    ("forward",   0.2),
+    ("archive",   0.9),
+    ("label",     0.9),
+    ("mark",      0.9),
+    ("modify",    0.8),
+    ("read",      1.0),
+    ("list",      1.0),
+    ("search",    1.0),
+    ("fetch",     1.0),
+    ("status",    1.0),
+    ("log",       1.0),
+    ("diff",      1.0),
+]
+
 
 def is_auto_safe(tool_name: str) -> bool:
     return tool_name in AUTO_SAFE_TOOLS
+
+
+def tool_reversibility(tool_name: str | None) -> float:
+    """Intrinsic reversibility of a tool (0 = irreversible, 1 = fully safe).
+    Single source of truth — imported by decide.scoring."""
+    if tool_name is None:
+        return 0.5
+    if tool_name in _REVERSIBILITY:
+        return _REVERSIBILITY[tool_name]
+    t = tool_name.lower()
+    for pattern, score in _REVERSIBILITY_BY_PATTERN:
+        if pattern in t:
+            return score
+    return 0.5
 
 
 def _email_from_field(raw: str) -> str | None:
