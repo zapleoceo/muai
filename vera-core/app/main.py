@@ -79,9 +79,23 @@ async def lifespan(app: FastAPI):
     #   - MCP server boot (network: spawn N processes)
     #   - Telegram webhook registration (network: TG API call)
     #   - Self-loop agent registration (network: own HTTP)
-    #   - jobs runner + synth (CPU-light loops)
+    #   - jobs runner + synth + pattern_miner (CPU-light loops)
     import asyncio
     asyncio.create_task(_boot_async(settings))
+
+    # Background loops — start NOW (not via @on_event which is ignored
+    # when lifespan is in use). Spawn fire-and-forget; never blocks boot.
+    for name, starter in (
+        ("jobs.runner",     "app.jobs.runner:start_all"),
+        ("brain.synth",     "app.brain.synth:start"),
+        ("pattern_miner",   "app.brain.pattern_miner:start"),
+    ):
+        try:
+            mod, fn = starter.split(":")
+            import importlib
+            getattr(importlib.import_module(mod), fn)()
+        except Exception as exc:
+            log.exception("%s failed to start: %s", name, exc)
 
     yield
 
@@ -131,26 +145,6 @@ async def health() -> dict:
     return {"ok": True}
 
 
-@app.on_event("startup")
-async def _start_bg_loops() -> None:
-    """Background workers — spawned AFTER FastAPI starts so binding is
-    not blocked. Failures logged but don't crash boot."""
-    try:
-        from app.jobs.runner import start_all as start_jobs
-        start_jobs()
-    except Exception as exc:
-        log.exception("jobs.runner failed to start: %s", exc)
-    try:
-        from app.brain.synth import start as start_synth
-        start_synth()
-    except Exception as exc:
-        log.exception("brain.synth failed to start: %s", exc)
-    # P1: Pattern miner — autonomous repetition detection from events.
-    try:
-        from app.brain.pattern_miner import start as start_miner
-        start_miner()
-    except Exception as exc:
-        log.exception("pattern_miner failed to start: %s", exc)
 app.include_router(agents_router)
 app.include_router(llm_proxy_router)
 app.include_router(coder_router)
