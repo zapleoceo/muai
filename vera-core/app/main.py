@@ -36,6 +36,7 @@ from app.sources.routes import router as sources_router
 from app.self_extend.routes import router as self_extend_router
 from app.research.routes import router as research_router
 from app.system.routes import register_self_loop, router as system_router
+from app.instagram.routes import router as instagram_router
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -89,6 +90,7 @@ async def lifespan(app: FastAPI):
         ("jobs.runner",     "app.jobs.runner:start_all"),
         ("brain.synth",     "app.brain.synth:start"),
         ("pattern_miner",   "app.brain.pattern_miner:start"),
+        ("ig.poller",       "app.instagram.poller:start"),
     ):
         try:
             mod, fn = starter.split(":")
@@ -162,6 +164,7 @@ app.include_router(sources_router)
 app.include_router(self_extend_router)
 app.include_router(research_router)
 app.include_router(system_router)
+app.include_router(instagram_router)
 app.include_router(dashboard_api_router)
 app.include_router(dashboard_static_router)
 

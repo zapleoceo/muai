@@ -265,3 +265,39 @@ class IngestJob(Base):
     enqueued_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
     started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class IgAccount(Base):
+    """Instagram account connected to Vera. One row per account.
+    Access token stored encrypted (same pattern as GmailAccount)."""
+    __tablename__ = "ig_accounts"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(String, nullable=False, unique=True)
+    display_name: Mapped[str | None] = mapped_column(String, nullable=True)
+    access_token_enc: Mapped[str | None] = mapped_column(String, nullable=True)
+    business_account_id: Mapped[str | None] = mapped_column(String, nullable=True)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    poll_interval_sec: Mapped[int] = mapped_column(Integer, default=300)
+    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_dm_cursor: Mapped[str | None] = mapped_column(String, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(String, nullable=True)
+    status: Mapped[str] = mapped_column(String, default="disconnected")  # disconnected|ok|error
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class IgAutoReply(Base):
+    """Auto-reply rule for Instagram DMs. When an incoming DM for an account
+    contains ALL trigger_keywords (case-insensitive), Vera auto-replies with
+    response_template without going through full triage."""
+    __tablename__ = "ig_auto_replies"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    account_username: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    trigger_keywords: Mapped[list] = mapped_column(JSON, default=list)  # ["цена", "курс"]
+    response_template: Mapped[str] = mapped_column(String, nullable=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    match_count: Mapped[int] = mapped_column(Integer, default=0)
+    last_matched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
