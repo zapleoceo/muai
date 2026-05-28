@@ -13,6 +13,7 @@ from vera_shared.db.migrations import run_migrations
 
 from app.bot.callbacks import router as callbacks_router
 from app.bot.digest_callbacks import router as digest_callbacks_router
+from app.bot.proactive_callbacks import router as proactive_callbacks_router
 from app.bot.handler import router as bot_router
 from app.bot.sender import init_bot
 from app.config import get_settings
@@ -71,6 +72,7 @@ async def lifespan(app: FastAPI):
     _dp = Dispatcher()
     _dp.include_router(callbacks_router)
     _dp.include_router(digest_callbacks_router)
+    _dp.include_router(proactive_callbacks_router)
     _dp.include_router(bot_router)
 
     # ASYNC (run in background, don't block boot):
@@ -143,6 +145,12 @@ async def _start_bg_loops() -> None:
         start_synth()
     except Exception as exc:
         log.exception("brain.synth failed to start: %s", exc)
+    # P1: Pattern miner — autonomous repetition detection from events.
+    try:
+        from app.brain.pattern_miner import start as start_miner
+        start_miner()
+    except Exception as exc:
+        log.exception("pattern_miner failed to start: %s", exc)
 app.include_router(agents_router)
 app.include_router(llm_proxy_router)
 app.include_router(coder_router)

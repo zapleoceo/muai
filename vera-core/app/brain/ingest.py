@@ -53,6 +53,12 @@ async def ingest(env: EventEnvelope) -> int | None:
     import os
     if os.environ.get("DEEP_EXTRACT_ENABLED") == "1":
         await _enqueue_deep(event.id)
+
+    # Proactive layer (P2): sniff if this event triggers a known Pattern
+    # → maybe DM Дима with a draft. Best-effort, never blocks ingest.
+    from app.common.bg import spawn
+    from app.brain.proactive import maybe_propose
+    spawn(maybe_propose(event.id), name=f"proactive-{event.id}")
     return event.id
 
 
