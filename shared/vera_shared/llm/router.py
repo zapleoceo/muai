@@ -20,13 +20,9 @@ _lock = asyncio.Lock()
 
 # Per-provider model name + LiteLLM provider prefix.
 _PROVIDER_MODEL: dict[str, tuple[str, str]] = {
-    # provider → (litellm_provider, model)
-    # gemini-2.5-flash: 1500 RPD on free tier (vs 1000 for 2.0; 2.0 deprecated 2026-06-01)
-    "gemini":     ("gemini",      "gemini-2.5-flash"),
+    "gemini":     ("gemini",      "gemini-3.5-flash"),
     "deepseek":   ("deepseek",    "deepseek-chat"),
     "anthropic":  ("anthropic",   "claude-haiku-4-5"),
-    # OpenRouter via OpenAI-compatible API — extra free pool independent
-    # of Google quota. Primary: gpt-oss-120b (verified non-rate-limited).
     "openrouter": ("openrouter",  "openai/gpt-oss-120b:free"),
 }
 
