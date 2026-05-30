@@ -1,4 +1,12 @@
-"""Graphiti LLM/Embedder/Reranker clients that rotate Gemini keys via our pool."""
+"""Graphiti LLM/Embedder/Reranker clients that rotate Gemini keys via our pool.
+
+Key rotation strategy for Graphiti:
+  - On 429: cooldown the key for 1 hour, rotate to the next available Gemini key.
+  - On 503: cooldown 5 min, rotate.
+  - On 401/403: cooldown 1 hour, rotate.
+  - On TokensExhausted: all Gemini keys unavailable — raise so caller skips the write.
+  - No DeepSeek fallback: DeepSeek rejects response_format:json_schema used by Graphiti.
+"""
 
 import logging
 
@@ -7,10 +15,13 @@ from vera_shared.tokens.selector import get_token
 
 log = logging.getLogger(__name__)
 
+_GEMINI_429_COOLDOWN  = 3600   # daily quota won't recover in minutes
+_GEMINI_503_COOLDOWN  = 300
+_GEMINI_AUTH_COOLDOWN = 3600
+_MAX_KEY_ROTATIONS    = 5      # max distinct keys to try per call
+
 
 def _status_from_exc(exc: Exception) -> int:
-    # Graphiti normalises 429 → RateLimitError; detect by class first so
-    # we don't depend on substring matching.
     cls = type(exc).__name__
     if cls in ("RateLimitError", "TokensExhausted"):
         return 429
@@ -28,105 +39,84 @@ def _status_from_exc(exc: Exception) -> int:
 
 
 async def _refresh_gemini_client(holder, *, capability: str = "chat:fast"):
-    """Pick a fresh Gemini key from the pool and rebuild the underlying google client."""
     from google import genai
-
     token = await get_token("gemini", capability)
     holder.client = genai.Client(api_key=token.token)
     return token
 
 
-# -------- LLM ---------------------------------------------------------------
+# ── LLM ──────────────────────────────────────────────────────────────────────
 
 
-async def _build_deepseek_fallback() -> object | None:
-    """Lazy DeepSeek-via-OpenAI Graphiti client; rebuilt per call so we
-    pick a fresh deepseek key from the pool each time."""
-    from graphiti_core.llm_client.config import LLMConfig
-    from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
-    from openai import AsyncOpenAI
-    # Deepseek capabilities are chat:smart / chat:code in our pool —
-    # try them in order; any working key is fine for Graphiti's calls.
-    token = None
-    for cap in ("chat:smart", "chat:code", "chat:fast"):
-        try:
-            token = await get_token("deepseek", cap)
-            break
-        except TokensExhausted:
-            continue
-    if token is None:
-        return None
-    aclient = AsyncOpenAI(api_key=token.token,
-                          base_url="https://api.deepseek.com")
-    client = OpenAIGenericClient(
-        config=LLMConfig(api_key=token.token, model="deepseek-chat"),
-        client=aclient,
-    )
-    return client
-
-
-def make_llm_client(model: str = "gemini-2.5-flash", capability: str = "chat:fast"):
+def make_llm_client(model: str = "gemini-3.5-flash", capability: str = "chat:fast"):
     from graphiti_core.llm_client.config import LLMConfig
     from graphiti_core.llm_client.gemini_client import GeminiClient
 
     class PoolGeminiClient(GeminiClient):
         async def _generate_response(self, *args, **kwargs):
-            try:
-                token = await _refresh_gemini_client(self, capability=capability)
-            except TokensExhausted:
-                fallback = await _build_deepseek_fallback()
-                if fallback is None:
+            last_exc: Exception | None = None
+            for attempt in range(_MAX_KEY_ROTATIONS):
+                try:
+                    token = await _refresh_gemini_client(self, capability=capability)
+                except TokensExhausted as exc:
+                    log.warning(
+                        "Graphiti LLM: all Gemini keys exhausted (attempt %d) — "
+                        "episode write skipped",
+                        attempt,
+                    )
                     raise
-                log.warning("Gemini exhausted — falling back to DeepSeek for this call")
-                return await fallback._generate_response(*args, **kwargs)
-            try:
-                return await super()._generate_response(*args, **kwargs)
-            except TokensExhausted:
-                fallback = await _build_deepseek_fallback()
-                if fallback is None:
-                    raise
-                log.warning("Gemini exhausted mid-call — falling back to DeepSeek")
-                return await fallback._generate_response(*args, **kwargs)
-            except Exception as exc:
-                status = _status_from_exc(exc)
-                # Don't cooldown the key on 429 — Gemini's per-minute
-                # quota refreshes quickly. Only cooldown on hard auth
-                # errors (401/403). Cooldown on 429 makes the pool
-                # falsely report exhausted for hours.
-                if status and status not in (429, 503):
-                    await get_pool().on_error(token.id, status)
-                if status in (429, 503):
-                    fallback = await _build_deepseek_fallback()
-                    if fallback is not None:
-                        log.warning("Gemini %s — falling back to DeepSeek", status)
-                        return await fallback._generate_response(*args, **kwargs)
-                raise
 
-    # placeholder key satisfies parent __init__; rebuilt per call
+                try:
+                    return await super()._generate_response(*args, **kwargs)
+                except TokensExhausted as exc:
+                    log.warning("Graphiti LLM: TokensExhausted mid-call — rotating key")
+                    last_exc = exc
+                    continue
+                except Exception as exc:
+                    status = _status_from_exc(exc)
+                    if status == 429:
+                        await get_pool().on_error(
+                            token.id, 429,
+                            retry_after_seconds=_GEMINI_429_COOLDOWN,
+                        )
+                        log.warning(
+                            "Graphiti LLM: Gemini key %d hit 429 — "
+                            "cooling down 1h, rotating (attempt %d/%d)",
+                            token.id, attempt + 1, _MAX_KEY_ROTATIONS,
+                        )
+                        last_exc = exc
+                        continue
+                    elif status == 503:
+                        await get_pool().on_error(
+                            token.id, 503,
+                            retry_after_seconds=_GEMINI_503_COOLDOWN,
+                        )
+                        log.warning("Graphiti LLM: Gemini 503 — rotating key")
+                        last_exc = exc
+                        continue
+                    elif status in (401, 403):
+                        await get_pool().on_error(
+                            token.id, status,
+                            retry_after_seconds=_GEMINI_AUTH_COOLDOWN,
+                        )
+                    raise
+
+            log.error("Graphiti LLM: exhausted %d Gemini key rotations", _MAX_KEY_ROTATIONS)
+            raise last_exc or TokensExhausted("gemini", capability)
+
     return PoolGeminiClient(config=LLMConfig(api_key="placeholder", model=model))
 
 
-# -------- Embedder ----------------------------------------------------------
+# ── Embedder ──────────────────────────────────────────────────────────────────
 
 
 def make_embedder(embedding_model: str = "voyage-3"):
-    """Voyage embeddings via dedicated free-tier pool (5 keys).
-
-    Was: Gemini embedder, which burned the SAME pool used by chat
-    requests. Each retrieval call took a chat:fast token slot. Now
-    embeddings live in their own provider, freeing all Gemini quota
-    for actual LLM calls."""
+    """Voyage embeddings — separate pool, never burns Gemini quota."""
     from graphiti_core.embedder.voyage import VoyageAIEmbedder, VoyageAIEmbedderConfig
 
-    async def _voyage_token():
-        return await get_token("voyage", "embed")
-
     async def _swap_voyage_client(holder):
-        """voyageai.AsyncClient is built once in VoyageAIEmbedder.__init__
-        from config.api_key. Rebuilding ONLY config.api_key won't reach
-        the cached self.client — must replace the client object too."""
         import voyageai
-        tok = await _voyage_token()
+        tok = await get_token("voyage", "embed")
         holder.config.api_key = tok.token
         holder.client = voyageai.AsyncClient(api_key=tok.token)
         return tok
@@ -154,14 +144,14 @@ def make_embedder(embedding_model: str = "voyage-3"):
 
     return PoolVoyageEmbedder(
         config=VoyageAIEmbedderConfig(api_key="placeholder",
-                                        embedding_model=embedding_model),
+                                      embedding_model=embedding_model),
     )
 
 
-# -------- Reranker ----------------------------------------------------------
+# ── Reranker ──────────────────────────────────────────────────────────────────
 
 
-def make_reranker(model: str = "gemini-2.5-flash"):
+def make_reranker(model: str = "gemini-3.5-flash"):
     from graphiti_core.cross_encoder.gemini_reranker_client import GeminiRerankerClient
     from graphiti_core.llm_client.config import LLMConfig
 
@@ -172,7 +162,12 @@ def make_reranker(model: str = "gemini-2.5-flash"):
                 return await super().rank(query, passages)
             except Exception as exc:
                 status = _status_from_exc(exc)
-                if status:
+                if status == 429:
+                    await get_pool().on_error(
+                        token.id, 429,
+                        retry_after_seconds=_GEMINI_429_COOLDOWN,
+                    )
+                elif status:
                     await get_pool().on_error(token.id, status)
                 raise
 
