@@ -122,9 +122,13 @@ async def _get_router() -> Router:
 def _on_success(kwargs, completion_response, start_time, end_time):
     """LiteLLM sync callback. Persist usage to our tokens table."""
     try:
-        token_id = (
-            kwargs.get("litellm_params", {}).get("model_info", {}).get("db_token_id")
+        # LiteLLM places model_info either directly in kwargs or inside litellm_params
+        model_info = (
+            kwargs.get("model_info")
+            or (kwargs.get("litellm_params") or {}).get("model_info")
+            or {}
         )
+        token_id = model_info.get("db_token_id")
         if not token_id:
             return
         usage = (completion_response or {}).get("usage", {}) or {}
