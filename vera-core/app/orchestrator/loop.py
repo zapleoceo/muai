@@ -157,6 +157,17 @@ _SYSTEM_TEMPLATE = """Ты — Vera, AI-оркестратор. У тебя ес
     → vera_remember(statement=<фраза Димы>, scope=<краткий ярлык>).
     Никаких уточнений. Никаких capability_gap. Просто запиши.
 - ВСПОМНИТЬ что было сказано → vera_recall(query=...).
+
+РЕЖИМ ПРЕДПРОВЕРКИ (важно):
+- Дима хочет чтобы ты пока УЧИЛАСЬ. Поэтому если ты НЕ УВЕРЕНА в ответе
+  (попробовала меньше 2 разных стратегий поиска, нашла подозрительно мало,
+  не используешь подсказку из ПРАВИЛ И КОНТЕКСТА выше) — пометь ответ
+  префиксом «🧪 черновик, проверь меня:» и явно опиши что попробовала
+  и какие были сомнения.
+- Уверенный ответ возможен ТОЛЬКО если: (а) ты применила хотя бы один
+  факт из ПРАВИЛА И КОНТЕКСТ, (б) данных хватает для прямого ответа.
+- Никогда не отвечай только «Готово» или «Сделано» без сути ответа —
+  всегда показывай ЧТО именно нашла или ЧТО именно сделала.
 {history_block}"""
 
 _JSON_BLOCK_RE = re.compile(r"\{.*\}", re.DOTALL)
@@ -173,11 +184,35 @@ async def run_agentic(
         f"\n\nНедавний контекст диалога с пользователем (для ссылок типа 'ещё раз', 'тот же'):\n{history}"
         if history else ""
     )
+
+    # Pre-inject memos so Vera doesn't have to call vera_recall as a
+    # separate step. The brain already knows "выплаты = Старшие и отчеты",
+    # "SePay = чеки гостей, игнорировать", etc — bake those into the
+    # system prompt as ground truth before the first turn.
+    memos_block = ""
+    try:
+        from app.brain.identity import search_memos
+        memos = await search_memos(query=None, scope=None, limit=30)
+        if memos:
+            lines = []
+            for m in memos[:30]:
+                st = (m.get("statement") or "").strip()
+                if st:
+                    lines.append(f"- {st[:280]}")
+            if lines:
+                memos_block = (
+                    "\n\nПРАВИЛА И КОНТЕКСТ (запомненные тобой ранее — "
+                    "ВСЕГДА учитывай эти факты перед действием):\n"
+                    + "\n".join(lines)
+                )
+    except Exception as exc:
+        log.debug("memos pre-inject failed: %s", exc)
+
     system = _SYSTEM_TEMPLATE.format(
         tools=format_tools_for_prompt(specs),
         max_iter=_MAX_ITERATIONS,
         history_block=history_block,
-    )
+    ) + memos_block
 
     messages: list[dict] = [{"role": "user", "content": request}]
     trace: list[dict] = []
@@ -196,7 +231,26 @@ async def run_agentic(
                         "Ищу в реестре, пришлю предложение в DM."), trace
 
         if "answer" in parsed:
-            return str(parsed["answer"]).strip() or "Готово.", trace
+            ans = str(parsed["answer"]).strip()
+            # Empty answer = the LLM gave up but pretended to finish. Reject
+            # and force it to either retry with a different strategy or
+            # honestly say "не нашла X, попробуй Y". No more silent "Готово."
+            if not ans:
+                log.warning("LLM returned empty answer on step %d — forcing retry", step)
+                messages.append({"role": "assistant", "content": raw.strip()})
+                messages.append({
+                    "role": "user",
+                    "content": (
+                        "Ты вернула пустой ответ. Это запрещено. Либо: "
+                        "(1) попробуй другой инструмент с другими аргументами, "
+                        "(2) перечитай ПРАВИЛА И КОНТЕКСТ выше — там подсказка "
+                        "куда смотреть, (3) если правда ничего не нашлось — "
+                        "честно скажи 'не нашла X, искала через Y, попробуй уточнить'. "
+                        "Не отвечай 'Готово' без содержания."
+                    ),
+                })
+                continue
+            return ans, trace
 
         if "tool" in parsed:
             name = str(parsed["tool"])
