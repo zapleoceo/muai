@@ -31,6 +31,7 @@ async def vera_query_events(
     folder: str | None = None,
     chat_name: str | None = None,
     person: str | None = None,
+    query: str | None = None,
     days: int | None = None,
     since: str | None = None,
     until: str | None = None,
@@ -38,7 +39,13 @@ async def vera_query_events(
 ) -> dict:
     """Query Event store by structured filters.
 
-    All filters AND-combined. Returns
+    Args:
+        query: optional free-text — matches if substring appears in
+               content_text (case-insensitive). Use for searching topics
+               like "выплата", "счёт", "доставка" without knowing the chat.
+        All other filters AND-combined.
+
+    Returns
       {total, returned, events:[{id, source, occurred_at, chat,
                                   person, text, direction}, ...]}
     """
@@ -47,6 +54,8 @@ async def vera_query_events(
         where.append(Event.source == source)
     if account:
         where.append(Event.account == account)
+    if query:
+        where.append(Event.content_text.ilike(f"%{query.strip()}%"))
     if days is not None:
         where.append(Event.occurred_at >= datetime.utcnow() - timedelta(days=int(days)))
     if since:
