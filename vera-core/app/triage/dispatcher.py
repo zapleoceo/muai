@@ -19,6 +19,12 @@ _FINAL_STATUSES = frozenset({
     "expired",        # cleaned up by /api/admin/expire-stale-events
 })
 
+# Sources that are infra heartbeats / our own outputs. Cards for them are
+# noise — the LLM proposes nonsense actions like "посмотреть переписку" on
+# a deploy event, which then sends Dima to a random chat. Silence them
+# at the source.
+_INFRA_SOURCES = frozenset({"deploy", "monitor", "system", "selfcheck"})
+
 
 async def _run_triage(event_id: int) -> None:
     async with get_session() as session:
@@ -30,6 +36,19 @@ async def _run_triage(event_id: int) -> None:
                      event_id, event.triage_status)
             return
         e = event
+
+    # Infra events never get user-facing cards. Mark silenced with a note
+    # so the dashboard can still display them under "system events".
+    if e.source in _INFRA_SOURCES:
+        async with get_session() as session:
+            row = await session.get(Event, event_id)
+            if row:
+                row.triage_status = "silenced"
+                row.triage_result = {"silenced": True,
+                                     "reason": f"infra source ({e.source})"}
+                await session.commit()
+        log.info("Event %d silenced: infra source=%s", event_id, e.source)
+        return
 
     proposal = await triage(e)
     if proposal is None:
