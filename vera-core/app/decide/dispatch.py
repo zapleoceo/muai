@@ -79,11 +79,20 @@ async def _enumerate_candidates(hints: list[dict]) -> list[Candidate]:
 
 
 def _band(s: float) -> str:
-    if s >= 7.0:
+    """Decision band from alignment score (0..10).
+       auto    — fire immediately, post-fact card
+       propose — show a card for user approval
+       silent  — write status, no card
+
+    Thresholds tuned 2026-06-01 after user complained that score-3.8 cards
+    ('alignment=3.8, предлагаю') flooded the group. Old: 3.0/7.0. New 5.0/8.0
+    silences low-confidence proposals; user can lower if needed.
+    """
+    if s >= 8.0:
         return "auto"
-    if s >= 3.0:
+    if s >= 5.0:
         return "propose"
-    return "ask"
+    return "silent"
 
 
 def _summarise(breakdown: dict) -> str:

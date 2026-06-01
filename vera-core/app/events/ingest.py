@@ -120,6 +120,9 @@ def schedule_ingest(event_id: int, **kw) -> None:
         spawn(_v3_shadow_decide(event_id), name=f"v3-shadow-{event_id}")
 
 
+_INFRA_SOURCES_V3 = frozenset({"deploy", "monitor", "system", "selfcheck"})
+
+
 async def _v3_live_dispatch(event_id: int) -> None:
     """v3-owned decision flow. Runs decide(), and based on the band:
        auto    — execute tool + post post-fact card
@@ -138,6 +141,13 @@ async def _v3_live_dispatch(event_id: int) -> None:
                 select(Event).where(Event.id == event_id)
             )).scalar_one_or_none()
             if ev is None:
+                return
+            # Infra heartbeats never become cards. Same guard as v2 path.
+            if ev.source in _INFRA_SOURCES_V3:
+                ev.triage_status = "silenced"
+                ev.triage_result = {"v3_live": True, "silenced": True,
+                                    "reason": f"infra source ({ev.source})"}
+                await s.commit()
                 return
             hints = ev.entity_hints or []
         d = await decide(hints)
@@ -163,11 +173,20 @@ async def _v3_live_dispatch(event_id: int) -> None:
         } for i, c in enumerate(d.candidates[:4]) if c.candidate.tool]
         if not actions:
             return
+        # Build a human-readable summary from the actual event content,
+        # not the v3 score-dump (which read "alignment=3.8, предлагаю" — useless).
+        sender = "?"
+        for h in (ev.entity_hints or []):
+            if h.get("type") == "person":
+                sender = h.get("name") or h.get("identifier") or "?"
+                break
+        snippet = (ev.content_text or "").strip().split("\n", 1)[0][:180]
+        summary = f"{sender}: {snippet}" if snippet else explanation
         from types import SimpleNamespace
         proposal = SimpleNamespace(
             actions=actions, confidence=(d.chosen.score / 10.0 if d.chosen else 0.0),
-            summary=explanation,
-            reasoning=str(d.chosen.breakdown if d.chosen else {}),
+            summary=summary,
+            reasoning=explanation,
             urgency="medium", context_used=[],
         )
         from app.triage.card import send_card
