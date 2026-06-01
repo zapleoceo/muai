@@ -3,22 +3,16 @@
   - GET /internal/coder/anthropic-key: returns active Anthropic key
   - POST /internal/coder/notify: receives PR-ready notifications, DMs Dima
 """
-import hmac
 import logging
 
 from fastapi import APIRouter, Body, Header, HTTPException
 
-from app.config import get_settings
+from vera_shared.internal_auth import require_internal as _require_secret
+
 from app.system.tools import _gh_token
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/internal/coder")
-
-
-def _require_secret(secret: str | None) -> None:
-    expected = get_settings().internal_secret
-    if not secret or not hmac.compare_digest(secret, expected):
-        raise HTTPException(401, "invalid X-Internal-Secret")
 
 
 @router.get("/github-token")

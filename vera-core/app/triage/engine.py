@@ -162,25 +162,7 @@ async def _retrieve_context(event: Event, limit: int = 8) -> list[dict]:
         return []
 
 
-def _strip_fence(s: str) -> str:
-    s = s.strip()
-    if s.startswith("```"):
-        s = re.sub(r"^```\w*\s*", "", s)
-        s = re.sub(r"\s*```$", "", s)
-    return s.strip()
-
-
-def _safe_parse(raw: str) -> dict | None:
-    try:
-        return json.loads(_strip_fence(raw))
-    except Exception:
-        m = re.search(r"\{[\s\S]*\}", raw)
-        if m:
-            try:
-                return json.loads(m.group(0))
-            except Exception:
-                pass
-    return None
+from vera_shared.llm.json_parse import safe_parse as _safe_parse  # noqa: F401
 
 
 def _format_event_for_llm(event: Event, context: list[dict]) -> str:

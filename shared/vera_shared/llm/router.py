@@ -64,14 +64,11 @@ async def _build_model_list() -> list[dict]:
             params["api_base"] = "https://openrouter.ai/api/v1"
             params["custom_llm_provider"] = "openai"
         is_paid = (r.provider, r.label) in _PAID_KEYS
-        # Weight tuning: free keys have 20 RPD per project — burn through
-        # fast on Graphiti ingest. Paid Gemini key has standard-tier quota
-        # (~300 RPM / no daily limit), so weight it close to free pool.
-        # Old setting weight=1 meant paid was only touched ~1% of the time
-        # and free keys hit cooldown constantly. New: paid weight=70, free
-        # weight=100 → free is still preferred, but paid takes a real
-        # share of traffic (~40%) instead of being a museum piece.
-        params["weight"] = 70 if is_paid else 100
+        # Weight tuning: free Gemini has 1500 RPD per project (5 RPM × ~5 min
+        # bursts). Use free as primary, paid as safety net for spikes.
+        # weight=20 for paid means it only gets ~17% of pickups normally,
+        # but LiteLLM falls through to it instantly when free returns 429.
+        params["weight"] = 20 if is_paid else 100
         out.append({
             "model_name": f"chat:fast::{r.provider}",  # group alias
             "litellm_params": params,

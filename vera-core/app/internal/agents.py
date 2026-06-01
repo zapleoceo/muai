@@ -1,4 +1,3 @@
-import hmac
 import logging
 from datetime import datetime
 
@@ -7,8 +6,8 @@ from pydantic import BaseModel
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import Agent
+from vera_shared.internal_auth import require_internal as _require_internal
 
-from app.config import get_settings
 from app.dashboard.auth import require_owner
 from app.internal.agent_repo import list_all_agents
 
@@ -19,12 +18,6 @@ _REGISTRATION_ALLOWED_HOSTS = {
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/internal/agents")
-
-
-def _require_internal(secret_header: str | None) -> None:
-    expected = get_settings().internal_secret
-    if not secret_header or not hmac.compare_digest(secret_header, expected):
-        raise HTTPException(status_code=401, detail="invalid X-Internal-Secret")
 
 
 class RegisterPayload(BaseModel):

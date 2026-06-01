@@ -4,23 +4,15 @@ vera-telegram / vera-gmail don't carry their own LLM pool. When they
 need to summarise / classify, they POST here. Auth via X-Internal-Secret
 (same secret already used by /event).
 """
-import hmac
 import logging
 
 from fastapi import APIRouter, Body, Header, HTTPException
 
+from vera_shared.internal_auth import require_internal as _require_internal
 from vera_shared.llm.router import chat as llm_chat
-
-from app.config import get_settings
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/internal/llm")
-
-
-def _require_internal(secret_header: str | None) -> None:
-    expected = get_settings().internal_secret
-    if not secret_header or not hmac.compare_digest(secret_header, expected):
-        raise HTTPException(401, "invalid X-Internal-Secret")
 
 
 @router.post("/chat")

@@ -4,7 +4,9 @@ import logging
 from datetime import datetime
 
 import httpx
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Header, HTTPException
+
+from vera_shared.internal_auth import require_internal
 
 from app.config import get_settings
 from app.system.tools import HANDLERS
@@ -212,7 +214,14 @@ TOOL_SPECS = [
 
 
 @router.post("/tool/{name}")
-async def call_self_tool(name: str, payload: dict | None = None) -> dict:
+async def call_self_tool(
+    name: str,
+    payload: dict | None = None,
+    x_internal_secret: str | None = Header(default=None),
+) -> dict:
+    # CRITICAL: this endpoint exposes destructive self-tools (deploy, mass-delete TG,
+    # rotate tokens) and must NEVER be reachable without the internal HMAC.
+    require_internal(x_internal_secret)
     handler = HANDLERS.get(name)
     if handler is None:
         raise HTTPException(404, f"unknown self-tool {name}")

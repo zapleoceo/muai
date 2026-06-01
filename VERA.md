@@ -262,10 +262,141 @@ Action posts to Telegram and runs ROLLBACK_SHA reset.
 
 ## 13. Migration log
 
+- **2026-06-01**: Brain auto-feedback loop killed — `vera-monitor` now
+  ignores Graphiti ingest errors (Gemini/Voyage rate-limits). DRY pass:
+  shared `vera_shared.internal_auth.require_internal` and
+  `vera_shared.llm.json_parse.{strip_fence,safe_parse}` replace 6
+  duplicated copies. Security: `/tool/{name}` now requires X-Internal-Secret.
+- **2026-05-30**: Gemini 2.5 → 3.5 Flash (7× faster, +452 Elo on agentic).
+  Graphiti key rotation fixed (429 cooldown 1h instead of falling through
+  to DeepSeek which rejected `response_format: json_schema`).
+  vera-deploy script: auto-prunes images + builder cache.
+  vera-monitor cron checks 12 health dimensions every 5 min.
 - **2026-05-22**: v3 spec adopted — single graph, no per-event config,
   6-week phased rebuild. Triage/persona/Trigger/DecisionReplay deprecated.
 - 2026-05-21 → 2026-05-22: v2 (current production) — topics, replay
   table, threshold-based auto, scattered prefs. Now legacy.
+
+## 14. Database schema (SQLite, `/data/vera.db`)
+
+Schema is in `shared/vera_shared/db/models.py`. Run migrations on startup
+via `vera_shared.db.migrations.run_migrations`.
+
+**Core tables:**
+
+| Table | Purpose | Key columns |
+|---|---|---|
+| `tokens` | API keys (encrypted at rest) for all providers | `provider`, `label`, `token` (encrypted), `capabilities`, `daily_used`, `cooldown_until` |
+| `events` | Every observed signal: gmail/telegram/monitor/deploy | `source`, `source_event_id` (unique), `content_text`, `entity_hints`, `triage_status`, `triage_result`, `graphiti_episode_uuid` |
+| `gmail_accounts` | OAuth-connected mailboxes | `email`, `refresh_token_enc`, `access_token_enc`, `is_active`, `last_polled_at` |
+| `ig_accounts` | Instagram sessions | `username`, `access_token_enc` (encrypted instagrapi session JSON), `status` |
+| `agents` | HTTP MCP agents registered with vera-core | `id`, `name`, `http_url`, `capabilities`, `last_heartbeat` |
+| `backfill_jobs` | Async backfill queue | `source_name`, `since`, `status`, `count_processed` |
+| `mcp_servers` / `mcp_proposals` | Self-extension (proposed/installed MCP) | see SELF_EXTENSION.md |
+
+**Graph (Neo4j Aura, free tier, 200K nodes / 400K rel limit):**
+
+| Node label | Meaning |
+|---|---|
+| `Episodic` | Raw event stored verbatim (1 per event) |
+| `Entity` | Person / chat / account / project — auto-extracted by Graphiti |
+| `Community` | Cluster of related entities |
+| `Saga` | Cross-event narrative (currently unused) |
+
+Relationships: `MENTIONS` (episodic → entity), `RELATES_TO` (entity ↔ entity,
+with `fact` text), `HAS_EPISODE` (community ↔ episodic), `NEXT_EPISODE`
+(temporal chain).
+
+## 15. API reference
+
+All routes require `Depends(require_owner)` (HMAC session cookie + CSRF on
+mutating methods) unless noted.
+
+### Owner-facing (dashboard)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/api/observability` | Health snapshot (DB, queue, Graphiti, tokens) |
+| GET/POST | `/api/gmail/oauth/start` `/callback` | OAuth flow for Gmail accounts |
+| GET/POST/DELETE | `/api/instagram/accounts` | IG session CRUD via instagrapi |
+| GET/POST/PATCH/DELETE | `/api/instagram/autoreplies` | DM auto-reply rules |
+| POST | `/api/self_extend/discover` `/uninstall/{name}` | Manual MCP install/remove |
+| POST | `/api/sources/*` | Source registry CRUD |
+
+### Service-to-service (X-Internal-Secret required)
+
+| Method | Path | Purpose |
+|---|---|---|
+| POST | `/event` | Submit a signal from any source |
+| POST | `/internal/agents/register` | Agent heartbeat |
+| POST | `/internal/llm/chat` | LLM proxy for other vera-* containers |
+| GET | `/internal/coder/github-token` | PAT for vera-coder |
+| POST | `/internal/coder/notify` | PR-ready notification → DM Dima |
+| POST | `/tool/{name}` | Invoke a vera-core self-tool (deploy, send_telegram, etc.) |
+
+### Public (no auth)
+
+| Method | Path | Purpose |
+|---|---|---|
+| GET | `/health` | Liveness probe |
+| POST | `/api/tg_login` | Telegram-login widget callback (validates TG hash) |
+
+## 16. Deployment runbook
+
+**Standard deploy:**
+```
+git push origin master
+ssh hetzner-root vera-deploy [vera-core|vera-gmail|vera-telegram|vera-coder]
+```
+
+The `vera-deploy` script (`/usr/local/bin/vera-deploy`) does: `git pull →
+docker compose build --no-cache <svc> → up -d → docker image prune -f →
+docker builder prune --keep-storage=1gb -f → POST /event {source=deploy}`.
+
+**Health monitor:** `/usr/local/bin/vera-monitor` runs every 5 min via
+root cron. Checks 12 dimensions (containers, disk, memory, /health, error
+rate, Gmail OAuth expiry, triage backlog, Gemini quota, Voyage quota, SSL
+cert). Alerts go to Vera as `source=monitor` events; she surfaces them in
+Telegram. Throttle: 1 alert per key per 30 min.
+
+**Backup/restore SQLite:**
+- Backup: `ssh hetzner-root "sqlite3 /var/www/vera/data/vera.db .backup /tmp/vera-$(date +%F).db"`
+- Restore: stop `vera-core`, `cp` over `/var/www/vera/data/vera.db`, start.
+
+**Neo4j Aura:** managed by Neo4j Inc. Connection string in `.env`
+(`NEO4J_URI`, `NEO4J_USER`, `NEO4J_PASSWORD`). No local backups — the
+free tier keeps 7-day point-in-time recovery in the Aura console.
+
+## 17. Troubleshooting
+
+| Symptom | Likely cause | Fix |
+|---|---|---|
+| `Episode add failed: No gemini tokens` | All Gemini keys in cooldown (free tier RPM exhausted) | Wait 60s, or check that `gemini/demoniwwwe` paid key billing is active. Verify `tokens.cooldown_until` in DB. |
+| `Episode add failed: ... reduced rate limits of 3 RPM and 10K TPM` (Voyage) | Voyage account has no payment method | Visit dashboard.voyageai.com → Settings → Payment → add card. 200M free tokens stay; payment method unlocks Tier 1. |
+| Gmail poller `invalid_grant` for all accounts | Google revoked refresh tokens (idle > 7 days while app is in "Testing") | Re-authorize via `/api/gmail/oauth/start` per account. Long-term fix: publish OAuth app to "Production" in Google Cloud Console. |
+| Disk fills up | Old Docker images, build cache | `vera-deploy` auto-prunes. Manual: `docker image prune -af && docker builder prune --keep-storage=1gb -f`. |
+| `/tool/{name}` returns 404 | Tool name typo or HANDLERS not loaded | Check `app/system/tools.py` `HANDLERS` dict. Restart vera-core. |
+| `/tool/{name}` returns 401 | Caller didn't send `X-Internal-Secret` header | Add the header. INTERNAL_SECRET env var on caller must match server. |
+| Triage produces nothing for hours | All LLM providers down / no active tokens | Check `/api/observability` for token table. Add a fresh Gemini free key via dashboard Settings. |
+| brain empty but events arrive | Graphiti ingest fails silently | Check vera-core logs for `Episode add failed`. Likely Voyage or Gemini quota; see rows above. |
+| Container in `Restarting` loop | Bad migration or corrupt env | `docker compose -f /var/www/vera/docker-compose.yml logs --tail=200 <svc>` and read the traceback. |
+
+## 18. Local development
+
+Prerequisites: Python 3.12, docker (for full stack), or just sqlite for tests.
+
+```bash
+# Run unit tests
+cd vera-core
+PYTHONPATH=../shared pytest -x
+
+# Run a single service against test SQLite
+DB_PATH=/tmp/vera-test.db SESSION_SECRET=dev INTERNAL_SECRET=dev \
+  uvicorn app.main:app --reload --port 8001
+```
+
+Migrations apply automatically on startup. Test fixtures live in
+`vera-core/tests/conftest.py` — they isolate a temp SQLite per session.
 
 ---
 

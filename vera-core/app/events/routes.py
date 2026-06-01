@@ -1,26 +1,18 @@
-import hmac
 import logging
 from datetime import datetime
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 from pydantic import BaseModel, Field
 
-from app.config import get_settings
-from app.dashboard.auth import require_owner
-from fastapi import Depends
+from vera_shared.internal_auth import require_internal as _require_internal
 
+from app.dashboard.auth import require_owner
 from app.events.ingest import schedule_ingest
 from app.events.store import list_recent, save_event
 
 log = logging.getLogger(__name__)
 router = APIRouter()
-
-
-def _require_internal(secret_header: str | None) -> None:
-    expected = get_settings().internal_secret
-    if not secret_header or not hmac.compare_digest(secret_header, expected):
-        raise HTTPException(401, "invalid X-Internal-Secret")
 
 
 class EntityHint(BaseModel):
