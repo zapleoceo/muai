@@ -15,13 +15,23 @@ from app.config import get_settings
 log = logging.getLogger(__name__)
 
 
-async def _post_event(payload: dict) -> None:
+async def _post_event(payload: dict) -> bool:
+    """Returns True if vera-core accepted the event. Gmail re-fetches on
+    next poll anyway, but caller can log a per-event failure for visibility.
+    """
     cfg = get_settings()
     headers = {"X-Internal-Secret": cfg.internal_secret}
-    async with httpx.AsyncClient(timeout=20) as c:
-        r = await c.post(f"{cfg.vera_core_url}/event", json=payload, headers=headers)
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.post(f"{cfg.vera_core_url}/event",
+                             json=payload, headers=headers)
+    except Exception as exc:
+        log.warning("POST /event raised: %s", exc)
+        return False
     if r.status_code != 200:
         log.warning("POST /event failed (%d): %s", r.status_code, r.text[:200])
+        return False
+    return True
 
 
 _NOISE_SENDER_HINTS = (

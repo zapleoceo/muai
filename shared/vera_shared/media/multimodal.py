@@ -27,9 +27,11 @@ async def media_to_text(mime_type: str, data: bytes, instruction: str) -> str:
         return f"⚠ Файл слишком большой ({len(data) // 1024 // 1024} MB > 20 MB)"
 
     token = await get_token(_PROVIDER, "chat:fast")
+    # API key MUST go in the x-goog-api-key header, not the URL — otherwise
+    # it gets captured by every proxy / nginx access log / httpx debug trace.
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{_MODEL}:generateContent?key={token.token}"
+        f"{_MODEL}:generateContent"
     )
     payload = {
         "contents": [{
@@ -46,7 +48,8 @@ async def media_to_text(mime_type: str, data: bytes, instruction: str) -> str:
     }
 
     async with httpx.AsyncClient(timeout=120) as c:
-        r = await c.post(url, json=payload)
+        r = await c.post(url, json=payload,
+                         headers={"x-goog-api-key": token.token})
 
     if r.status_code != 200:
         await get_pool().on_error(token.id, r.status_code)

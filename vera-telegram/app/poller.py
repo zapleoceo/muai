@@ -114,13 +114,24 @@ def _name(entity) -> str:
     return " ".join(filter(None, [fn, ln])) or str(getattr(entity, "id", "?"))
 
 
-async def _post_event(payload: dict) -> None:
+async def _post_event(payload: dict) -> bool:
+    """Returns True if vera-core accepted the event, False on any failure.
+    Caller MUST check the return value before advancing the seen_msg_ids
+    watermark — otherwise failed POSTs silently drop messages.
+    """
     cfg = get_settings()
     headers = {"X-Internal-Secret": cfg.internal_secret} if cfg.internal_secret else {}
-    async with httpx.AsyncClient(timeout=20) as c:
-        r = await c.post(f"{cfg.vera_core_url}/event", json=payload, headers=headers)
+    try:
+        async with httpx.AsyncClient(timeout=20) as c:
+            r = await c.post(f"{cfg.vera_core_url}/event",
+                             json=payload, headers=headers)
+    except Exception as exc:
+        log.warning("POST /event raised: %s", exc)
+        return False
     if r.status_code != 200:
         log.warning("POST /event failed (%d): %s", r.status_code, r.text[:200])
+        return False
+    return True
 
 
 async def _build_payload(source_name: str, dialog, msg: Message, me_id: int,
@@ -257,13 +268,22 @@ async def _process_source(source: Source, me_id: int,
                 filter_p = payload.pop("_filter_payload")
                 decision = evaluate(source.filters, filter_p)
                 if decision == "exclude":
+                    # filter-excluded events are by definition uninteresting;
+                    # safe to advance watermark without POST.
                     max_id_for_chat = max(max_id_for_chat, msg.id)
                     continue
                 if decision == "priority":
                     payload["category"] = "priority"
-                await _post_event(payload)
-                ingested += 1
-                max_id_for_chat = max(max_id_for_chat, msg.id)
+                # Only advance watermark if vera-core actually accepted the event.
+                # A failed POST leaves max_id_for_chat at its previous value so
+                # the next poll re-fetches and retries.
+                if await _post_event(payload):
+                    ingested += 1
+                    max_id_for_chat = max(max_id_for_chat, msg.id)
+                else:
+                    log.warning("tg %s msg %d: POST failed — will retry next poll",
+                                source.name, msg.id)
+                    break  # don't keep posting after a failure; restart cleanly
             if max_id_for_chat > last_seen:
                 new_seen[chat_id] = max_id_for_chat
     except FloodWaitError as exc:

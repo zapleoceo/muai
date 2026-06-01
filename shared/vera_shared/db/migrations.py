@@ -23,8 +23,27 @@ async def run_migrations(engine: AsyncEngine) -> None:
         await conn.execute(text("PRAGMA journal_mode=WAL"))
         await conn.execute(text("PRAGMA synchronous=NORMAL"))
         await conn.run_sync(_evolve_columns)
+        await conn.run_sync(_ensure_indexes)
 
     await _seed_default_caps()
+
+
+def _ensure_indexes(sync_conn) -> None:
+    """Idempotent index/constraint creation.
+    UNIQUE on (source, source_event_id) closes the dedup race in save_event.
+    """
+    try:
+        sync_conn.execute(text(
+            'CREATE UNIQUE INDEX IF NOT EXISTS '
+            'ux_events_source_eid '
+            'ON events(source, source_event_id) '
+            'WHERE source_event_id IS NOT NULL'
+        ))
+        log.info("schema-evolve: ux_events_source_eid index ensured")
+    except Exception as exc:
+        # If duplicates already exist, the index creation will fail.
+        # Log and continue — operator can dedup manually.
+        log.warning("schema-evolve: ux_events_source_eid skipped: %s", exc)
 
 
 def _evolve_columns(sync_conn) -> None:

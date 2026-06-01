@@ -122,9 +122,15 @@ async def _get_router() -> Router:
 
 
 def _on_success(kwargs, completion_response, start_time, end_time):
-    """LiteLLM sync callback. Persist usage to our tokens table."""
+    """LiteLLM sync callback. Persist usage to our tokens table.
+
+    NOTE: we IGNORE LiteLLM's response_cost / kwargs.response_cost — it
+    uses a stale pricing table that under-counts new models (gemini-3.5-flash
+    was reported at 2.5-flash pricing = 20× under-count, which caused the
+    $25 burn incident on 2026-06-01). Instead we recompute cost from
+    actual token usage against our hand-maintained price table in cost_guard.
+    """
     try:
-        # LiteLLM places model_info either directly in kwargs or inside litellm_params
         model_info = (
             kwargs.get("model_info")
             or (kwargs.get("litellm_params") or {}).get("model_info")
@@ -136,11 +142,12 @@ def _on_success(kwargs, completion_response, start_time, end_time):
         usage = (completion_response or {}).get("usage", {}) or {}
         t_in = usage.get("prompt_tokens", 0) or 0
         t_out = usage.get("completion_tokens", 0) or 0
-        cost = kwargs.get("response_cost") or 0.0
-        # Schedule async write — we're in a sync callback context
+        model = kwargs.get("model") or ""
+        from vera_shared.llm.cost_guard import estimate_cost
+        cost = estimate_cost(model, t_in, t_out)
         loop = asyncio.get_event_loop()
         if loop.is_running():
-            loop.create_task(token_repo.record_usage(token_id, t_in, t_out, float(cost)))
+            loop.create_task(token_repo.record_usage(token_id, t_in, t_out, cost))
     except Exception as exc:
         log.warning("usage callback failed: %s", exc)
 
@@ -174,11 +181,30 @@ async def chat_with_meta(
     capability: str = "chat:fast",
     **extra_kwargs,
 ) -> tuple[str, dict]:
-    """Returns (text, meta) where meta has model, usage, cost_usd."""
+    """Returns (text, meta) where meta has model, usage, cost_usd.
+
+    Wrapped in cost_guard.check_and_reserve so a runaway loop can't burn
+    through the daily LLM budget. The guard uses prompt-length heuristics
+    BEFORE the call; actual cost is recorded post-call in _on_success.
+    """
     router = await _get_router()
     msgs = list(messages)
     if system:
         msgs = [{"role": "system", "content": system}] + msgs
+
+    # Pre-flight cost gate. Heuristic estimate: 1 token ≈ 4 chars.
+    # Output estimate caps at max_tokens (if provided) or 2k.
+    from vera_shared.llm.cost_guard import check_and_reserve, DailyBudgetExceeded
+    char_count = sum(len(str(m.get("content", ""))) for m in msgs)
+    t_in_est = max(1, char_count // 4)
+    t_out_est = int(extra_kwargs.get("max_tokens", 2000) or 2000)
+    # We don't know which provider the router will pick yet; use the
+    # most-expensive plausible model so the gate is conservative.
+    try:
+        await check_and_reserve("gemini-3.5-flash", t_in_est, t_out_est)
+    except DailyBudgetExceeded as exc:
+        log.warning("chat() refused: %s", exc)
+        raise
 
     response = await router.acompletion(
         model=capability,

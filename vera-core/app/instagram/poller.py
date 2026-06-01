@@ -104,7 +104,15 @@ async def _poll_account(acc: IgAccount) -> None:
             except Exception:
                 sender = str(msg.user_id)
 
-            await _handle_dm(acc, cl, sender, str(msg.user_id), msg.text.strip(), msg)
+            # Only advance the cursor if _handle_dm succeeded — otherwise
+            # the same DM would be silently dropped on the next poll.
+            try:
+                await _handle_dm(acc, cl, sender, str(msg.user_id),
+                                 msg.text.strip(), msg)
+            except Exception as exc:
+                log.warning("ig @%s msg %s handler failed (will retry next poll): %s",
+                            acc.username, getattr(msg, "id", "?"), exc)
+                continue
             new_count += 1
             if latest_ts is None or ts > latest_ts:
                 latest_ts = ts

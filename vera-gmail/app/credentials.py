@@ -48,7 +48,14 @@ async def get_access_token(email: str) -> str:
                 "client_secret": cfg.gmail_client_secret,
             })
         if r.status_code != 200:
-            log.warning("token refresh failed for %s: %s", email, r.text[:200])
+            # NEVER log r.text — Google may echo refresh_token / client_secret
+            # in error bodies. Log status + sanitized error code only.
+            try:
+                err_code = (r.json() or {}).get("error", "")[:40]
+            except Exception:
+                err_code = "parse_failed"
+            log.warning("token refresh failed for %s: HTTP %d error=%s",
+                        email, r.status_code, err_code)
             r.raise_for_status()
         data = r.json()
         new_access = data["access_token"]

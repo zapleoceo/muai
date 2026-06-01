@@ -52,8 +52,26 @@ def make_llm_client(model: str = "gemini-3.5-flash", capability: str = "chat:fas
     from graphiti_core.llm_client.config import LLMConfig
     from graphiti_core.llm_client.gemini_client import GeminiClient
 
+    from vera_shared.llm.cost_guard import (
+        DailyBudgetExceeded, check_and_reserve, estimate_cost,
+    )
+    from vera_shared.tokens import repository as token_repo
+
+    # Heuristic token estimates for cost-guard. Graphiti calls have variable
+    # input sizes (retrieved context); we use a conservative upper bound.
+    _PROMPT_EST = 8000   # avg input tokens per Graphiti LLM call
+    _OUTPUT_EST = 2000   # max output we'd typically see
+
     class PoolGeminiClient(GeminiClient):
         async def _generate_response(self, *args, **kwargs):
+            # Hard cost-ceiling: refuse before sending if it would push
+            # 24h spend over VERA_DAILY_LIMIT_USD (default $1).
+            try:
+                await check_and_reserve(model, _PROMPT_EST, _OUTPUT_EST)
+            except DailyBudgetExceeded as exc:
+                log.warning("Graphiti LLM: daily budget exceeded — %s", exc)
+                raise
+
             last_exc: Exception | None = None
             for attempt in range(_MAX_KEY_ROTATIONS):
                 try:
@@ -67,7 +85,22 @@ def make_llm_client(model: str = "gemini-3.5-flash", capability: str = "chat:fas
                     raise
 
                 try:
-                    return await super()._generate_response(*args, **kwargs)
+                    response = await super()._generate_response(*args, **kwargs)
+                    # Record real usage from the response (Google SDK populates
+                    # usage_metadata on the holder.client after the call).
+                    try:
+                        meta = getattr(getattr(self, "client", None), "_last_usage", None)
+                        if meta is None:
+                            # Fallback: heuristic estimates so we at least see something
+                            tin, tout = _PROMPT_EST, _OUTPUT_EST
+                        else:
+                            tin = int(meta.get("prompt_token_count", _PROMPT_EST) or 0)
+                            tout = int(meta.get("candidates_token_count", _OUTPUT_EST) or 0)
+                        cost = estimate_cost(model, tin, tout)
+                        await token_repo.record_usage(token.id, tin, tout, cost)
+                    except Exception as track_exc:
+                        log.debug("usage tracking failed: %s", track_exc)
+                    return response
                 except TokensExhausted as exc:
                     log.warning("Graphiti LLM: TokensExhausted mid-call — rotating key")
                     last_exc = exc

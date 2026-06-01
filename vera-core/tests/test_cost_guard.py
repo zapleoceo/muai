@@ -32,10 +32,9 @@ def test_estimate_handles_provider_prefix():
     assert cost > 0.0
 
 
-def test_free_model_does_not_consume_budget():
-    cost = pytest.run = None  # noqa
-    import asyncio
-    asyncio.run(check_and_reserve("deepseek-chat", 10_000_000, 10_000_000))
+@pytest.mark.asyncio
+async def test_free_model_does_not_consume_budget():
+    await check_and_reserve("deepseek-chat", 10_000_000, 10_000_000)
     spent, _ = current_spend()
     assert spent == 0.0
 
