@@ -11,7 +11,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from app.brain import patterns as P
-from app.decide.scoring import AUTO_SAFE_TOOLS, Candidate, score, _reversibility
+from app.decide.scoring import AUTO_SAFE_TOOLS, Candidate, score
+from app.orchestrator.tool_router import tool_reversibility as _reversibility
 from app.decide.dispatch import _band, decide
 from app.sources.base import Attachment, EntityHint, EventEnvelope
 
