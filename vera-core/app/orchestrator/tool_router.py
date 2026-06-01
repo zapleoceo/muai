@@ -70,10 +70,15 @@ async def call_tool(route: dict[str, tuple[str, str]], name: str, args: dict) ->
     if kind == "mcp":
         from app.mcp.manager import call_tool as mcp_call
         return await mcp_call(dest, name, args)
-    # http
+    # http — all agent /tool/{name} endpoints are now behind X-Internal-Secret
+    # since the 2026-06-01 lockdown. We must forward it on every call.
+    import os
+    secret = os.environ.get("INTERNAL_SECRET", "")
+    headers = {"X-Internal-Secret": secret} if secret else {}
     try:
         async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
-            resp = await client.post(f"{dest}/tool/{name}", json=args)
+            resp = await client.post(f"{dest}/tool/{name}",
+                                     json=args, headers=headers)
             resp.raise_for_status()
             return resp.json()
     except httpx.TimeoutException:
