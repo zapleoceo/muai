@@ -96,10 +96,17 @@ def schedule_ingest(event_id: int, **kw) -> None:
       'v2' (default) — old triage runs the show, v3 stays as shadow
       'v3'           — v3 decide owns the UX, v2 disabled
     Both paths always write to the graph; only the card-creation path differs.
+
+    KILL SWITCH: set VERA_BRAIN_INGEST_OFF=1 to skip Graphiti writes entirely.
+    Use when LLM/embedding quota is bleeding cost. Decision pipeline keeps
+    running (triage still works), only the graph episode write is skipped.
     """
     import os
     from app.common.bg import spawn
-    spawn(ingest_episode(event_id, **kw), name=f"ingest-{event_id}")
+    if os.environ.get("VERA_BRAIN_INGEST_OFF", "").strip() not in ("", "0", "false", "no"):
+        log.info("Brain ingest skipped for event %d (VERA_BRAIN_INGEST_OFF set)", event_id)
+    else:
+        spawn(ingest_episode(event_id, **kw), name=f"ingest-{event_id}")
     mode = os.environ.get("VERA_LIVE_DISPATCHER", "v2").lower()
     if mode == "v3":
         spawn(_v3_live_dispatch(event_id), name=f"v3-live-{event_id}")
