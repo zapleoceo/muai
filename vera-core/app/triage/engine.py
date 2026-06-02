@@ -202,6 +202,28 @@ async def triage(event: Event) -> TriageProposal | None:
     except Exception as exc:
         log.warning("persona read failed: %s", exc)
 
+    # Inject memos so triage sees stored rules + promises. Without this,
+    # Vera knew them in chat but forgot them when a new email came in.
+    # Especially important for things like 'Lintang promised by Friday' —
+    # the promise lives in a memo, the email arrives as an event, triage
+    # must connect the two.
+    try:
+        from app.brain.identity import search_memos
+        memos = await search_memos(query=None, scope=None, limit=30)
+        if memos:
+            lines = []
+            for m in memos[:30]:
+                st = (m.get("statement") or "").strip()
+                if st:
+                    lines.append(f"- {st[:280]}")
+            if lines:
+                prompt += ("\n\nПРАВИЛА И ОБЕЩАНИЯ из мозга Веры (применяй "
+                           "перед оценкой события — игнорируй то что в правилах "
+                           "помечено как фон/шум; напоминай про обещания если "
+                           "событие нарушает их):\n" + "\n".join(lines))
+    except Exception as exc:
+        log.warning("memos read failed: %s", exc)
+
     try:
         from app.orchestrator.tool_router import collect_tools, format_tools_for_prompt
         specs, _ = await collect_tools()
