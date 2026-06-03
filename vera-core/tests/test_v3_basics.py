@@ -45,12 +45,14 @@ def test_signature_ignores_volatile_hint_types():
 
 
 def test_band_thresholds():
+    # Thresholds tuned 2026-06-01 after user complained score-3.8 cards
+    # flooded the group. Old: 3.0/7.0. New: 5.0/8.0. Ask renamed to silent.
     assert _band(8.5) == "auto"
-    assert _band(7.0) == "auto"
-    assert _band(6.9) == "propose"
-    assert _band(3.0) == "propose"
-    assert _band(2.99) == "ask"
-    assert _band(0.0) == "ask"
+    assert _band(8.0) == "auto"
+    assert _band(7.99) == "propose"
+    assert _band(5.0) == "propose"
+    assert _band(4.99) == "silent"
+    assert _band(0.0) == "silent"
 
 
 def test_reversibility_heuristic():
