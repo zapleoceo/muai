@@ -111,14 +111,24 @@ async def search_memos(query: str | None = None,
 
 
 async def list_active() -> dict:
-    """Return everything Vera knows about herself right now."""
+    """Return only ACTIVE identity nodes. Was: returned everything including
+    deactivated. Bug fix 2026-06-02 — Дима жаловался что в утреннем дайджесте
+    висела «Закрыть 3 сделки в Veranda Payments» (захоллюцинированная LLM
+    21 мая) даже после deactivate.
+    """
     from app.graph.client import get_graphiti
     client = await get_graphiti()
     db = get_settings().neo4j_database
     out: dict[str, list[dict]] = {"Goal": [], "Value": [], "NoGo": [], "Style": []}
     async with client.driver.session(database=db) as ses:
         for label in out.keys():
-            r = await ses.run(f"MATCH (n:{label}) RETURN n")
+            # NULL status (legacy nodes) treated as active. Explicit
+            # 'inactive' or 'deleted' filtered out.
+            r = await ses.run(
+                f"MATCH (n:{label}) "
+                f"WHERE coalesce(n.status,'active') NOT IN ['inactive','deleted'] "
+                f"RETURN n"
+            )
             async for rec in r:
                 node = rec["n"]
                 out[label].append({k: node.get(k) for k in node.keys()})
@@ -126,6 +136,7 @@ async def list_active() -> dict:
 
 
 async def deactivate(label: str, node_id: str) -> bool:
+    """Soft-delete: mark status='inactive'. list_active() will skip it."""
     from app.graph.client import get_graphiti
     client = await get_graphiti()
     db = get_settings().neo4j_database
