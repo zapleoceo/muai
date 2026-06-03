@@ -20,6 +20,8 @@ class TokenRecord:
     is_active: bool = True
     daily_limit: int = 1500
     daily_used: int = 0
+    daily_cost_limit_usd: float | None = None
+    daily_cost_used_usd: float = 0.0
     daily_reset_at: date | None = None
     cooldown_until: datetime | None = None
     error_count: int = 0
@@ -32,6 +34,9 @@ class TokenRecord:
         if self.cooldown_until and self.cooldown_until > datetime.utcnow():
             return False
         if self.daily_used >= self.daily_limit:
+            return False
+        if (self.daily_cost_limit_usd is not None
+                and self.daily_cost_used_usd >= self.daily_cost_limit_usd):
             return False
         return True
 

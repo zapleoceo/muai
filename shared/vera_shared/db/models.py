@@ -20,6 +20,11 @@ class Token(Base):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)
     daily_limit: Mapped[int] = mapped_column(Integer, default=1500)
     daily_used: Mapped[int] = mapped_column(Integer, default=0)
+    # Per-key cost cap. NULL = unlimited (only request-count caps apply).
+    # When set, is_available() blocks the key once daily_cost_used_usd
+    # reaches this value. Resets at the same time as daily_used.
+    daily_cost_limit_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
+    daily_cost_used_usd: Mapped[float] = mapped_column(Float, default=0.0)
     daily_reset_at: Mapped[date | None] = mapped_column(Date, nullable=True)
     cooldown_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     error_count: Mapped[int] = mapped_column(Integer, default=0)

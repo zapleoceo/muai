@@ -22,7 +22,10 @@ def _to_record(row: Token) -> TokenRecord:
     return TokenRecord(
         id=row.id, provider=row.provider, label=row.label, token=plain_token,
         capabilities=caps, is_active=row.is_active, daily_limit=row.daily_limit,
-        daily_used=row.daily_used, daily_reset_at=row.daily_reset_at,
+        daily_used=row.daily_used,
+        daily_cost_limit_usd=getattr(row, "daily_cost_limit_usd", None),
+        daily_cost_used_usd=getattr(row, "daily_cost_used_usd", 0.0) or 0.0,
+        daily_reset_at=row.daily_reset_at,
         cooldown_until=row.cooldown_until, error_count=row.error_count,
         last_used_at=row.last_used_at, created_at=row.created_at,
     )
@@ -83,9 +86,12 @@ async def record_usage(token_id: int, tokens_in: int, tokens_out: int, cost: flo
     async with get_session() as session:
         row = await session.get(Token, token_id)
         if row:
+            c = max(0.0, cost)
             row.tokens_in = (row.tokens_in or 0) + max(0, tokens_in)
             row.tokens_out = (row.tokens_out or 0) + max(0, tokens_out)
-            row.cost_usd = (row.cost_usd or 0.0) + max(0.0, cost)
+            row.cost_usd = (row.cost_usd or 0.0) + c
+            # Per-key rolling daily cost counter (resets in reset_daily_if_needed)
+            row.daily_cost_used_usd = (row.daily_cost_used_usd or 0.0) + c
             await session.commit()
 
 
@@ -95,8 +101,20 @@ async def reset_daily_if_needed(token_id: int) -> None:
         row = await session.get(Token, token_id)
         if row and (row.daily_reset_at is None or row.daily_reset_at < today):
             row.daily_used = 0
+            row.daily_cost_used_usd = 0.0
             row.daily_reset_at = today
             await session.commit()
+
+
+async def set_cost_limit(token_id: int, limit_usd: float | None) -> bool:
+    """Set or remove the per-key daily cost cap. Pass None to remove."""
+    async with get_session() as session:
+        row = await session.get(Token, token_id)
+        if row is None:
+            return False
+        row.daily_cost_limit_usd = limit_usd
+        await session.commit()
+        return True
 
 
 async def upsert(

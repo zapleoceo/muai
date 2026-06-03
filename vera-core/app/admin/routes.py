@@ -1,17 +1,62 @@
 import asyncio
 import logging
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import select
 
 from vera_shared.db.engine import get_session
-from vera_shared.db.models import Event
+from vera_shared.db.models import Event, Token
+from vera_shared.tokens import repository as token_repo
 
 from app.dashboard.auth import require_owner
 from app.triage.dispatcher import schedule_triage
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/admin")
+
+
+@router.get("/tokens")
+async def list_tokens(_=Depends(require_owner)) -> list[dict]:
+    """List all tokens with their per-key limits + today's usage."""
+    async with get_session() as s:
+        rows = (await s.execute(
+            select(Token).order_by(Token.provider, Token.id)
+        )).scalars().all()
+    return [
+        {
+            "id": r.id, "provider": r.provider, "label": r.label,
+            "is_active": r.is_active,
+            "daily_limit": r.daily_limit,
+            "daily_used": r.daily_used,
+            "daily_cost_limit_usd": r.daily_cost_limit_usd,
+            "daily_cost_used_usd": round(r.daily_cost_used_usd or 0.0, 4),
+            "cost_usd_total": round(r.cost_usd or 0.0, 4),
+            "cooldown_until": (r.cooldown_until.isoformat()
+                                if r.cooldown_until else None),
+            "error_count": r.error_count,
+        }
+        for r in rows
+    ]
+
+
+@router.post("/tokens/{token_id}/cost-limit")
+async def set_cost_limit(token_id: int, payload: dict,
+                          _=Depends(require_owner)) -> dict:
+    """Set per-key daily cost cap. POST {limit_usd: 2.0} or {limit_usd: null}."""
+    raw = payload.get("limit_usd")
+    if raw is None:
+        limit: float | None = None
+    else:
+        try:
+            limit = float(raw)
+            if limit < 0:
+                raise HTTPException(400, "limit_usd must be >= 0")
+        except (TypeError, ValueError):
+            raise HTTPException(400, "limit_usd must be a number or null")
+    ok = await token_repo.set_cost_limit(token_id, limit)
+    if not ok:
+        raise HTTPException(404, "token not found")
+    return {"ok": True, "token_id": token_id, "daily_cost_limit_usd": limit}
 
 
 @router.post("/expire-stale-events")
