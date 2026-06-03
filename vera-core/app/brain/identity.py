@@ -126,7 +126,7 @@ async def list_active() -> dict:
             # 'inactive' or 'deleted' filtered out.
             r = await ses.run(
                 f"MATCH (n:{label}) "
-                f"WHERE coalesce(n.status,'active') NOT IN ['inactive','deleted'] "
+                f"WHERE NOT coalesce(n.status,'active') IN ['inactive','deleted'] "
                 f"RETURN n"
             )
             async for rec in r:
