@@ -15,7 +15,7 @@ from vera_shared.tokens.selector import get_token
 
 log = logging.getLogger(__name__)
 
-_GEMINI_429_COOLDOWN  = 90     # 429 is usually per-minute RPM, resets fast
+_GEMINI_429_COOLDOWN  = 65     # Gemini RPM window resets at 60s; +5s safety
 _GEMINI_503_COOLDOWN  = 300
 _GEMINI_AUTH_COOLDOWN = 3600   # 401/403 IS a hard fail — wait an hour
 _MAX_KEY_ROTATIONS    = 5      # max distinct keys to try per call
