@@ -42,7 +42,12 @@ _MODELS: dict[str, tuple[float, float]] = {
     # for our structured-output use case.
     "zai-glm-4.7":              (0.0,   0.0),
     "gpt-oss-120b":             (0.0,   0.0),
-    # Groq still serves Llama 3.3 70B free.
+    # Groq's namespaced gpt-oss-120b — SAME underlying open model as
+    # Cerebras's, but Groq has it on its own infrastructure with healthy
+    # rate limits AND it properly supports response_format=json_schema.
+    # Groq's llama-3.3-70b-versatile DOES NOT support json_schema, so it
+    # can't be used by Graphiti — kept here only for chat:fast fallback.
+    "openai/gpt-oss-120b":      (0.0,   0.0),
     "llama-3.3-70b-versatile":  (0.0,   0.0),
 }
 
@@ -56,7 +61,7 @@ PROVIDER_MODEL: dict[str, str] = {
     "anthropic":  "claude-haiku-4-5",
     "openrouter": "openai/gpt-oss-120b:free",
     "cerebras":   "gpt-oss-120b",
-    "groq":       "llama-3.3-70b-versatile",
+    "groq":       "openai/gpt-oss-120b",
     "voyage":     "voyage-3",
 }
 
