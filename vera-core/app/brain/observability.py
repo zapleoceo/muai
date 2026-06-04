@@ -133,17 +133,56 @@ async def snapshot(_=Depends(require_owner)) -> dict:
 
 
 async def _tokens_summary() -> dict:
-    """Per-provider count of active vs inactive LLM tokens."""
+    """Per-provider stats + individual key list. Three states:
+      - active   : is_active=1, cooldown_until in past or NULL
+      - cooldown : is_active=1, cooldown_until in future (transient,
+                   key recovers automatically — nothing to do)
+      - dead     : is_active=0 (system or admin disabled — operator
+                   should investigate or recreate the key)
+    """
+    from datetime import datetime
     from vera_shared.db.models import Token
-    out: dict[str, dict[str, int]] = {}
+
+    out: dict[str, dict] = {}
+    now = datetime.utcnow()
     async with get_session() as s:
-        rs = (await s.execute(
-            select(Token.provider, Token.is_active, func.count())
-            .group_by(Token.provider, Token.is_active)
-        )).all()
-    for provider, active, n in rs:
-        out.setdefault(provider, {"active": 0, "inactive": 0})
-        out[provider]["active" if active else "inactive"] = n
+        rows = (await s.execute(
+            select(Token).order_by(Token.provider, Token.label)
+        )).scalars().all()
+
+    for tk in rows:
+        bucket = out.setdefault(tk.provider, {
+            "total": 0, "active": 0, "cooldown": 0, "dead": 0,
+            "inactive": 0,  # legacy alias = dead, kept for older clients
+            "keys": [],
+        })
+        bucket["total"] += 1
+        in_cooldown = bool(
+            tk.cooldown_until and tk.cooldown_until > now
+        )
+        if not tk.is_active:
+            state = "dead"
+        elif in_cooldown:
+            state = "cooldown"
+        else:
+            state = "active"
+        bucket[state] += 1
+        if state == "dead":
+            bucket["inactive"] += 1
+        bucket["keys"].append({
+            "id": tk.id,
+            "label": tk.label,
+            "state": state,
+            "daily_used": int(tk.daily_used or 0),
+            "daily_limit": int(tk.daily_limit or 0),
+            "error_count": int(tk.error_count or 0),
+            "cooldown_until": (
+                tk.cooldown_until.isoformat() if in_cooldown else None
+            ),
+            "last_used_at": (
+                tk.last_used_at.isoformat() if tk.last_used_at else None
+            ),
+        })
     return out
 
 

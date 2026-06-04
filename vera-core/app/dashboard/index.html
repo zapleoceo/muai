@@ -327,7 +327,7 @@ main { max-width: 1080px; margin: 0 auto; padding: 24px 20px 80px; }
 <div class="section">
   <div class="section-head">🔑 LLM-ключи</div>
   <table class="tbl" id="tokens-table">
-    <thead><tr><th>провайдер</th><th>активных</th><th>не работают</th></tr></thead>
+    <thead><tr><th></th><th>провайдер</th><th>всего</th><th>активных</th><th>cooldown</th><th>мёртвых</th></tr></thead>
     <tbody></tbody>
   </table>
 </div>
@@ -517,11 +517,55 @@ function renderV3(d) {
 
 function renderTokens(d) {
   const tb = document.querySelector('#tokens-table tbody');
-  tb.innerHTML = Object.entries(d.tokens||{}).map(([p,t]) =>
-    `<tr><td>${esc(p)}</td>
-     <td><span class="pill ok">${t.active||0}</span></td>
-     <td><span class="pill ${(t.inactive||0)>0?'err':'muted'}">${t.inactive||0}</span></td></tr>`
-  ).join('') || '<tr><td colspan="3" class="empty">нет токенов</td></tr>';
+  const rows = Object.entries(d.tokens||{}).map(([p,t]) => {
+    const total = t.total ?? ((t.active||0) + (t.cooldown||0) + (t.dead ?? t.inactive ?? 0));
+    const active = t.active||0;
+    const cooldown = t.cooldown||0;
+    const dead = t.dead ?? t.inactive ?? 0;
+    const keys = t.keys || [];
+    const detail = keys.length === 0 ? '' :
+      `<tr class="token-detail" id="td-${esc(p)}" style="display:none">
+         <td></td>
+         <td colspan="5" style="padding:8px 12px;background:var(--panel-2)">
+           ${keys.map(k => {
+             const usage = k.daily_limit > 0
+               ? `${k.daily_used}/${k.daily_limit}`
+               : `${k.daily_used}`;
+             const stateCls = k.state==='active'?'ok':k.state==='cooldown'?'warn':'err';
+             const stateText = k.state==='active'?'жив':k.state==='cooldown'?'cooldown':'мёртв';
+             const extra = k.state==='dead' && k.error_count>0
+                  ? ` · ${k.error_count} ошибок`
+                  : k.state==='cooldown' && k.cooldown_until
+                  ? ` · до ${k.cooldown_until.slice(11,16)}`
+                  : '';
+             return `<div style="display:flex;align-items:center;gap:10px;padding:3px 0;font-size:12px">
+               <span class="pill ${stateCls}" style="min-width:64px;text-align:center">${stateText}</span>
+               <span class="mono" style="color:var(--text)">${esc(k.label)}</span>
+               <span class="mute" style="margin-left:auto">${usage}${extra}</span>
+             </div>`;
+           }).join('')}
+         </td>
+       </tr>`;
+    const caret = `<span class="token-caret" id="tc-${esc(p)}" style="cursor:pointer;color:var(--mute);user-select:none">▸</span>`;
+    return `<tr style="cursor:pointer" onclick="toggleTokenDetail('${esc(p)}')">
+       <td style="width:18px">${caret}</td>
+       <td>${esc(p)}</td>
+       <td><span class="pill muted">${total}</span></td>
+       <td><span class="pill ok">${active}</span></td>
+       <td><span class="pill ${cooldown>0?'warn':'muted'}">${cooldown}</span></td>
+       <td><span class="pill ${dead>0?'err':'muted'}">${dead}</span></td>
+     </tr>${detail}`;
+  }).join('');
+  tb.innerHTML = rows || '<tr><td colspan="6" class="empty">нет токенов</td></tr>';
+}
+
+function toggleTokenDetail(provider) {
+  const row = document.getElementById('td-' + provider);
+  const caret = document.getElementById('tc-' + provider);
+  if (!row) return;
+  const open = row.style.display === 'none';
+  row.style.display = open ? '' : 'none';
+  if (caret) caret.textContent = open ? '▾' : '▸';
 }
 
 function renderEvents(d) {
