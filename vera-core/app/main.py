@@ -37,6 +37,7 @@ from app.self_extend.routes import router as self_extend_router
 from app.research.routes import router as research_router
 from app.system.routes import register_self_loop, router as system_router
 from app.instagram.routes import router as instagram_router
+from app.manychat.routes import router as manychat_router
 
 logging.basicConfig(level=logging.INFO)
 log = logging.getLogger(__name__)
@@ -86,12 +87,18 @@ async def lifespan(app: FastAPI):
 
     # Background loops — start NOW (not via @on_event which is ignored
     # when lifespan is in use). Spawn fire-and-forget; never blocks boot.
-    for name, starter in (
+    import os as _os
+    _ig_poller_enabled = _os.environ.get("IG_INSTAGRAPI_ENABLED", "0") == "1"
+    _starters: list[tuple[str, str]] = [
         ("jobs.runner",     "app.jobs.runner:start_all"),
         ("brain.synth",     "app.brain.synth:start"),
         ("pattern_miner",   "app.brain.pattern_miner:start"),
-        ("ig.poller",       "app.instagram.poller:start"),
-    ):
+    ]
+    # instagrapi poller is OFF by default — replaced by ManyChat webhook
+    # (app/manychat). Set IG_INSTAGRAPI_ENABLED=1 to bring it back.
+    if _ig_poller_enabled:
+        _starters.append(("ig.poller", "app.instagram.poller:start"))
+    for name, starter in _starters:
         try:
             mod, fn = starter.split(":")
             import importlib
@@ -165,6 +172,7 @@ app.include_router(self_extend_router)
 app.include_router(research_router)
 app.include_router(system_router)
 app.include_router(instagram_router)
+app.include_router(manychat_router)
 app.include_router(dashboard_api_router)
 app.include_router(dashboard_static_router)
 
