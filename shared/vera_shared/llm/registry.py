@@ -35,10 +35,11 @@ _MODELS: dict[str, tuple[float, float]] = {
     "voyage-3":                 (0.06,  0.00),
     # OpenRouter free tier — explicit 0
     "openai/gpt-oss-120b:free": (0.0,   0.0),
-    # Cerebras — free tier we use; supports OpenAI-style structured output
-    # which Graphiti needs. Llama 3.3 70B served on Cerebras CS-3 hardware.
-    "llama-3.3-70b":            (0.0,   0.0),
-    # Groq — also OpenAI-compatible; same Llama 3.3 70B but on LPU hardware.
+    # Cerebras free tier — only gpt-oss-120b and zai-glm-4.7 are available
+    # for free now (Llama 3.3 70B moved to paid). We use gpt-oss-120b: it's
+    # OpenAI's open-source 120B model, has solid structured-output support.
+    "gpt-oss-120b":             (0.0,   0.0),
+    # Groq still serves Llama 3.3 70B free.
     "llama-3.3-70b-versatile":  (0.0,   0.0),
 }
 
@@ -51,7 +52,7 @@ PROVIDER_MODEL: dict[str, str] = {
     "deepseek":   "deepseek-chat",
     "anthropic":  "claude-haiku-4-5",
     "openrouter": "openai/gpt-oss-120b:free",
-    "cerebras":   "llama-3.3-70b",
+    "cerebras":   "gpt-oss-120b",
     "groq":       "llama-3.3-70b-versatile",
     "voyage":     "voyage-3",
 }
