@@ -2,6 +2,7 @@
 import pytest
 
 from vera_shared.llm import router as r
+from vera_shared.llm import registry as reg
 
 
 @pytest.mark.asyncio
@@ -24,24 +25,21 @@ async def test_capability_order_has_known_aliases():
 
 
 def test_openrouter_registered_with_openai_compat():
-    info = r._PROVIDER_MODEL.get("openrouter")
-    assert info is not None
-    provider_prefix, model = info
-    assert provider_prefix == "openrouter"
+    model = reg.PROVIDER_MODEL.get("openrouter")
+    assert model is not None
     assert ":free" in model  # we want a free-tier model on OpenRouter
 
 
 def test_paid_keys_provider_scoped():
     # ONLY gemini-demoniwwwe is paid. DeepSeek/Voyage even though same
     # label «demoniwwwe» are free tier — must not be flagged paid.
-    assert ("gemini", "demoniwwwe") in r._PAID_KEYS
-    assert ("deepseek", "demoniwwwe") not in r._PAID_KEYS
+    assert reg.is_paid("gemini", "demoniwwwe") is True
+    assert reg.is_paid("deepseek", "demoniwwwe") is False
 
 
 def test_gemini_uses_2_5_flash():
     """2.0-flash deprecated 2026-06-01. Must use 2.5 or newer."""
-    info = r._PROVIDER_MODEL["gemini"]
-    _, model = info
+    model = reg.PROVIDER_MODEL["gemini"]
     assert "2.5" in model or "3" in model, f"got {model}, must be ≥2.5"
 
 
