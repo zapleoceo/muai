@@ -36,8 +36,11 @@ _MODELS: dict[str, tuple[float, float]] = {
     # OpenRouter free tier — explicit 0
     "openai/gpt-oss-120b:free": (0.0,   0.0),
     # Cerebras free tier — only gpt-oss-120b and zai-glm-4.7 are available
-    # for free now (Llama 3.3 70B moved to paid). We use gpt-oss-120b: it's
-    # OpenAI's open-source 120B model, has solid structured-output support.
+    # for free. gpt-oss-120b is wildly popular and its shared queue is
+    # almost always overloaded (HTTP 429 queue_exceeded). zai-glm-4.7
+    # (Zhipu GLM 4.7) is less hyped, queue is empty, comparable quality
+    # for our structured-output use case.
+    "zai-glm-4.7":              (0.0,   0.0),
     "gpt-oss-120b":             (0.0,   0.0),
     # Groq still serves Llama 3.3 70B free.
     "llama-3.3-70b-versatile":  (0.0,   0.0),
@@ -52,7 +55,7 @@ PROVIDER_MODEL: dict[str, str] = {
     "deepseek":   "deepseek-chat",
     "anthropic":  "claude-haiku-4-5",
     "openrouter": "openai/gpt-oss-120b:free",
-    "cerebras":   "gpt-oss-120b",
+    "cerebras":   "zai-glm-4.7",
     "groq":       "llama-3.3-70b-versatile",
     "voyage":     "voyage-3",
 }
