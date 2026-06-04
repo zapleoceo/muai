@@ -287,6 +287,14 @@ main { max-width: 1080px; margin: 0 auto; padding: 24px 20px 80px; }
     </div>
   </div>
   <div id="v3-dist" style="margin-top:10px;display:flex;gap:8px;flex-wrap:wrap"></div>
+
+  <!-- BACKFILL PROGRESS -->
+  <div class="panel" id="backfill-panel" style="margin-top:12px">
+    <div style="font-size:11px;color:var(--mute);margin-bottom:6px;text-transform:uppercase;letter-spacing:.5px">
+      Загрузка истории в мозг (фоновая)
+    </div>
+    <div id="backfill-content" style="font-size:13px;color:var(--mute)">загружаю…</div>
+  </div>
 </div>
 
 <!-- НАУЧИТЬ -->
@@ -372,9 +380,10 @@ async function api(path, opts = {}) {
 async function loadAll() {
   $('ts').textContent = '…';
   try {
-    const [obs, ig] = await Promise.all([
+    const [obs, ig, bf] = await Promise.all([
       api('/api/observability').then(r => r.json()),
       api('/api/instagram/accounts').then(r => r.json()).catch(() => []),
+      api('/api/admin/brain-backfill').then(r => r.json()).catch(() => null),
     ]);
     renderOverview(obs);
     renderGraph(obs);
@@ -382,11 +391,54 @@ async function loadAll() {
     renderV3(obs);
     renderTokens(obs);
     renderEvents(obs);
+    renderBackfill(bf);
     await renderIG(ig, obs);
     $('ts').textContent = new Date().toLocaleTimeString();
   } catch(e) {
     if (e.message !== 'unauth') $('ts').textContent = 'ошибка';
   }
+}
+
+function renderBackfill(bf) {
+  const el = $('backfill-content');
+  if (!el) return;
+  if (!bf) { el.textContent = 'не запущен'; return; }
+  const brain = bf.brain_total_episodes || 0;
+  const missing = bf.events_missing_last_month || 0;
+  const filtered = bf.candidates_filtered || 0;
+  const ok = bf.ok || 0;
+  const err = bf.err || 0;
+  const processed = bf.processed || 0;
+  const eta = bf.eta_minutes;
+  const lastUpd = bf.last_update ? new Date(bf.last_update + 'Z') : null;
+  const aliveSec = lastUpd ? Math.round((Date.now() - lastUpd.getTime())/1000) : 999;
+  const alive = aliveSec < 180;
+  const pct = filtered > 0 ? Math.round(100*ok/filtered) : 0;
+  const dotColor = alive ? 'var(--ok)' : 'var(--err)';
+  const aliveText = alive ? 'работает' : `остановился (${aliveSec}с)`;
+  let etaText = '';
+  if (eta != null && eta > 0) {
+    if (eta < 60) etaText = `~${eta} мин`;
+    else if (eta < 1440) etaText = `~${Math.round(eta/60)} ч`;
+    else etaText = `~${Math.round(eta/1440)} дн`;
+  }
+  el.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px;font-size:13px;color:var(--text)">
+      <span style="width:8px;height:8px;border-radius:50%;background:${dotColor}"></span>
+      <span><b>${ok}</b> / ${filtered} попало в мозг <span style="color:var(--mute)">(${pct}%)</span></span>
+      <span style="margin-left:auto;font-size:11px;color:var(--mute)">${aliveText}</span>
+    </div>
+    <div style="height:6px;background:var(--panel-2);border-radius:3px;margin-bottom:8px;overflow:hidden">
+      <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,var(--ok),var(--blue))"></div>
+    </div>
+    <div style="font-size:12px;color:var(--mute);line-height:1.5">
+      Всего эпизодов в графе: <b style="color:var(--text)">${brain}</b><br>
+      Осталось загрузить (месяц): ${missing}<br>
+      Обработано попыток: ${processed} (✓ ${ok} · ✗ ${err})<br>
+      ${etaText ? `ETA: <span style="color:var(--blue)">${etaText}</span><br>` : ''}
+      ${bf.last_err_msg ? `<span style="color:var(--warn)">последняя ошибка: ${esc(bf.last_err_msg).slice(0,60)}</span>` : ''}
+    </div>
+  `;
 }
 
 function renderOverview(d) {

@@ -1,8 +1,11 @@
 import asyncio
+import json
 import logging
+from datetime import datetime
+from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import Event, Token
@@ -13,6 +16,60 @@ from app.triage.dispatcher import schedule_triage
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/admin")
+
+
+@router.get("/brain-backfill")
+async def brain_backfill_progress(_=Depends(require_owner)) -> dict:
+    """Read the systemd backfill job's progress file written by
+    /tmp/backfill_brain.py. Plus live brain count from DB.
+    """
+    progress_file = Path("/data/backfill_progress.json")
+    state = {}
+    if progress_file.exists():
+        try:
+            state = json.loads(progress_file.read_text())
+        except Exception as exc:
+            log.warning("backfill state read failed: %s", exc)
+    # Live brain count
+    async with get_session() as s:
+        brain_total = (await s.execute(
+            select(func.count(Event.id))
+            .where(Event.graphiti_episode_uuid.is_not(None))
+        )).scalar() or 0
+        missing = (await s.execute(
+            select(func.count(Event.id))
+            .where(Event.graphiti_episode_uuid.is_(None))
+            .where(Event.occurred_at >= "2026-05-03")
+        )).scalar() or 0
+    # ETA
+    eta_min = None
+    if state.get("started_at") and state.get("ok", 0) > 0:
+        try:
+            started = datetime.fromisoformat(state["started_at"])
+            elapsed_s = (datetime.utcnow() - started).total_seconds()
+            rate = state["ok"] / max(elapsed_s, 1)  # ok/sec
+            remaining = state.get("candidates_filtered", 0) - state.get("ok", 0)
+            if rate > 0:
+                eta_min = round(remaining / rate / 60)
+        except Exception:
+            pass
+    return {
+        "brain_total_episodes": brain_total,
+        "events_missing_last_month": missing,
+        "started_at": state.get("started_at"),
+        "last_update": state.get("last_update"),
+        "candidates_total": state.get("candidates_total", 0),
+        "candidates_filtered": state.get("candidates_filtered", 0),
+        "processed": state.get("processed", 0),
+        "ok": state.get("ok", 0),
+        "err": state.get("err", 0),
+        "current_event_id": state.get("current_event_id"),
+        "current_event_time": state.get("current_event_time"),
+        "last_ok_event_id": state.get("last_ok_event_id"),
+        "last_err_msg": state.get("last_err_msg"),
+        "eta_minutes": eta_min,
+        "running": state.get("running", False),
+    }
 
 
 @router.get("/tokens")
