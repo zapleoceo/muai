@@ -48,7 +48,14 @@ async def _refresh_gemini_client(holder, *, capability: str = "chat:fast"):
 # ── LLM ──────────────────────────────────────────────────────────────────────
 
 
-def make_llm_client(model: str = "gemini-3.5-flash", capability: str = "chat:fast"):
+def make_llm_client(model: str = "gemini-2.5-flash", capability: str = "chat:fast"):
+    # Graphiti uses 2.5-flash (NOT 3.5) because:
+    # 1. Entity-extraction / summary / edge-resolve are structural tasks
+    #    where 2.5 quality is fine
+    # 2. 2.5-flash is 20× cheaper ($0.075 in / $0.30 out vs $1.50/$9)
+    # 3. 2.5-flash has 1000 RPM on Tier 1 vs 60 RPM for 3.5-flash
+    # Triage/chat still use 3.5-flash via LiteLLM router (router.py) where
+    # the agent-reasoning quality difference actually matters.
     from graphiti_core.llm_client.config import LLMConfig
     from graphiti_core.llm_client.gemini_client import GeminiClient
 
@@ -184,7 +191,8 @@ def make_embedder(embedding_model: str = "voyage-3"):
 # ── Reranker ──────────────────────────────────────────────────────────────────
 
 
-def make_reranker(model: str = "gemini-3.5-flash"):
+def make_reranker(model: str = "gemini-2.5-flash"):
+    # Reranker is a per-token relevance score — 2.5 is plenty.
     from graphiti_core.cross_encoder.gemini_reranker_client import GeminiRerankerClient
     from graphiti_core.llm_client.config import LLMConfig
 
