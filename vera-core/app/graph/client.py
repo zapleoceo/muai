@@ -21,7 +21,9 @@ async def get_graphiti():
         from graphiti_core import Graphiti
         from graphiti_core.driver.neo4j_driver import Neo4jDriver
 
-        from app.graph.pool_clients import make_embedder, make_llm_client, make_reranker
+        from app.graph.pool_clients import (
+            make_embedder, make_multi_llm_client, make_reranker,
+        )
 
         settings = get_settings()
         if not settings.neo4j_uri:
@@ -35,11 +37,12 @@ async def get_graphiti():
         )
         _client = Graphiti(
             graph_driver=driver,
-            llm_client=make_llm_client(),
+            llm_client=make_multi_llm_client(),
             embedder=make_embedder(),
             cross_encoder=make_reranker(),
         )
-        log.info("Graphiti client initialised (Neo4j: %s, db=%s) with pooled Gemini keys",
+        log.info("Graphiti client initialised (Neo4j: %s, db=%s) — LLM "
+                 "fallback chain: cerebras → groq → gemini",
                  settings.neo4j_uri, settings.neo4j_database)
     return _client
 

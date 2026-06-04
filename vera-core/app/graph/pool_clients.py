@@ -165,6 +165,173 @@ def make_llm_client(model: str | None = None, capability: str = "chat:fast"):
     return PoolGeminiClient(config=LLMConfig(api_key="placeholder", model=model))
 
 
+# ── OpenAI-compatible providers (Cerebras, Groq, DeepSeek) ──────────────────
+
+
+_OPENAI_POOL_CLIENT_CACHE: dict[tuple[str, int], object] = {}
+
+
+def _make_openai_pool_client(
+    *, provider: str, base_url: str, model: str, capability: str = "chat:fast",
+):
+    """Build a Graphiti LLM client backed by an OpenAI-compatible endpoint
+    with our TokenPool rotation. Used for Cerebras, Groq, and similar
+    providers that speak the OpenAI Chat Completions protocol.
+    """
+    from graphiti_core.llm_client.config import LLMConfig
+    from graphiti_core.llm_client.openai_generic_client import OpenAIGenericClient
+    from openai import AsyncOpenAI
+
+    from vera_shared.llm.cost_guard import estimate_cost
+    from vera_shared.tokens import repository as token_repo
+
+    _PROMPT_EST = 8000
+    _OUTPUT_EST = 2000
+
+    async def _refresh(holder):
+        token = await get_token(provider, capability)
+        key = (provider, token.id)
+        cached = _OPENAI_POOL_CLIENT_CACHE.get(key)
+        if cached is None:
+            cached = AsyncOpenAI(api_key=token.token, base_url=base_url)
+            _OPENAI_POOL_CLIENT_CACHE[key] = cached
+        holder.client = cached
+        return token
+
+    class PoolOpenAICompatClient(OpenAIGenericClient):
+        async def _generate_response(self, *args, **kwargs):
+            last_exc: Exception | None = None
+            for attempt in range(_MAX_KEY_ROTATIONS):
+                try:
+                    token = await _refresh(self)
+                except TokensExhausted as exc:
+                    log.warning(
+                        "Graphiti LLM: all %s keys exhausted (attempt %d)",
+                        provider, attempt,
+                    )
+                    raise
+
+                try:
+                    response = await super()._generate_response(*args, **kwargs)
+                    try:
+                        cost = estimate_cost(model, _PROMPT_EST, _OUTPUT_EST)
+                        await token_repo.record_usage(
+                            token.id, _PROMPT_EST, _OUTPUT_EST, cost,
+                        )
+                    except Exception as track_exc:
+                        log.debug("%s usage tracking failed: %s", provider, track_exc)
+                    return response
+                except TokensExhausted as exc:
+                    last_exc = exc
+                    continue
+                except Exception as exc:
+                    status = _status_from_exc(exc)
+                    if status == 429:
+                        await get_pool().on_error(token.id, 429, retry_after_seconds=_GEMINI_429_COOLDOWN)
+                        log.warning("Graphiti LLM: %s key %d hit 429 — rotating",
+                                    provider, token.id)
+                        last_exc = exc
+                        continue
+                    elif status in (401, 403):
+                        await get_pool().on_error(
+                            token.id, status,
+                            retry_after_seconds=_GEMINI_AUTH_COOLDOWN,
+                        )
+                    elif status == 503:
+                        await get_pool().on_error(
+                            token.id, 503,
+                            retry_after_seconds=_GEMINI_503_COOLDOWN,
+                        )
+                        last_exc = exc
+                        continue
+                    raise
+
+            raise last_exc or TokensExhausted(provider, capability)
+
+    return PoolOpenAICompatClient(
+        config=LLMConfig(api_key="placeholder", base_url=base_url, model=model),
+    )
+
+
+def make_cerebras_llm_client(capability: str = "chat:fast"):
+    from vera_shared.llm.registry import PROVIDER_MODEL
+    return _make_openai_pool_client(
+        provider="cerebras",
+        base_url="https://api.cerebras.ai/v1",
+        model=PROVIDER_MODEL.get("cerebras", "llama-3.3-70b"),
+        capability=capability,
+    )
+
+
+def make_groq_llm_client(capability: str = "chat:fast"):
+    from vera_shared.llm.registry import PROVIDER_MODEL
+    return _make_openai_pool_client(
+        provider="groq",
+        base_url="https://api.groq.com/openai/v1",
+        model=PROVIDER_MODEL.get("groq", "llama-3.3-70b-versatile"),
+        capability=capability,
+    )
+
+
+# ── Multi-provider wrapper: tries clients in order, falls through on fail ────
+
+
+def make_multi_llm_client():
+    """Cerebras first → Groq → Gemini fallback. Each level has its own
+    pooled rotation of keys. We move to the next provider only when the
+    current one is fully exhausted (all keys cooled down) or returns a
+    structural error the SDK couldn't recover from.
+
+    Why this order: Cerebras + Groq have orders-of-magnitude bigger quotas
+    than Gemini (~5M tok/day × 5 keys for Cerebras vs 4500 req/day for
+    Gemini free) AND much faster inference. Gemini is the precious-but-
+    small resource we keep as last resort.
+    """
+    from graphiti_core.llm_client.client import LLMClient
+
+    children = [
+        make_cerebras_llm_client(),
+        make_groq_llm_client(),
+        make_llm_client(),  # Gemini
+    ]
+
+    class MultiProviderLLM(LLMClient):
+        def __init__(self):
+            # Take first child's config so Graphiti has something to read
+            # (model name, temperature, etc.). We don't actually use it.
+            super().__init__(config=children[0].config)
+            self._children = children
+
+        async def _generate_response(self, *args, **kwargs):
+            last_exc: Exception | None = None
+            for child in self._children:
+                try:
+                    return await child._generate_response(*args, **kwargs)
+                except TokensExhausted as exc:
+                    log.info(
+                        "Graphiti LLM: %s exhausted, trying next provider",
+                        type(child).__name__,
+                    )
+                    last_exc = exc
+                    continue
+                except Exception as exc:
+                    # Non-pool error — log and try next anyway, since we'd
+                    # rather complete with a different provider than fail.
+                    log.warning(
+                        "Graphiti LLM: %s raised %s — falling through",
+                        type(child).__name__, type(exc).__name__,
+                    )
+                    last_exc = exc
+                    continue
+            raise last_exc or RuntimeError("All Graphiti LLM providers failed")
+
+        async def generate_response(self, *args, **kwargs):
+            # Delegate to the same fall-through chain via base class plumbing.
+            return await super().generate_response(*args, **kwargs)
+
+    return MultiProviderLLM()
+
+
 # ── Embedder ──────────────────────────────────────────────────────────────────
 
 
