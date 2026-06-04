@@ -18,9 +18,13 @@ async def test_build_model_list_picks_active_tokens(sample_tokens):
 async def test_capability_order_has_known_aliases():
     assert "chat:fast" in r._CAPABILITY_ORDER
     assert "chat:smart" in r._CAPABILITY_ORDER
-    # fast tries free Gemini pool first; smart leans on openrouter+deepseek
-    # before touching anthropic. Paid keys are deprioritised via weight.
-    assert r._CAPABILITY_ORDER["chat:fast"][0] == "gemini"
+    # Cerebras + Groq go first for chat/triage — their daily quota is
+    # orders of magnitude bigger than Gemini's, and they leave Gemini's
+    # tiny RPM window available for Graphiti (the only consumer that
+    # CAN'T switch off Gemini due to its structured-output requirement).
+    assert r._CAPABILITY_ORDER["chat:fast"][0] == "cerebras"
+    assert "groq" in r._CAPABILITY_ORDER["chat:fast"]
+    assert "gemini" in r._CAPABILITY_ORDER["chat:fast"]
     assert "openrouter" in r._CAPABILITY_ORDER["chat:fast"]
 
 
