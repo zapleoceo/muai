@@ -17,9 +17,15 @@ from vera_shared.tokens.selector import get_token
 
 log = logging.getLogger(__name__)
 
-_MODEL = "gemini-2.5-flash"
+from vera_shared.llm.registry import PROVIDER_MODEL
+
 _PROVIDER = "gemini"
 _MAX_BYTES = 20 * 1024 * 1024
+
+
+def _model() -> str:
+    """Resolved at call time so registry changes don't require restart."""
+    return PROVIDER_MODEL.get(_PROVIDER, "gemini-2.5-flash")
 
 
 async def media_to_text(mime_type: str, data: bytes, instruction: str) -> str:
@@ -27,11 +33,12 @@ async def media_to_text(mime_type: str, data: bytes, instruction: str) -> str:
         return f"⚠ Файл слишком большой ({len(data) // 1024 // 1024} MB > 20 MB)"
 
     token = await get_token(_PROVIDER, "chat:fast")
+    model = _model()
     # API key MUST go in the x-goog-api-key header, not the URL — otherwise
     # it gets captured by every proxy / nginx access log / httpx debug trace.
     url = (
         f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{_MODEL}:generateContent"
+        f"{model}:generateContent"
     )
     payload = {
         "contents": [{
@@ -65,6 +72,6 @@ async def media_to_text(mime_type: str, data: bytes, instruction: str) -> str:
     t_in = usage.get("promptTokenCount", 0)
     t_out = usage.get("candidatesTokenCount", 0)
     await token_repo.record_usage(
-        token.id, t_in, t_out, cost_usd(_PROVIDER, _MODEL, t_in, t_out)
+        token.id, t_in, t_out, cost_usd(_PROVIDER, model, t_in, t_out)
     )
     return text or "(пустой ответ от Gemini)"

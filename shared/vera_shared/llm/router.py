@@ -18,39 +18,30 @@ log = logging.getLogger(__name__)
 _router: Router | None = None
 _lock = asyncio.Lock()
 
-# Per-provider model name + LiteLLM provider prefix.
-_PROVIDER_MODEL: dict[str, tuple[str, str]] = {
-    "gemini":     ("gemini",      "gemini-3.5-flash"),
-    "deepseek":   ("deepseek",    "deepseek-chat"),
-    "anthropic":  ("anthropic",   "claude-haiku-4-5"),
-    "openrouter": ("openrouter",  "openai/gpt-oss-120b:free"),
-}
-
-# Capability → fallback order. FREE pools first, PAID demoniwwwe Gemini
-# inside «gemini» bucket (LiteLLM round-robins within the bucket, but we
-# can hint via routing strategy).
-_CAPABILITY_ORDER = {
-    "chat:fast":  ["gemini", "openrouter", "deepseek", "anthropic"],
-    "prefilter":  ["gemini", "openrouter", "deepseek", "anthropic"],
-    "chat:smart": ["openrouter", "deepseek", "anthropic", "gemini"],
-    "chat:code":  ["openrouter", "deepseek", "anthropic", "gemini"],
-}
+# All routing config now lives in vera_shared.llm.registry — single source of
+# truth shared with cost_guard, pool_clients, multimodal.
+from vera_shared.llm.registry import (
+    PROVIDER_MODEL as _PROVIDER_MODEL_NAME,
+    CAPABILITY_ORDER as _CAPABILITY_ORDER,
+    is_paid as _is_paid,
+)
 
 
-# (provider, label) pairs that indicate a PAID account — keep them
-# last so free quotas burn before we touch user's wallet. Single source
-# of truth (no env). NOTE: label «demoniwwwe» is used both for paid
-# Gemini AND for FREE DeepSeek — must be (provider, label) pair.
-_PAID_KEYS: set[tuple[str, str]] = {
-    ("gemini", "demoniwwwe"),  # paid Google AI billing account
-}
+def _provider_prefix_and_model(provider: str) -> tuple[str, str] | None:
+    """LiteLLM expects `{prefix}/{model}` for routing.
+    Prefix == provider for all our providers except openrouter (handled
+    separately because it's OpenAI-compatible)."""
+    model = _PROVIDER_MODEL_NAME.get(provider)
+    if model is None:
+        return None
+    return (provider, model)
 
 
 async def _build_model_list() -> list[dict]:
     rows = await token_repo.get_all_active()
     out: list[dict] = []
     for r in rows:
-        info = _PROVIDER_MODEL.get(r.provider)
+        info = _provider_prefix_and_model(r.provider)
         if info is None:
             continue
         provider_prefix, base_model = info
@@ -63,10 +54,9 @@ async def _build_model_list() -> list[dict]:
             params["model"] = base_model  # litellm doesn't know "openrouter/"
             params["api_base"] = "https://openrouter.ai/api/v1"
             params["custom_llm_provider"] = "openai"
-        is_paid = (r.provider, r.label) in _PAID_KEYS
-        # Weight tuning: free Gemini has 1500 RPD per project (5 RPM × ~5 min
-        # bursts). Use free as primary, paid as safety net for spikes.
-        # weight=20 for paid means it only gets ~17% of pickups normally,
+        is_paid = _is_paid(r.provider, r.label)
+        # Weight tuning: free pool burns first, paid is safety net.
+        # weight=20 paid vs 100 free → paid sees ~17% of normal traffic,
         # but LiteLLM falls through to it instantly when free returns 429.
         params["weight"] = 20 if is_paid else 100
         out.append({
@@ -194,14 +184,18 @@ async def chat_with_meta(
 
     # Pre-flight cost gate. Heuristic estimate: 1 token ≈ 4 chars.
     # Output estimate caps at max_tokens (if provided) or 2k.
+    # Uses the most expensive plausible model so the gate is conservative —
+    # if it would push us over the cap on the worst case, refuse.
     from vera_shared.llm.cost_guard import check_and_reserve, DailyBudgetExceeded
+    from vera_shared.llm.registry import PROVIDER_MODEL
     char_count = sum(len(str(m.get("content", ""))) for m in msgs)
     t_in_est = max(1, char_count // 4)
     t_out_est = int(extra_kwargs.get("max_tokens", 2000) or 2000)
-    # We don't know which provider the router will pick yet; use the
-    # most-expensive plausible model so the gate is conservative.
+    # Default to gemini model since most chat:fast traffic flows through it.
+    # Registry change → new model name picked up automatically.
+    estimate_model = PROVIDER_MODEL.get("gemini", "gemini-2.5-flash")
     try:
-        await check_and_reserve("gemini-3.5-flash", t_in_est, t_out_est)
+        await check_and_reserve(estimate_model, t_in_est, t_out_est)
     except DailyBudgetExceeded as exc:
         log.warning("chat() refused: %s", exc)
         raise

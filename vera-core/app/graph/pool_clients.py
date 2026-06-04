@@ -1,11 +1,18 @@
-"""Graphiti LLM/Embedder/Reranker clients that rotate Gemini keys via our pool.
+"""Graphiti LLM/Embedder/Reranker clients that rotate keys via TokenPool.
 
-Key rotation strategy for Graphiti:
-  - On 429: cooldown the key for 1 hour, rotate to the next available Gemini key.
-  - On 503: cooldown 5 min, rotate.
-  - On 401/403: cooldown 1 hour, rotate.
+Model selection: pulls from vera_shared.llm.registry.PROVIDER_MODEL. Change
+the model name THERE and every Graphiti path picks it up on next restart.
+
+Key rotation strategy:
+  - On 429: cooldown the key for _GEMINI_429_COOLDOWN seconds (65 — Gemini's
+    per-minute RPM window resets at 60s + 5s safety).
+  - On 503: cooldown _GEMINI_503_COOLDOWN seconds (300).
+  - On 401/403: cooldown _GEMINI_AUTH_COOLDOWN seconds (3600 — actual hard fail).
   - On TokensExhausted: all Gemini keys unavailable — raise so caller skips the write.
-  - No DeepSeek fallback: DeepSeek rejects response_format:json_schema used by Graphiti.
+  - No DeepSeek fallback for Graphiti calls: DeepSeek rejects response_format:json_schema.
+
+Usage tracking: every successful call writes to tokens.daily_cost_used_usd
+via token_repo.record_usage so per-key cost caps work everywhere.
 """
 
 import logging
@@ -48,16 +55,16 @@ async def _refresh_gemini_client(holder, *, capability: str = "chat:fast"):
 # ── LLM ──────────────────────────────────────────────────────────────────────
 
 
-def make_llm_client(model: str = "gemini-2.5-flash", capability: str = "chat:fast"):
-    # Graphiti uses 2.5-flash (NOT 3.5) because:
-    # 1. Entity-extraction / summary / edge-resolve are structural tasks
-    #    where 2.5 quality is fine
-    # 2. 2.5-flash is 20× cheaper ($0.075 in / $0.30 out vs $1.50/$9)
-    # 3. 2.5-flash has 1000 RPM on Tier 1 vs 60 RPM for 3.5-flash
-    # Triage/chat still use 3.5-flash via LiteLLM router (router.py) where
-    # the agent-reasoning quality difference actually matters.
+def make_llm_client(model: str | None = None, capability: str = "chat:fast"):
+    """Build Graphiti's GeminiClient with key rotation. Model defaults to
+    whatever vera_shared.llm.registry.PROVIDER_MODEL says for 'gemini' —
+    change the registry to upgrade everywhere."""
+    from vera_shared.llm.registry import PROVIDER_MODEL
     from graphiti_core.llm_client.config import LLMConfig
     from graphiti_core.llm_client.gemini_client import GeminiClient
+
+    if model is None:
+        model = PROVIDER_MODEL.get("gemini", "gemini-2.5-flash")
 
     from vera_shared.llm.cost_guard import (
         DailyBudgetExceeded, check_and_reserve, estimate_cost,
@@ -161,11 +168,34 @@ def make_embedder(embedding_model: str = "voyage-3"):
         holder.client = voyageai.AsyncClient(api_key=tok.token)
         return tok
 
+    # Per-call usage tracking — was missing, making Voyage spend invisible
+    # (the same blind-spot bug as Graphiti's bypass of LiteLLM).
+    from vera_shared.llm.registry import cost_usd as _cost_usd
+    from vera_shared.tokens import repository as token_repo
+
+    def _approx_tokens(input_data) -> int:
+        """Voyage SDK doesn't return usage. Heuristic: 1 token ≈ 4 chars."""
+        if isinstance(input_data, str):
+            return max(1, len(input_data) // 4)
+        if isinstance(input_data, list):
+            return sum(max(1, len(str(s)) // 4) for s in input_data)
+        return 1
+
+    async def _track(tok, input_data):
+        try:
+            tin = _approx_tokens(input_data)
+            cost = _cost_usd(embedding_model, tin, 0)
+            await token_repo.record_usage(tok.id, tin, 0, cost)
+        except Exception as exc:
+            log.debug("voyage usage tracking failed: %s", exc)
+
     class PoolVoyageEmbedder(VoyageAIEmbedder):
         async def create(self, input_data):
             tok = await _swap_voyage_client(self)
             try:
-                return await super().create(input_data)
+                result = await super().create(input_data)
+                await _track(tok, input_data)
+                return result
             except Exception as exc:
                 status = _status_from_exc(exc)
                 if status:
@@ -175,7 +205,9 @@ def make_embedder(embedding_model: str = "voyage-3"):
         async def create_batch(self, input_data_list):
             tok = await _swap_voyage_client(self)
             try:
-                return await super().create_batch(input_data_list)
+                result = await super().create_batch(input_data_list)
+                await _track(tok, input_data_list)
+                return result
             except Exception as exc:
                 status = _status_from_exc(exc)
                 if status:
@@ -191,16 +223,31 @@ def make_embedder(embedding_model: str = "voyage-3"):
 # ── Reranker ──────────────────────────────────────────────────────────────────
 
 
-def make_reranker(model: str = "gemini-2.5-flash"):
-    # Reranker is a per-token relevance score — 2.5 is plenty.
+def make_reranker(model: str | None = None):
+    """Reranker is a per-token relevance score; model defaults to whatever
+    the registry says for the gemini provider."""
+    from vera_shared.llm.registry import PROVIDER_MODEL, cost_usd as _cost_usd
+    from vera_shared.tokens import repository as token_repo
     from graphiti_core.cross_encoder.gemini_reranker_client import GeminiRerankerClient
     from graphiti_core.llm_client.config import LLMConfig
+
+    if model is None:
+        model = PROVIDER_MODEL.get("gemini", "gemini-2.5-flash")
 
     class PoolGeminiReranker(GeminiRerankerClient):
         async def rank(self, query, passages):
             token = await _refresh_gemini_client(self, capability="chat:fast")
             try:
-                return await super().rank(query, passages)
+                result = await super().rank(query, passages)
+                # Approx tracking — reranker has no usage_metadata exposed.
+                try:
+                    tin = max(1, (len(query) + sum(len(str(p)) for p in passages)) // 4)
+                    await token_repo.record_usage(
+                        token.id, tin, 0, _cost_usd(model, tin, 0)
+                    )
+                except Exception as exc:
+                    log.debug("reranker usage tracking failed: %s", exc)
+                return result
             except Exception as exc:
                 status = _status_from_exc(exc)
                 if status == 429:

@@ -24,20 +24,7 @@ from datetime import datetime, timedelta
 log = logging.getLogger(__name__)
 
 
-# Hand-curated pricing. Update when Google/Anthropic change prices.
-# $ per 1M tokens. NEVER trust LiteLLM's _hidden_params.response_cost
-# for new models — it's stale until the litellm package updates.
-_PRICING: dict[str, tuple[float, float]] = {
-    # (input_per_1m, output_per_1m)
-    "gemini-3.5-flash":   (1.50, 9.00),
-    "gemini-3.5-pro":     (3.50, 21.00),
-    "gemini-2.5-flash":   (0.075, 0.30),
-    "gemini-2.5-pro":     (1.25, 5.00),
-    "claude-haiku-4-5":   (1.00, 5.00),
-    "claude-sonnet-4-5":  (3.00, 15.00),
-    "deepseek-chat":      (0.0, 0.0),       # free tier
-    "openai/gpt-oss-120b:free": (0.0, 0.0),
-}
+from vera_shared.llm.registry import cost_usd as _registry_cost_usd
 
 
 class DailyBudgetExceeded(RuntimeError):
@@ -45,9 +32,10 @@ class DailyBudgetExceeded(RuntimeError):
 
 
 def estimate_cost(model: str, tokens_in: int, tokens_out: int) -> float:
-    """Returns USD cost. Unknown model => 0.0 (we don't gate what we can't price)."""
-    pin, pout = _PRICING.get(model.split("/")[-1].lower(), (0.0, 0.0))
-    return (tokens_in / 1_000_000) * pin + (tokens_out / 1_000_000) * pout
+    """Delegates to the single source of truth in `vera_shared.llm.registry`.
+    Kept as a function so existing imports don't break.
+    """
+    return _registry_cost_usd(model, tokens_in, tokens_out)
 
 
 _lock = asyncio.Lock()
