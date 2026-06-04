@@ -171,9 +171,17 @@ app.include_router(dashboard_static_router)
 
 @app.post("/bot/webhook")
 async def bot_webhook(request: Request) -> dict:
+    # ALWAYS return 200 to Telegram. If we 500, Telegram retries the same
+    # update for hours — and a bad update (deleted reply target, malformed
+    # payload) becomes a permanent silence. We log and move on.
     if _dp is None or _bot is None:
         return {"ok": False}
-    body = await request.body()
-    update = Update.model_validate(json.loads(body))
-    await _dp.feed_update(bot=_bot, update=update)
+    try:
+        body = await request.body()
+        update = Update.model_validate(json.loads(body))
+        await _dp.feed_update(bot=_bot, update=update)
+    except Exception as exc:
+        logging.getLogger("app.bot.webhook").exception(
+            "webhook handler swallowed exception: %s", exc,
+        )
     return {"ok": True}

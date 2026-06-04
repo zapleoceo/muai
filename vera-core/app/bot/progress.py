@@ -18,7 +18,16 @@ class ProgressIndicator:
         self._typing_task: asyncio.Task | None = None
 
     async def start(self, text: str) -> None:
-        self._placeholder = await self._message.reply(text)
+        # Reply target can vanish (user deleted message, or Telegram retried an
+        # old update after we restarted). Fall back to a fresh send so we never
+        # 500 the webhook — Telegram would just retry forever.
+        try:
+            self._placeholder = await self._message.reply(text)
+        except TelegramBadRequest as exc:
+            log.warning("reply failed (%s); falling back to send_message", exc)
+            self._placeholder = await self._bot.send_message(
+                self._message.chat.id, text,
+            )
         self._last_text = text
         self._typing_task = asyncio.create_task(self._keep_typing())
 
@@ -34,7 +43,10 @@ class ProgressIndicator:
     async def finish(self, text: str) -> None:
         await self._stop_typing()
         if self._placeholder is None:
-            await self._message.reply(text)
+            try:
+                await self._message.reply(text)
+            except TelegramBadRequest:
+                await self._bot.send_message(self._message.chat.id, text)
             return
         try:
             await self._placeholder.edit_text(text)
