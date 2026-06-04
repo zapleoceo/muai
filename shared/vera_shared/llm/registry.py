@@ -35,6 +35,11 @@ _MODELS: dict[str, tuple[float, float]] = {
     "voyage-3":                 (0.06,  0.00),
     # OpenRouter free tier — explicit 0
     "openai/gpt-oss-120b:free": (0.0,   0.0),
+    # Cerebras — free tier we use; supports OpenAI-style structured output
+    # which Graphiti needs. Llama 3.3 70B served on Cerebras CS-3 hardware.
+    "llama-3.3-70b":            (0.0,   0.0),
+    # Groq — also OpenAI-compatible; same Llama 3.3 70B but on LPU hardware.
+    "llama-3.3-70b-versatile":  (0.0,   0.0),
 }
 
 
@@ -46,6 +51,8 @@ PROVIDER_MODEL: dict[str, str] = {
     "deepseek":   "deepseek-chat",
     "anthropic":  "claude-haiku-4-5",
     "openrouter": "openai/gpt-oss-120b:free",
+    "cerebras":   "llama-3.3-70b",
+    "groq":       "llama-3.3-70b-versatile",
     "voyage":     "voyage-3",
 }
 
@@ -54,10 +61,13 @@ PROVIDER_MODEL: dict[str, str] = {
 # Fallback order when LiteLLM serves a capability. Earlier = preferred.
 # Adding a provider = add it to relevant lists.
 CAPABILITY_ORDER: dict[str, list[str]] = {
-    "chat:fast":  ["gemini", "openrouter", "deepseek", "anthropic"],
-    "prefilter":  ["gemini", "openrouter", "deepseek", "anthropic"],
-    "chat:smart": ["openrouter", "deepseek", "anthropic", "gemini"],
-    "chat:code":  ["openrouter", "deepseek", "anthropic", "gemini"],
+    # Free, fast Cerebras + Groq first — they have huge headroom (1M tok/day
+    # × 4 keys for Cerebras alone) and let Gemini's small RPM window stay
+    # available for Graphiti, which can ONLY use Gemini.
+    "chat:fast":  ["cerebras", "groq", "gemini", "openrouter", "deepseek", "anthropic"],
+    "prefilter":  ["cerebras", "groq", "gemini", "openrouter", "deepseek", "anthropic"],
+    "chat:smart": ["cerebras", "groq", "openrouter", "deepseek", "anthropic", "gemini"],
+    "chat:code":  ["cerebras", "groq", "openrouter", "deepseek", "anthropic", "gemini"],
 }
 
 

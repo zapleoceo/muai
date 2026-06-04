@@ -45,14 +45,24 @@ async def _build_model_list() -> list[dict]:
         if info is None:
             continue
         provider_prefix, base_model = info
-        # OpenRouter needs base_url override (it's OpenAI-compatible).
+        # OpenRouter/Cerebras/Groq are all OpenAI-compatible — LiteLLM
+        # needs explicit api_base + custom_llm_provider="openai" so it
+        # doesn't try to look them up as native providers it doesn't ship.
         params: dict = {
             "model": f"{provider_prefix}/{base_model}",
             "api_key": r.token,
         }
         if r.provider == "openrouter":
-            params["model"] = base_model  # litellm doesn't know "openrouter/"
+            params["model"] = base_model
             params["api_base"] = "https://openrouter.ai/api/v1"
+            params["custom_llm_provider"] = "openai"
+        elif r.provider == "cerebras":
+            params["model"] = base_model
+            params["api_base"] = "https://api.cerebras.ai/v1"
+            params["custom_llm_provider"] = "openai"
+        elif r.provider == "groq":
+            params["model"] = base_model
+            params["api_base"] = "https://api.groq.com/openai/v1"
             params["custom_llm_provider"] = "openai"
         is_paid = _is_paid(r.provider, r.label)
         # Weight tuning: free pool burns first, paid is safety net.
