@@ -45,10 +45,21 @@ def _status_from_exc(exc: Exception) -> int:
     return 0
 
 
+# Per-token cache so we don't spin up a fresh aiohttp session every retry.
+# Re-creating genai.Client(...) each call left stale connectors around; once
+# the SDK's internal retry fired against the prior session we got
+# `Connector is closed` / `Server disconnected` failures.
+_GENAI_CLIENT_CACHE: dict[int, object] = {}
+
+
 async def _refresh_gemini_client(holder, *, capability: str = "chat:fast"):
     from google import genai
     token = await get_token("gemini", capability)
-    holder.client = genai.Client(api_key=token.token)
+    cached = _GENAI_CLIENT_CACHE.get(token.id)
+    if cached is None:
+        cached = genai.Client(api_key=token.token)
+        _GENAI_CLIENT_CACHE[token.id] = cached
+    holder.client = cached
     return token
 
 
