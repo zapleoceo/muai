@@ -20,3 +20,4 @@ data/
 __pycache__/
 *.session
 *.pyc
+.claude/scheduled_tasks.lock
