@@ -55,7 +55,7 @@ PROVIDER_MODEL: dict[str, str] = {
     "deepseek":   "deepseek-chat",
     "anthropic":  "claude-haiku-4-5",
     "openrouter": "openai/gpt-oss-120b:free",
-    "cerebras":   "zai-glm-4.7",
+    "cerebras":   "gpt-oss-120b",
     "groq":       "llama-3.3-70b-versatile",
     "voyage":     "voyage-3",
 }
