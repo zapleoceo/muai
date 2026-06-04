@@ -20,17 +20,39 @@ router = APIRouter(prefix="/api/admin")
 
 @router.get("/brain-backfill")
 async def brain_backfill_progress(_=Depends(require_owner)) -> dict:
-    """Read the systemd backfill job's progress file written by
-    /tmp/backfill_brain.py. Plus live brain count from DB.
+    """Read the systemd backfill job's progress file. Maps the script's
+    new schema (done/errors/last_ok_at/...) to the legacy field names the
+    dashboard expects (ok/err/last_update/...) so the widget keeps working
+    without a frontend change.
     """
     progress_file = Path("/data/backfill_progress.json")
-    state = {}
+    state: dict = {}
     if progress_file.exists():
         try:
             state = json.loads(progress_file.read_text())
         except Exception as exc:
             log.warning("backfill state read failed: %s", exc)
-    # Live brain count
+
+    # New script writes: total, done, errors, skipped, last_event_id,
+    # last_ok_at, last_error, rate_per_min, status. Map to legacy keys.
+    ok = int(state.get("done") or state.get("ok") or 0)
+    err = int(state.get("errors") or state.get("err") or 0)
+    processed = ok + err
+    candidates = int(
+        state.get("total") or state.get("candidates_filtered") or 0
+    )
+    # Frontend appends "Z" before new Date() — strip any trailing Z/tz
+    # info from our ISO so the result stays a single valid UTC stamp.
+    last_update_iso = state.get("last_ok_at") or state.get("last_update")
+    if last_update_iso and isinstance(last_update_iso, str):
+        last_update_iso = last_update_iso.rstrip("Z").split("+")[0]
+    running_flag = (
+        state.get("status") == "running"
+        if "status" in state
+        else bool(state.get("running"))
+    )
+
+    # Live brain count from DB
     async with get_session() as s:
         brain_total = (await s.execute(
             select(func.count(Event.id))
@@ -41,34 +63,42 @@ async def brain_backfill_progress(_=Depends(require_owner)) -> dict:
             .where(Event.graphiti_episode_uuid.is_(None))
             .where(Event.occurred_at >= "2026-05-03")
         )).scalar() or 0
-    # ETA
+
+    # ETA: prefer the rolling rate the script publishes (events/min),
+    # fall back to averaged-since-start.
     eta_min = None
-    if state.get("started_at") and state.get("ok", 0) > 0:
+    rate_per_min = float(state.get("rate_per_min") or 0)
+    remaining = max(0, candidates - ok)
+    if rate_per_min > 0 and remaining > 0:
+        eta_min = round(remaining / rate_per_min)
+    elif state.get("started_at") and ok > 0:
         try:
-            started = datetime.fromisoformat(state["started_at"])
-            elapsed_s = (datetime.utcnow() - started).total_seconds()
-            rate = state["ok"] / max(elapsed_s, 1)  # ok/sec
-            remaining = state.get("candidates_filtered", 0) - state.get("ok", 0)
-            if rate > 0:
-                eta_min = round(remaining / rate / 60)
+            started_str = str(state["started_at"]).replace("Z", "+00:00")
+            started = datetime.fromisoformat(started_str)
+            now = datetime.utcnow().replace(tzinfo=started.tzinfo) if started.tzinfo else datetime.utcnow()
+            elapsed_s = (now - started).total_seconds()
+            if elapsed_s > 0:
+                eta_min = round(remaining * elapsed_s / ok / 60)
         except Exception:
             pass
+
     return {
         "brain_total_episodes": brain_total,
         "events_missing_last_month": missing,
         "started_at": state.get("started_at"),
-        "last_update": state.get("last_update"),
-        "candidates_total": state.get("candidates_total", 0),
-        "candidates_filtered": state.get("candidates_filtered", 0),
-        "processed": state.get("processed", 0),
-        "ok": state.get("ok", 0),
-        "err": state.get("err", 0),
-        "current_event_id": state.get("current_event_id"),
-        "current_event_time": state.get("current_event_time"),
-        "last_ok_event_id": state.get("last_ok_event_id"),
-        "last_err_msg": state.get("last_err_msg"),
+        "last_update": last_update_iso,
+        "candidates_total": candidates,
+        "candidates_filtered": candidates,
+        "processed": processed,
+        "ok": ok,
+        "err": err,
+        "current_event_id": state.get("last_event_id"),
+        "current_event_time": None,
+        "last_ok_event_id": state.get("last_event_id"),
+        "last_err_msg": state.get("last_error") or state.get("last_err_msg"),
         "eta_minutes": eta_min,
-        "running": state.get("running", False),
+        "running": running_flag,
+        "rate_per_min": rate_per_min,
     }
 
 
