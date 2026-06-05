@@ -277,21 +277,21 @@ def make_groq_llm_client(capability: str = "chat:fast"):
 
 
 def make_multi_llm_client():
-    """Cerebras first → Groq → Gemini fallback. Each level has its own
-    pooled rotation of keys. We move to the next provider only when the
-    current one is fully exhausted (all keys cooled down) or returns a
-    structural error the SDK couldn't recover from.
+    """Groq → Cerebras → Gemini fallback.
 
-    Why this order: Cerebras + Groq have orders-of-magnitude bigger quotas
-    than Gemini (~5M tok/day × 5 keys for Cerebras vs 4500 req/day for
-    Gemini free) AND much faster inference. Gemini is the precious-but-
-    small resource we keep as last resort.
+    Empirical ordering decision (2026-06-05): Cerebras free queue for
+    gpt-oss-120b is overloaded 99% of the time — putting it first means
+    every Graphiti call wastes ~5×60ms (one 429 per key) before falling
+    through. Groq's single working key (others got abuse-flagged) gives
+    ~8000 TPM steady, so it actually completes most calls. Cerebras stays
+    second so we still scoop up the rare moments its queue clears.
+    Gemini is last resort because free RPM is precious.
     """
     from graphiti_core.llm_client.client import LLMClient
 
     children = [
-        make_cerebras_llm_client(),
         make_groq_llm_client(),
+        make_cerebras_llm_client(),
         make_llm_client(),  # Gemini
     ]
 
