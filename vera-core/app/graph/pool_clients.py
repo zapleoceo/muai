@@ -273,6 +273,16 @@ def make_groq_llm_client(capability: str = "chat:fast"):
     )
 
 
+def make_openrouter_llm_client(capability: str = "chat:fast"):
+    from vera_shared.llm.registry import PROVIDER_MODEL
+    return _make_openai_pool_client(
+        provider="openrouter",
+        base_url="https://openrouter.ai/api/v1",
+        model=PROVIDER_MODEL.get("openrouter", "openai/gpt-oss-120b:free"),
+        capability=capability,
+    )
+
+
 # ── Multi-provider wrapper: tries clients in order, falls through on fail ────
 
 
@@ -291,6 +301,7 @@ def make_multi_llm_client():
 
     children = [
         make_groq_llm_client(),
+        make_openrouter_llm_client(),
         make_cerebras_llm_client(),
         make_llm_client(),  # Gemini
     ]

@@ -42,7 +42,7 @@ async def get_graphiti():
             cross_encoder=make_reranker(),
         )
         log.info("Graphiti client initialised (Neo4j: %s, db=%s) — LLM "
-                 "fallback chain: groq → cerebras → gemini",
+                 "fallback chain: groq → openrouter → cerebras → gemini",
                  settings.neo4j_uri, settings.neo4j_database)
     return _client
 
