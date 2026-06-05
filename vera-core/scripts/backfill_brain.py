@@ -32,9 +32,15 @@ from app.brain.ingest import deep_extract
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import Event
 
-PACE_SECONDS = int(os.environ.get("BACKFILL_PACE_SECONDS", "30"))
+PACE_SECONDS = float(os.environ.get("BACKFILL_PACE_SECONDS", "2"))
 LOOKBACK_DAYS = int(os.environ.get("BACKFILL_LOOKBACK_DAYS", "30"))
 PER_CALL_TIMEOUT = float(os.environ.get("BACKFILL_TIMEOUT_S", "600"))
+# Concurrency: how many events deep_extract in parallel. Each event makes
+# ~15 LLM + ~3 embed calls. The multi-provider router applies its own
+# backpressure (429 → next provider). Bigger value = more pressure on
+# Groq/Cerebras/Gemini and bigger chance of squeezing through whichever
+# free RPM bucket has capacity at the moment.
+CONCURRENCY = int(os.environ.get("BACKFILL_CONCURRENCY", "5"))
 PROGRESS_FILE = Path(os.environ.get(
     "BACKFILL_PROGRESS_FILE", "/data/backfill_progress.json"
 ))
@@ -131,8 +137,8 @@ async def _process_one(event_id: int) -> bool:
 
 async def main() -> None:
     log.info(
-        "backfill: pace=%ss timeout=%ss lookback=%sd",
-        PACE_SECONDS, PER_CALL_TIMEOUT, LOOKBACK_DAYS,
+        "backfill: pace=%ss timeout=%ss lookback=%sd concurrency=%d",
+        PACE_SECONDS, PER_CALL_TIMEOUT, LOOKBACK_DAYS, CONCURRENCY,
     )
     _state["status"] = "running"
     save_state()
@@ -146,7 +152,7 @@ async def main() -> None:
             _state["done"] = done
             save_state()
 
-            batch = await _next_batch(limit=20)
+            batch = await _next_batch(limit=max(20, CONCURRENCY * 4))
             if not batch:
                 idle_rounds += 1
                 _state["status"] = "idle" if idle_rounds < 3 else "caught_up"
@@ -156,10 +162,16 @@ async def main() -> None:
             idle_rounds = 0
             _state["status"] = "running"
 
-            for event_id in batch:
-                await _process_one(event_id)
-                save_state()
-                await asyncio.sleep(PACE_SECONDS)
+            sem = asyncio.Semaphore(CONCURRENCY)
+
+            async def _bounded(eid: int) -> None:
+                async with sem:
+                    await _process_one(eid)
+                    save_state()
+
+            await asyncio.gather(*(_bounded(eid) for eid in batch),
+                                 return_exceptions=True)
+            await asyncio.sleep(PACE_SECONDS)
         except BaseException as outer:  # noqa: BLE001
             _state["status"] = "error_recovering"
             _state["last_error"] = (
