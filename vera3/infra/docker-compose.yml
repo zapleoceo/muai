@@ -91,6 +91,24 @@ services:
       SEARCH_URL: http://brain-search:8000
     restart: unless-stopped
 
+  # ─── Sync bridge from Vera 2.0 (временно, пока ingestor'ы не готовы) ─
+  sync-bridge:
+    build:
+      context: ..
+      dockerfile: services/sync-bridge/Dockerfile
+    container_name: vera3-sync-bridge
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
+      TOKEN_SECRET: ${TOKEN_SECRET}
+      VERA2_SQLITE: /vera2/vera.db
+      SYNC_POLL_S: 60
+    volumes:
+      - /var/lib/docker/volumes/vera_vera_data/_data:/vera2:ro
+    restart: unless-stopped
+
   # ─── Housekeeping ───────────────────────────────────────────────────────
   prune:
     image: docker:cli
