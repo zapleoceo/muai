@@ -1,0 +1,68 @@
+name: Vera 3.0 Tests
+
+on:
+  push:
+    branches: [master, main]
+    paths:
+      - 'vera3/**'
+      - '.github/workflows/vera3-tests.yml'
+  pull_request:
+    paths:
+      - 'vera3/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: vera3
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install shared lib
+        run: pip install -e ./shared[dev] aiosqlite
+
+      - name: Install gateway
+        run: pip install -e ./services/gateway[dev]
+
+      - name: Run all tests with coverage
+        run: |
+          PYTHONPATH=shared:services/gateway/src \
+          pytest tests/ \
+            --cov=vera_shared \
+            --cov=gateway \
+            --cov-report=term-missing \
+            --cov-report=xml \
+            --cov-fail-under=80
+
+      - name: Lint with ruff
+        run: |
+          pip install ruff
+          ruff check shared services tests --output-format=github
+        continue-on-error: true  # warning, not blocking yet
+
+      - name: Type check with mypy
+        run: |
+          pip install mypy
+          mypy shared/vera_shared --ignore-missing-imports
+        continue-on-error: true  # warning, not blocking yet
+
+  build-images:
+    needs: test
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        service: [gateway]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build ${{ matrix.service }} image
+        run: |
+          docker build \
+            -f vera3/services/${{ matrix.service }}/Dockerfile \
+            -t vera3-${{ matrix.service }}:${{ github.sha }} \
+            vera3/
