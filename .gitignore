@@ -21,3 +21,15 @@ __pycache__/
 *.session
 *.pyc
 .claude/scheduled_tasks.lock
+
+# Backup tarballs (большие, хранятся локально не в git)
+backups/**/*.tar.gz
+backups/**/*.db
+backups/**/*.json
+!backups/**/MANIFEST.md
+
+# Vera 3.0 local dev
+vera3/.venv/
+vera3/**/*.egg-info/
+vera3/.coverage
+vera3/htmlcov/
