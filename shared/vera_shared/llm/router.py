@@ -61,7 +61,13 @@ async def _build_model_list() -> list[dict]:
             params["api_base"] = "https://api.cerebras.ai/v1"
             params["custom_llm_provider"] = "openai"
         elif r.provider == "groq":
-            params["model"] = base_model
+            # Groq's model id literally is "openai/gpt-oss-120b" — but
+            # LiteLLM with custom_llm_provider="openai" auto-strips the
+            # "openai/" prefix, so we get sent as plain "gpt-oss-120b"
+            # which Groq doesn't have. Double-prefix workaround: LiteLLM
+            # strips the outer "openai/" and forwards "openai/gpt-oss-120b"
+            # which is what Groq actually expects.
+            params["model"] = f"openai/{base_model}"
             params["api_base"] = "https://api.groq.com/openai/v1"
             params["custom_llm_provider"] = "openai"
         is_paid = _is_paid(r.provider, r.label)
