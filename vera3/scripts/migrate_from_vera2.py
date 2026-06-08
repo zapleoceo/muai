@@ -139,7 +139,7 @@ async def migrate_events(sqlite_path: Path, *, dry_run: bool = True, limit: int 
     conn.row_factory = sqlite3.Row
 
     sql = (
-        "SELECT source, source_event_id, account, category, content_text, "
+        "SELECT id AS v2_id, source, source_event_id, account, category, content_text, "
         "content_extra, entity_hints, metadata, occurred_at, received_at, "
         "graphiti_episode_uuid, triage_status "
         "FROM events ORDER BY occurred_at"
@@ -200,14 +200,19 @@ async def _import_batch(rows: list[dict], *, dry_run: bool) -> tuple[int, int, i
         existing_set = {(row.source, row.source_event_id) for row in result}
 
         for r in rows:
-            key = (r["source"], r["source_event_id"])
+            # Vera 2 разрешал NULL для source_event_id (например system 'monitor' events).
+            # Vera 3 требует NOT NULL — генерируем synthetic ID на основе v2 id.
+            sid = r.get("source_event_id")
+            if not sid:
+                sid = f"v2migrated:{r.get('v2_id', 'unknown')}"
+            key = (r["source"], sid)
             if key in existing_set:
                 deduped += 1
                 continue
             try:
                 row = EventRow(
                     source=r["source"],
-                    source_event_id=r["source_event_id"],
+                    source_event_id=sid,
                     account=r.get("account"),
                     category=r.get("category", "generic"),
                     content_text=r.get("content_text") or "",

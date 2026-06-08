@@ -12,29 +12,12 @@ services:
     volumes:
       - vera3_pgdata:/var/lib/postgresql/data
     ports:
-      - "127.0.0.1:5432:5432"
+      - "127.0.0.1:5433:5432"
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U vera -d vera"]
       interval: 10s
       timeout: 5s
       retries: 5
-    restart: unless-stopped
-
-  # ─── Observability ───────────────────────────────────────────────────────
-  langfuse:
-    image: langfuse/langfuse:latest
-    container_name: vera3-langfuse
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/langfuse
-      NEXTAUTH_URL: http://localhost:3000
-      NEXTAUTH_SECRET: ${LANGFUSE_SECRET:-change-me-please}
-      SALT: ${LANGFUSE_SALT:-change-me-too}
-      TELEMETRY_ENABLED: "false"
-    ports:
-      - "127.0.0.1:3000:3000"
     restart: unless-stopped
 
   # ─── Gateway ─────────────────────────────────────────────────────────────
@@ -48,15 +31,67 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
-      INTERNAL_SECRET: ${INTERNAL_SECRET:-dev-internal-secret}
+      INTERNAL_SECRET: ${INTERNAL_SECRET:-dev}
       TOKEN_SECRET: ${TOKEN_SECRET}
       OWNER_TELEGRAM_ID: ${OWNER_TELEGRAM_ID:-0}
       LOG_LEVEL: INFO
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:8001:8000"
     restart: unless-stopped
 
-  # ─── Auto-prune (housekeeping) ───────────────────────────────────────────
+  # ─── Brain: Triage Worker ───────────────────────────────────────────────
+  brain-triage:
+    build:
+      context: ..
+      dockerfile: services/brain-triage/Dockerfile
+    container_name: vera3-brain-triage
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
+      TOKEN_SECRET: ${TOKEN_SECRET}
+      TRIAGE_POLL_INTERVAL_S: 15
+      TRIAGE_BATCH_SIZE: 5
+      TRIAGE_PACE_S: 2
+      VERA_DAILY_GLOBAL_CAP_USD: ${VERA_DAILY_GLOBAL_CAP_USD:-2.0}
+    restart: unless-stopped
+
+  # ─── Brain: Search ──────────────────────────────────────────────────────
+  brain-search:
+    build:
+      context: ..
+      dockerfile: services/brain-search/Dockerfile
+    container_name: vera3-brain-search
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
+      TOKEN_SECRET: ${TOKEN_SECRET}
+      VERA_DAILY_GLOBAL_CAP_USD: ${VERA_DAILY_GLOBAL_CAP_USD:-2.0}
+    ports:
+      - "127.0.0.1:8002:8000"
+    restart: unless-stopped
+
+  # ─── Telegram Bot ───────────────────────────────────────────────────────
+  bot-telegram:
+    build:
+      context: ..
+      dockerfile: services/bot-telegram/Dockerfile
+    container_name: vera3-bot-telegram
+    depends_on:
+      brain-search:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
+      TOKEN_SECRET: ${TOKEN_SECRET}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      OWNER_TELEGRAM_ID: ${OWNER_TELEGRAM_ID}
+      SEARCH_URL: http://brain-search:8000
+    restart: unless-stopped
+
+  # ─── Housekeeping ───────────────────────────────────────────────────────
   prune:
     image: docker:cli
     container_name: vera3-prune
@@ -64,7 +99,7 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     entrypoint: >
       sh -c "while true; do
-        docker system prune -af --filter 'until=72h' --filter 'label!=vera3.keep' || true;
+        docker system prune -af --filter 'until=72h' || true;
         sleep 86400;
       done"
     restart: unless-stopped
