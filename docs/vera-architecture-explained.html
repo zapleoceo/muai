@@ -1,0 +1,587 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Вера — как работает (для всех)</title>
+<style>
+  :root {
+    --bg: #fafaf7;
+    --ink: #1a1a1a;
+    --mute: #6b6b6b;
+    --accent: #d97706;
+    --accent-soft: #fef3c7;
+    --green: #059669;
+    --green-soft: #d1fae5;
+    --blue: #2563eb;
+    --blue-soft: #dbeafe;
+    --pink: #db2777;
+    --pink-soft: #fce7f3;
+    --purple: #7c3aed;
+    --purple-soft: #ede9fe;
+    --red: #dc2626;
+    --red-soft: #fee2e2;
+    --card: #ffffff;
+    --border: #e5e5e0;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    background: var(--bg);
+    color: var(--ink);
+    margin: 0;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  .container {
+    max-width: 920px;
+    margin: 0 auto;
+    padding: 48px 24px;
+  }
+  h1 {
+    font-size: clamp(32px, 5vw, 56px);
+    line-height: 1.1;
+    margin: 0 0 16px;
+    letter-spacing: -0.02em;
+  }
+  h2 {
+    font-size: clamp(24px, 3vw, 36px);
+    margin: 64px 0 16px;
+    letter-spacing: -0.01em;
+  }
+  h3 {
+    font-size: 20px;
+    margin: 24px 0 8px;
+  }
+  p { margin: 0 0 16px; color: var(--ink); }
+  .lead { font-size: 20px; color: var(--mute); margin-bottom: 32px; }
+  .small { font-size: 14px; color: var(--mute); }
+  .accent { color: var(--accent); }
+  .green { color: var(--green); }
+  .red { color: var(--red); }
+
+  /* Hero */
+  .hero {
+    padding: 64px 0 32px;
+    border-bottom: 1px solid var(--border);
+    margin-bottom: 16px;
+  }
+  .badge {
+    display: inline-block;
+    padding: 6px 14px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 13px;
+    font-weight: 600;
+    border-radius: 999px;
+    margin-bottom: 16px;
+    letter-spacing: 0.02em;
+  }
+
+  /* Cards */
+  .card {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 16px;
+    padding: 24px;
+    margin: 16px 0;
+  }
+  .card-row {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+    gap: 16px;
+    margin: 24px 0;
+  }
+  .card-row .card { margin: 0; }
+
+  /* Loop cards */
+  .loop {
+    display: grid;
+    grid-template-columns: 80px 1fr;
+    gap: 20px;
+    align-items: start;
+    padding: 24px;
+    border-radius: 16px;
+    border: 1px solid var(--border);
+    background: var(--card);
+    margin: 12px 0;
+  }
+  .loop-num {
+    width: 64px;
+    height: 64px;
+    border-radius: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 32px;
+    font-weight: 700;
+    color: white;
+  }
+  .loop-1 .loop-num { background: var(--blue); }
+  .loop-2 .loop-num { background: var(--green); }
+  .loop-3 .loop-num { background: var(--purple); }
+  .loop-4 .loop-num { background: var(--accent); }
+  .loop-5 .loop-num { background: var(--pink); }
+  .loop-6 .loop-num { background: #475569; }
+  .loop h3 { margin-top: 0; font-size: 22px; }
+  .loop-meta {
+    display: inline-block;
+    padding: 4px 10px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    font-size: 12px;
+    color: var(--mute);
+    margin-right: 6px;
+  }
+
+  /* Flow */
+  .flow {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 32px 24px;
+    margin: 32px 0;
+  }
+  .flow-step {
+    display: grid;
+    grid-template-columns: 48px 1fr;
+    gap: 16px;
+    padding: 16px 0;
+    border-bottom: 1px dashed var(--border);
+  }
+  .flow-step:last-child { border-bottom: none; }
+  .flow-icon {
+    width: 40px;
+    height: 40px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 22px;
+    background: var(--blue-soft);
+  }
+  .flow-step strong { color: var(--ink); }
+  .flow-step .small { display: block; margin-top: 4px; }
+  .flow-arrow {
+    color: var(--mute);
+    text-align: center;
+    font-size: 18px;
+    padding: 4px 0;
+  }
+
+  /* Comparison */
+  table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 16px 0;
+    background: var(--card);
+    border-radius: 12px;
+    overflow: hidden;
+    border: 1px solid var(--border);
+  }
+  th, td {
+    padding: 14px 16px;
+    text-align: left;
+    border-bottom: 1px solid var(--border);
+  }
+  th {
+    background: var(--bg);
+    font-size: 13px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--mute);
+  }
+  td:last-child, th:last-child { text-align: right; }
+  tr:last-child td { border-bottom: none; }
+  .ok { color: var(--green); font-weight: 600; }
+  .bad { color: var(--red); font-weight: 600; }
+
+  /* Brain diagram */
+  .brain {
+    background: linear-gradient(135deg, #fff 0%, #faf5ff 100%);
+    border: 1px solid var(--border);
+    border-radius: 24px;
+    padding: 32px 24px;
+    margin: 32px 0;
+  }
+  .brain-layers {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    margin-top: 16px;
+  }
+  .layer {
+    background: var(--card);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 20px;
+    display: grid;
+    grid-template-columns: 40px 1fr 160px;
+    gap: 16px;
+    align-items: center;
+  }
+  .layer-icon {
+    width: 36px;
+    height: 36px;
+    border-radius: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 18px;
+  }
+  .layer-text { font-size: 14px; color: var(--mute); }
+  .layer-text strong { display: block; color: var(--ink); font-size: 16px; margin-bottom: 2px; }
+  .layer-cost {
+    font-size: 13px;
+    padding: 4px 10px;
+    background: var(--green-soft);
+    color: var(--green);
+    border-radius: 8px;
+    text-align: center;
+    font-weight: 600;
+  }
+  .arrow-down {
+    color: var(--mute);
+    text-align: center;
+    font-size: 14px;
+    margin: -4px 0;
+  }
+
+  /* Hightlight */
+  .highlight {
+    background: var(--accent-soft);
+    border-left: 4px solid var(--accent);
+    padding: 16px 20px;
+    border-radius: 12px;
+    margin: 16px 0;
+  }
+  .highlight strong { color: var(--accent); }
+
+  /* Story */
+  .story {
+    background: linear-gradient(135deg, #fef3c7 0%, #ffffff 100%);
+    border: 1px solid var(--border);
+    border-radius: 20px;
+    padding: 28px 24px;
+    margin: 24px 0;
+  }
+  .story-msg {
+    background: white;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 14px 18px;
+    margin: 12px 0;
+    font-style: italic;
+    color: var(--mute);
+  }
+  .story-msg strong { color: var(--ink); font-style: normal; }
+
+  /* Total banner */
+  .total {
+    background: linear-gradient(135deg, var(--green) 0%, #047857 100%);
+    color: white;
+    padding: 32px 24px;
+    border-radius: 20px;
+    margin: 32px 0;
+    text-align: center;
+  }
+  .total-num {
+    font-size: 56px;
+    font-weight: 700;
+    line-height: 1;
+    margin: 12px 0;
+    letter-spacing: -0.02em;
+  }
+  .total-label { opacity: 0.85; font-size: 15px; }
+
+  .footer {
+    margin-top: 80px;
+    padding-top: 32px;
+    border-top: 1px solid var(--border);
+    color: var(--mute);
+    font-size: 13px;
+    text-align: center;
+  }
+
+  @media (max-width: 640px) {
+    .container { padding: 24px 16px; }
+    .loop { grid-template-columns: 60px 1fr; gap: 14px; padding: 18px; }
+    .loop-num { width: 48px; height: 48px; font-size: 24px; }
+    .layer { grid-template-columns: 32px 1fr; }
+    .layer-cost { grid-column: 2; margin-left: 48px; justify-self: start; }
+  }
+</style>
+</head>
+<body>
+
+<div class="container">
+
+  <!-- HERO -->
+  <section class="hero">
+    <span class="badge">для мамы и для всех остальных</span>
+    <h1>Как работает Вера</h1>
+    <p class="lead">Это не помощник. Это <strong>цифровая копия памяти</strong> одного человека — Димы. Чтобы она видела всё что видит он, помнила всё, понимала кто/что важно, и со временем училась думать как он.</p>
+  </section>
+
+  <!-- PRINCIPLE -->
+  <h2>Главный принцип — как у человеческого мозга</h2>
+  <p>Мозг человека не запоминает всё одинаково. Он:</p>
+  <ul>
+    <li>📥 <strong>Захватывает всё</strong> — всё что видит и слышит</li>
+    <li>🔍 <strong>Сортирует мгновенно</strong> — где важное, где мусор</li>
+    <li>🧠 <strong>Углубляется только в важное</strong> — связывает с тем что уже знает</li>
+    <li>💭 <strong>Регулярно осмысляет</strong> — во время сна, отдыха</li>
+    <li>⚡ <strong>Вспоминает по запросу</strong> — нужное достаёт за секунды</li>
+  </ul>
+  <p>Так должна работать и Вера. Раньше она пыталась глубоко обработать <strong>каждое</strong> событие как важное — это безумно дорого и не как у человека. Теперь — правильно.</p>
+
+  <!-- BRAIN DIAGRAM -->
+  <div class="brain">
+    <h3 style="margin-top: 0;">Память Веры — три слоя</h3>
+    <p class="small">От низа к верху: чем глубже слой, тем дороже, но и тем умнее. Низы хранят всё, верхи понимают смысл.</p>
+
+    <div class="brain-layers">
+      <div class="layer">
+        <div class="layer-icon" style="background: var(--blue-soft);">📦</div>
+        <div class="layer-text">
+          <strong>1. Полная память</strong>
+          Все сообщения, письма, события — сырыми, навсегда. Можно найти за миллисекунды.
+        </div>
+        <div class="layer-cost">$0</div>
+      </div>
+      <div class="arrow-down">↑ выборка важного ↑</div>
+      <div class="layer">
+        <div class="layer-icon" style="background: var(--purple-soft);">🕸️</div>
+        <div class="layer-text">
+          <strong>2. Карта связей</strong>
+          «Егоров → работает в → IT STEP → филиал → Джакарта». Только для важных людей и проектов.
+        </div>
+        <div class="layer-cost">$5–10/мес</div>
+      </div>
+      <div class="arrow-down">↑ ежедневное осмысление ↑</div>
+      <div class="layer">
+        <div class="layer-icon" style="background: var(--accent-soft);">📖</div>
+        <div class="layer-text">
+          <strong>3. Личная Wiki</strong>
+          Готовые «досье» на каждого важного человека, проект, тему. Вера их сама пишет каждый день.
+        </div>
+        <div class="layer-cost">$2–3/мес</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- SIX LOOPS -->
+  <h2>Шесть контуров работы Веры</h2>
+  <p>Это шесть процессов, каждый делает свою работу. Все вместе они — Вера.</p>
+
+  <div class="loop loop-1">
+    <div class="loop-num">1</div>
+    <div>
+      <h3>Захват — лови всё подряд</h3>
+      <span class="loop-meta">всё, всегда</span>
+      <span class="loop-meta">$0</span>
+      <span class="loop-meta">за миллисекунды</span>
+      <p>Каждое письмо, каждое сообщение в Telegram, в Instagram, в Facebook, каждое событие в календаре — мгновенно сохраняется в архив. Ничего не теряется никогда.</p>
+    </div>
+  </div>
+
+  <div class="loop loop-2">
+    <div class="loop-num">2</div>
+    <div>
+      <h3>Триаж — сортировка с умом</h3>
+      <span class="loop-meta">читает каждое событие</span>
+      <span class="loop-meta">$1–22/мес</span>
+      <p>Маленький быстрый AI читает <strong>содержимое</strong> каждого события (не просто заголовок). Сравнивает с тем что у Димы сейчас происходит в жизни. Помечает: важность, темы, упомянутые люди, найденные сигналы.</p>
+      <p class="small"><strong>Важно:</strong> «спам» по заголовку — может содержать важное (день рождения, предложение аренды, новость). Вера читает текст, не отправителя.</p>
+    </div>
+  </div>
+
+  <div class="loop loop-3">
+    <div class="loop-num">3</div>
+    <div>
+      <h3>Глубокое понимание — только для важного</h3>
+      <span class="loop-meta">~10% событий</span>
+      <span class="loop-meta">$5–10/мес</span>
+      <p>Только если триаж сказал «это важно» — строится карта связей. «Это письмо от Егорова про проект Джакарта, упоминает Лизу и сроки». Дёшево потому что только для значимого.</p>
+    </div>
+  </div>
+
+  <div class="loop loop-4">
+    <div class="loop-num">4</div>
+    <div>
+      <h3>Консолидация — как сон у человека</h3>
+      <span class="loop-meta">раз в день</span>
+      <span class="loop-meta">$2–3/мес</span>
+      <p>Каждую ночь Вера пересматривает что было за день. Обновляет «досье» на людей: «У Егорова на этой неделе три раза была тема визы». Обновляет проекты, замечает паттерны. Это как сон — Вера сама себя приводит в порядок.</p>
+    </div>
+  </div>
+
+  <div class="loop loop-5">
+    <div class="loop-num">5</div>
+    <div>
+      <h3>Ответ Диме — когда он спрашивает</h3>
+      <span class="loop-meta">по запросу</span>
+      <span class="loop-meta">$3–5/мес</span>
+      <p>Дима пишет «что было с Veranda?» — Вера ищет в полной памяти, проверяет досье, синтезирует ответ за секунды. Использует и сырое и обработанное.</p>
+    </div>
+  </div>
+
+  <div class="loop loop-6">
+    <div class="loop-num">6</div>
+    <div>
+      <h3>Самосознание — модель Димы и саму себя</h3>
+      <span class="loop-meta">раз в неделю</span>
+      <span class="loop-meta">$1/мес</span>
+      <p>Вера ведёт два внутренних документа: «Какой Дима» (его ценности, стиль, привычки) и «Какая я» (последовательность ответов, что она уже знает). С каждой неделей точнее. Со временем — реально <strong>становится Димой в цифре</strong>.</p>
+    </div>
+  </div>
+
+  <!-- REACTION OBSERVATION -->
+  <h2>Особый случай — наблюдение за реакциями Димы</h2>
+  <div class="card" style="background: var(--pink-soft); border-color: var(--pink);">
+    <p>Вера смотрит не только что <strong>приходит</strong> Диме, но и что он <strong>отвечает</strong>. И понимает, что его ответ — это не реакция только на последнее сообщение, а на <strong>всю накопившуюся ситуацию</strong>.</p>
+    <p>Пример: Дима отвечает Егорову коротко «работаем». Вера понимает: это не из-за лени. Это потому что:</p>
+    <ul style="margin: 8px 0;">
+      <li>Уже три раза по этому же проекту отвечал</li>
+      <li>Сегодня сложный день — пять встреч</li>
+      <li>С Егоровым у Димы стиль короткий и по делу</li>
+      <li>Завтра пятница — он закроет вопрос в выходные</li>
+    </ul>
+    <p>Со временем Вера учится <strong>предсказывать</strong> что Дима скажет в любой ситуации. И умеет писать драфты ответов, которые звучат как сам Дима.</p>
+  </div>
+
+  <!-- STORY: example flow -->
+  <h2>Пример: приходит письмо</h2>
+  <div class="story">
+    <div class="story-msg">
+      <strong>От:</strong> Facebook notifications<br>
+      <strong>Тема:</strong> 5 новых событий на этой неделе<br>
+      <em>«День рождения Анны Петровой 12 ноября... Сдаётся квартира 2BR в Семеньяке за $800/мес... Скидка 20% в Pizza Hut...»</em>
+    </div>
+  </div>
+
+  <div class="flow">
+    <div class="flow-step">
+      <div class="flow-icon" style="background: var(--blue-soft);">📥</div>
+      <div><strong>Захват</strong> (мгновенно, $0)<br>
+        <span class="small">Письмо сохранено в полную память. Доступно по поиску навсегда.</span>
+      </div>
+    </div>
+    <div class="flow-arrow">↓</div>
+    <div class="flow-step">
+      <div class="flow-icon" style="background: var(--green-soft);">🔍</div>
+      <div><strong>Триаж</strong> (1–2 секунды, $0.001)<br>
+        <span class="small">AI читает текст. Видит: упоминания «Анна», «квартира Семеньяк». Сравнивает с активным проектом Димы — <strong>«переезд в Индонезию»</strong>. <span class="ok">Совпадение 85%!</span></span>
+      </div>
+    </div>
+    <div class="flow-arrow">↓</div>
+    <div class="flow-step">
+      <div class="flow-icon" style="background: var(--purple-soft);">🕸️</div>
+      <div><strong>Глубокое понимание</strong> (5 секунд, $0.05)<br>
+        <span class="small">Создаёт узел «Квартира 2BR Семеньяк $800» → связь → «Проект переезд». Добавляет ДР Анны в календарь.</span>
+      </div>
+    </div>
+    <div class="flow-arrow">↓</div>
+    <div class="flow-step">
+      <div class="flow-icon" style="background: var(--accent-soft);">📖</div>
+      <div><strong>Обновляет досье</strong> (фоном)<br>
+        <span class="small">В досье «Переезд в Индонезию» добавляется новая опция жилья. В досье «Анна» — ДР через 11 дней.</span>
+      </div>
+    </div>
+    <div class="flow-arrow">↓</div>
+    <div class="flow-step">
+      <div class="flow-icon" style="background: var(--pink-soft);">💬</div>
+      <div><strong>Уведомление Диме</strong><br>
+        <span class="small">«Дима, нашлось 1 важное по теме переезда: квартира 2BR в Семеньяке за $800. Хочешь подробности?» + «ДР Анны через 11 дней, напомнить заранее?»</span>
+      </div>
+    </div>
+  </div>
+  <p class="small">⏱ Весь процесс занимает <strong>несколько секунд</strong>. Скидка в Pizza Hut тоже сохранена, но не вспыхивает — её можно найти через поиск, если Диме понадобится.</p>
+
+  <!-- COMPARISON -->
+  <h2>Чем это отличается от старой Веры</h2>
+  <p>Старая Вера обрабатывала глубоко <strong>каждое</strong> событие как важное. Это как читать с фломастером каждую книгу из библиотеки целиком — даже рекламные брошюры. Дорого, медленно, не как у человека.</p>
+
+  <table>
+    <thead>
+      <tr><th>Сценарий</th><th>Старая Вера</th><th>Новая Вера</th></tr>
+    </thead>
+    <tbody>
+      <tr>
+        <td>Прогнать 30 дней истории</td>
+        <td class="bad">~30 дней, ~$200</td>
+        <td class="ok">~2 дня, $2–6</td>
+      </tr>
+      <tr>
+        <td>Прогнать 17 месяцев (с янв 2025)</td>
+        <td class="bad">~1.5 года, $3500</td>
+        <td class="ok">~5 дней, $10–20</td>
+      </tr>
+      <tr>
+        <td>Стоимость в месяц при полном живом потоке</td>
+        <td class="bad">~$200–400/мес</td>
+        <td class="ok">$15–25/мес</td>
+      </tr>
+      <tr>
+        <td>Найти что-то в истории</td>
+        <td>Только если попало в граф</td>
+        <td class="ok">Найдётся всё, включая рекламу</td>
+      </tr>
+      <tr>
+        <td>Подключить новый источник (FB, IG, новый бот)</td>
+        <td class="bad">Дорого масштабируется</td>
+        <td class="ok">Бесплатно. Расход не растёт.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <!-- TOTAL -->
+  <div class="total">
+    <div class="total-label">Полная Вера в месяц</div>
+    <div class="total-num">$15–25</div>
+    <div class="total-label">Любое количество источников · вся история · все ответы</div>
+  </div>
+
+  <!-- WHAT YOU GET -->
+  <h2>Что в итоге получит Дима</h2>
+  <div class="card-row">
+    <div class="card">
+      <h3>✅ Ничего не пропускается</h3>
+      <p class="small">Все письма, чаты, сообщения — каждое сохранено и доступно поиском, даже спам.</p>
+    </div>
+    <div class="card">
+      <h3>🧠 Понимает кто/что важно</h3>
+      <p class="small">Егоров — босс. Маша — жена. Veranda — бар. Виза — горит. Вера сама строит и обновляет картину.</p>
+    </div>
+    <div class="card">
+      <h3>⚡ Отвечает за секунды</h3>
+      <p class="small">«Что было с Veranda в августе?» — мгновенный ответ из досье или сборка на лету.</p>
+    </div>
+    <div class="card">
+      <h3>👀 Видит сигналы в мусоре</h3>
+      <p class="small">FB-рассылка про скидки — внутри ДР Анны и предложение аренды. Вера это вытащит.</p>
+    </div>
+    <div class="card">
+      <h3>✍️ Пишет как Дима</h3>
+      <p class="small">Драфт ответа Егорову — точно в его стиле, с его обычным тоном, в правильное время.</p>
+    </div>
+    <div class="card">
+      <h3>🔔 Замечает то что Дима не заметил</h3>
+      <p class="small">«Ты не ответил Егорову уже 8 часов — обычно отвечаешь за 2. У тебя встреча — напомнить после?»</p>
+    </div>
+  </div>
+
+  <!-- HIGHLIGHT -->
+  <div class="highlight">
+    <strong>Главное:</strong> это не «помощник который отвечает на команды». Это <strong>цифровая версия памяти и понимания</strong>. Если бы у Димы было идеальное воспоминание + время осмыслить каждое событие — он бы сам это сделал. Вера делает это за него.
+  </div>
+
+  <div class="footer">
+    Веры 2.0 · архитектура от 2026-06-08
+  </div>
+
+</div>
+
+</body>
+</html>
