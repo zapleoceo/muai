@@ -91,7 +91,7 @@ services:
       SEARCH_URL: http://brain-search:8000
     restart: unless-stopped
 
-  # ─── Sync bridge from Vera 2.0 (временно, пока ingestor'ы не готовы) ─
+  # ─── Sync bridge from Vera 2.0 (временно — пока ingestor'ы покрывают всё) ─
   sync-bridge:
     build:
       context: ..
@@ -109,6 +109,61 @@ services:
       - /var/lib/docker/volumes/vera_vera_data/_data:/vera2:ro
     restart: unless-stopped
 
+  # ─── Gmail Ingestor ─────────────────────────────────────────────────────
+  ingestor-gmail:
+    build:
+      context: ..
+      dockerfile: services/ingestor-gmail/Dockerfile
+    container_name: vera3-ingestor-gmail
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
+      TOKEN_SECRET: ${TOKEN_SECRET}
+      GMAIL_CLIENT_ID: ${GMAIL_CLIENT_ID}
+      GMAIL_CLIENT_SECRET: ${GMAIL_CLIENT_SECRET}
+      GMAIL_POLL_S: 300
+    restart: unless-stopped
+
+  # ─── Telegram Userbot ───────────────────────────────────────────────────
+  ingestor-telegram:
+    build:
+      context: ..
+      dockerfile: services/ingestor-telegram/Dockerfile
+    container_name: vera3-ingestor-telegram
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
+      TOKEN_SECRET: ${TOKEN_SECRET}
+      TELEGRAM_API_ID: ${TELEGRAM_API_ID}
+      TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
+      TELEGRAM_PHONE: ${TELEGRAM_PHONE}
+      TELEGRAM_SESSION_DIR: /sessions
+    volumes:
+      - vera3_tg_sessions:/sessions
+    restart: unless-stopped
+
+  # ─── Dashboard ──────────────────────────────────────────────────────────
+  dashboard:
+    build:
+      context: ..
+      dockerfile: services/dashboard/Dockerfile
+    container_name: vera3-dashboard
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
+      TOKEN_SECRET: ${TOKEN_SECRET}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      SEARCH_URL: http://brain-search:8000
+    ports:
+      - "127.0.0.1:8003:8000"
+    restart: unless-stopped
+
   # ─── Housekeeping ───────────────────────────────────────────────────────
   prune:
     image: docker:cli
@@ -124,4 +179,6 @@ services:
 
 volumes:
   vera3_pgdata:
+    driver: local
+  vera3_tg_sessions:
     driver: local

@@ -173,8 +173,8 @@ async def _call_provider(
     # OpenAI-compat path
     if provider in {"cerebras", "groq", "openrouter", "deepseek", "openai", "sambanova", "nvidia", "mistral"}:
         url = f"{base_url}/chat/completions"
-        # Groq нужен openai/ префикс
-        api_model = f"openai/{model}" if provider == "groq" else model
+        # Groq model уже содержит "openai/" префикс в registry — НЕ удваиваем
+        api_model = model
         payload: dict[str, Any] = {
             "model": api_model,
             "messages": messages,
@@ -222,9 +222,9 @@ async def _call_provider(
             },
         }
         if response_format and response_format.get("type") == "json_schema":
-            schema = response_format["json_schema"]["schema"]
+            # Gemini не принимает наш OpenAI-стиль schema (другие field names).
+            # Просим просто JSON output без strict schema.
             payload["generationConfig"]["responseMimeType"] = "application/json"
-            payload["generationConfig"]["responseSchema"] = schema
 
         t0 = time.time()
         async with httpx.AsyncClient(timeout=60.0) as c:

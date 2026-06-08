@@ -70,12 +70,22 @@ JSON_SCHEMA = {
                 "properties": {
                     "type": {"type": "string"},
                     "summary": {"type": "string"},
-                    "date": {"type": ["string", "null"]},
+                    "date": {"type": "string"},
                 },
                 "required": ["type", "summary"],
             },
         },
-        "active_topic_matches": {"type": "array"},
+        "active_topic_matches": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "topic": {"type": "string"},
+                    "confidence": {"type": "number"},
+                },
+                "required": ["topic"],
+            },
+        },
         "needs_action": {"type": "boolean"},
     },
     "required": ["importance", "topics", "people_mentioned", "signals", "needs_action"],

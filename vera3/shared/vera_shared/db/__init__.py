@@ -13,6 +13,7 @@ from vera_shared.db.models import (
     JobRow,
     UsageLogRow,
 )
+from vera_shared.db.models_sources import GmailAccountRow, TelegramSessionRow
 
 __all__ = [
     "Base",
@@ -25,4 +26,6 @@ __all__ = [
     "SourceRow",
     "JobRow",
     "UsageLogRow",
+    "GmailAccountRow",
+    "TelegramSessionRow",
 ]
