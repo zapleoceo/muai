@@ -77,42 +77,52 @@ async def search(query: SearchQuery) -> AnswerResponse:
         log.warning("Embed failed: %s — fallback only FTS", e)
         q_vec = None
 
-    # 2. FTS-search через ILIKE (на старте без full FTS5)
-    # 3. Достаём recent events + ранжируем по сходству
+    # Postgres FTS с русским стеммером — учитывает морфологию И word boundaries.
+    # Решает проблемы:
+    #   - «виза» матчит «визой/визу/визы», но НЕ «Визардиум» (другой токен)
+    #   - «Лизе» матчит «Лиза/Лизы/Лизой»
+    # ts_rank даёт нативную релевантность.
     async with get_session() as s:
-        words = [w for w in query.q.split() if len(w) >= 3]
-        # Берём по словам OR + recent. Берём кандидатов 200.
-        if words:
-            ilike_conditions = " OR ".join(
-                f"content_text ILIKE :w{i}" for i in range(len(words))
-            )
-            sql = f"""
+        # Удаляем стопслова + escape tsquery спецсимволы
+        import re
+        STOPWORDS = {"что", "как", "и", "в", "на", "о", "по", "у", "для",
+                     "это", "что-то", "ли", "ну", "же", "то", "был", "была",
+                     "были", "быть", "есть", "не", "ни", "при", "из", "за",
+                     "ты", "я", "мне", "мы", "вы", "он", "она", "они"}
+        raw_words = re.findall(r"[\wа-яА-ЯёЁ]+", query.q)
+        words = [w for w in raw_words if len(w) >= 2 and w.lower() not in STOPWORDS]
+        # to_tsquery с prefix-match (:* — найдёт «виза», «визу», «визой»)
+        ts_query = " | ".join(f"{w}:*" for w in words) if words else ""
+
+        if ts_query:
+            stmt = text("""
                 SELECT id, source, source_event_id, occurred_at, content_text,
-                       importance, embedding_voyage_3
+                       importance, embedding_voyage_3,
+                       ts_rank(to_tsvector('russian', content_text),
+                               to_tsquery('russian', :tsq)) AS rank
                 FROM events
-                WHERE ({ilike_conditions})
-                ORDER BY occurred_at DESC
+                WHERE to_tsvector('russian', content_text)
+                      @@ to_tsquery('russian', :tsq)
+                ORDER BY rank DESC, occurred_at DESC
                 LIMIT 200
-            """
-            stmt = text(sql)
-            params = {f"w{i}": f"%{w}%" for i, w in enumerate(words)}
-            rs = (await s.execute(stmt, params)).all()
+            """)
+            rs = (await s.execute(stmt, {"tsq": ts_query})).all()
         else:
             stmt = text(
                 "SELECT id, source, source_event_id, occurred_at, content_text, "
-                "importance, embedding_voyage_3 FROM events "
-                "ORDER BY occurred_at DESC LIMIT 100"
+                "importance, embedding_voyage_3, 0.0 AS rank "
+                "FROM events ORDER BY occurred_at DESC LIMIT 100"
             )
             rs = (await s.execute(stmt)).all()
 
     candidates: list[tuple[float, dict]] = []
     for r in rs:
-        # Score: combo of FTS hit + cosine sim
-        score = 0.0
+        # Hybrid score: FTS rank + semantic similarity + importance
+        ts_rank = float(r[7]) if r[7] is not None else 0.0
+        score = ts_rank * 2.0  # FTS — главный сигнал
         emb = r[6]
         if q_vec and emb:
-            score = _cosine(q_vec, emb)
-        # Importance boost
+            score += _cosine(q_vec, emb)
         if r[5]:
             score += r[5] / 200.0
         candidates.append((score, {
