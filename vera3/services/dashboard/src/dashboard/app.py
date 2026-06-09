@@ -636,21 +636,22 @@ async def sources_page(request: Request):
         tg_freshness = f'<span class="pill err">давно молчит ({mins_since} мин)</span>'
 
     tg_types_html = "".join(
-        f'<div class="row"><span>{t or "—"}</span><span class="mute">{cnt:,}</span></div>'
+        f'<div class="row"><span>{esc(t or "—")}</span><span class="mute">{cnt:,}</span></div>'
         for t, cnt in tg_by_type
     )
     tg_dir_html = "".join(
-        f'<div class="row"><span>{d}</span><span class="mute">{cnt:,}</span></div>'
+        f'<div class="row"><span>{esc(d)}</span><span class="mute">{cnt:,}</span></div>'
         for d, cnt in tg_by_direction
     )
     tg_top_html = "".join(
-        f'<div class="row"><span>{title[:60]} <span class="mute">({ctype})</span></span>'
+        f'<div class="row"><span>{esc((title or "")[:60])} '
+        f'<span class="mute">({esc(ctype or "?")})</span></span>'
         f'<span class="mute">{cnt:,}</span></div>'
         for title, ctype, cnt in tg_top_chats
     )
 
     src_html = "".join(
-        f'<div class="row"><span>{src}</span><span class="mute">{cnt:,} событий</span></div>'
+        f'<div class="row"><span>{esc(src)}</span><span class="mute">{cnt:,} событий</span></div>'
         for src, cnt in events_by_src
     )
 
@@ -728,16 +729,18 @@ async def search_ui(request: Request, q: str = Form(...)):
         async with httpx.AsyncClient(timeout=90) as c:
             r = await c.post(f"{SEARCH_URL}/search", json={"q": q, "limit": 15})
         data = r.json()
-        answer = data.get("answer", "—").replace("<", "&lt;").replace("\n", "<br>")
-        provider = data.get("provider") or "—"
-        cost = data.get("cost_usd", 0.0)
+        # Полный HTML escape ответа + перевод \n в <br>. quote=True закрывает
+        # XSS через атрибуты, не только теги.
+        answer = esc(data.get("answer", "—")).replace("\n", "<br>")
+        provider = esc(data.get("provider") or "—")
+        cost = float(data.get("cost_usd", 0.0))
         n = len(data.get("results", []))
         return HTMLResponse(
             f'<div class="answer"><b>Ответ:</b><br>{answer}</div>'
             f'<div class="meta">via {provider}, ${cost:.4f}, {n} событий</div>'
         )
     except Exception as e:
-        return HTMLResponse(f'<div class="error">Ошибка: {e}</div>')
+        return HTMLResponse(f'<div class="error">Ошибка: {esc(str(e))}</div>')
 
 
 # ─── Templates ─────────────────────────────────────────────────────────────

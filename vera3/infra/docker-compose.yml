@@ -31,9 +31,9 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
-      INTERNAL_SECRET: ${INTERNAL_SECRET:-dev}
+      INTERNAL_SECRET: ${INTERNAL_SECRET:?INTERNAL_SECRET must be set}
       TOKEN_SECRET: ${TOKEN_SECRET}
-      OWNER_TELEGRAM_ID: ${OWNER_TELEGRAM_ID:-0}
+      OWNER_TELEGRAM_ID: ${OWNER_TELEGRAM_ID:?OWNER_TELEGRAM_ID must be set}
       LOG_LEVEL: INFO
     ports:
       - "127.0.0.1:8001:8000"
@@ -95,26 +95,12 @@ services:
       OWNER_TELEGRAM_ID: ${OWNER_TELEGRAM_ID}
       SEARCH_URL: http://brain-search:8000
       GATEWAY_URL: http://gateway:8000
-      INTERNAL_SECRET: ${INTERNAL_SECRET:-}
+      INTERNAL_SECRET: ${INTERNAL_SECRET:?INTERNAL_SECRET must be set}
     restart: unless-stopped
+    logging: {driver: json-file, options: {max-size: 10m, max-file: 3}}
 
-  # ─── Sync bridge from Vera 2.0 (временно — пока ingestor'ы покрывают всё) ─
-  sync-bridge:
-    build:
-      context: ..
-      dockerfile: services/sync-bridge/Dockerfile
-    container_name: vera3-sync-bridge
-    depends_on:
-      postgres:
-        condition: service_healthy
-    environment:
-      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
-      TOKEN_SECRET: ${TOKEN_SECRET}
-      VERA2_SQLITE: /vera2/vera.db
-      SYNC_POLL_S: 60
-    volumes:
-      - /var/lib/docker/volumes/vera_vera_data/_data:/vera2:ro
-    restart: unless-stopped
+  # NOTE: sync-bridge retired 2026-06-09 — Vera 2 is gone, its SQLite no
+  # longer updates. ingestor-{telegram,gmail,instagram} cover everything.
 
   # ─── Gmail Ingestor ─────────────────────────────────────────────────────
   ingestor-gmail:
@@ -149,7 +135,7 @@ services:
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
       TELEGRAM_PHONE: ${TELEGRAM_PHONE}
       TELEGRAM_SESSION_DIR: /sessions
-      INTERNAL_SECRET: ${INTERNAL_SECRET:-dev}
+      INTERNAL_SECRET: ${INTERNAL_SECRET:?INTERNAL_SECRET must be set}
     volumes:
       - vera3_tg_sessions:/sessions
     expose:
@@ -170,7 +156,7 @@ services:
       DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
       TOKEN_SECRET: ${TOKEN_SECRET}
       GATEWAY_URL: http://gateway:8000
-      INTERNAL_SECRET: ${INTERNAL_SECRET:-dev}
+      INTERNAL_SECRET: ${INTERNAL_SECRET:?INTERNAL_SECRET must be set}
       IG_POLL_INTERVAL_S: "90"
     restart: unless-stopped
 

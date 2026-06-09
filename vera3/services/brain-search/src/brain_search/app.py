@@ -1,14 +1,17 @@
 """Vera 3.0 search service — hybrid retrieval + answer synthesis."""
 from __future__ import annotations
 
+import asyncio
 import logging
 import math
+import re
+import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel, Field
-from sqlalchemy import bindparam, select, text
+from sqlalchemy import select, text
 
 from vera_shared.db.engine import close_engine, get_session, init_engine
 from vera_shared.db.models import EventRow
@@ -18,6 +21,18 @@ from vera_shared.llm.client import LLMCallFailed, chat, embed
 from brain_search.agent import run_agent
 
 log = logging.getLogger(__name__)
+
+# Стопслова и regex — module-level, не пересоздавать на каждый запрос
+STOPWORDS = {
+    "что", "как", "и", "в", "на", "о", "по", "у", "для", "это", "что-то",
+    "ли", "ну", "же", "то", "был", "была", "были", "быть", "есть",
+    "не", "ни", "при", "из", "за", "ты", "я", "мне", "мы", "вы",
+    "он", "она", "они",
+}
+_WORD_RE = re.compile(r"[\wа-яА-ЯёЁ]+")
+# Self-context кэш — COUNT(*) FROM events это seq scan, не запускаем на каждый запрос
+_SELF_CTX_TTL_S = 60
+_self_ctx_cache: dict[str, Any] = {"value": None, "fetched_at": 0.0}
 
 
 @asynccontextmanager
@@ -116,10 +131,12 @@ async def healthz():
 
 
 async def _self_context() -> str:
-    """Описание реальной конфигурации Веры — что подключено, сколько данных.
+    """Описание реальной конфигурации Веры. Кэшируется на _SELF_CTX_TTL_S
+    чтобы COUNT(*) FROM events не делался на каждый /search."""
+    now = time.time()
+    if _self_ctx_cache["value"] and (now - _self_ctx_cache["fetched_at"] < _SELF_CTX_TTL_S):
+        return _self_ctx_cache["value"]
 
-    Включается в каждый search-prompt, чтобы Вера могла ответить про себя.
-    """
     from sqlalchemy import func
     async with get_session() as s:
         gmail_accs = (await s.execute(
@@ -155,37 +172,30 @@ async def _self_context() -> str:
     for src, cnt in per_src:
         lines.append(f"• {src}: {cnt:,}")
 
-    return "\n".join(lines)
+    result = "\n".join(lines)
+    _self_ctx_cache["value"] = result
+    _self_ctx_cache["fetched_at"] = now
+    return result
 
 
 @app.post("/search", response_model=AnswerResponse)
 async def search(query: SearchQuery) -> AnswerResponse:
     """Гибридный поиск + LLM-синтез ответа."""
-    # 1. Embed запроса
+    # 1. Embed запроса — ВАЖНО передаём как list[str], НЕ str.
+    # `embed(str)` сейчас правильно оборачивает в [str], но явный list безопаснее.
+    q_vec: list[float] | None = None
     try:
-        q_vecs = await embed(query.q)
-        q_vec = q_vecs[0]
-    except LLMCallFailed as e:
+        q_vecs = await asyncio.wait_for(embed([query.q]), timeout=15)
+        q_vec = q_vecs[0] if q_vecs else None
+    except (LLMCallFailed, asyncio.TimeoutError) as e:
         log.warning("Embed failed: %s — fallback only FTS", e)
-        q_vec = None
 
-    # Postgres FTS с русским стеммером — учитывает морфологию И word boundaries.
-    # Решает проблемы:
-    #   - «виза» матчит «визой/визу/визы», но НЕ «Визардиум» (другой токен)
-    #   - «Лизе» матчит «Лиза/Лизы/Лизой»
-    # ts_rank даёт нативную релевантность.
+    # Postgres FTS с русским стеммером
+    raw_words = _WORD_RE.findall(query.q)
+    words = [w for w in raw_words if len(w) >= 2 and w.lower() not in STOPWORDS]
+    ts_query = " | ".join(f"{w}:*" for w in words) if words else ""
+
     async with get_session() as s:
-        # Удаляем стопслова + escape tsquery спецсимволы
-        import re
-        STOPWORDS = {"что", "как", "и", "в", "на", "о", "по", "у", "для",
-                     "это", "что-то", "ли", "ну", "же", "то", "был", "была",
-                     "были", "быть", "есть", "не", "ни", "при", "из", "за",
-                     "ты", "я", "мне", "мы", "вы", "он", "она", "они"}
-        raw_words = re.findall(r"[\wа-яА-ЯёЁ]+", query.q)
-        words = [w for w in raw_words if len(w) >= 2 and w.lower() not in STOPWORDS]
-        # to_tsquery с prefix-match (:* — найдёт «виза», «визу», «визой»)
-        ts_query = " | ".join(f"{w}:*" for w in words) if words else ""
-
         if ts_query:
             stmt = text("""
                 SELECT id, source, source_event_id, occurred_at, content_text,
@@ -199,11 +209,25 @@ async def search(query: SearchQuery) -> AnswerResponse:
                 LIMIT 200
             """)
             rs = (await s.execute(stmt, {"tsq": ts_query})).all()
+        elif q_vec:
+            # Stopword-only вопрос («что это?») — берём топ-200 НЕДАВНИХ и
+            # ранжируем по vector similarity, а НЕ дампим 100 случайных событий.
+            stmt = text("""
+                SELECT id, source, source_event_id, occurred_at, content_text,
+                       importance, embedding_voyage_3, 0.0 AS rank
+                FROM events
+                WHERE embedding_voyage_3 IS NOT NULL
+                ORDER BY occurred_at DESC
+                LIMIT 200
+            """)
+            rs = (await s.execute(stmt)).all()
         else:
+            # Нет ни keywords ни embedding — возвращаем последние, но честно
+            # говорим LLM что данных мало
             stmt = text(
                 "SELECT id, source, source_event_id, occurred_at, content_text, "
                 "importance, embedding_voyage_3, 0.0 AS rank "
-                "FROM events ORDER BY occurred_at DESC LIMIT 100"
+                "FROM events ORDER BY occurred_at DESC LIMIT 30"
             )
             rs = (await s.execute(stmt)).all()
 
@@ -301,17 +325,21 @@ async def search(query: SearchQuery) -> AnswerResponse:
 
     # Legacy однопроход (use_agent=false) — для отладки/dashboard.
     try:
-        answer_text, meta = await chat(
-            messages=[{"role": "user", "content": synth_prompt}],
-            capability="chat:smart",
-            max_tokens=800,
-            temperature=0.5,
-            workflow="search",
+        answer_text, meta = await asyncio.wait_for(
+            chat(
+                messages=[{"role": "user", "content": synth_prompt}],
+                capability="chat:smart",
+                max_tokens=800,
+                temperature=0.5,
+                workflow="search",
+            ),
+            timeout=90,
         )
         provider = meta.get("provider")
         cost = meta.get("cost_usd", 0.0)
-    except LLMCallFailed:
-        answer_text = f"Не могу обратиться к LLM (провайдеры заняты). Нашёл {len(results)} событий."
+    except (LLMCallFailed, asyncio.TimeoutError) as e:
+        log.warning("Synth failed: %s", e)
+        answer_text = f"Не могу обратиться к LLM (провайдеры заняты или таймаут). Нашёл {len(results)} событий."
         provider = None
         cost = 0.0
 

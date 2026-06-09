@@ -72,6 +72,28 @@ async def fetch_messages(access_token: str, query: str, max_results: int = 30) -
     return messages
 
 
+_SCRIPT_STYLE_RE = re.compile(
+    r"<(script|style)[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL
+)
+_TAG_RE = re.compile(r"<[^>]+>")
+_WS_RE = re.compile(r"\s+")
+
+
+def _html_to_text(html: str) -> str:
+    """HTML → text. Убирает <script>/<style> ПОЛНОСТЬЮ (содержимое и теги).
+
+    Старый regex `<[^>]+>` оставлял JS-код в тексте — попадал в LLM, тратил
+    токены и мог стать prompt injection через email-newsletter с JS внутри.
+    """
+    html = _SCRIPT_STYLE_RE.sub(" ", html)
+    text = _TAG_RE.sub(" ", html)
+    text = (text
+            .replace("&nbsp;", " ").replace("&amp;", "&")
+            .replace("&lt;", "<").replace("&gt;", ">")
+            .replace("&quot;", '"').replace("&#39;", "'"))
+    return _WS_RE.sub(" ", text).strip()
+
+
 def _extract_text(payload: dict) -> str:
     """Recursive extract plain text from MIME parts."""
     if payload.get("mimeType") == "text/plain":
@@ -85,13 +107,12 @@ def _extract_text(payload: dict) -> str:
         txt = _extract_text(part)
         if txt:
             return txt
-    # Fallback to html
     if payload.get("mimeType") == "text/html":
         data = payload.get("body", {}).get("data", "")
         if data:
             try:
                 html = base64.urlsafe_b64decode(data + "===").decode("utf-8", errors="ignore")
-                return re.sub(r"<[^>]+>", " ", html)
+                return _html_to_text(html)
             except Exception:
                 return ""
     return ""
@@ -109,7 +130,10 @@ def _format_event(account_email: str, msg: dict) -> dict[str, Any]:
     except Exception:
         occurred = datetime.utcnow()
     if occurred.tzinfo:
-        occurred = occurred.replace(tzinfo=None)  # to naive UTC
+        # Convert to UTC FIRST, then strip tz — иначе "11:22 +07:00" станет "11:22"
+        # naive вместо корректного "04:22" UTC.
+        from datetime import timezone
+        occurred = occurred.astimezone(timezone.utc).replace(tzinfo=None)
 
     direction = "sent" if account_email.lower() in from_.lower() else "received"
     body = _extract_text(msg.get("payload", {}))[:8000]
