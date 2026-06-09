@@ -1,6 +1,6 @@
 [project]
 name = "vera-shared"
-version = "0.3.0"
+version = "0.3.1"
 description = "Shared library for Vera 3.0 services"
 requires-python = ">=3.12"
 dependencies = [
