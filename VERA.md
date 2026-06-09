@@ -135,7 +135,8 @@ writes.
 
 ## 6. Standard source contract
 
-Every input source (existing or future) implements two methods:
+Every input source (existing or future) implements four methods. The first
+two are mandatory; `sync_directory` and `tools` are opt-in but recommended.
 
 ```python
 class Source(ABC):
@@ -144,6 +145,16 @@ class Source(ABC):
 
     async def backfill(self, since: date) -> AsyncIterator[EventEnvelope]:
         """Yield events from `since` to now, oldest first."""
+
+    async def sync_directory(self) -> DirectoryDelta:
+        """Upsert Entity / Membership / Relationship rows for this source.
+        Examples: TG group participants, gmail Contacts, IG followers.
+        Default: no-op."""
+
+    def tools(self) -> list[Tool]:
+        """Live tools the agent loop can call (look up, search, read).
+        Examples: telegram.get_participants, gmail.search, ig.profile_info.
+        Default: []."""
 ```
 
 `EventEnvelope` is a normalised dict with:
@@ -261,6 +272,19 @@ ssh hetzner-root "/var/www/vera/scripts/deploy.sh"
 Action posts to Telegram and runs ROLLBACK_SHA reset.
 
 ## 13. Migration log
+
+- **2026-06-09 (this commit)**: v3 substrate consolidated. Graph layer is
+  materialized inside Postgres (not Neo4j yet) via `entities` /
+  `entity_aliases` / `memberships` / `relationships` / `identity_nodes` /
+  `patterns` tables behind a `graph_repo` API — Neo4j swap is a one-file
+  change later. Phase 3 (Voice / Style nodes per relationship)
+  **promoted ahead of Phase 2** at owner's request: Vera must learn Dima's
+  per-recipient writing style (formality вы/ты, length, emoji rate,
+  opening/closing patterns, vocabulary signatures, code-switching ratio,
+  sample messages) and draft outgoing messages in that voice via
+  `tools.style.draft(recipient, intent)`. Tool layer formalized:
+  `shared/vera_shared/tools/{base,registry,http_client,memory,search,style}.py`
+  with one registry; every ingestor exposes `/tools/*`. New §19 below.
 
 - **2026-06-01**: Brain auto-feedback loop killed — `vera-monitor` now
   ignores Graphiti ingest errors (Gemini/Voyage rate-limits). DRY pass:
@@ -397,6 +421,87 @@ DB_PATH=/tmp/vera-test.db SESSION_SECRET=dev INTERNAL_SECRET=dev \
 
 Migrations apply automatically on startup. Test fixtures live in
 `vera-core/tests/conftest.py` — they isolate a temp SQLite per session.
+
+---
+
+## 19. Style profiling — how Vera sounds like Dima
+
+Phase 3 promoted ahead. Vera holds a **per-relationship Style profile** in
+L3 (`identity_nodes` where `type='style'`) and uses it whenever she drafts
+a message on Dima's behalf.
+
+### Profile shape
+
+```jsonc
+{
+  "speaker": "dima",
+  "listener_entity_id": 4711,        // resolved Person/Chat in entities
+  "listener_label": "Маша",
+  "based_on_n_messages": 234,
+  "formality": "ty",                 // 'vy' | 'ty' | 'mixed'
+  "avg_length_chars": 86,
+  "avg_sentences": 1.4,
+  "emoji_per_msg": 0.6,
+  "frequent_emoji": ["🙏","🤙","😂"],
+  "openings": ["Слушай,", "Привет!", "Окей"],
+  "closings": ["Обнимаю", "Спасибо", "—"],
+  "vocabulary_signatures": ["надо","короче","шарю","заебись"],
+  "code_switching": {"ru": 0.78, "en": 0.18, "uk": 0.04},
+  "median_response_latency_min": 9,
+  "sample_messages": [
+    {"event_id": 22310, "text": "ок, через час буду"},
+    {"event_id": 22871, "text": "слушай, перенесём на среду?"},
+    ...
+  ],
+  "updated_at": "2026-06-09T03:00:00Z",
+  "confidence": 0.83
+}
+```
+
+### Generation pipeline
+
+```
+brain-voice service (nightly cron, 03:00 UTC):
+  1. SELECT events WHERE direction='sent' AND occurred_at > now()-90d
+  2. group by resolved_listener_entity_id
+  3. for each (Dima → Listener):
+       - compute stats (formality, length, emoji, code-switch)
+       - extract n-gram vocabulary signatures
+       - pick 10 representative samples (medoid by embedding)
+       - UPSERT identity_node(type='style', payload=profile)
+  4. global Dima style fallback (any-listener) also stored
+```
+
+### Tool exposure
+
+```
+tools.style.get(listener)              → StyleProfile | None
+tools.style.draft(listener, intent,    → {text, model, profile_used}
+                  context, length_hint)
+tools.style.list_profiles()            → [(listener, n_messages, updated_at)]
+```
+
+`draft()` builds the LLM prompt:
+```
+You are Dima writing to {listener_label}. Match this voice exactly:
+{compact profile}
+Examples of how Dima writes to them:
+{5 sample_messages verbatim}
+Intent: {intent}
+Context: {context}
+Write the message. Plain text. {length_hint or 'aim for avg_length_chars ±30%'}.
+```
+
+### Hard rules
+
+- Style is never `'auto-send'`. Drafts always require explicit owner ✅
+  before the corresponding send tool fires (Telegram, Gmail, IG).
+- Style is **observed, not configured.** Dima can override a profile
+  field in chat ("с Машей я теперь на вы"); the editor agent writes a
+  Correction edge and the next nightly rebuild respects it.
+- Style profiles are derivable. They are NOT a source of truth — they
+  are a cache over `events.direction='sent'`. Drop the row, the next
+  voice run rebuilds it.
 
 ---
 
