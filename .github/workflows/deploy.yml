@@ -1,8 +1,11 @@
-name: Deploy
+name: Deploy vera3 to Hetzner
 
 on:
   push:
     branches: [master]
+    paths:
+      - 'vera3/**'
+      - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
 concurrency:
@@ -12,11 +15,16 @@ concurrency:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 25
     env:
       HOST: ${{ secrets.HETZNER_HOST }}
       PORT: ${{ secrets.HETZNER_PORT || '9617' }}
+      USER: root
+      REMOTE_DIR: /var/www/vera3
+
     steps:
+      - uses: actions/checkout@v4
+
       - name: Set up SSH
         uses: webfactory/ssh-agent@v0.9.0
         with:
@@ -27,36 +35,58 @@ jobs:
           mkdir -p ~/.ssh
           ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts
 
-      - name: Capture previous SHA
-        id: prev
+      - name: Disk usage before
         run: |
-          PREV=$(ssh -p "$PORT" -o BatchMode=yes "root@$HOST" \
-                 'cd /var/www/vera && git rev-parse HEAD' || echo "")
-          echo "prev_sha=$PREV" >> "$GITHUB_OUTPUT"
+          ssh -p "$PORT" "$USER@$HOST" 'df -h / | tail -1'
 
-      - name: Bootstrap (sync deploy script)
+      - name: Rsync vera3 code → server
         run: |
-          ssh -p "$PORT" -o BatchMode=yes "root@$HOST" '
-            cd /var/www/vera
-            git fetch --quiet origin master
-            git checkout origin/master -- scripts/deploy.sh
-            chmod +x scripts/deploy.sh
+          rsync -az --delete \
+            --exclude '.git' \
+            --exclude '__pycache__' \
+            --exclude '*.pyc' \
+            --exclude '.pytest_cache' \
+            --exclude 'htmlcov' \
+            --exclude '.coverage' \
+            -e "ssh -p $PORT" \
+            vera3/ \
+            "$USER@$HOST:$REMOTE_DIR/"
+
+      - name: Build & up services
+        run: |
+          ssh -p "$PORT" -o ServerAliveInterval=30 "$USER@$HOST" '
+            set -e
+            cd /var/www/vera3/infra
+            docker compose build
+            docker compose up -d --remove-orphans
+            sleep 8
+            docker compose ps
           '
 
-      - name: Deploy
-        id: deploy
-        run: ssh -p "$PORT" -o BatchMode=yes -o ConnectTimeout=15 -o ServerAliveInterval=30 -o ServerAliveCountMax=20 "root@$HOST"
-             '/var/www/vera/scripts/deploy.sh'
-
-      - name: Rollback on failure
-        if: failure() && steps.prev.outputs.prev_sha != ''
+      - name: Smoke checks
         run: |
-          echo "Rolling back to ${{ steps.prev.outputs.prev_sha }}"
-          ssh -p "$PORT" -o BatchMode=yes "root@$HOST" \
-              "ROLLBACK_SHA=${{ steps.prev.outputs.prev_sha }} /var/www/vera/scripts/deploy.sh" \
-              || echo "rollback failed"
+          ssh -p "$PORT" "$USER@$HOST" '
+            set -e
+            docker exec vera3-gateway      python -c "import urllib.request;import sys;sys.exit(0 if urllib.request.urlopen(\"http://localhost:8000/healthz\",timeout=5).status==200 else 1)" || exit 11
+            docker exec vera3-brain-search python -c "import urllib.request;import sys;sys.exit(0 if urllib.request.urlopen(\"http://localhost:8000/healthz\",timeout=5).status==200 else 1)" || exit 12
+            docker exec vera3-dashboard    python -c "import urllib.request;import sys;sys.exit(0 if urllib.request.urlopen(\"http://localhost:8000/healthz\",timeout=5).status==200 else 1)" || exit 13
+            curl -sf -o /dev/null -w "HTTPS dashboard: %{http_code}\n" https://dima.veranda.my/login | grep -qE "200|303" || exit 14
+          '
 
-      - name: Notify on failure
+      - name: Prune dangling images
+        if: success()
+        run: |
+          ssh -p "$PORT" "$USER@$HOST" '
+            docker image prune -f --filter "until=24h" >/dev/null 2>&1 || true
+            docker builder prune --keep-storage=1gb -f >/dev/null 2>&1 || true
+          '
+
+      - name: Disk usage after
+        if: always()
+        run: |
+          ssh -p "$PORT" "$USER@$HOST" 'df -h / | tail -1'
+
+      - name: Notify failure
         if: failure()
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN_VERA }}
@@ -68,5 +98,5 @@ jobs:
           curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
                -d "chat_id=${OWNER_ID}" \
                -d "parse_mode=HTML" \
-               -d "text=⚠️ Deploy failed → rolled back%0A${RUN_URL}" \
+               -d "text=⚠️ vera3 deploy failed%0A${RUN_URL}" \
                -o /dev/null || true
