@@ -48,13 +48,15 @@ class ProviderChoice:
 # Free провайдеры первыми. Trial вторыми. Paid — последний резерв.
 
 _BASE_CHAINS: dict[Capability, list[str]] = {
-    # Быстрые ответы: огромные free пулы (Cerebras + Groq + Gemini), потом trial,
-    # потом paid. DeepSeek в самом конце (paid, есть json_object но не json_schema).
+    # Быстрые ответы: free большие пулы первые. DeepSeek (paid, $0.27/1M)
+    # повышен в ранке — latency 1.5s против 22s у openrouter:free.
+    # При активном backfill это даёт ×10 throughput за copейки.
     "chat:fast": [
-        "cerebras", "groq", "gemini", "openrouter",
-        "sambanova", "nvidia", "mistral",
+        "cerebras", "groq", "gemini",
+        "deepseek",  # paid но дешёвый и быстрый — после free, перед slow free
+        "openrouter", "sambanova", "nvidia", "mistral",
         "anthropic",  # trial
-        "deepseek", "openai",  # paid
+        "openai",  # paid резерв
     ],
     # Умные запросы — те же провайдеры но смещён акцент на качество.
     "chat:smart": [

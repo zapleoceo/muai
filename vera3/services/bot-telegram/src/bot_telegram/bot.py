@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from datetime import datetime
 
 import httpx
 from aiogram import Bot, Dispatcher, F
@@ -17,6 +18,41 @@ log = logging.getLogger(__name__)
 BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
 OWNER_ID = int(os.environ.get("OWNER_TELEGRAM_ID", "0"))
 SEARCH_URL = os.environ.get("SEARCH_URL", "http://brain-search:8000")
+GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://gateway:8000")
+INTERNAL_SECRET = os.environ.get("INTERNAL_SECRET", "")
+
+
+async def _save_event(chat_id: int, msg_id: int, role: str, content: str,
+                       sender_id: int | None = None, occurred_at: datetime | None = None) -> None:
+    """Записать реплику разговора в events table через gateway.
+
+    role: 'user' (Dima) или 'vera' (bot's answer).
+    """
+    payload = {
+        "source": "vera_chat",
+        "source_event_id": f"tg:{chat_id}:{msg_id}:{role}",
+        "account": f"chat:{chat_id}",
+        "category": role,
+        "content_text": content[:8000],
+        "occurred_at": (occurred_at or datetime.utcnow()).isoformat(),
+        "metadata": {
+            "chat_id": chat_id,
+            "sender_id": sender_id,
+            "role": role,
+            "msg_id": msg_id,
+        },
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10) as c:
+            r = await c.post(
+                f"{GATEWAY_URL}/event/vera_chat",
+                json=payload,
+                headers={"X-Internal-Secret": INTERNAL_SECRET} if INTERNAL_SECRET else {},
+            )
+        if r.status_code not in (200, 201):
+            log.warning("save_event %s: HTTP %s %s", role, r.status_code, r.text[:200])
+    except Exception as e:
+        log.warning("save_event %s failed: %s", role, e)
 
 bot = Bot(
     token=BOT_TOKEN,
@@ -85,13 +121,24 @@ async def on_message(message: Message):
     if not query.strip():
         return
 
+    chat_id = message.chat.id
+    user_id = message.from_user.id
+
+    # Сохраняем вопрос Димы как событие (попадёт в триаж/embed/search)
+    await _save_event(chat_id, message.message_id, "user", query,
+                       sender_id=user_id, occurred_at=message.date)
+
     placeholder = await message.reply("🤔 Думаю…")
 
     try:
         async with httpx.AsyncClient(timeout=120.0) as c:
             r = await c.post(
                 f"{SEARCH_URL}/search",
-                json={"q": query, "limit": 15},
+                json={
+                    "q": query,
+                    "limit": 15,
+                    "conversation": {"chat_id": chat_id, "user_id": user_id},
+                },
             )
         if r.status_code != 200:
             await placeholder.edit_text(f"⚠ Ошибка поиска: HTTP {r.status_code}")
@@ -101,10 +148,19 @@ async def on_message(message: Message):
         provider = data.get("provider") or "—"
         cost = data.get("cost_usd", 0.0)
         n_results = len(data.get("results", []))
+        n_history = data.get("history_used", 0)
 
-        footer = f"\n\n<i>via {provider}, ${cost:.4f}, {n_results} событий</i>"
-        full = (answer + footer)[:4096]
-        await placeholder.edit_text(full)
+        footer = f"\n\n<i>via {provider}, ${cost:.4f}, {n_results} событий · {n_history} реплик контекста</i>"
+        # Telegram limit 4096. Footer (с <i></i>) оставляем целиком —
+        # резать может только сам answer, иначе разорвёт HTML-теги.
+        max_answer = 4096 - len(footer)
+        if len(answer) > max_answer:
+            answer = answer[:max_answer - 1] + "…"
+        sent = await placeholder.edit_text(answer + footer)
+
+        # Сохраняем ответ Веры тоже как событие
+        reply_msg_id = sent.message_id if hasattr(sent, "message_id") else placeholder.message_id
+        await _save_event(chat_id, reply_msg_id, "vera", answer)
     except Exception as e:
         log.exception("Reply failed: %s", e)
         await placeholder.edit_text(f"⚠ Ошибка: {e}")

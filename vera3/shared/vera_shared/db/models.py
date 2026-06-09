@@ -141,8 +141,11 @@ class EventRow(Base):
     # Processing state
     triage_status: Mapped[str] = mapped_column(
         String(20), nullable=False, default="pending",
-    )  # pending | done | error
+    )  # pending | processing | done | error
     triage_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # Когда воркер захватил это событие в processing — для watchdog.
+    # NULL значит pending/done — never claimed.
+    triage_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class JobRow(Base):

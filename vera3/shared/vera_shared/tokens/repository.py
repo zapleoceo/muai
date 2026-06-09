@@ -1,13 +1,16 @@
 """Token repository — CRUD + ротация + reset_daily.
 
 Используется LLM client'ом для выбора следующего токена.
+
+КРИТИЧНО: `reserve_paid_cost` атомарен — UPDATE с условием cap.
+Это закрывает TOCTOU класс багов ($25-burn инцидент).
 """
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
 from typing import Iterable
 
-from sqlalchemy import select, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.engine import get_session
@@ -37,7 +40,8 @@ async def upsert(
         if existing:
             existing.token_encrypted = encrypted
             existing.tier = tier
-            existing.capabilities = capabilities or existing.capabilities
+            if capabilities is not None:
+                existing.capabilities = capabilities
             existing.daily_cost_cap_usd = daily_cost_cap_usd
             existing.monthly_cost_cap_usd = monthly_cost_cap_usd
             existing.notes = notes
@@ -117,6 +121,60 @@ async def pick_available(
 # ─── Atomic increment операции ──────────────────────────────────────────────
 
 
+async def reserve_paid_cost(
+    token_id: int,
+    *,
+    estimated_cost: float,
+    daily_cap: float,
+    monthly_cap: float | None = None,
+) -> bool:
+    """Атомарно зарезервировать estimated_cost в счётчиках токена.
+
+    Закрывает TOCTOU. Возвращает True если резерв удался, False если cap превышен.
+    Если резерв удался — после реального вызова делаем `settle_paid_cost(diff)`.
+    Если упал — пробуем следующий токен.
+
+    SQL: UPDATE ... WHERE cost_used + est <= cap. Если 0 rows — отказ.
+    """
+    if estimated_cost <= 0:
+        # Halacha: для нулевых затрат cap НЕ резервируем, чтобы LRU работал
+        return True
+    async with get_session() as s:
+        # Условие = "ещё помещается под cap И активен"
+        conds = ["id = :tid", "is_active = TRUE",
+                 "(daily_cost_used_usd + :est) <= :daily_cap"]
+        params: dict = {"tid": token_id, "est": estimated_cost, "daily_cap": daily_cap}
+        if monthly_cap is not None:
+            conds.append("(monthly_cost_used_usd + :est) <= :monthly_cap")
+            params["monthly_cap"] = monthly_cap
+        sql = (
+            "UPDATE tokens SET "
+            "  daily_cost_used_usd = daily_cost_used_usd + :est, "
+            "  monthly_cost_used_usd = monthly_cost_used_usd + :est "
+            f"WHERE {' AND '.join(conds)}"
+        )
+        result = await s.execute(text(sql), params)
+        return (result.rowcount or 0) > 0
+
+
+async def settle_paid_cost(token_id: int, *, diff_usd: float) -> None:
+    """Скорректировать счётчики на diff = actual - estimated после успешного вызова.
+
+    diff может быть положительным (мы съели больше чем зарезервировали)
+    или отрицательным (вернули остаток).
+    """
+    if abs(diff_usd) < 1e-9:
+        return
+    async with get_session() as s:
+        await s.execute(text(
+            "UPDATE tokens SET "
+            "  daily_cost_used_usd = GREATEST(0, daily_cost_used_usd + :d), "
+            "  monthly_cost_used_usd = GREATEST(0, monthly_cost_used_usd + :d), "
+            "  total_cost_usd = GREATEST(0, total_cost_usd + :d) "
+            "WHERE id = :tid"
+        ), {"tid": token_id, "d": diff_usd})
+
+
 async def record_usage(
     token_id: int,
     *,
@@ -124,19 +182,74 @@ async def record_usage(
     tokens_out: int,
     cost_usd: float,
 ) -> None:
-    """Атомарно увеличить счётчики после успешного вызова."""
+    """Атомарно увеличить счётчики после успешного вызова.
+
+    ⚠️ Для PAID вызовов используется `reserve_paid_cost` + `settle_paid_cost`.
+    Этот метод — для free/trial где cap не применяется, а также для
+    инкремента daily_used / total_cost_usd / last_used_at.
+    """
     async with get_session() as s:
         await s.execute(
             update(TokenRow)
             .where(TokenRow.id == token_id)
             .values(
                 daily_used=TokenRow.daily_used + 1,
+                # Эти три уже учтены в reserve_paid_cost для paid токенов —
+                # для free/trial cost_usd обычно 0, так что без удвоения.
                 daily_cost_used_usd=TokenRow.daily_cost_used_usd + cost_usd,
                 monthly_cost_used_usd=TokenRow.monthly_cost_used_usd + cost_usd,
                 total_cost_usd=TokenRow.total_cost_usd + cost_usd,
                 last_used_at=datetime.utcnow(),
             )
         )
+
+
+async def record_free_usage(token_id: int) -> None:
+    """Для free/trial вызовов — только инкрементим daily_used + last_used_at."""
+    async with get_session() as s:
+        await s.execute(
+            update(TokenRow)
+            .where(TokenRow.id == token_id)
+            .values(
+                daily_used=TokenRow.daily_used + 1,
+                last_used_at=datetime.utcnow(),
+            )
+        )
+
+
+async def record_paid_settled(
+    token_id: int,
+    *,
+    actual_cost: float,
+    reserved_cost: float,
+) -> None:
+    """После успешного paid вызова: diff = actual - reserved, инкремент
+    daily_used + total_cost_usd, last_used_at. Cost-counters уже у нас в reserve.
+    """
+    diff = actual_cost - reserved_cost
+    async with get_session() as s:
+        await s.execute(text(
+            "UPDATE tokens SET "
+            "  daily_used = daily_used + 1, "
+            "  total_cost_usd = total_cost_usd + :actual, "
+            "  daily_cost_used_usd = GREATEST(0, daily_cost_used_usd + :diff), "
+            "  monthly_cost_used_usd = GREATEST(0, monthly_cost_used_usd + :diff), "
+            "  last_used_at = NOW() "
+            "WHERE id = :tid"
+        ), {"tid": token_id, "actual": actual_cost, "diff": diff})
+
+
+async def release_reservation(token_id: int, *, reserved_cost: float) -> None:
+    """Если paid вызов упал — освобождаем зарезервированный cost."""
+    if reserved_cost <= 0:
+        return
+    async with get_session() as s:
+        await s.execute(text(
+            "UPDATE tokens SET "
+            "  daily_cost_used_usd = GREATEST(0, daily_cost_used_usd - :est), "
+            "  monthly_cost_used_usd = GREATEST(0, monthly_cost_used_usd - :est) "
+            "WHERE id = :tid"
+        ), {"tid": token_id, "est": reserved_cost})
 
 
 async def mark_cooldown(token_id: int, *, seconds: int) -> None:
@@ -178,6 +291,15 @@ async def reset_daily(token_id: int | None = None) -> int:
                 | (TokenRow.daily_reset_at < today)
             )
         result = await s.execute(q)
+        return result.rowcount or 0
+
+
+async def reset_monthly() -> int:
+    """Сбросить ежемесячные cost счётчики. Запускать 1-го числа каждого месяца."""
+    async with get_session() as s:
+        result = await s.execute(update(TokenRow).values(
+            monthly_cost_used_usd=0.0,
+        ))
         return result.rowcount or 0
 
 

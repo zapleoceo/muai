@@ -1,4 +1,12 @@
-"""Worker loop: SELECT pending events → triage + embed → UPDATE."""
+"""Worker loop: SELECT pending events → triage + embed → UPDATE.
+
+Concurrency model:
+- N реплик через docker compose `--scale brain-triage=N`
+- Каждая реплика берёт batch через `UPDATE ... WHERE id IN (SELECT FOR UPDATE
+  SKIP LOCKED) RETURNING *` — реплики не дерутся за одни и те же события
+- triage_started_at используется watchdog'ом чтобы вернуть зависшие
+  (а НЕ received_at — иначе старые pending мгновенно реверится при подборе)
+"""
 from __future__ import annotations
 
 import asyncio
@@ -9,19 +17,22 @@ import re
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select, update
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy import select, text, update
 
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.llm.client import LLMCallFailed, chat, embed
-from vera_shared.events.schema import TriageMetadata
 
 log = logging.getLogger(__name__)
 
-POLL_INTERVAL_S = float(os.environ.get("TRIAGE_POLL_INTERVAL_S", "10"))
-BATCH_SIZE = int(os.environ.get("TRIAGE_BATCH_SIZE", "5"))
-PACE_BETWEEN_S = float(os.environ.get("TRIAGE_PACE_S", "2"))
+POLL_INTERVAL_S = float(os.environ.get("TRIAGE_POLL_INTERVAL_S", "5"))
+BATCH_SIZE = int(os.environ.get("TRIAGE_BATCH_SIZE", "16"))
+CONCURRENCY = int(os.environ.get("TRIAGE_CONCURRENCY", "5"))
+PACE_BETWEEN_S = float(os.environ.get("TRIAGE_PACE_S", "0.5"))
+WORKER_ID = os.environ.get("HOSTNAME", "worker") + ":" + str(os.getpid())
+# Сколько секунд триаж может работать прежде чем watchdog считает его мёртвым.
+# Должно быть БОЛЬШЕ чем самый медленный LLM-вызов × CONCURRENCY.
+STUCK_AFTER_S = int(os.environ.get("TRIAGE_STUCK_AFTER_S", "600"))
 
 
 TRIAGE_PROMPT_TEMPLATE = """Ты — Вера, цифровая память Димы. Прочитай событие и извлеки структуру.
@@ -57,43 +68,8 @@ TRIAGE_PROMPT_TEMPLATE = """Ты — Вера, цифровая память Д�
 ВАЖНО: только JSON, без префиксов и комментариев."""
 
 
-JSON_SCHEMA = {
-    "type": "object",
-    "properties": {
-        "importance": {"type": "integer", "minimum": 0, "maximum": 100},
-        "topics": {"type": "array", "items": {"type": "string"}},
-        "people_mentioned": {"type": "array", "items": {"type": "string"}},
-        "signals": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "type": {"type": "string"},
-                    "summary": {"type": "string"},
-                    "date": {"type": "string"},
-                },
-                "required": ["type", "summary"],
-            },
-        },
-        "active_topic_matches": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "properties": {
-                    "topic": {"type": "string"},
-                    "confidence": {"type": "number"},
-                },
-                "required": ["topic"],
-            },
-        },
-        "needs_action": {"type": "boolean"},
-    },
-    "required": ["importance", "topics", "people_mentioned", "signals", "needs_action"],
-}
-
-
 async def triage_one(event_row: EventRow) -> dict[str, Any] | None:
-    """Триаж одного события. Возвращает metadata или None при провале."""
+    """Триаж одного события. Возвращает metadata."""
     content = (event_row.content_text or "")[:8000]
     prompt = TRIAGE_PROMPT_TEMPLATE.format(
         source=event_row.source,
@@ -102,107 +78,217 @@ async def triage_one(event_row: EventRow) -> dict[str, Any] | None:
         content=content,
     )
 
-    text, meta = await chat(
+    response_text, meta = await chat(
         messages=[{"role": "user", "content": prompt}],
         capability="chat:fast",
-        require_json_schema=True,
-        response_format={
-            "type": "json_schema",
-            "json_schema": {"name": "triage", "strict": True, "schema": JSON_SCHEMA},
-        },
+        require_json_schema=False,
+        response_format={"type": "json_object"},
         max_tokens=1500,
         temperature=0.3,
         workflow="triage",
         event_id=event_row.id,
     )
 
-    # Парсим JSON — возможно с обёрткой markdown
-    text = text.strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\n?", "", text)
-        text = re.sub(r"\n?```$", "", text)
+    response_text = response_text.strip()
+    if response_text.startswith("```"):
+        response_text = re.sub(r"^```(?:json)?\n?", "", response_text)
+        response_text = re.sub(r"\n?```$", "", response_text)
 
-    parsed = json.loads(text)
+    try:
+        parsed = json.loads(response_text)
+    except json.JSONDecodeError:
+        # Попытка вытащить JSON из текста (LLM иногда добавляет prefix/suffix)
+        match = re.search(r"\{.*\}", response_text, re.DOTALL)
+        if not match:
+            raise
+        try:
+            parsed = json.loads(match.group(0))
+        except json.JSONDecodeError:
+            raise
+
+    # Если LLM вернул не dict (массив, строку) — ошибка
+    if not isinstance(parsed, dict):
+        raise ValueError(f"Expected JSON object, got {type(parsed).__name__}")
+
     parsed["triaged_by_provider"] = meta.get("provider")
     parsed["triaged_by_model"] = meta.get("model")
     parsed["triaged_at"] = datetime.utcnow().isoformat()
     return parsed
 
 
-async def process_pending() -> int:
-    """Выбрать pending events, обработать batch."""
-    async with get_session() as s:
-        rows = (await s.execute(
-            select(EventRow)
-            .where(EventRow.triage_status == "pending")
-            .where(EventRow.content_text != "")
-            .order_by(EventRow.occurred_at.desc())
-            .limit(BATCH_SIZE)
-        )).scalars().all()
+async def _claim_batch() -> list[EventRow]:
+    """Захватить batch событий ОДНИМ запросом через UPDATE ... RETURNING *.
 
+    Старый код делал UPDATE + второй SELECT — между ними окно для гонки/потери
+    видимости. Теперь всё в одной сессии, и `triage_started_at = NOW()` ставится
+    атомарно вместе с claim'ом.
+    """
+    async with get_session() as s:
+        rs = await s.execute(text(
+            """
+            UPDATE events
+            SET triage_status = 'processing',
+                triage_started_at = NOW()
+            WHERE id IN (
+              SELECT id FROM events
+              WHERE triage_status = 'pending' AND content_text != ''
+              ORDER BY occurred_at DESC
+              LIMIT :batch
+              FOR UPDATE SKIP LOCKED
+            )
+            RETURNING id, source, source_event_id, account, category,
+                      content_text, occurred_at, importance
+            """
+        ), {"batch": BATCH_SIZE})
+        mappings = list(rs.mappings().all())
+
+    if not mappings:
+        return []
+
+    # Лёгкие detached объекты — не нужно второй SELECT, ORM не требуется
+    out: list[EventRow] = []
+    for m in mappings:
+        ev = EventRow(
+            id=m["id"], source=m["source"], source_event_id=m["source_event_id"],
+            account=m["account"], category=m["category"],
+            content_text=m["content_text"], occurred_at=m["occurred_at"],
+            importance=m["importance"],
+        )
+        out.append(ev)
+    return out
+
+
+async def _embed_batch(texts: list[str]) -> list[list[float] | None]:
+    """Один Voyage-запрос на N текстов."""
+    if not texts:
+        return []
+    try:
+        vectors = await embed(texts)
+        if len(vectors) != len(texts):
+            log.warning("Embed mismatch: got %d, expected %d", len(vectors), len(texts))
+            return [None] * len(texts)
+        return vectors
+    except Exception as e:
+        log.warning("Batch embed failed: %s", e)
+        return [None] * len(texts)
+
+
+async def _process_one_with_sem(
+    sem: asyncio.Semaphore, row: EventRow,
+) -> tuple[int, str, dict | None, str | None]:
+    """Triage под семафором. Возвращает (event_id, status, metadata, error)."""
+    async with sem:
+        try:
+            metadata = await asyncio.wait_for(triage_one(row), timeout=120)
+            return row.id, "done", metadata, None
+        except asyncio.TimeoutError:
+            return row.id, "pending", None, "timeout"
+        except LLMCallFailed as e:
+            return row.id, "pending", None, str(e)[:200]
+        except Exception as e:
+            log.warning("Triage failed for event %s: %s", row.id, e)
+            return row.id, "error", None, str(e)[:500]
+
+
+async def process_pending() -> int:
+    """Захватить batch, эмбедить parallel, триаж concurrent, UPDATE."""
+    rows = await _claim_batch()
     if not rows:
         return 0
 
+    log.info("[%s] claimed batch of %d events", WORKER_ID, len(rows))
+
+    texts = [(r.content_text or "")[:8000] for r in rows]
+    embeddings = await _embed_batch(texts)
+
+    sem = asyncio.Semaphore(CONCURRENCY)
+    tasks = [_process_one_with_sem(sem, row) for row in rows]
+    results = await asyncio.gather(*tasks, return_exceptions=False)
+
     processed = 0
-    for row in rows:
-        try:
-            # 1. Triage via LLM
-            metadata = await triage_one(row)
-            if metadata is None:
-                continue
-
-            # 2. Embed для семантического поиска
-            try:
-                vectors = await embed(row.content_text[:8000])
-                embedding = vectors[0] if vectors else None
-            except Exception as e:
-                log.warning("Embed failed for event %s: %s", row.id, e)
-                embedding = None
-
-            # 3. Update DB
-            async with get_session() as s:
+    llm_exhausted = 0
+    async with get_session() as s:
+        for (event_id, status, metadata, error), embedding in zip(results, embeddings):
+            if status == "pending":
+                # LLM пул занят — вернём в pending, освобождаем triage_started_at
                 await s.execute(
-                    update(EventRow).where(EventRow.id == row.id).values(
+                    update(EventRow).where(EventRow.id == event_id).values(
+                        triage_status="pending",
+                        triage_started_at=None,
+                    )
+                )
+                llm_exhausted += 1
+            elif status == "done":
+                await s.execute(
+                    update(EventRow).where(EventRow.id == event_id).values(
                         triage_status="done",
                         triage_metadata=metadata,
-                        importance=metadata.get("importance"),
+                        importance=metadata.get("importance") if metadata else None,
                         embedding_voyage_3=embedding,
+                        triage_started_at=None,
                     )
                 )
-            processed += 1
-            log.info("Triaged event %s (importance=%s)",
-                     row.id, metadata.get("importance"))
-
-        except LLMCallFailed as e:
-            log.warning("LLM exhausted for event %s: %s", row.id, e)
-            # Не помечаем error — попробуем ещё раз в следующем тике
-            break  # все провайдеры заняты — пауза
-        except Exception as e:
-            log.exception("Triage failed for event %s: %s", row.id, e)
-            async with get_session() as s:
+                processed += 1
+            else:  # error
                 await s.execute(
-                    update(EventRow).where(EventRow.id == row.id).values(
+                    update(EventRow).where(EventRow.id == event_id).values(
                         triage_status="error",
-                        triage_error=str(e)[:500],
+                        triage_error=error,
+                        embedding_voyage_3=embedding,
+                        triage_started_at=None,
                     )
                 )
-        await asyncio.sleep(PACE_BETWEEN_S)
 
+    log.info("[%s] processed: %d done, %d exhausted, %d errors",
+             WORKER_ID, processed, llm_exhausted, len(rows) - processed - llm_exhausted)
+
+    if PACE_BETWEEN_S > 0:
+        await asyncio.sleep(PACE_BETWEEN_S)
     return processed
 
 
+async def _watchdog_loop() -> None:
+    """Возвращает 'processing' события в 'pending' если воркер крашнулся.
+
+    Использует `triage_started_at` (когда захвачено), НЕ `received_at`.
+    Это исправляет баг: старое pending событие (received_at месячной давности)
+    мгновенно реверится сразу после claim'a.
+    """
+    sql = (
+        "UPDATE events SET "
+        "  triage_status='pending', "
+        "  triage_started_at=NULL "
+        "WHERE triage_status='processing' "
+        f"  AND triage_started_at < NOW() - INTERVAL '{STUCK_AFTER_S} seconds' "
+        "RETURNING id"
+    )
+    while True:
+        await asyncio.sleep(60)
+        try:
+            async with get_session() as s:
+                rs = await s.execute(text(sql))
+                stuck = list(rs.scalars().all())
+            if stuck:
+                log.warning("Watchdog: %d stuck events returned to pending: %s",
+                            len(stuck), stuck[:5])
+        except Exception as e:
+            log.warning("Watchdog error: %s", e)
+
+
 async def main_loop() -> None:
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(level=logging.INFO,
+                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     await init_engine()
-    log.info("brain-triage worker started, poll=%ss batch=%s", POLL_INTERVAL_S, BATCH_SIZE)
+    log.info("[%s] brain-triage worker started, poll=%ss batch=%s concurrency=%s",
+             WORKER_ID, POLL_INTERVAL_S, BATCH_SIZE, CONCURRENCY)
+
+    asyncio.create_task(_watchdog_loop())
 
     while True:
         try:
             n = await process_pending()
             if n == 0:
                 await asyncio.sleep(POLL_INTERVAL_S)
-            else:
-                log.info("Processed batch of %s events", n)
         except Exception as e:
             log.exception("Outer loop error: %s", e)
             await asyncio.sleep(POLL_INTERVAL_S * 2)

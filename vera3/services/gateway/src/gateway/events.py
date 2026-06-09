@@ -1,16 +1,17 @@
 """POST /event/{source} endpoint — приём событий от ingestor'ов и webhook'ов.
 
-Принимает RawEvent payload, делает dedup, сохраняет в DB, публикует
-в Hatchet для обработки brain-triage.
+Дедупликация через ON CONFLICT DO NOTHING (UNIQUE constraint
+`uq_event_source_id` в db/models.py). Это закрывает race condition
+между check-and-insert при concurrent backfill + poller.
 """
 from __future__ import annotations
 
 import logging
 from typing import Any
 
-from fastapi import APIRouter, Header, HTTPException, Request
+from fastapi import APIRouter, Header, HTTPException
 from sqlalchemy import select
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
@@ -48,46 +49,45 @@ async def ingest_event(
             400, f"Path source '{source}' != event.source '{event.source}'"
         )
 
-    row = EventRow(
-        source=event.source,
-        source_event_id=event.source_event_id,
-        account=event.account,
-        category=event.category,
-        content_text=event.content_text,
-        content_extra=event.content_extra,
-        entity_hints=[h.model_dump() for h in event.entity_hints],
-        metadata_=event.metadata,
-        occurred_at=event.occurred_at,
-        triage_status="pending",
-    )
+    values = {
+        "source": event.source,
+        "source_event_id": event.source_event_id,
+        "account": event.account,
+        "category": event.category,
+        "content_text": event.content_text,
+        "content_extra": event.content_extra,
+        "entity_hints": [h.model_dump() for h in event.entity_hints],
+        "metadata_": event.metadata,
+        "occurred_at": event.occurred_at,
+        "triage_status": "pending",
+    }
 
-    # Dedup explicit check (быстрее и понятнее чем catch IntegrityError)
+    # INSERT ... ON CONFLICT (source, source_event_id) DO NOTHING RETURNING id.
+    # Если конфликт — RETURNING пуст, делаем SELECT уже существующего ID.
     async with get_session() as s:
-        existing = await s.execute(
-            select(EventRow.id).where(
-                EventRow.source == event.source,
-                EventRow.source_event_id == event.source_event_id,
-            )
+        stmt = (
+            pg_insert(EventRow)
+            .values(**values)
+            .on_conflict_do_nothing(index_elements=["source", "source_event_id"])
+            .returning(EventRow.id)
         )
-        existing_id = existing.scalar_one_or_none()
-        if existing_id is not None:
-            log.info("Dedup hit: %s/%s → event %s", event.source, event.source_event_id, existing_id)
-            return {"ok": True, "event_id": existing_id, "deduped": True}
+        result = await s.execute(stmt)
+        event_id = result.scalar_one_or_none()
 
-    try:
-        async with get_session() as s:
-            s.add(row)
-            await s.flush()
-            event_id = row.id
-    except IntegrityError as exc:
-        log.exception("Insert failed: %s", exc)
-        raise HTTPException(500, f"insert failed: {exc}") from exc
+        if event_id is None:
+            # Дедуп hit — событие уже было. Подберём существующий id.
+            existing = await s.execute(
+                select(EventRow.id).where(
+                    EventRow.source == event.source,
+                    EventRow.source_event_id == event.source_event_id,
+                )
+            )
+            event_id = existing.scalar_one_or_none()
+            log.info("Dedup hit: %s/%s → event %s",
+                     event.source, event.source_event_id, event_id)
+            return {"ok": True, "event_id": event_id, "deduped": True}
 
     log.info("Event %s ingested: %s/%s", event_id, event.source, event.source_event_id)
-
-    # TODO: publish to Hatchet `event.triage` workflow
-    # await hatchet.publish("event.created", event_id=event_id)
-
     return {"ok": True, "event_id": event_id, "deduped": False}
 
 
