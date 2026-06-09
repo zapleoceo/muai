@@ -48,6 +48,9 @@ jobs:
             --exclude '.pytest_cache' \
             --exclude 'htmlcov' \
             --exclude '.coverage' \
+            --exclude '.env' \
+            --exclude 'infra/.env*' \
+            --exclude '*.session' \
             -e "ssh -p $PORT" \
             vera3/ \
             "$USER@$HOST:$REMOTE_DIR/"
