@@ -42,3 +42,18 @@ class TelegramSessionRow(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(),
     )
+
+
+class InstagramSessionRow(Base):
+    """Instagram mobile-API session (instagrapi). Cookies+device JSON."""
+    __tablename__ = "instagram_sessions"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    username: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
+    session_json_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_thread_cursor: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(),
+    )
