@@ -39,21 +39,24 @@ services:
       - "127.0.0.1:8001:8000"
     restart: unless-stopped
 
-  # ─── Brain: Triage Worker ───────────────────────────────────────────────
+  # ─── Brain: Triage Workers (scalable) ──────────────────────────────────
+  # SELECT FOR UPDATE SKIP LOCKED исключает race condition между воркерами
+  # Скейл: docker compose up -d --scale brain-triage=3
   brain-triage:
     build:
       context: ..
       dockerfile: services/brain-triage/Dockerfile
-    container_name: vera3-brain-triage
+    # container_name НЕ задан — иначе scale ломается
     depends_on:
       postgres:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
       TOKEN_SECRET: ${TOKEN_SECRET}
-      TRIAGE_POLL_INTERVAL_S: 15
-      TRIAGE_BATCH_SIZE: 5
-      TRIAGE_PACE_S: 2
+      TRIAGE_POLL_INTERVAL_S: ${TRIAGE_POLL_INTERVAL_S:-5}
+      TRIAGE_BATCH_SIZE: ${TRIAGE_BATCH_SIZE:-16}
+      TRIAGE_CONCURRENCY: ${TRIAGE_CONCURRENCY:-5}
+      TRIAGE_PACE_S: ${TRIAGE_PACE_S:-0.5}
       VERA_DAILY_GLOBAL_CAP_USD: ${VERA_DAILY_GLOBAL_CAP_USD:-2.0}
     restart: unless-stopped
 
@@ -83,12 +86,16 @@ services:
     depends_on:
       brain-search:
         condition: service_started
+      gateway:
+        condition: service_started
     environment:
       DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
       TOKEN_SECRET: ${TOKEN_SECRET}
       TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
       OWNER_TELEGRAM_ID: ${OWNER_TELEGRAM_ID}
       SEARCH_URL: http://brain-search:8000
+      GATEWAY_URL: http://gateway:8000
+      INTERNAL_SECRET: ${INTERNAL_SECRET:-}
     restart: unless-stopped
 
   # ─── Sync bridge from Vera 2.0 (временно — пока ingestor'ы покрывают всё) ─
@@ -142,8 +149,29 @@ services:
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
       TELEGRAM_PHONE: ${TELEGRAM_PHONE}
       TELEGRAM_SESSION_DIR: /sessions
+      INTERNAL_SECRET: ${INTERNAL_SECRET:-dev}
     volumes:
       - vera3_tg_sessions:/sessions
+    expose:
+      - "8000"
+    restart: unless-stopped
+
+  ingestor-instagram:
+    build:
+      context: ..
+      dockerfile: services/ingestor-instagram/Dockerfile
+    container_name: vera3-ingestor-instagram
+    depends_on:
+      postgres:
+        condition: service_healthy
+      gateway:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
+      TOKEN_SECRET: ${TOKEN_SECRET}
+      GATEWAY_URL: http://gateway:8000
+      INTERNAL_SECRET: ${INTERNAL_SECRET:-dev}
+      IG_POLL_INTERVAL_S: "90"
     restart: unless-stopped
 
   # ─── Dashboard ──────────────────────────────────────────────────────────
@@ -158,7 +186,9 @@ services:
     environment:
       DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
       TOKEN_SECRET: ${TOKEN_SECRET}
-      ADMIN_TOKEN: ${ADMIN_TOKEN:-}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-Dimondra_Ai_Bot}
+      OWNER_TELEGRAM_ID: ${OWNER_TELEGRAM_ID}
       SEARCH_URL: http://brain-search:8000
     ports:
       - "127.0.0.1:8003:8000"

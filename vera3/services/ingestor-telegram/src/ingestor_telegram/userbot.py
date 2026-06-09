@@ -19,6 +19,9 @@ from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import TelegramSessionRow
 from vera_shared.tokens.crypto import decrypt
 
+from ingestor_telegram.entity_sync import sync_message_entities
+from ingestor_telegram.tools_http import build_app
+
 log = logging.getLogger("tg")
 
 API_ID = int(os.environ["TELEGRAM_API_ID"])
@@ -107,6 +110,12 @@ async def save_message(client: TelegramClient, msg) -> None:
             triage_status="pending",
         ))
 
+    # Side-effect: keep entities/memberships in sync with reality.
+    try:
+        await sync_message_entities(chat, sender)
+    except Exception as e:
+        log.warning("entity_sync failed: %s", e)
+
 
 async def main():
     logging.basicConfig(level=logging.INFO,
@@ -132,7 +141,21 @@ async def main():
             log.warning("Save failed: %s", e)
 
     log.info("Listening for new messages…")
-    await client.run_until_disconnected()
+
+    # Co-host FastAPI tools server so brain-search can query Telegram live.
+    import uvicorn
+    app = build_app(client)
+    config = uvicorn.Config(app, host="0.0.0.0", port=8000,
+                             log_level="warning", access_log=False)
+    server = uvicorn.Server(config)
+    tools_task = asyncio.create_task(server.serve())
+    log.info("Tools HTTP server up on :8000 (/tools/*)")
+
+    try:
+        await client.run_until_disconnected()
+    finally:
+        server.should_exit = True
+        await tools_task
 
 
 if __name__ == "__main__":
