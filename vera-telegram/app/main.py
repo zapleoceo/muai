@@ -12,6 +12,7 @@ from vera_shared.db.engine import get_engine
 from vera_shared.db.migrations import run_migrations
 
 from app.backfill import stream_envelopes
+from app.config import get_settings
 from app.poller import poll_loop
 from app.dialog_cache import refresh_loop as dialog_refresh_loop
 from app.push_handler import start_push_listener
@@ -38,8 +39,29 @@ async def lifespan(app: FastAPI):
     asyncio.create_task(poll_loop())
     # Dialog cache — periodic refresh; search_dialogs hits SQLite first.
     asyncio.create_task(dialog_refresh_loop())
+    await _maybe_start_mcp()
     yield
     await stop_client()
+
+
+async def _maybe_start_mcp() -> None:
+    cfg = get_settings()
+    if not cfg.mcp_enabled:
+        return
+    from app.mcp.server import build_mcp_app, mcp_misconfig
+
+    problem = mcp_misconfig()
+    if problem:
+        logger.error("MCP server disabled — %s", problem)
+        return
+    import uvicorn
+
+    mcp_app = await build_mcp_app()
+    server = uvicorn.Server(
+        uvicorn.Config(mcp_app, host="0.0.0.0", port=cfg.mcp_port, log_level="info")
+    )
+    asyncio.create_task(server.serve())
+    logger.info("MCP OAuth server listening on :%s", cfg.mcp_port)
 
 
 app = FastAPI(title="vera-telegram", lifespan=lifespan)
