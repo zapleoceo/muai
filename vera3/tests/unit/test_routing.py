@@ -18,14 +18,27 @@ class TestChainBuilding:
         chain = RoutingPolicy.chain_for("chat:fast")
         assert chain[0].is_free, f"First provider for chat:fast must be free, got {chain[0]}"
 
-    def test_paid_providers_at_the_end(self):
+    def test_chat_fast_top_free_precede_deepseek(self):
+        # Документированное исключение: в chat:fast deepseek (paid, ~$0.3/1M,
+        # 1.5s) стоит ВЫШЕ медленных free (openrouter:free 20-70s latency) —
+        # осознанный trade-off для backfill. Но big-quota free (cerebras,
+        # groq, gemini) обязаны идти ДО deepseek.
         chain = RoutingPolicy.chain_for("chat:fast")
-        # Все paid идут после всех free
-        paid_indices = [i for i, c in enumerate(chain) if c.is_paid]
-        free_indices = [i for i, c in enumerate(chain) if c.is_free]
-        if paid_indices and free_indices:
-            assert max(free_indices) < min(paid_indices), \
-                "Free providers must precede all paid providers"
+        providers = [c.provider for c in chain]
+        ds = providers.index("deepseek")
+        for fast_free in ("cerebras", "groq", "gemini"):
+            assert providers.index(fast_free) < ds, \
+                f"{fast_free} must precede deepseek in chat:fast"
+
+    def test_paid_providers_at_the_end_non_fast(self):
+        # Для остальных capability строгий free-first сохраняется
+        for cap in ("chat:smart", "chat:code", "structured"):
+            chain = RoutingPolicy.chain_for(cap)
+            paid_indices = [i for i, c in enumerate(chain) if c.is_paid]
+            free_indices = [i for i, c in enumerate(chain) if c.is_free]
+            if paid_indices and free_indices:
+                assert max(free_indices) < min(paid_indices), \
+                    f"{cap}: free providers must precede all paid providers"
 
     def test_include_paid_false_filters(self):
         chain = RoutingPolicy.chain_for("chat:fast", include_paid=False)
@@ -43,9 +56,13 @@ class TestChainBuilding:
 
 
 class TestFreeFirstInvariant:
-    """Главный инвариант: free всегда раньше paid в любой capability."""
+    """Инвариант free-first для всех capability КРОМЕ chat:fast.
 
-    @pytest.mark.parametrize("cap", ["chat:fast", "chat:smart", "chat:code", "prefilter", "structured"])
+    chat:fast — документированное исключение: deepseek (paid, дешёвый,
+    быстрый) поднят выше медленных free провайдеров. См. routing.py.
+    """
+
+    @pytest.mark.parametrize("cap", ["chat:smart", "chat:code", "prefilter", "structured"])
     def test_free_first_for_each_capability(self, cap: Capability):
         # verify_free_first сам поднимет AssertionError если нарушится
         RoutingPolicy.verify_free_first(cap)

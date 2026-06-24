@@ -19,6 +19,14 @@ from vera_shared.db.models_sources import GmailAccountRow
 from vera_shared.llm.client import LLMCallFailed, chat, embed
 
 from brain_search.agent import run_agent
+from brain_search.query_parse import (
+    SOURCE_PROMPT_NOTE,
+    extract_account_terms,
+    is_summary_query,
+    parse_time_range,
+    resolve_project,
+    source_weight,
+)
 
 log = logging.getLogger(__name__)
 
@@ -190,57 +198,153 @@ async def search(query: SearchQuery) -> AnswerResponse:
     except (LLMCallFailed, asyncio.TimeoutError) as e:
         log.warning("Embed failed: %s — fallback only FTS", e)
 
+    # Темпоральный фильтр: «вчера/сегодня/за неделю/9 июня» → WHERE occurred_at
+    time_range = parse_time_range(query.q)
+    time_where = ""
+    time_params: dict[str, Any] = {}
+    if time_range:
+        time_where = " AND occurred_at >= :t_start AND occurred_at < :t_end"
+        time_params = {"t_start": time_range[0], "t_end": time_range[1]}
+        log.info("Temporal filter: %s → [%s, %s)", query.q[:60], *time_range)
+
+    # «по проекту Itstep» → реальные ящики + рабочие чаты (не текст «itstep»)
+    project = resolve_project(query.q)
+    # «саммари/что сделано/вытяни всё» → нужна ШИРОКАЯ выборка, иначе 53
+    # рабочих сообщения не влезут в top-15
+    summary = is_summary_query(query.q)
+    eff_limit = max(query.limit, 60) if summary else query.limit
+
+    # Project-scoped retrieval. ПЕРВИЧНЫЙ сигнал — колонка project, которую
+    # триаж проставляет сам по содержимому (системно). Реестр chats/accounts —
+    # fallback для событий, ещё не классифицированных Верой.
+    if project:
+        conds = ["(nature IS NULL OR nature NOT IN ('conversation_with_me', 'my_intent'))",
+                 "source <> 'vera_chat'"]
+        pparams: dict[str, Any] = {"pname": project.name}
+        ors = ["project = :pname"]
+        for i, pat in enumerate(project.account_like):
+            ors.append(f"account ILIKE :pacc{i}")
+            pparams[f"pacc{i}"] = f"%{pat}%"
+        if project.chats:
+            ors.append("metadata->>'chat_title' = ANY(:pchats)")
+            pparams["pchats"] = project.chats
+        conds.append("(" + " OR ".join(ors) + ")")
+        if time_range:
+            conds.append("occurred_at >= :t_start AND occurred_at < :t_end")
+            pparams.update(time_params)
+        where_sql = " AND ".join(conds)
+        async with get_session() as s:
+            stmt = text(f"""
+                SELECT id, source, source_event_id, occurred_at, content_text,
+                       importance, embedding_voyage_3, 0.0 AS rank, account
+                FROM events WHERE {where_sql}
+                ORDER BY occurred_at DESC
+                LIMIT :lim
+            """)
+            rs = (await s.execute(stmt, {**pparams, "lim": eff_limit})).all()
+        log.info("Project=%s scope: %d events (summary=%s, range=%s)",
+                 project.name, len(rs), summary, bool(time_range))
+        return await _finish_search(query, rs, q_vec, summary=summary,
+                                    eff_limit=eff_limit, project=project.name)
+
     # Postgres FTS с русским стеммером
     raw_words = _WORD_RE.findall(query.q)
     words = [w for w in raw_words if len(w) >= 2 and w.lower() not in STOPWORDS]
     ts_query = " | ".join(f"{w}:*" for w in words) if words else ""
 
+    # Account-matching: «Itstep» живёт в account='zaporozec_d@itstep.org',
+    # а письмо на английском — текстовый FTS его не найдёт. Берём только
+    # имена собственные (латиница / с Заглавной) — маркеры проекта/бренда.
+    acc_words = extract_account_terms(words)
+    acc_where = ""
+    acc_match_expr = "FALSE"
+    acc_params: dict[str, Any] = {}
+    if acc_words:
+        ors = []
+        for i, w in enumerate(acc_words):
+            ors.append(f"account ILIKE :acc{i}")
+            acc_params[f"acc{i}"] = f"%{w}%"
+        acc_where = " OR " + " OR ".join(ors)
+        acc_match_expr = "(" + " OR ".join(ors) + ")"
+
+    # Разговоры с Верой — не «события мира»: системно по nature (триаж
+    # классифицирует сам), source-фильтр остаётся для неклассифицированных.
+    base_where = (" AND (nature IS NULL OR nature <> 'conversation_with_me')"
+                  " AND source <> 'vera_chat'")
+
     async with get_session() as s:
         if ts_query:
-            stmt = text("""
+            # acc_match DESC первым в ORDER — иначе account-совпадения с rank=0
+            # (англ. письма) отрезаются LIMIT 200 в пользу FTS-матчей.
+            stmt = text(f"""
                 SELECT id, source, source_event_id, occurred_at, content_text,
                        importance, embedding_voyage_3,
                        ts_rank(to_tsvector('russian', content_text),
-                               to_tsquery('russian', :tsq)) AS rank
+                               to_tsquery('russian', :tsq)) AS rank,
+                       account,
+                       {acc_match_expr} AS acc_match
                 FROM events
-                WHERE to_tsvector('russian', content_text)
-                      @@ to_tsquery('russian', :tsq)
-                ORDER BY rank DESC, occurred_at DESC
+                WHERE (to_tsvector('russian', content_text)
+                      @@ to_tsquery('russian', :tsq){acc_where}){time_where}{base_where}
+                ORDER BY acc_match DESC, rank DESC, occurred_at DESC
                 LIMIT 200
             """)
-            rs = (await s.execute(stmt, {"tsq": ts_query})).all()
-        elif q_vec:
-            # Stopword-only вопрос («что это?») — берём топ-200 НЕДАВНИХ и
-            # ранжируем по vector similarity, а НЕ дампим 100 случайных событий.
-            stmt = text("""
+            rs = (await s.execute(
+                stmt, {"tsq": ts_query, **acc_params, **time_params})).all()
+            if not rs and time_range:
+                stmt = text(f"""
+                    SELECT id, source, source_event_id, occurred_at, content_text,
+                           importance, embedding_voyage_3, 0.0 AS rank, account
+                    FROM events
+                    WHERE 1=1{time_where}{base_where}
+                    ORDER BY occurred_at DESC LIMIT 200
+                """)
+                rs = (await s.execute(stmt, time_params)).all()
+        elif time_range:
+            stmt = text(f"""
                 SELECT id, source, source_event_id, occurred_at, content_text,
-                       importance, embedding_voyage_3, 0.0 AS rank
+                       importance, embedding_voyage_3, 0.0 AS rank, account
                 FROM events
-                WHERE embedding_voyage_3 IS NOT NULL
-                ORDER BY occurred_at DESC
-                LIMIT 200
+                WHERE 1=1{time_where}{base_where}
+                ORDER BY occurred_at DESC LIMIT 200
+            """)
+            rs = (await s.execute(stmt, time_params)).all()
+        elif q_vec:
+            stmt = text(f"""
+                SELECT id, source, source_event_id, occurred_at, content_text,
+                       importance, embedding_voyage_3, 0.0 AS rank, account
+                FROM events
+                WHERE embedding_voyage_3 IS NOT NULL{base_where}
+                ORDER BY occurred_at DESC LIMIT 200
             """)
             rs = (await s.execute(stmt)).all()
         else:
-            # Нет ни keywords ни embedding — возвращаем последние, но честно
-            # говорим LLM что данных мало
-            stmt = text(
-                "SELECT id, source, source_event_id, occurred_at, content_text, "
-                "importance, embedding_voyage_3, 0.0 AS rank "
-                "FROM events ORDER BY occurred_at DESC LIMIT 30"
-            )
+            stmt = text(f"""
+                SELECT id, source, source_event_id, occurred_at, content_text,
+                       importance, embedding_voyage_3, 0.0 AS rank, account
+                FROM events WHERE 1=1{base_where}
+                ORDER BY occurred_at DESC LIMIT 30
+            """)
             rs = (await s.execute(stmt)).all()
 
+    return await _finish_search(query, rs, q_vec, acc_words=acc_words,
+                                summary=summary, eff_limit=eff_limit)
+
+
+def _score_rows(rs, q_vec, acc_words: list[str]) -> list[tuple[float, dict]]:
     candidates: list[tuple[float, dict]] = []
     for r in rs:
-        # Hybrid score: FTS rank + semantic similarity + importance
         ts_rank = float(r[7]) if r[7] is not None else 0.0
-        score = ts_rank * 2.0  # FTS — главный сигнал
+        score = ts_rank * 2.0
         emb = r[6]
         if q_vec and emb:
             score += _cosine(q_vec, emb)
         if r[5]:
             score += r[5] / 200.0
+        account_l = (r[8] or "").lower() if len(r) > 8 else ""
+        if account_l and any(w in account_l for w in acc_words):
+            score += 1.0
+        score *= source_weight(r[1])
         candidates.append((score, {
             "event_id": r[0],
             "source": r[1],
@@ -248,36 +352,42 @@ async def search(query: SearchQuery) -> AnswerResponse:
             "content_preview": (r[4] or "")[:400],
             "importance": r[5],
         }))
-
     candidates.sort(key=lambda x: x[0], reverse=True)
-    top = candidates[: query.limit]
+    return candidates
 
+
+async def _finish_search(
+    query: SearchQuery, rs, q_vec, *,
+    acc_words: list[str] | None = None,
+    summary: bool = False,
+    eff_limit: int | None = None,
+    project: str | None = None,
+) -> AnswerResponse:
+    """Скоринг + synthesis. Общий хвост для всех retrieval-веток."""
+    acc_words = acc_words or []
+    candidates = _score_rows(rs, q_vec, acc_words)
+    out_limit = eff_limit or query.limit
+    top = candidates[:out_limit]
     results = [SearchResult(score=score, **info) for score, info in top]
 
-    # 4. Self-awareness: подключённые источники
     self_ctx = await _self_context()
 
-    # 5. Synthesize answer
-    context_blocks = []
-    for r in results[:10]:
-        context_blocks.append(
-            f"[{r.occurred_at[:10]} | {r.source}] {r.content_preview[:300]}"
-        )
+    # В summary-режиме даём LLM больше событий (до 30), чтобы синтез был полным
+    ctx_n = 30 if summary else 10
+    context_blocks = [
+        f"[{r.occurred_at[:16]} | {r.source}] {r.content_preview[:300]}"
+        for r in results[:ctx_n]
+    ]
     context = "\n\n".join(context_blocks) if context_blocks else "(нет данных)"
 
-    # Conversation history — правильный путь: тянем из БД по chat_id
-    # (не in-memory, переживает рестарты, доступно с любого канала)
     history: list[HistoryItem] = []
     if query.conversation:
         history = await _fetch_conversation_history(query.conversation.chat_id, limit_pairs=8)
-    # Legacy путь: явный history в payload (для dashboard и debugging)
     if not history and query.history:
         history = list(query.history)
 
     history_block = ""
     if history:
-        # Последняя реплика в БД может быть текущим вопросом — отсечём её
-        # (бот пишет user-event ДО search-вызова)
         recent = [h for h in history if h.content.strip() != query.q.strip()]
         if recent:
             lines = ["### Предыдущий разговор (понимай контекст уточняющих вопросов):"]
@@ -286,31 +396,47 @@ async def search(query: SearchQuery) -> AnswerResponse:
                 lines.append(f"{who}: {h.content[:600]}")
             history_block = "\n".join(lines) + "\n\n"
 
+    summary_note = ""
+    if summary:
+        summary_note = (
+            "\n\nЭто запрос на СВОДКУ. Синтезируй ПО СУТИ: сгруппируй по темам "
+            "(должники, расписание/группы, найм, продажи, переписка с командой), "
+            "укажи факты и имена. НЕ перечисляй запросы Димы к тебе как «сделанное». "
+            "Если событий мало — скажи что день ещё не закончен / данных пока мало, "
+            "но НЕ выдумывай."
+        )
+    project_note = ""
+    if project:
+        project_note = (
+            f"\n\nВопрос про проект «{project}». Все события ниже уже отобраны как "
+            f"относящиеся к нему (рабочие ящики + чаты). Отвечай по ним."
+        )
+
     synth_prompt = (
         "Ты — Вера, личная память Димы.\n\n"
         f"### Твоя конфигурация (твоя реальная, не из писем!)\n{self_ctx}\n\n"
         f"{history_block}"
         f"### Текущий вопрос Димы:\n{query.q}\n\n"
-        f"### Найденные события (топ-10 из истории):\n{context}\n\n"
+        f"### Найденные события:\n{context}\n\n"
         "ВАЖНО:\n"
-        "1) Учитывай предыдущий разговор. Если вопрос похож на уточняющий "
-        "(«а ещё?», «расскажи подробнее», «а другие?», местоимения «он/она/они/это») — "
-        "связывай с тем что ты уже сказала. Не отвечай «нет данных» если "
-        "в прошлом ответе ты что-то перечислила и Дима спрашивает про продолжение.\n"
-        "2) Если вопрос про ТЕБЯ саму (источники, почты, чаты, кто ты) — отвечай "
-        "по разделу «Твоя конфигурация», НЕ по найденным событиям. Email отправителей "
-        "в письмах ≠ твои подключённые ящики.\n"
-        "3) Если вопрос про факты/людей/события — отвечай по найденным событиям. "
-        "Если данных нет — честно скажи."
+        "1) Учитывай предыдущий разговор для уточняющих вопросов.\n"
+        "2) Если вопрос про ТЕБЯ саму — отвечай по «Твоя конфигурация».\n"
+        "3) Если вопрос про факты/события — отвечай по найденным событиям. "
+        "Если данных нет — честно скажи.\n"
+        f"{SOURCE_PROMPT_NOTE}"
+        f"{summary_note}{project_note}"
     )
 
-    # Agent loop путь (по умолчанию) — позволяет LLM звать tools и обогащать ответ
-    if query.use_agent:
+    # project/summary: события уже отобраны точно (account+chats / time-window).
+    # Агенту нечего доискивать — он только зациклится. Прямой синтез надёжнее.
+    use_agent = query.use_agent and not project and not summary
+
+    if use_agent:
         trace = await run_agent(
             user_query=query.q,
             initial_context=context,
             self_context=self_ctx,
-            history_block=history_block,
+            history_block=history_block + summary_note + project_note,
             max_steps=query.max_steps,
         )
         return AnswerResponse(
@@ -323,13 +449,12 @@ async def search(query: SearchQuery) -> AnswerResponse:
             agent_trace=trace.steps,
         )
 
-    # Legacy однопроход (use_agent=false) — для отладки/dashboard.
     try:
         answer_text, meta = await asyncio.wait_for(
             chat(
                 messages=[{"role": "user", "content": synth_prompt}],
                 capability="chat:smart",
-                max_tokens=800,
+                max_tokens=900,
                 temperature=0.5,
                 workflow="search",
             ),

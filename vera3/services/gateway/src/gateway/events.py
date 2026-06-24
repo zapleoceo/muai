@@ -109,4 +109,7 @@ async def get_event(event_id: int) -> dict[str, Any]:
             "triage_status": row.triage_status,
             "triage_metadata": row.triage_metadata,
             "importance": row.importance,
+            "nature": row.nature,
+            "project": row.project,
+            "ready_subtype": row.ready_subtype,
         }

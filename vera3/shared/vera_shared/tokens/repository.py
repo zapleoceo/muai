@@ -165,12 +165,16 @@ async def settle_paid_cost(token_id: int, *, diff_usd: float) -> None:
     """
     if abs(diff_usd) < 1e-9:
         return
+    # CASE WHEN вместо GREATEST — портабельно между Postgres и SQLite (тесты)
     async with get_session() as s:
         await s.execute(text(
             "UPDATE tokens SET "
-            "  daily_cost_used_usd = GREATEST(0, daily_cost_used_usd + :d), "
-            "  monthly_cost_used_usd = GREATEST(0, monthly_cost_used_usd + :d), "
-            "  total_cost_usd = GREATEST(0, total_cost_usd + :d) "
+            "  daily_cost_used_usd = CASE WHEN daily_cost_used_usd + :d < 0 "
+            "    THEN 0 ELSE daily_cost_used_usd + :d END, "
+            "  monthly_cost_used_usd = CASE WHEN monthly_cost_used_usd + :d < 0 "
+            "    THEN 0 ELSE monthly_cost_used_usd + :d END, "
+            "  total_cost_usd = CASE WHEN total_cost_usd + :d < 0 "
+            "    THEN 0 ELSE total_cost_usd + :d END "
             "WHERE id = :tid"
         ), {"tid": token_id, "d": diff_usd})
 
@@ -232,11 +236,14 @@ async def record_paid_settled(
             "UPDATE tokens SET "
             "  daily_used = daily_used + 1, "
             "  total_cost_usd = total_cost_usd + :actual, "
-            "  daily_cost_used_usd = GREATEST(0, daily_cost_used_usd + :diff), "
-            "  monthly_cost_used_usd = GREATEST(0, monthly_cost_used_usd + :diff), "
-            "  last_used_at = NOW() "
+            "  daily_cost_used_usd = CASE WHEN daily_cost_used_usd + :diff < 0 "
+            "    THEN 0 ELSE daily_cost_used_usd + :diff END, "
+            "  monthly_cost_used_usd = CASE WHEN monthly_cost_used_usd + :diff < 0 "
+            "    THEN 0 ELSE monthly_cost_used_usd + :diff END, "
+            "  last_used_at = :now "
             "WHERE id = :tid"
-        ), {"tid": token_id, "actual": actual_cost, "diff": diff})
+        ), {"tid": token_id, "actual": actual_cost, "diff": diff,
+            "now": datetime.utcnow()})
 
 
 async def release_reservation(token_id: int, *, reserved_cost: float) -> None:
@@ -246,8 +253,10 @@ async def release_reservation(token_id: int, *, reserved_cost: float) -> None:
     async with get_session() as s:
         await s.execute(text(
             "UPDATE tokens SET "
-            "  daily_cost_used_usd = GREATEST(0, daily_cost_used_usd - :est), "
-            "  monthly_cost_used_usd = GREATEST(0, monthly_cost_used_usd - :est) "
+            "  daily_cost_used_usd = CASE WHEN daily_cost_used_usd - :est < 0 "
+            "    THEN 0 ELSE daily_cost_used_usd - :est END, "
+            "  monthly_cost_used_usd = CASE WHEN monthly_cost_used_usd - :est < 0 "
+            "    THEN 0 ELSE monthly_cost_used_usd - :est END "
             "WHERE id = :tid"
         ), {"tid": token_id, "est": reserved_cost})
 

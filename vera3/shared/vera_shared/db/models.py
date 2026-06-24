@@ -102,6 +102,8 @@ class EventRow(Base):
         Index("ix_events_occurred_at", "occurred_at"),
         Index("ix_events_source", "source"),
         Index("ix_events_account", "account"),
+        Index("ix_events_project", "project"),
+        Index("ix_events_nature", "nature"),
     )
 
     id: Mapped[int] = mapped_column(BigIntPk, primary_key=True, autoincrement=True)
@@ -134,6 +136,11 @@ class EventRow(Base):
     # Triage metadata (results от brain-triage)
     triage_metadata: Mapped[dict[str, Any] | None] = mapped_column(JsonType, nullable=True)
     importance: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    # Классификация природы и принадлежности — пишется триажем.
+    # nature: world_event | my_intent | conversation_with_me | derived_fact
+    # project: itstep | veranda | family | personal | news | other
+    nature: Mapped[str | None] = mapped_column(String(24), nullable=True)
+    project: Mapped[str | None] = mapped_column(String(24), nullable=True)
 
     # Graphiti reference (если попало в граф)
     graphiti_episode_uuid: Mapped[str | None] = mapped_column(String(36), nullable=True)
@@ -146,6 +153,11 @@ class EventRow(Base):
     # Когда воркер захватил это событие в processing — для watchdog.
     # NULL значит pending/done — never claimed.
     triage_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+    # Ready status subtype (null | 'deal' | 'openhouse')
+    # 'deal' = lead ready to BUY (has contact, purchase intent, within cohort)
+    # 'openhouse' = lead ready to ATTEND (June 29 event)
+    ready_subtype: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
 
 class JobRow(Base):

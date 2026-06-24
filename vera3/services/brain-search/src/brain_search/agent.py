@@ -99,7 +99,9 @@ BUILTIN_SPECS: list[ToolDescriptor] = [
         description=(
             "Full-text search across ALL events (telegram, gmail, instagram, "
             "vera_chat). Use when you need MORE messages than initial context "
-            "already shows. Returns up to limit events."
+            "already shows. For time-bound questions (вчера, за неделю, дата) "
+            "ALWAYS pass date_from/date_to (ISO date, e.g. 2026-06-09) — "
+            "an empty q with dates returns everything in the period."
         ),
         params_schema={
             "type": "object",
@@ -108,6 +110,10 @@ BUILTIN_SPECS: list[ToolDescriptor] = [
                 "source": {"type": "string",
                             "enum": ["telegram", "gmail", "instagram", "vera_chat", "any"]},
                 "limit": {"type": "integer", "default": 20},
+                "date_from": {"type": "string",
+                               "description": "ISO date inclusive, e.g. 2026-06-09"},
+                "date_to": {"type": "string",
+                             "description": "ISO date inclusive, e.g. 2026-06-09"},
             },
             "required": ["q"],
         },
@@ -135,10 +141,24 @@ BUILTIN_SPECS: list[ToolDescriptor] = [
 ]
 
 
+def _parse_iso_date(raw: str | None) -> "datetime | None":
+    from datetime import datetime as _dt
+    if not raw:
+        return None
+    try:
+        return _dt.strptime(raw.strip()[:10], "%Y-%m-%d")
+    except ValueError:
+        return None
+
+
 async def _exec_search_events(q: str, source: str = "any",
-                                limit: int = 20) -> dict[str, Any]:
+                                limit: int = 20,
+                                date_from: str | None = None,
+                                date_to: str | None = None) -> dict[str, Any]:
+    from datetime import timedelta
     from sqlalchemy import text
     from vera_shared.db.engine import get_session
+    from brain_search.query_parse import TZ_OFFSET_H
 
     STOPWORDS = {"что", "как", "и", "в", "на", "о", "по", "у", "для", "это",
                  "что-то", "ли", "ну", "же", "то", "был", "была", "были",
@@ -151,8 +171,19 @@ async def _exec_search_events(q: str, source: str = "any",
     params: dict[str, Any] = {"tsq": ts_query, "lim": limit}
     where_extra = ""
     if source != "any":
-        where_extra = " AND source = :src"
+        where_extra += " AND source = :src"
         params["src"] = source
+
+    # Даты — локальные (Jakarta), храним naive UTC → сдвиг на -TZ_OFFSET_H.
+    d_from = _parse_iso_date(date_from)
+    d_to = _parse_iso_date(date_to)
+    if d_from:
+        params["d_from"] = d_from - timedelta(hours=TZ_OFFSET_H)
+        where_extra += " AND occurred_at >= :d_from"
+    if d_to:
+        # inclusive конец дня
+        params["d_to"] = d_to + timedelta(days=1) - timedelta(hours=TZ_OFFSET_H)
+        where_extra += " AND occurred_at < :d_to"
 
     async with get_session() as s:
         if ts_query:
@@ -243,6 +274,13 @@ SYSTEM_PROMPT = """Ты — Вера, цифровая память Димы. Т
    memory.remember чтобы запомнить, и ТОЛЬКО ПОТОМ отвечай.
 5. Каждый ответ цитируй фактами — числами и именами, не общими словами.
 6. Максимум 6 шагов. Если не справилась — отвечай честно тем что есть.
+7. События source=perplexity — это ЗАПРОСЫ Димы к Perplexity AI (намерения,
+   вопросы), а НЕ выполненная работа. НИКОГДА не описывай их как
+   «сделано/выполнено». source=vera_chat — прошлые разговоры с тобой, не факты.
+   Реальная работа дня живёт в source=gmail (письма) и source=telegram (чаты).
+8. Если вопрос содержит период («вчера», «за неделю», дату) — у search_events
+   есть параметры date_from/date_to (ISO). Используй их, не полагайся на
+   текстовое совпадение слова «вчера».
 """
 
 

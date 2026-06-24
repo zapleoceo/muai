@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import pytest
+from cryptography.fernet import InvalidToken
 
 from vera_shared.tokens.crypto import ENCRYPTED_PREFIX, decrypt, encrypt, is_encrypted
 
@@ -20,8 +21,17 @@ def test_decrypt_returns_original():
     assert decrypt(encrypted, secret=SECRET) == plain
 
 
-def test_decrypt_legacy_plaintext_passes_through():
-    # Legacy токены из миграции — без префикса. Возвращаются как есть.
+def test_decrypt_plaintext_rejected_by_default(monkeypatch):
+    # Security fix: plaintext без префикса теперь отклоняется по умолчанию —
+    # закрывает вектор «атакующий с DB write подсовывает свой sk-...»
+    monkeypatch.delenv("ALLOW_PLAINTEXT_TOKENS", raising=False)
+    with pytest.raises(InvalidToken):
+        decrypt("sk-old-format-no-prefix", secret=SECRET)
+
+
+def test_decrypt_plaintext_allowed_with_migration_flag(monkeypatch):
+    # Для одноразовой legacy-миграции — явный opt-in через env
+    monkeypatch.setenv("ALLOW_PLAINTEXT_TOKENS", "1")
     plain_legacy = "sk-old-format-no-prefix"
     assert decrypt(plain_legacy, secret=SECRET) == plain_legacy
 
@@ -38,7 +48,12 @@ def test_decrypt_with_wrong_secret_raises():
         decrypt(encrypted, secret="completely-different-secret")
 
 
-def test_encrypt_empty_secret_raises():
+def test_encrypt_empty_secret_raises(monkeypatch):
+    # secret="" falls back на token_secret() из env — чистим env чтобы
+    # проверить именно отказ при полном отсутствии секрета
+    monkeypatch.delenv("TOKEN_SECRET", raising=False)
+    monkeypatch.delenv("SESSION_SECRET", raising=False)
+    monkeypatch.delenv("ALLOW_SESSION_SECRET_FALLBACK", raising=False)
     with pytest.raises(ValueError):
         encrypt("data", secret="")
 
