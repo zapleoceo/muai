@@ -60,6 +60,21 @@
 - Comments in commit messages — write a real message
 - TODO/FIXME with no owner or date
 
+## Pre-commit hooks
+
+`.pre-commit-config.yaml` is at the repo root. To enable locally:
+
+```bash
+pip install pre-commit
+pre-commit install            # ruff + format + leak guards on commit
+pre-commit install -t pre-push  # plus pytest unit run on push
+```
+
+Hooks: trailing whitespace, EOL fixer, YAML syntax, large-file guard,
+merge-conflict markers, `detect-private-key` (blocks accidental .pem /
+id_rsa commits), `ruff --fix` on `vera3/`, `ruff format` on `vera3/`,
+`pytest -x` on push.
+
 ## Process
 
 - One logical change per commit.
