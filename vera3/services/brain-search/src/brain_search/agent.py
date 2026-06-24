@@ -141,7 +141,8 @@ BUILTIN_SPECS: list[ToolDescriptor] = [
 ]
 
 
-def _parse_iso_date(raw: str | None) -> "datetime | None":
+def _parse_iso_date(raw: str | None):
+    """Lazy import — datetime not needed elsewhere in this module."""
     from datetime import datetime as _dt
     if not raw:
         return None
