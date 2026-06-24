@@ -94,7 +94,27 @@ async def chat(
     workflow: str | None = None,
     event_id: int | None = None,
 ) -> tuple[str, dict[str, Any]]:
-    """Chat-completion с автоматической ротацией и atomic cost reservation."""
+    """Chat-completion с автоматической ротацией и atomic cost reservation.
+
+    BROKER_URL set → отдаём всё в aibroker (он сам делает chain+cost+rotation).
+    Иначе — legacy путь по локальным tokens.
+    """
+    from vera_shared.llm.broker_client import (
+        BrokerCallFailed, broker_enabled, chat_via_broker,
+    )
+    if broker_enabled():
+        try:
+            return await chat_via_broker(
+                messages=messages, capability=capability,
+                response_format=response_format,
+                max_tokens=max_tokens, temperature=temperature,
+                workflow=workflow, event_id=event_id,
+            )
+        except BrokerCallFailed as e:
+            log.warning("broker call failed, falling back to local: %s", e)
+            # fall-through to legacy path below
+
+    # ── legacy: pick local tokens, walk chain ourselves ─────────────────
     chain = RoutingPolicy.chain_for(capability, require_json_schema=require_json_schema)
     last_error: Exception | None = None
     global_cap = global_daily_cap_from_env()
@@ -115,9 +135,13 @@ async def chat(
             est_cost = estimate_cost(PROVIDER_MODEL[provider], t_in_est, t_out_est)
 
             reserved = 0.0
-            # ── PAID: атомарный резерв через UPDATE WHERE cap ──
-            if tk.tier == "paid":
-                # Глобальный pre-check (best-effort, точный — в БД cap'е)
+            # ── BILLABLE: cap по реальной цене модели, НЕ по метке tier ──
+            # Урок $20-burn: Gemini-ключ с tier="free", но включённым биллингом
+            # в Google → при превышении free-квоты молча списывает деньги (без
+            # 429). Любой вызов с est_cost>0 — billable и обязан пройти под cap.
+            billable = est_cost > 0
+            if billable:
+                # Глобальный дневной cap — на ЛЮБОЙ billable вызов (free/trial тоже).
                 if global_cap is not None:
                     g_used = await global_cost_today()
                     if g_used + est_cost > global_cap:
@@ -126,18 +150,20 @@ async def chat(
                             provider, tk.label, g_used, est_cost, global_cap,
                         )
                         continue
-                cap = tk.daily_cost_cap_usd or 0.0
-                ok = await token_repo.reserve_paid_cost(
-                    tk.id,
-                    estimated_cost=est_cost,
-                    daily_cap=cap,
-                    monthly_cap=tk.monthly_cost_cap_usd,
-                )
-                if not ok:
-                    log.warning("Skip %s/%s — token cap reservation failed",
-                                provider, tk.label)
-                    continue
-                reserved = est_cost
+                # Per-key атомарный резерв — для paid или ключей с явным cap.
+                if tk.tier == "paid" or tk.daily_cost_cap_usd is not None:
+                    cap = tk.daily_cost_cap_usd or 0.0
+                    ok = await token_repo.reserve_paid_cost(
+                        tk.id,
+                        estimated_cost=est_cost,
+                        daily_cap=cap,
+                        monthly_cap=tk.monthly_cost_cap_usd,
+                    )
+                    if not ok:
+                        log.warning("Skip %s/%s — token cap reservation failed",
+                                    provider, tk.label)
+                        continue
+                    reserved = est_cost
 
             try:
                 text_out, meta = await _call_provider(
@@ -163,9 +189,17 @@ async def chat(
             # Success — settle и log
             actual_cost = cost_usd(meta["model"], meta["tokens_in"], meta["tokens_out"])
 
-            if tk.tier == "paid":
+            if reserved > 0:
                 await token_repo.record_paid_settled(
                     tk.id, actual_cost=actual_cost, reserved_cost=reserved,
+                )
+                invalidate_global_cost_cache()
+            elif billable:
+                # Billable без per-key cap (free/trial-метка с реальной ценой):
+                # учитываем стоимость, чтобы глобальный cap её видел.
+                await token_repo.record_usage(
+                    tk.id, tokens_in=meta["tokens_in"],
+                    tokens_out=meta["tokens_out"], cost_usd=actual_cost,
                 )
                 invalidate_global_cost_cache()
             else:
@@ -367,7 +401,19 @@ async def embed(text: str | list[str]) -> list[list[float]]:
 
     ВАЖНО: возвращает list[list[float]] — даже если на вход str, оборачиваем
     в [text] (НЕ итерируем по char).
+
+    BROKER_URL set → отдаём всё в aibroker. Иначе — legacy.
     """
+    from vera_shared.llm.broker_client import (
+        BrokerCallFailed, broker_enabled, embed_via_broker,
+    )
+    if broker_enabled():
+        try:
+            return await embed_via_broker(text)
+        except BrokerCallFailed as e:
+            log.warning("broker embed failed, falling back to local: %s", e)
+            # fall-through to legacy
+
     if isinstance(text, str):
         items: list[str] = [text]
     else:

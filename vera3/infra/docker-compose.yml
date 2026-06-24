@@ -58,6 +58,8 @@ services:
       TRIAGE_CONCURRENCY: ${TRIAGE_CONCURRENCY:-5}
       TRIAGE_PACE_S: ${TRIAGE_PACE_S:-0.5}
       VERA_DAILY_GLOBAL_CAP_USD: ${VERA_DAILY_GLOBAL_CAP_USD:-2.0}
+      BROKER_URL: ${BROKER_URL:-}
+      BROKER_PROJECT_KEY: ${BROKER_PROJECT_KEY:-}
     restart: unless-stopped
 
   # ─── Brain: Search ──────────────────────────────────────────────────────
@@ -73,6 +75,11 @@ services:
       DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
       TOKEN_SECRET: ${TOKEN_SECRET}
       VERA_DAILY_GLOBAL_CAP_USD: ${VERA_DAILY_GLOBAL_CAP_USD:-2.0}
+      BROKER_URL: ${BROKER_URL:-}
+      BROKER_PROJECT_KEY: ${BROKER_PROJECT_KEY:-}
+      # Для live-tool вызовов к ingestor-telegram (folder/dialog dump)
+      INTERNAL_SECRET: ${INTERNAL_SECRET:?INTERNAL_SECRET must be set}
+      TELEGRAM_TOOLS_URL: http://ingestor-telegram:8000
     ports:
       - "127.0.0.1:8002:8000"
     restart: unless-stopped
