@@ -183,6 +183,7 @@ services:
       TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-Dimondra_Ai_Bot}
       OWNER_TELEGRAM_ID: ${OWNER_TELEGRAM_ID}
       SEARCH_URL: http://brain-search:8000
+      BROKER_URL: ${BROKER_URL:-}
     ports:
       - "127.0.0.1:8003:8000"
     restart: unless-stopped

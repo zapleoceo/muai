@@ -351,37 +351,55 @@ async def tokens_page(request: Request, _=Depends(lambda r=Request: None)):
     except HTTPException:
         return RedirectResponse("/login", status_code=303)
 
+    # local pool — теперь только cold fallback. Real source of truth = aibroker.
     async with get_session() as s:
         rows = (await s.execute(
             select(TokenRow).order_by(TokenRow.provider, TokenRow.id)
         )).scalars().all()
 
-    tbody = []
-    for r in rows:
-        in_cd = r.cooldown_until and r.cooldown_until > datetime.utcnow()
-        state = ("✗ dead" if not r.is_active
-                 else "◐ cooldown" if in_cd else "✓ live")
-        state_class = ("err" if not r.is_active
-                       else "warn" if in_cd else "ok")
-        tier_emoji = {"free": "🟢", "paid": "🔴", "trial": "🟡"}.get(r.tier, "⚪")
-        cap = f"${r.daily_cost_cap_usd:.2f}" if r.daily_cost_cap_usd else "—"
-        used = f"${r.daily_cost_used_usd:.4f}" if r.daily_cost_used_usd else "$0"
-        tbody.append(
-            f'<tr><td>{r.id}</td><td>{tier_emoji} {esc(r.tier)}</td>'
-            f'<td>{esc(r.provider)}</td><td>{esc(r.label)}</td>'
-            f'<td class="pill {state_class}">{state}</td>'
-            f'<td>{r.daily_used}/{r.daily_limit}</td>'
-            f'<td>{used} / {cap}</td><td>{r.error_count}</td></tr>'
-        )
+    broker_url = os.environ.get("BROKER_URL", "").rstrip("/")
+    broker_link = broker_url + "/dashboard" if broker_url else None
 
-    return HTMLResponse(_render("tokens", f"""
-        <h2>LLM-токены</h2>
-        <table class="data">
-          <thead><tr><th>id</th><th>tier</th><th>provider</th><th>label</th>
-          <th>state</th><th>requests today</th><th>cost today / cap</th><th>errors</th></tr></thead>
-          <tbody>{''.join(tbody)}</tbody>
-        </table>
-    """))
+    fallback_rows = "".join(
+        f'<tr><td>{esc(r.provider)}</td><td>{esc(r.label)}</td>'
+        f'<td>{esc(r.tier)}</td>'
+        f'<td>{"✓" if r.is_active else "✗"}</td></tr>'
+        for r in rows
+    )
+
+    body = f"""
+    <div style="background:#1a3d5a; border:1px solid #2a5d7a; color:#aed4ee;
+                padding:20px 24px; border-radius:12px; margin-bottom:24px;">
+      <div style="font-size:14px; color:#cfdfe7; margin-bottom:6px;">
+        🔑 Ключи теперь управляются централизованным брокером
+      </div>
+      <div style="font-size:13px; color:#9ab; line-height:1.6;">
+        После миграции 2026-06-24 все LLM-вызовы Vera идут через
+        <b>aibroker</b> (CRUD, health-monitor, ротация, кэпы — всё там).
+        Локальный пул ниже — холодный fallback, используется только если
+        broker недоступен.
+      </div>
+      {('<div style="margin-top:14px;"><a href="' + esc(broker_link) +
+        '" target="_blank" style="display:inline-block; background:#4dabf7; '
+        'color:#0f1115; padding:10px 18px; border-radius:8px; '
+        'font-weight:600; text-decoration:none; font-size:13px;">'
+        '→ Открыть aibroker dashboard</a></div>') if broker_link else ''}
+    </div>
+
+    <h2 style="font-size:14px; color:#888; font-weight:500;
+               text-transform:uppercase; letter-spacing:0.05em;">
+      Локальный fallback-пул ({len(rows)} ключей)
+    </h2>
+    <table class="data">
+      <thead><tr><th>provider</th><th>label</th><th>tier</th><th>active</th></tr></thead>
+      <tbody>{fallback_rows}</tbody>
+    </table>
+    <p style="font-size:11px; color:#666; margin-top:8px;">
+      В fallback-пул не пишется live-state (используется counter, cooldown,
+      cost) — это кеш на случай аварии broker'а.
+    </p>
+    """
+    return HTMLResponse(_render("tokens", body))
 
 
 # ─── Events ────────────────────────────────────────────────────────────────
