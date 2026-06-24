@@ -28,6 +28,7 @@ def test_broker_enabled_requires_both_vars(monkeypatch):
     assert bc.broker_enabled()
 
 
+@pytest.mark.asyncio
 async def test_chat_via_broker_unpacks_response(monkeypatch):
     monkeypatch.setattr(bc, "BROKER_URL", "https://aib.zapleo.com")
     monkeypatch.setattr(bc, "BROKER_PROJECT_KEY", "aib_prj_xxx")
@@ -57,6 +58,7 @@ async def test_chat_via_broker_unpacks_response(monkeypatch):
     assert meta["latency_ms"] == 451
 
 
+@pytest.mark.asyncio
 async def test_chat_via_broker_raises_on_5xx(monkeypatch):
     monkeypatch.setattr(bc, "BROKER_URL", "https://aib.zapleo.com")
     monkeypatch.setattr(bc, "BROKER_PROJECT_KEY", "aib_prj_xxx")
@@ -73,6 +75,7 @@ async def test_chat_via_broker_raises_on_5xx(monkeypatch):
             )
 
 
+@pytest.mark.asyncio
 async def test_embed_via_broker_with_str_input(monkeypatch):
     """str input wraps to [input] — verify it doesn't iterate over chars."""
     monkeypatch.setattr(bc, "BROKER_URL", "https://aib.zapleo.com")
