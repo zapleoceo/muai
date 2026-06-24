@@ -13,6 +13,15 @@ from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, Respo
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select, text
 
+from vera_shared.db.engine import close_engine, get_session, init_engine
+from vera_shared.db.models import EventRow, TokenRow, UsageLogRow
+from vera_shared.db.models_sources import GmailAccountRow, InstagramSessionRow, TelegramSessionRow
+
+from dashboard.auth import (
+    COOKIE_NAME, TTL, get_bot_username, issue_session,
+    require_owner, verify_telegram_auth, OWNER_ID,
+)
+
 
 def esc(v) -> str:
     """HTML-escape для значений из БД/Telegram. Защита от XSS.
@@ -24,15 +33,6 @@ def esc(v) -> str:
     if v is None:
         return "—"
     return _esc(str(v), quote=True)
-
-from vera_shared.db.engine import close_engine, get_session, init_engine
-from vera_shared.db.models import EventRow, TokenRow, UsageLogRow
-from vera_shared.db.models_sources import GmailAccountRow, InstagramSessionRow, TelegramSessionRow
-
-from dashboard.auth import (
-    COOKIE_NAME, TTL, get_bot_username, issue_session,
-    require_owner, verify_telegram_auth, OWNER_ID,
-)
 
 log = logging.getLogger(__name__)
 SEARCH_URL = os.environ.get("SEARCH_URL", "http://brain-search:8000")
