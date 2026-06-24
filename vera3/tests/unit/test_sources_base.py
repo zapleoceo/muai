@@ -64,6 +64,7 @@ def test_source_is_abstract():
         Source()  # type: ignore[abstract]
 
 
+@pytest.mark.asyncio
 async def test_source_default_sync_directory_returns_empty_delta():
     """The default sync_directory is a no-op returning an empty DirectoryDelta."""
     class StubSource(Source):
