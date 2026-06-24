@@ -33,3 +33,15 @@ vera3/.venv/
 vera3/**/*.egg-info/
 vera3/.coverage
 vera3/htmlcov/
+
+# Session debris that lived in repo root but isn't part of the project
+/READY_SUBTYPES*.md
+/READY_SUBTYPES*.txt
+/READY_SUBTYPES*.sql
+/README_READY_SUBTYPES.txt
+/analyze_stepan.py
+/audit_full.py
+/audit_stepan_chats.py
+/backfill_links.py
+/persona.md
+/test_ready_subtypes_integration.py
