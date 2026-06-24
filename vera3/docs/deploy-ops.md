@@ -4,23 +4,51 @@
 
 Push to `master` → `.github/workflows/deploy.yml`:
 
-1. **rsync** vera3/ to `hetzner-root:/var/www/vera3/` (excludes `.env`, `.git`, `__pycache__`, `*.session`)
-2. **docker compose build && up -d --remove-orphans**
-3. **smoke**: probes `vera3-gateway`, `vera3-brain-search`, `vera3-dashboard` /healthz + HTTPS `dima.veranda.my/login`
-4. **prune** dangling images on success
+1. **test** job — pytest must pass; coverage gate 40% on
+   `vera_shared` + `gateway`. Deploy is gated on this via `needs: test`.
+2. **deploy** job — single SSH to the server with a restricted key.
+   The key is wired in `/root/.ssh/authorized_keys` to
+   `command="/usr/local/bin/vera3-deploy"` — connecting at all runs the
+   wrapper, anything the client sends is ignored.
 
-## Tests gate
+The wrapper does:
 
-`.github/workflows/vera3-tests.yml` runs on every push touching `vera3/**`:
+1. `git clone` (or `git fetch + reset --hard origin/master`) the muai repo
+   into `/var/www/muai-checkout/`.
+2. `rsync vera3/ → /var/www/vera3/` preserving `.env`, sessions, pycache.
+3. `docker compose build && up -d --remove-orphans` in `/var/www/vera3/infra`.
+4. Polls `vera3-gateway /healthz` for up to 60 seconds, exits 11 if dead.
 
-- Unit tests in `vera3/tests/unit/`
-- Coverage gate: **40%** on `vera_shared` + `gateway` (raise as we cover more)
-- Ruff + mypy are `continue-on-error` (non-blocking but visible)
+## Tests gate (separate workflow)
 
-Tests must pass before merging. The deploy workflow does NOT depend on the
-tests workflow today — they run in parallel. The deploy can ship even with
-red tests. **TODO**: gate deploy on tests when the suite is comprehensive
-enough.
+`.github/workflows/vera3-tests.yml` also runs on every push (independent
+of deploy) and is the same pytest invocation. The duplication is
+intentional: tests workflow shows up as a clean check on every PR, deploy
+workflow re-runs them as a guard before shipping.
+
+## Docs gate
+
+`.github/workflows/docs-check.yml` blocks pushes that change Python under
+`vera3/services/` or `vera3/shared/` without touching `vera3/docs/`.
+Opt-out: `docs-not-needed` literal in any commit in the range.
+
+## Restricted SSH key
+
+Generated once on a dev box:
+```
+ssh-keygen -t ed25519 -f vera3_gh_deploy -N "" -C "github-actions-vera3-deploy"
+```
+
+Public part appended to `/root/.ssh/authorized_keys`:
+```
+command="/usr/local/bin/vera3-deploy",no-port-forwarding,no-X11-forwarding,no-agent-forwarding,no-pty ssh-ed25519 AAAA…
+```
+
+If this key leaks, the worst an attacker can do is re-run our wrapper.
+No shell, no scp, no port-forward, no agent-forward.
+
+Stored in GH Secrets as `HETZNER_SSH_KEY_VERA3`. The old (full-root)
+`HETZNER_SSH_KEY` is no longer used by Vera's deploy and can be removed.
 
 ## Docs gate
 

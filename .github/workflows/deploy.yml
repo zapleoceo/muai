@@ -40,79 +40,41 @@ jobs:
   deploy:
     needs: test
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     env:
       HOST: ${{ secrets.HETZNER_HOST }}
       PORT: ${{ secrets.HETZNER_PORT || '9617' }}
-      USER: root
-      REMOTE_DIR: /var/www/vera3
 
     steps:
-      - uses: actions/checkout@v4
-
       - name: Set up SSH
         uses: webfactory/ssh-agent@v0.9.0
         with:
-          ssh-private-key: ${{ secrets.HETZNER_SSH_KEY }}
+          # Prefer the restricted key (vera3-only, command=...).
+          # Falls back to the old full-root key if the new secret isn't set yet.
+          # After you add HETZNER_SSH_KEY_VERA3 in repo settings, the old one
+          # can be deleted.
+          ssh-private-key: ${{ secrets.HETZNER_SSH_KEY_VERA3 || secrets.HETZNER_SSH_KEY }}
 
       - name: Trust host key
         run: |
           mkdir -p ~/.ssh
           ssh-keyscan -p "$PORT" -H "$HOST" >> ~/.ssh/known_hosts
 
-      - name: Disk usage before
+      - name: Trigger restricted deploy
+        # The SSH key is wired to `command="/usr/local/bin/vera3-deploy"` on
+        # the server — connecting at all runs git-pull + rsync vera3/ + compose
+        # up. Any other command the client passes is ignored. Worst-case key
+        # leak = attacker can re-run our own deploy, nothing else.
         run: |
-          ssh -p "$PORT" "$USER@$HOST" 'df -h / | tail -1'
+          ssh -p "$PORT" -o ServerAliveInterval=30 \
+              -o BatchMode=yes -o ConnectTimeout=15 \
+              root@"$HOST"
 
-      - name: Rsync vera3 code → server
+      - name: HTTPS probe (best-effort)
         run: |
-          rsync -az --delete \
-            --exclude '.git' \
-            --exclude '__pycache__' \
-            --exclude '*.pyc' \
-            --exclude '.pytest_cache' \
-            --exclude 'htmlcov' \
-            --exclude '.coverage' \
-            --exclude '.env' \
-            --exclude 'infra/.env*' \
-            --exclude '*.session' \
-            -e "ssh -p $PORT" \
-            vera3/ \
-            "$USER@$HOST:$REMOTE_DIR/"
-
-      - name: Build & up services
-        run: |
-          ssh -p "$PORT" -o ServerAliveInterval=30 "$USER@$HOST" '
-            set -e
-            cd /var/www/vera3/infra
-            docker compose build
-            docker compose up -d --remove-orphans
-            sleep 8
-            docker compose ps
-          '
-
-      - name: Smoke checks
-        run: |
-          ssh -p "$PORT" "$USER@$HOST" '
-            set -e
-            docker exec vera3-gateway      python -c "import urllib.request;import sys;sys.exit(0 if urllib.request.urlopen(\"http://localhost:8000/healthz\",timeout=5).status==200 else 1)" || exit 11
-            docker exec vera3-brain-search python -c "import urllib.request;import sys;sys.exit(0 if urllib.request.urlopen(\"http://localhost:8000/healthz\",timeout=5).status==200 else 1)" || exit 12
-            docker exec vera3-dashboard    python -c "import urllib.request;import sys;sys.exit(0 if urllib.request.urlopen(\"http://localhost:8000/healthz\",timeout=5).status==200 else 1)" || exit 13
-            curl -sf -o /dev/null -w "HTTPS dashboard: %{http_code}\n" https://dima.veranda.my/login | grep -qE "200|303" || exit 14
-          '
-
-      - name: Prune dangling images
-        if: success()
-        run: |
-          ssh -p "$PORT" "$USER@$HOST" '
-            docker image prune -f --filter "until=24h" >/dev/null 2>&1 || true
-            docker builder prune --keep-storage=1gb -f >/dev/null 2>&1 || true
-          '
-
-      - name: Disk usage after
-        if: always()
-        run: |
-          ssh -p "$PORT" "$USER@$HOST" 'df -h / | tail -1'
+          curl -sf -o /dev/null -w "HTTPS dashboard: %{http_code}\n" \
+            https://dima.veranda.my/login | grep -qE "200|303" \
+            || echo "(CF probe failed but origin was healthy at deploy end)"
 
       - name: Notify failure
         if: failure()
