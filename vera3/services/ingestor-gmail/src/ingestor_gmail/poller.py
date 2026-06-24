@@ -10,7 +10,7 @@ import base64
 import logging
 import os
 import re
-from datetime import datetime, timedelta
+from datetime import datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
 
@@ -20,7 +20,7 @@ from sqlalchemy import select, update
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import GmailAccountRow
-from vera_shared.tokens.crypto import decrypt, encrypt
+from vera_shared.tokens.crypto import decrypt
 
 log = logging.getLogger("gmail")
 
