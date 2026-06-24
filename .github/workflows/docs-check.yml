@@ -1,0 +1,54 @@
+name: docs-check
+
+# Blocks pushes that change vera3/services/** or vera3/shared/** without
+# touching vera3/docs/**. Opt-out: 'docs-not-needed' literal in commit msg.
+
+on:
+  push:
+    paths:
+      - 'vera3/**'
+  pull_request:
+    paths:
+      - 'vera3/**'
+
+jobs:
+  docs-updated:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify /docs updated alongside code
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+            HEAD="${{ github.event.pull_request.head.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+            HEAD="${{ github.sha }}"
+          fi
+          if [ -z "${BASE:-}" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            BASE="$(git rev-parse "${HEAD}~1" 2>/dev/null || echo "$HEAD")"
+          fi
+
+          CHANGED="$(git diff --name-only "$BASE" "$HEAD")"
+          echo "== changed files =="; echo "$CHANGED"
+
+          if git log --format=%B "${BASE}..${HEAD}" 2>/dev/null | grep -qiF "docs-not-needed"; then
+            echo "::notice::'docs-not-needed' found — skipping docs check."
+            exit 0
+          fi
+
+          CODE="$(echo "$CHANGED" | grep -E '^vera3/(services|shared)/.*\.py$' || true)"
+          DOCS="$(echo "$CHANGED" | grep -E '^vera3/docs/' || true)"
+
+          if [ -n "$CODE" ] && [ -z "$DOCS" ]; then
+            echo "::error::vera3/services/ or vera3/shared/ Python code changed but vera3/docs/ was not updated."
+            echo "Update the relevant file under vera3/docs/ OR add 'docs-not-needed' to a commit message."
+            exit 1
+          fi
+          echo "✓ docs-check passed"

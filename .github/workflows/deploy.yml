@@ -13,7 +13,32 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: vera3
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          pip install -e ./shared[dev] aiosqlite
+          pip install -e ./services/gateway[dev]
+      - name: Pytest
+        run: |
+          PYTHONPATH=shared:services/gateway/src \
+          pytest tests/ \
+            --cov=vera_shared --cov=gateway \
+            --cov-report=term-missing \
+            --cov-fail-under=40
+
   deploy:
+    needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
