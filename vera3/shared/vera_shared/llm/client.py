@@ -233,6 +233,29 @@ class _RetryableError(Exception):
     pass
 
 
+# OpenAI-compat providers — same wire format, different base_url + model.
+_OPENAI_COMPAT_PROVIDERS = frozenset({
+    "cerebras", "groq", "openrouter", "deepseek", "openai",
+    "sambanova", "nvidia", "mistral",
+})
+
+
+def _check_http_status(r, t0: float) -> int:
+    """Common: convert HTTP response into either ms-latency or a raised error.
+
+    Raises _RetryableError on 429 / 5xx so the chain advances.
+    Raises plain Exception on other non-200 (auth, bad req — caller skips key).
+    """
+    latency_ms = int((time.time() - t0) * 1000)
+    if r.status_code == 429:
+        raise _RetryableError(f"429: {r.text[:120]}")
+    if r.status_code >= 500:
+        raise _RetryableError(f"{r.status_code}: {r.text[:120]}")
+    if r.status_code != 200:
+        raise Exception(f"HTTP {r.status_code}: {r.text[:200]}")
+    return latency_ms
+
+
 async def _call_provider(
     provider: str,
     token: Token,
@@ -248,8 +271,7 @@ async def _call_provider(
     client = await _get_http_client()
 
     # OpenAI-compat path
-    if provider in {"cerebras", "groq", "openrouter", "deepseek", "openai",
-                    "sambanova", "nvidia", "mistral"}:
+    if provider in _OPENAI_COMPAT_PROVIDERS:
         url = f"{base_url}/chat/completions"
         payload: dict[str, Any] = {
             "model": model,
@@ -265,14 +287,7 @@ async def _call_provider(
             url, json=payload,
             headers={"Authorization": f"Bearer {token.token}"},
         )
-        latency_ms = int((time.time() - t0) * 1000)
-
-        if r.status_code == 429:
-            raise _RetryableError(f"429: {r.text[:120]}")
-        if r.status_code >= 500:
-            raise _RetryableError(f"{r.status_code}: {r.text[:120]}")
-        if r.status_code != 200:
-            raise Exception(f"HTTP {r.status_code}: {r.text[:200]}")
+        latency_ms = _check_http_status(r, t0)
 
         data = r.json()
         choices = data.get("choices") or []
@@ -313,14 +328,7 @@ async def _call_provider(
 
         t0 = time.time()
         r = await client.post(url, json=payload, headers={"x-goog-api-key": token.token})
-        latency_ms = int((time.time() - t0) * 1000)
-
-        if r.status_code == 429:
-            raise _RetryableError(f"429: {r.text[:120]}")
-        if r.status_code >= 500:
-            raise _RetryableError(f"{r.status_code}: {r.text[:120]}")
-        if r.status_code != 200:
-            raise Exception(f"HTTP {r.status_code}: {r.text[:200]}")
+        latency_ms = _check_http_status(r, t0)
 
         data = r.json()
         cand = (data.get("candidates") or [{}])[0]
@@ -363,14 +371,7 @@ async def _call_provider(
                 "content-type": "application/json",
             },
         )
-        latency_ms = int((time.time() - t0) * 1000)
-
-        if r.status_code == 429:
-            raise _RetryableError(f"429: {r.text[:120]}")
-        if r.status_code >= 500:
-            raise _RetryableError(f"{r.status_code}: {r.text[:120]}")
-        if r.status_code != 200:
-            raise Exception(f"HTTP {r.status_code}: {r.text[:200]}")
+        latency_ms = _check_http_status(r, t0)
 
         data = r.json()
         blocks = data.get("content") or []
