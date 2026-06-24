@@ -18,7 +18,7 @@ from vera_shared.db.models import EventRow, TokenRow, UsageLogRow
 from vera_shared.db.models_sources import GmailAccountRow, InstagramSessionRow, TelegramSessionRow
 
 from dashboard.auth import (
-    COOKIE_NAME, TTL, get_bot_username, issue_session,
+    COOKIE_NAME, get_bot_username, issue_session,
     require_owner, verify_telegram_auth, OWNER_ID,
 )
 
@@ -104,7 +104,6 @@ async def home(request: Request):
         total_events = (await s.execute(select(func.count(EventRow.id)))).scalar() or 0
         triaged = (await s.execute(select(func.count(EventRow.id)).where(EventRow.triage_status == "done"))).scalar() or 0
         pending = (await s.execute(select(func.count(EventRow.id)).where(EventRow.triage_status == "pending"))).scalar() or 0
-        errors = (await s.execute(select(func.count(EventRow.id)).where(EventRow.triage_status == "error"))).scalar() or 0
         with_emb = (await s.execute(
             select(func.count(EventRow.id)).where(EventRow.embedding_voyage_3.is_not(None))
         )).scalar() or 0
@@ -127,15 +126,8 @@ async def home(request: Request):
             "SELECT source, COUNT(*) FROM events GROUP BY source ORDER BY 2 DESC LIMIT 5"
         ))).all()
 
-        # Backfill progress: events added in last hour vs last 24h
+        # Backfill progress: events added in last hour (used by /_progress route)
         hour_ago = datetime.utcnow() - timedelta(hours=1)
-        day_ago = datetime.utcnow() - timedelta(hours=24)
-        rate_1h = (await s.execute(
-            select(func.count(EventRow.id)).where(EventRow.received_at >= hour_ago)
-        )).scalar() or 0
-        rate_24h = (await s.execute(
-            select(func.count(EventRow.id)).where(EventRow.received_at >= day_ago)
-        )).scalar() or 0
         # Triage rate
         triage_1h = (await s.execute(text(
             "SELECT COUNT(*) FROM usage_log WHERE workflow='triage' AND created_at >= :t"
