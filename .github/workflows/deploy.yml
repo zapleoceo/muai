@@ -13,6 +13,44 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # ─── 1. Docs gate ────────────────────────────────────────────────────────
+  # Blocks deploy if vera3/services or vera3/shared changed without
+  # vera3/docs being updated. Opt-out per commit: `docs-not-needed`.
+  docs:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Verify vera3/docs updated alongside code
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="${{ github.event.before }}"
+          HEAD="${{ github.sha }}"
+          if [ -z "${BASE:-}" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            BASE="$(git rev-parse "${HEAD}~1" 2>/dev/null || echo "$HEAD")"
+          fi
+          CHANGED="$(git diff --name-only "$BASE" "$HEAD")"
+          echo "changed files:"; echo "$CHANGED"
+
+          if git log --format=%B "${BASE}..${HEAD}" 2>/dev/null | grep -qiF "docs-not-needed"; then
+            echo "::notice::'docs-not-needed' marker found, skipping docs gate"
+            exit 0
+          fi
+
+          CODE="$(echo "$CHANGED" | grep -E '^vera3/(services|shared)/' || true)"
+          DOCS="$(echo "$CHANGED" | grep -E '^vera3/docs/' || true)"
+          if [ -n "$CODE" ] && [ -z "$DOCS" ]; then
+            echo "::error::Code changed in vera3/services or vera3/shared but vera3/docs was not updated."
+            echo "Update the relevant doc OR add 'docs-not-needed' to a commit message."
+            exit 1
+          fi
+          echo "docs gate passed"
+
+  # ─── 2. Test gate ────────────────────────────────────────────────────────
   test:
     runs-on: ubuntu-latest
     timeout-minutes: 10
@@ -38,8 +76,10 @@ jobs:
             --cov-report=term-missing \
             --cov-fail-under=60
 
+  # ─── 3. Deploy ───────────────────────────────────────────────────────────
+  # Hard-gated: both docs AND tests must pass.
   deploy:
-    needs: test
+    needs: [docs, test]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:

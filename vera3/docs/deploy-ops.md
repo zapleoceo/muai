@@ -2,12 +2,15 @@
 
 ## Auto-deploy
 
-Push to `master` → `.github/workflows/deploy.yml`:
+Push to `master` → `.github/workflows/deploy.yml` runs **three jobs**:
 
-1. **test** job — pytest must pass; coverage gate 40% on
-   `vera_shared` + `gateway`. Deploy is gated on this via `needs: test`.
-2. **deploy** job — single SSH to the server with a restricted key.
-   The key is wired in `/root/.ssh/authorized_keys` to
+1. **`docs` job** — fails if any change under `vera3/services/` or
+   `vera3/shared/` lands without a matching change under `vera3/docs/`.
+   Opt-out per commit: literal `docs-not-needed`.
+2. **`test` job** — pytest must pass; coverage gate currently **60%** on
+   `vera_shared` + `gateway`.
+3. **`deploy` job** — `needs: [docs, test]`. SSH to the server with a
+   restricted key. The key is wired in `/root/.ssh/authorized_keys` to
    `command="/usr/local/bin/vera3-deploy"` — connecting at all runs the
    wrapper, anything the client sends is ignored.
 
