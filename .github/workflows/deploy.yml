@@ -30,12 +30,13 @@ jobs:
           pip install -e ./shared[dev] aiosqlite
           pip install -e ./services/gateway[dev]
       - name: Pytest
+        # Coverage gate stair-step. 2026-06-24: 40 → 60 (239 passed, 68.45%)
         run: |
           PYTHONPATH=shared:services/gateway/src \
           pytest tests/ \
             --cov=vera_shared --cov=gateway \
             --cov-report=term-missing \
-            --cov-fail-under=40
+            --cov-fail-under=60
 
   deploy:
     needs: test
