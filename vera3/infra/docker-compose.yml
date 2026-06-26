@@ -184,6 +184,9 @@ services:
       OWNER_TELEGRAM_ID: ${OWNER_TELEGRAM_ID}
       SEARCH_URL: http://brain-search:8000
       BROKER_URL: ${BROKER_URL:-}
+      GMAIL_CLIENT_ID: ${GMAIL_CLIENT_ID}
+      GMAIL_CLIENT_SECRET: ${GMAIL_CLIENT_SECRET}
+      DASHBOARD_BASE_URL: https://dima.veranda.my
     ports:
       - "127.0.0.1:8003:8000"
     restart: unless-stopped

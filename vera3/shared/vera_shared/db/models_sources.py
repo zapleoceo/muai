@@ -25,6 +25,10 @@ class GmailAccountRow(Base):
     last_polled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     include_automated: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    # Статус OAuth: токен отозван Google → нужен повторный consent.
+    needs_reauth: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    last_ok_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(),
     )

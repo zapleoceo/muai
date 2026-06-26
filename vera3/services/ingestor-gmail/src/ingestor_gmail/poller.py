@@ -30,6 +30,15 @@ POLL_S = int(os.environ.get("GMAIL_POLL_S", "300"))  # 5 минут
 MAX_PER_RUN = int(os.environ.get("GMAIL_MAX_PER_RUN", "30"))
 
 
+class TokenRevoked(Exception):
+    """Refresh-токен отозван Google (invalid_grant) — нужен повторный consent."""
+
+
+class ScopeInsufficient(Exception):
+    """Токен валиден, но без Gmail-scope (403). При consent сняли галку
+    «Чтение писем» → нужен повторный consent с полным доступом."""
+
+
 async def refresh_access(refresh_token: str) -> dict:
     async with httpx.AsyncClient(timeout=30) as c:
         r = await c.post(
@@ -41,6 +50,8 @@ async def refresh_access(refresh_token: str) -> dict:
                 "client_secret": CLIENT_SECRET,
             },
         )
+    if r.status_code == 400 and "invalid_grant" in r.text:
+        raise TokenRevoked(r.text[:200])
     r.raise_for_status()
     return r.json()
 
@@ -54,6 +65,8 @@ async def fetch_messages(access_token: str, query: str, max_results: int = 30) -
             params={"q": query, "maxResults": max_results},
             headers=headers,
         )
+        if r.status_code == 403 and "insufficient" in r.text.lower():
+            raise ScopeInsufficient(r.text[:200])
         r.raise_for_status()
         ids = [m["id"] for m in r.json().get("messages", [])]
 
@@ -170,8 +183,23 @@ async def poll_account(acc: GmailAccountRow) -> int:
     # Refresh access token if needed
     try:
         tok = await refresh_access(refresh)
+    except TokenRevoked as e:
+        # Токен мёртв — помечаем needs_reauth, поллер перестанет долбиться.
+        # Восстановление: Дима жмёт «Переподключить» в дашборде.
+        log.warning("Token REVOKED for %s — needs re-auth: %s", acc.email, e)
+        async with get_session() as s:
+            await s.execute(
+                update(GmailAccountRow).where(GmailAccountRow.id == acc.id)
+                .values(needs_reauth=True, last_error=str(e)[:500])
+            )
+        return 0
     except Exception as e:
         log.error("Refresh failed for %s: %s", acc.email, e)
+        async with get_session() as s:
+            await s.execute(
+                update(GmailAccountRow).where(GmailAccountRow.id == acc.id)
+                .values(last_error=str(e)[:500])
+            )
         return 0
     access_token = tok["access_token"]
 
@@ -185,8 +213,24 @@ async def poll_account(acc: GmailAccountRow) -> int:
 
     try:
         messages = await fetch_messages(access_token, query, max_results=MAX_PER_RUN)
+    except ScopeInsufficient as e:
+        log.warning("Scope INSUFFICIENT for %s — re-auth with Gmail access: %s",
+                    acc.email, e)
+        async with get_session() as s:
+            await s.execute(
+                update(GmailAccountRow).where(GmailAccountRow.id == acc.id)
+                .values(needs_reauth=True,
+                        last_error="Нет доступа к Gmail (403): при входе не выдан "
+                                   "scope чтения писем. Переподключи с полным доступом.")
+            )
+        return 0
     except Exception as e:
         log.error("Fetch failed for %s: %s", acc.email, e)
+        async with get_session() as s:
+            await s.execute(
+                update(GmailAccountRow).where(GmailAccountRow.id == acc.id)
+                .values(last_error=str(e)[:500])
+            )
         return 0
 
     inserted = 0
@@ -204,11 +248,13 @@ async def poll_account(acc: GmailAccountRow) -> int:
             s.add(EventRow(triage_status="pending", **spec))
             inserted += 1
 
+    now = datetime.utcnow()
     async with get_session() as s:
         await s.execute(
             update(GmailAccountRow)
             .where(GmailAccountRow.id == acc.id)
-            .values(last_polled_at=datetime.utcnow())
+            .values(last_polled_at=now, last_ok_at=now,
+                    needs_reauth=False, last_error=None)
         )
 
     if inserted:
@@ -224,8 +270,12 @@ async def main_loop():
     while True:
         try:
             async with get_session() as s:
+                # Пропускаем needs_reauth — токен мёртв, refresh бесполезен,
+                # вернётся в опрос после переподключения через дашборд.
                 accs = (await s.execute(
-                    select(GmailAccountRow).where(GmailAccountRow.is_active.is_(True))
+                    select(GmailAccountRow)
+                    .where(GmailAccountRow.is_active.is_(True))
+                    .where(GmailAccountRow.needs_reauth.is_(False))
                 )).scalars().all()
 
             for acc in accs:

@@ -85,3 +85,30 @@ def require_owner(request: Request,
 
 def get_bot_username() -> str:
     return os.environ.get("TELEGRAM_BOT_USERNAME", "Dimondra_Ai_Bot")
+
+
+# ─── OAuth state (anti-CSRF для Gmail re-auth) ───────────────────────────────
+# Stateless: подписываем timestamp тем же секретом. Не зависит от памяти
+# процесса (переживает рестарт dashboard, работает при нескольких воркерах).
+OAUTH_STATE_TTL_S = 600  # 10 минут на прохождение consent
+
+
+def issue_oauth_state() -> str:
+    return _sign(f"gmailoauth:{int(time.time())}")
+
+
+def verify_oauth_state(state: str | None) -> bool:
+    if not state or "." not in state:
+        return False
+    payload, sig = state.rsplit(".", 1)
+    expected = hmac.new(SESSION_SECRET.encode(), payload.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        return False
+    parts = payload.split(":")
+    if len(parts) != 2 or parts[0] != "gmailoauth":
+        return False
+    try:
+        issued = int(parts[1])
+    except ValueError:
+        return False
+    return time.time() - issued <= OAUTH_STATE_TTL_S
