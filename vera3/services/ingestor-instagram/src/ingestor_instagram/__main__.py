@@ -101,7 +101,11 @@ async def poll_once(cl: Client, username: str) -> int:
                 else:
                     text = "[non-text message]"
 
+            author_role = "self" if direction == "sent" else "counterparty"
+            author_label = "Я" if author_role == "self" else f"@{sender_username}"
+
             content = (
+                f"Author: {author_label} [{author_role}]\n"
                 f"From: @{sender_username}\n"
                 f"Chat: {chat_title}\n"
                 f"Date: {m.timestamp.isoformat() if m.timestamp else ''}\n"
@@ -123,6 +127,8 @@ async def poll_once(cl: Client, username: str) -> int:
                     "sender_id": sender_id,
                     "sender_username": sender_username,
                     "direction": direction,
+                    "author_role": author_role,
+                    "author_label": author_label,
                     "message_id": m.id,
                     "item_type": getattr(m, "item_type", None),
                 },

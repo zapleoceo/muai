@@ -41,10 +41,28 @@ via `gateway /event/<source>` with `X-Internal-Secret`.
 - `scripts/import_perplexity.py` — imports Perplexity MD exports as events.
 - Source name = `perplexity`. Run once when there's a new bundle.
 
+## Authorship contract (telegram / gmail / instagram)
+
+Every event from a conversational source MUST encode author unambiguously:
+
+- `content_text` first line: `Author: <label> [<self|counterparty>]`
+- `metadata.author_role` = `self` | `counterparty`
+- `metadata.author_label` = `Я` (for self) | `@username` | from-address | fallback chat_title
+
+This exists because `chat_title` in a personal chat = the *other* party, but a
+`direction=sent` message in that chat is authored by the owner, not by the
+counterparty. Consumers (the agent loop, dashboards, ad-hoc SQL) must look at
+`author_role`, never at `chat_title`, to decide who wrote a message.
+
+Migration that backfills both fields + the content_text prefix:
+`infra/migrations/005_author_role.sql` — idempotent (guarded by
+`content_text NOT LIKE 'Author:%'`).
+
 ## Adding a new source
 
 1. New service under `services/ingestor-<name>/`.
 2. Implement `vera_shared.sources.base.Source` ABC (poll + backfill).
 3. POST normalized events to `gateway /event/<name>` with internal secret.
-4. Update [domain-model.md](./domain-model.md) if you add new metadata fields.
-5. Update this file with the source's quirks.
+4. Write `author_role` + `author_label` into metadata and prepend `Author:` to content_text (see authorship contract above).
+5. Update [domain-model.md](./domain-model.md) if you add new metadata fields.
+6. Update this file with the source's quirks.

@@ -68,8 +68,17 @@ async def save_message(client: TelegramClient, msg) -> None:
 
     me = await client.get_me()
     direction = "sent" if (sender and sender.id == me.id) else "received"
+    author_role = "self" if direction == "sent" else "counterparty"
+    author_label = (
+        "Я"
+        if author_role == "self"
+        else (f"@{sender_username}" if sender_username else sender_name)
+    )
 
+    # Author: первая строка — однозначный маркер «своё/чужое». chat_title в
+    # личке = собеседник; без явного author_role читатели путали его с автором.
     content = (
+        f"Author: {author_label} [{author_role}]\n"
         f"From: {sender_name}\n"
         f"Chat: {chat_title} ({chat_type})\n"
         f"Date: {msg.date.isoformat() if msg.date else ''}\n"
@@ -102,6 +111,8 @@ async def save_message(client: TelegramClient, msg) -> None:
                 "sender_id": sender.id if sender else None,
                 "sender_username": sender_username,
                 "direction": direction,
+                "author_role": author_role,
+                "author_label": author_label,
                 "msg_id": msg.id,
                 "is_channel": chat_type in {"channel"},
                 "is_group": chat_type in {"chat", "chatfull"},

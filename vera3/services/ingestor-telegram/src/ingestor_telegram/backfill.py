@@ -60,8 +60,16 @@ async def backfill_dialog(client: TelegramClient, dialog, cutoff: datetime, me) 
 
             chat_title = getattr(dialog, "title", "(private)") or "(private)"
             direction = "sent" if (sender and sender.id == me.id) else "received"
+            author_role = "self" if direction == "sent" else "counterparty"
+            sender_username = getattr(sender, "username", None) if sender else None
+            author_label = (
+                "Я"
+                if author_role == "self"
+                else (f"@{sender_username}" if sender_username else sender_name)
+            )
 
             content = (
+                f"Author: {author_label} [{author_role}]\n"
                 f"From: {sender_name}\n"
                 f"Chat: {chat_title}\n"
                 f"Date: {msg.date.isoformat()}\n"
@@ -91,8 +99,10 @@ async def backfill_dialog(client: TelegramClient, dialog, cutoff: datetime, me) 
                         "chat_id": dialog.id,
                         "chat_title": chat_title,
                         "sender_id": sender.id if sender else None,
-                        "sender_username": getattr(sender, "username", None) if sender else None,
+                        "sender_username": sender_username,
                         "direction": direction,
+                        "author_role": author_role,
+                        "author_label": author_label,
                         "msg_id": msg.id,
                     },
                     triage_status="pending",

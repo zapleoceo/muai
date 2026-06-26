@@ -189,7 +189,10 @@ async def _exec_search_events(q: str, source: str = "any",
     async with get_session() as s:
         if ts_query:
             stmt = text(f"""
-                SELECT id, source, occurred_at, content_text
+                SELECT id, source, occurred_at, content_text,
+                       metadata->>'author_role'  AS author_role,
+                       metadata->>'author_label' AS author_label,
+                       metadata->>'chat_title'   AS chat_title
                 FROM events
                 WHERE to_tsvector('russian', content_text)
                       @@ to_tsquery('russian', :tsq) {where_extra}
@@ -200,7 +203,10 @@ async def _exec_search_events(q: str, source: str = "any",
             """)
         else:
             stmt = text(f"""
-                SELECT id, source, occurred_at, content_text
+                SELECT id, source, occurred_at, content_text,
+                       metadata->>'author_role'  AS author_role,
+                       metadata->>'author_label' AS author_label,
+                       metadata->>'chat_title'   AS chat_title
                 FROM events
                 WHERE 1=1 {where_extra}
                 ORDER BY occurred_at DESC LIMIT :lim
@@ -211,6 +217,9 @@ async def _exec_search_events(q: str, source: str = "any",
         "events": [
             {"event_id": r[0], "source": r[1],
              "occurred_at": str(r[2])[:19],
+             "author_role": r[4],
+             "author_label": r[5],
+             "chat_title": r[6],
              "preview": (r[3] or "")[:400]}
             for r in rs
         ],
@@ -282,6 +291,13 @@ SYSTEM_PROMPT = """Ты — Вера, цифровая память Димы. Т
 8. Если вопрос содержит период («вчера», «за неделю», дату) — у search_events
    есть параметры date_from/date_to (ISO). Используй их, не полагайся на
    текстовое совпадение слова «вчера».
+9. АВТОРСТВО — критично. У каждого события в search_events есть поля
+   author_role и author_label. author_role='self' значит писал ДИМА.
+   author_role='counterparty' значит писал собеседник. chat_title — это
+   название чата, НЕ автор сообщения; в личке chat_title = имя собеседника,
+   но сообщение может быть и моё (self), и его (counterparty). НИКОГДА не
+   определяй автора по chat_title. Когда цитируешь — пиши «Я →» для self,
+   «<author_label> →» для counterparty.
 """
 
 

@@ -149,9 +149,12 @@ def _format_event(account_email: str, msg: dict) -> dict[str, Any]:
         occurred = occurred.astimezone(timezone.utc).replace(tzinfo=None)
 
     direction = "sent" if account_email.lower() in from_.lower() else "received"
+    author_role = "self" if direction == "sent" else "counterparty"
+    author_label = "Я" if author_role == "self" else (from_ or "(unknown)")
     body = _extract_text(msg.get("payload", {}))[:8000]
 
     content = (
+        f"Author: {author_label} [{author_role}]\n"
         f"From: {from_}\n"
         f"To: {to_}\n"
         f"Subject: {subject}\n"
@@ -167,7 +170,14 @@ def _format_event(account_email: str, msg: dict) -> dict[str, Any]:
         "category": "email",
         "content_text": content,
         "occurred_at": occurred,
-        "metadata_": {"direction": direction, "subject": subject, "from": from_, "to": to_},
+        "metadata_": {
+            "direction": direction,
+            "author_role": author_role,
+            "author_label": author_label,
+            "subject": subject,
+            "from": from_,
+            "to": to_,
+        },
     }
 
 
