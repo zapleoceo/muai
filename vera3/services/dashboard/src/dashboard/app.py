@@ -47,6 +47,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Vera 3.0 Dashboard", lifespan=lifespan)
 
+from dashboard.gmail_oauth import router as gmail_oauth_router
+app.include_router(gmail_oauth_router)
+
 
 def _set_session_cookie(resp: Response) -> None:
     cookie, ttl = issue_session()
@@ -338,58 +341,34 @@ async def progress_fragment(request: Request):
 
 @app.get("/tokens", response_class=HTMLResponse)
 async def tokens_page(request: Request, _=Depends(lambda r=Request: None)):
+    """LLM-ключи живут в aibroker. Эта страница — короткий редирект-stub."""
     try:
         require_owner(request, request.cookies.get(COOKIE_NAME))
     except HTTPException:
         return RedirectResponse("/login", status_code=303)
 
-    # local pool — теперь только cold fallback. Real source of truth = aibroker.
-    async with get_session() as s:
-        rows = (await s.execute(
-            select(TokenRow).order_by(TokenRow.provider, TokenRow.id)
-        )).scalars().all()
-
     broker_url = os.environ.get("BROKER_URL", "").rstrip("/")
-    broker_link = broker_url + "/dashboard" if broker_url else None
-
-    fallback_rows = "".join(
-        f'<tr><td>{esc(r.provider)}</td><td>{esc(r.label)}</td>'
-        f'<td>{esc(r.tier)}</td>'
-        f'<td>{"✓" if r.is_active else "✗"}</td></tr>'
-        for r in rows
-    )
+    broker_link = (broker_url + "/dashboard") if broker_url else "#"
 
     body = f"""
     <div style="background:#1a3d5a; border:1px solid #2a5d7a; color:#aed4ee;
                 padding:20px 24px; border-radius:12px; margin-bottom:24px;">
       <div style="font-size:14px; color:#cfdfe7; margin-bottom:6px;">
-        🔑 Ключи теперь управляются централизованным брокером
+        🔑 LLM-ключи Vera полностью на стороне брокера
       </div>
       <div style="font-size:13px; color:#9ab; line-height:1.6;">
-        После миграции 2026-06-24 все LLM-вызовы Vera идут через
-        <b>aibroker</b> (CRUD, health-monitor, ротация, кэпы — всё там).
-        Локальный пул ниже — холодный fallback, используется только если
-        broker недоступен.
+        Все вызовы (chat + embed) идут через aibroker; добавление,
+        ротация, ограничения, health-monitoring — всё там. Локальная
+        таблица <code>tokens</code> в БД оставлена dormant как
+        аварийный резерв (на runtime не читается).
       </div>
-      {('<div style="margin-top:14px;"><a href="' + esc(broker_link) +
-        '" target="_blank" style="display:inline-block; background:#4dabf7; '
-        'color:#0f1115; padding:10px 18px; border-radius:8px; '
-        'font-weight:600; text-decoration:none; font-size:13px;">'
-        '→ Открыть aibroker dashboard</a></div>') if broker_link else ''}
+      <div style="margin-top:14px;">
+        <a href="{esc(broker_link)}" target="_blank" style="display:inline-block;
+           background:#4dabf7; color:#0f1115; padding:10px 18px;
+           border-radius:8px; font-weight:600; text-decoration:none;
+           font-size:13px;">→ Открыть aibroker dashboard</a>
+      </div>
     </div>
-
-    <h2 style="font-size:14px; color:#888; font-weight:500;
-               text-transform:uppercase; letter-spacing:0.05em;">
-      Локальный fallback-пул ({len(rows)} ключей)
-    </h2>
-    <table class="data">
-      <thead><tr><th>provider</th><th>label</th><th>tier</th><th>active</th></tr></thead>
-      <tbody>{fallback_rows}</tbody>
-    </table>
-    <p style="font-size:11px; color:#666; margin-top:8px;">
-      В fallback-пул не пишется live-state (используется counter, cooldown,
-      cost) — это кеш на случай аварии broker'а.
-    </p>
     """
     return HTMLResponse(_render("tokens", body))
 
@@ -615,13 +594,32 @@ async def sources_page(request: Request):
                 .where(EventRow.source == "gmail", EventRow.account == g.email)
             )).scalar() or 0
         last = g.last_polled_at.strftime("%Y-%m-%d %H:%M") if g.last_polled_at else "никогда"
-        state = "✓ active" if g.is_active else "✗ inactive"
-        state_cls = "ok" if g.is_active else "err"
+        # Честный статус: needs_reauth важнее is_active
+        if getattr(g, "needs_reauth", False):
+            state, state_cls = "✗ токен отозван", "err"
+        elif not g.is_active:
+            state, state_cls = "✗ выключен", "err"
+        else:
+            state, state_cls = "✓ live", "ok"
+        err_note = (f'<div class="mute" style="font-size:11px">{esc((g.last_error or "")[:80])}</div>'
+                    if getattr(g, "needs_reauth", False) and g.last_error else "")
         gmail_html.append(
-            f'<tr><td>{g.id}</td><td>{esc(g.email)}</td>'
+            f'<tr><td>{g.id}</td><td>{esc(g.email)}{err_note}</td>'
             f'<td class="pill {state_cls}">{state}</td>'
             f'<td>{last}</td><td>{ev_count:,}</td></tr>'
         )
+
+    any_reauth = any(getattr(g, "needs_reauth", False) for g in gmail_rows)
+    reconnect_btn = (
+        '<a href="/api/gmail/start" '
+        'style="display:inline-block;margin:10px 0;padding:10px 18px;'
+        'background:#4dabf7;color:#fff;border-radius:8px;font-weight:600">'
+        '🔑 Переподключить Gmail</a>'
+        + ('<div class="mute" style="font-size:12px;margin-top:4px">'
+           'Один или несколько ящиков отвалились (Google отзывает токены '
+           'каждые 7 дней в Testing-режиме). Жми — пройди вход Google заново.'
+           '</div>' if any_reauth else "")
+    )
 
     # Telegram session info
     tg_session_rows = []
@@ -672,6 +670,7 @@ async def sources_page(request: Request):
           <th>last polled</th><th>events</th></tr></thead>
           <tbody>{''.join(gmail_html) or '<tr><td colspan=5 class="mute">нет аккаунтов</td></tr>'}</tbody>
         </table>
+        {reconnect_btn}
 
         <h2 style="margin-top:32px">✈️ Telegram userbot</h2>
         <div style="margin-bottom:12px">Статус потока: {tg_freshness}</div>

@@ -1,35 +1,26 @@
-"""LLM layer: registry (SSOT), routing policy, cost guard, client wrapper."""
-from vera_shared.llm.registry import (
-    PROVIDER_MODEL,
-    PROVIDER_TIER,
-    PROVIDER_BASE_URL,
-    PROVIDER_SUPPORTS_JSON_SCHEMA,
-    cost_usd,
-    is_paid_provider,
-    model_for_provider,
-    known_providers,
-    known_models,
+"""LLM layer — broker-only.
+
+Все вызовы (chat + embed) идут через AIbroker. Vera не несёт у себя ни
+routing-chain'ов, ни cost-guard'ов, ни provider-registry — это всё на
+стороне брокера.
+"""
+from vera_shared.llm.broker_client import (
+    BrokerCallFailed,
+    broker_enabled,
+    chat_via_broker,
+    embed_via_broker,
 )
-from vera_shared.llm.routing import RoutingPolicy, Capability
-from vera_shared.llm.cost_guard import (
-    DailyBudgetExceeded,
-    can_call_paid,
-    estimate_cost,
-)
+from vera_shared.llm.client import LLMCallFailed, chat, close_http_client, embed
+from vera_shared.llm.routing import Capability
 
 __all__ = [
-    "PROVIDER_MODEL",
-    "PROVIDER_TIER",
-    "PROVIDER_BASE_URL",
-    "PROVIDER_SUPPORTS_JSON_SCHEMA",
-    "cost_usd",
-    "is_paid_provider",
-    "model_for_provider",
-    "known_providers",
-    "known_models",
-    "RoutingPolicy",
     "Capability",
-    "DailyBudgetExceeded",
-    "can_call_paid",
-    "estimate_cost",
+    "LLMCallFailed",
+    "BrokerCallFailed",
+    "chat",
+    "embed",
+    "broker_enabled",
+    "chat_via_broker",
+    "embed_via_broker",
+    "close_http_client",
 ]
