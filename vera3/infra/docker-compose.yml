@@ -34,6 +34,9 @@ services:
       INTERNAL_SECRET: ${INTERNAL_SECRET:?INTERNAL_SECRET must be set}
       TOKEN_SECRET: ${TOKEN_SECRET}
       OWNER_TELEGRAM_ID: ${OWNER_TELEGRAM_ID:?OWNER_TELEGRAM_ID must be set}
+      # broker-only: needed by /v1/claude/remember to embed for semantic dedup
+      BROKER_URL: ${BROKER_URL:-}
+      BROKER_PROJECT_KEY: ${BROKER_PROJECT_KEY:-}
       LOG_LEVEL: INFO
     ports:
       - "127.0.0.1:8001:8000"
