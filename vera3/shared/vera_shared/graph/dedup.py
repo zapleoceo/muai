@@ -80,8 +80,8 @@ async def get_entity_context(entity_id: int) -> dict:
         ), {"eid": entity_id})).mappings().all())
 
         memberships = list((await s.execute(text(
-            "SELECT group_entity_id, role, joined_at FROM memberships "
-            "WHERE member_entity_id = :eid LIMIT 50"
+            "SELECT parent_entity_id, role, first_seen_at FROM memberships "
+            "WHERE child_entity_id = :eid LIMIT 50"
         ), {"eid": entity_id})).mappings().all())
 
         # Recent activity (events where sender_id matches an alias)
@@ -140,28 +140,30 @@ async def merge_entities(keeper_id: int, merged_id: int) -> dict:
             "DELETE FROM entity_aliases WHERE entity_id = :merged RETURNING id"
         ), {"merged": merged_id})).rowcount
 
-        # MEMBERSHIPS (member side)
+        # MEMBERSHIPS (child side) — UNIQUE is (parent, child, source)
         mems_moved = (await s.execute(text(
-            "UPDATE memberships SET member_entity_id = :keeper "
-            "WHERE member_entity_id = :merged "
+            "UPDATE memberships SET child_entity_id = :keeper "
+            "WHERE child_entity_id = :merged "
             "  AND NOT EXISTS (SELECT 1 FROM memberships m2 "
-            "                  WHERE m2.member_entity_id = :keeper "
-            "                    AND m2.group_entity_id = memberships.group_entity_id)"
+            "                  WHERE m2.child_entity_id = :keeper "
+            "                    AND m2.parent_entity_id = memberships.parent_entity_id "
+            "                    AND m2.source = memberships.source)"
         ), {"keeper": keeper_id, "merged": merged_id})).rowcount
         await s.execute(text(
-            "DELETE FROM memberships WHERE member_entity_id = :merged"
+            "DELETE FROM memberships WHERE child_entity_id = :merged"
         ), {"merged": merged_id})
 
-        # MEMBERSHIPS (group side — entity could be a group too)
+        # MEMBERSHIPS (parent side — entity could be a group too)
         await s.execute(text(
-            "UPDATE memberships SET group_entity_id = :keeper "
-            "WHERE group_entity_id = :merged "
+            "UPDATE memberships SET parent_entity_id = :keeper "
+            "WHERE parent_entity_id = :merged "
             "  AND NOT EXISTS (SELECT 1 FROM memberships m2 "
-            "                  WHERE m2.group_entity_id = :keeper "
-            "                    AND m2.member_entity_id = memberships.member_entity_id)"
+            "                  WHERE m2.parent_entity_id = :keeper "
+            "                    AND m2.child_entity_id = memberships.child_entity_id "
+            "                    AND m2.source = memberships.source)"
         ), {"keeper": keeper_id, "merged": merged_id})
         await s.execute(text(
-            "DELETE FROM memberships WHERE group_entity_id = :merged"
+            "DELETE FROM memberships WHERE parent_entity_id = :merged"
         ), {"merged": merged_id})
 
         # RELATIONSHIPS — both subject and object sides
