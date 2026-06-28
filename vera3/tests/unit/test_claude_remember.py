@@ -1,4 +1,5 @@
 """gateway.claude — /v1/claude/remember endpoint (exact + semantic dedup)."""
+# ruff: noqa: I001  # imports intentionally split around env setup
 from __future__ import annotations
 
 import os
