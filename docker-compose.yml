@@ -18,6 +18,11 @@ services:
       context: .
       dockerfile: vera-telegram/Dockerfile
     restart: unless-stopped
+    ports:
+      # MCP OAuth server (Telegram connector for Claude). Bound to localhost;
+      # nginx terminates TLS for the public subdomain. Disabled unless
+      # MCP_ENABLED=true in .env.
+      - "127.0.0.1:8011:8011"
     volumes:
       - vera_data:/data
     env_file: .env

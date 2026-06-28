@@ -2,6 +2,7 @@ import logging
 from typing import Any, Callable, Awaitable
 
 from app.tools.search_dialogs import search_dialogs
+from app.tools.search_public import search_public
 from app.tools.list_dialogs import list_recent_dialogs
 from app.tools.read_messages import read_messages, _resolve_peer_by_id_or_name
 from app.tools.send_message import send_message_to
@@ -17,6 +18,10 @@ log = logging.getLogger(__name__)
 
 async def _t_search(query: str, limit: int = 15) -> Any:
     return await search_dialogs(query, limit=limit)
+
+
+async def _t_search_public(query: str, limit: int = 20) -> Any:
+    return await search_public(query, limit=int(limit))
 
 
 async def _t_list_recent(limit: int = 15, exclude_channels: bool = False,
@@ -85,6 +90,7 @@ async def _t_list_topics(chat_id: int = 0, peer: str = "",
 HANDLERS: dict[str, Callable[..., Awaitable[Any]]] = {
     "telegram_list_recent_dialogs": _t_list_recent,
     "telegram_search_dialogs":      _t_search,
+    "telegram_search_public":       _t_search_public,
     "telegram_read_messages":       _t_read,
     "telegram_send_message":        _t_send,
     "telegram_get_dialog_info":     _t_info,

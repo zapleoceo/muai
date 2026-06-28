@@ -10,6 +10,14 @@ class Settings(BaseSettings):
     db_path: str = "/data/vera.db"
     internal_secret: str = ""
 
+    mcp_enabled: bool = False
+    mcp_port: int = 8011
+    mcp_public_url: str = ""
+    mcp_oauth_password: str = ""
+    mcp_oauth_signing_secret: str = ""
+    mcp_oauth_db: str = "/data/mcp_oauth.db"
+    mcp_allow_destructive: bool = False
+
     model_config = SettingsConfigDict(env_file=".env")
 
 
