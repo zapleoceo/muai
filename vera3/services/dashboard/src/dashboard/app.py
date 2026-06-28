@@ -284,10 +284,20 @@ async def progress_fragment(request: Request):
         triage_24h = (await s.execute(text(
             "SELECT COUNT(*) FROM usage_log WHERE workflow='triage' AND created_at >= :t"
         ), {"t": now - td(hours=24)})).scalar() or 0
-        # Pending count
-        pending = (await s.execute(
-            select(func.count(EventRow.id)).where(EventRow.triage_status == "pending")
-        )).scalar() or 0
+        # Backlog breakdown — pending + media_pending (waiting for vision/whisper) +
+        # error (retry-loop will pick them up) + dead (exhausted retries → manual review).
+        # Bar should reflect ALL waiting work, not just pending — otherwise stuck error
+        # batches stay invisible (this is exactly what bit us with the 2018 record_free_usage rows).
+        backlog_breakdown = dict((await s.execute(text(
+            "SELECT triage_status, COUNT(*) FROM events "
+            "WHERE triage_status IN ('pending','media_pending','error','dead') "
+            "GROUP BY 1"
+        ))).all())
+        pending = backlog_breakdown.get("pending", 0)
+        media_pending = backlog_breakdown.get("media_pending", 0)
+        errored = backlog_breakdown.get("error", 0)
+        dead = backlog_breakdown.get("dead", 0)
+        backlog_total = pending + media_pending + errored + dead
         # Per-source за последний час (что льётся)
         per_source_1h = (await s.execute(text(
             "SELECT source, COUNT(*) FROM events WHERE received_at >= :t "
@@ -298,9 +308,10 @@ async def progress_fragment(request: Request):
             select(GmailAccountRow).order_by(GmailAccountRow.id)
         )).scalars().all()
 
-    # ETA
-    if triage_1h > 0 and pending > 0:
-        eta_h = pending / triage_1h
+    # ETA — по всему backlog, dead не считаем (там retry уже не помогает)
+    eta_basis = backlog_total - dead
+    if triage_1h > 0 and eta_basis > 0:
+        eta_h = eta_basis / triage_1h
         eta = f"~{int(eta_h * 60)} мин" if eta_h < 2 else (
               f"~{eta_h:.1f} ч" if eta_h < 48 else f"~{eta_h/24:.1f} дн")
     else:
@@ -323,9 +334,9 @@ async def progress_fragment(request: Request):
             f'<span class="mute">last poll: {last}{ago}</span></div>'
         )
 
-    # Progress bar для триажа
-    total_events = pending + (triage_24h if triage_24h else 1)
-    pct_pending = min(100, int(100 * pending / max(total_events, 1)))
+    # Progress bar для триажа — теперь учитывает весь backlog, не только pending
+    total_events = backlog_total + (triage_24h if triage_24h else 1)
+    pct_pending = min(100, int(100 * backlog_total / max(total_events, 1)))
 
     return HTMLResponse(f"""
       <h2>📥 Live прогресс <span style="font-size:12px;color:#888">(обновляется каждые 10с)</span></h2>
@@ -343,14 +354,20 @@ async def progress_fragment(request: Request):
         </div>
         <div class="prog-cell">
           <div class="prog-label">В очереди на триаж</div>
-          <div class="prog-big">{pending:,}</div>
+          <div class="prog-big">{backlog_total:,}</div>
           <div class="mute" style="font-size:12px">ETA: {eta}</div>
+          <div class="mute" style="font-size:11px;margin-top:4px">
+            ⏳ {pending:,} pending
+            {' · 🎬 ' + f'{media_pending:,} media' if media_pending else ''}
+            {' · ❗ ' + f'{errored:,} retry-pending' if errored else ''}
+            {' · 💀 ' + f'{dead:,} dead' if dead else ''}
+          </div>
         </div>
       </div>
 
       <div style="margin:14px 0">
         <div class="mute" style="font-size:12px;margin-bottom:6px">
-          Прогресс триажа (обработано / накопилось за сутки):
+          Прогресс триажа (обработано / весь backlog):
         </div>
         <div class="bar"><div class="bar-fill" style="width:{100 - pct_pending}%"></div></div>
       </div>

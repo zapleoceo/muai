@@ -358,6 +358,53 @@ async def _watchdog_loop() -> None:
             log.warning("Watchdog error: %s", e)
 
 
+BACKOFF_MINUTES = [1, 5, 30, 120, 720]   # 1m, 5m, 30m, 2h, 12h → then dead
+MAX_RETRIES = len(BACKOFF_MINUTES)
+
+
+async def _retry_failed_loop() -> None:
+    """Pick up 'error' events whose backoff window expired, re-pend them.
+
+    Counter prevents flapping: each retry pushes next attempt further out.
+    After MAX_RETRIES attempts, status='dead' — drops out of the loop and
+    becomes visible in the dashboard as 'truly stuck, needs manual review'.
+    """
+    while True:
+        await asyncio.sleep(120)
+        try:
+            async with get_session() as s:
+                # Schedule retries: bump counter, push to pending, advance next_retry_at.
+                # CASE picks the right backoff for the *next* (retry_count+1) attempt.
+                bumped = await s.execute(text(f"""
+                    UPDATE events SET
+                      triage_status = CASE
+                        WHEN triage_retry_count + 1 >= {MAX_RETRIES} THEN 'dead'
+                        ELSE 'pending'
+                      END,
+                      triage_retry_count = triage_retry_count + 1,
+                      triage_started_at = NULL,
+                      triage_next_retry_at = CASE
+                        WHEN triage_retry_count + 1 >= {MAX_RETRIES} THEN NULL
+                        ELSE NOW() + (
+                          (ARRAY{BACKOFF_MINUTES})[triage_retry_count + 2]
+                          || ' minutes'
+                        )::interval
+                      END
+                    WHERE triage_status = 'error'
+                      AND triage_retry_count < {MAX_RETRIES}
+                      AND (triage_next_retry_at IS NULL OR triage_next_retry_at < NOW())
+                    RETURNING id, triage_retry_count, triage_status
+                """))
+                rows = list(bumped.mappings().all())
+            if rows:
+                live = [r for r in rows if r["triage_status"] == "pending"]
+                dead = [r for r in rows if r["triage_status"] == "dead"]
+                log.info("retry-loop: re-pended %d events (dead=%d)",
+                         len(live), len(dead))
+        except Exception as e:
+            log.warning("retry-loop error: %s", e)
+
+
 async def main_loop() -> None:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -366,6 +413,7 @@ async def main_loop() -> None:
              WORKER_ID, POLL_INTERVAL_S, BATCH_SIZE, CONCURRENCY)
 
     asyncio.create_task(_watchdog_loop())
+    asyncio.create_task(_retry_failed_loop())
 
     while True:
         try:
