@@ -48,3 +48,5 @@ Dedup: existing `(subject, predicate, object)` → bump `last_seen_at` +
 for audit/rollback.
 
 Fire-and-forget — runs as `asyncio.create_task`, never blocks triage.
+
+## Status: shipped 2026-06-28
