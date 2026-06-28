@@ -29,9 +29,13 @@ jobs:
       - name: Install gateway
         run: pip install -e ./services/gateway[dev]
 
+      - name: Install dashboard
+        # test_favicon imports the dashboard package — without this it can't be collected.
+        run: pip install -e ./services/dashboard
+
       - name: Run all tests with coverage
         run: |
-          PYTHONPATH=shared:services/gateway/src \
+          PYTHONPATH=shared:services/gateway/src:services/dashboard/src \
           pytest tests/ \
             --cov=vera_shared \
             --cov=gateway \

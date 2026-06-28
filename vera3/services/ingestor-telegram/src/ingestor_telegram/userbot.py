@@ -9,6 +9,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime
+from typing import Any
 
 from sqlalchemy import select
 from telethon import TelegramClient, events

@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from datetime import datetime, timedelta
@@ -45,7 +46,8 @@ async def backfill_dialog(client: TelegramClient, dialog, cutoff: datetime, me) 
             media_meta: dict = {}
             needs_recognition = False
             if getattr(msg, "photo", None):
-                media_kind = "photo"; needs_recognition = True
+                media_kind = "photo"
+                needs_recognition = True
             elif getattr(msg, "voice", None):
                 media_kind = "voice"
                 media_meta["duration_s"] = getattr(msg.voice, "duration", None)
@@ -82,10 +84,8 @@ async def backfill_dialog(client: TelegramClient, dialog, cutoff: datetime, me) 
                 continue
 
             sender = None
-            try:
+            with contextlib.suppress(Exception):
                 sender = await msg.get_sender()
-            except Exception:
-                pass
 
             sender_name = "(unknown)"
             if sender:
