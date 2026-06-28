@@ -6,6 +6,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 from datetime import datetime
@@ -213,11 +214,22 @@ async def main():
     tools_task = asyncio.create_task(server.serve())
     log.info("Tools HTTP server up on :8000 (/tools/*)")
 
+    # Backfill queue worker — pulls jobs from backfill_jobs table, walks
+    # each dialog back to its target_floor_date. Same Telethon client, so
+    # no second auth needed. Lives in the same loop — flood-wait pauses
+    # don't block live message handling because on_new is event-driven.
+    from ingestor_telegram.backfill_worker import backfill_loop
+    backfill_task = asyncio.create_task(backfill_loop(client))
+    log.info("Backfill queue worker started")
+
     try:
         await client.run_until_disconnected()
     finally:
         server.should_exit = True
+        backfill_task.cancel()
         await tools_task
+        with contextlib.suppress(asyncio.CancelledError):
+            await backfill_task
 
 
 if __name__ == "__main__":
