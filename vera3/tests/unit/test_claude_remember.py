@@ -4,6 +4,8 @@ from __future__ import annotations
 import os
 from unittest.mock import AsyncMock, patch
 
+import pytest
+
 # Set env BEFORE gateway imports — config reads at module load.
 os.environ.setdefault("INTERNAL_SECRET", "test-internal-secret")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
@@ -33,7 +35,7 @@ def test_content_hash_unicode_safe():
 
 def test_cosine_identical_vectors():
     v = [0.1, 0.2, 0.3, 0.4]
-    assert _cosine(v, v) == 1.0
+    assert _cosine(v, v) == pytest.approx(1.0)
 
 
 def test_cosine_orthogonal_zero():
@@ -144,6 +146,7 @@ def test_check_internal_secret_rejects_missing():
 # ─── Semantic neighbour finder ─────────────────────────────────────────────
 
 
+@pytest.mark.asyncio
 async def test_find_semantic_neighbour_returns_none_on_embed_fail():
     """If broker is down, semantic check must skip gracefully (return None),
     NOT crash the endpoint — exact dedup still works."""
@@ -153,6 +156,7 @@ async def test_find_semantic_neighbour_returns_none_on_embed_fail():
     assert result is None
 
 
+@pytest.mark.asyncio
 async def test_find_semantic_neighbour_returns_none_on_empty_vectors():
     from gateway.claude import _find_semantic_neighbour
     with patch("gateway.claude.embed", AsyncMock(return_value=[])):
