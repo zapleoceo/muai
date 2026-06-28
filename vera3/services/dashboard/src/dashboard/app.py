@@ -982,8 +982,8 @@ async def entity_duplicates_page(request: Request):
 
 @app.post("/entities/merge")
 async def entity_merge(request: Request,
-                       keeper_id: int = Form(...),
-                       merged_id: int = Form(...)):
+                       keeper_id: int = Form(...),  # noqa: B008
+                       merged_id: int = Form(...)):  # noqa: B008
     try:
         require_owner(request, request.cookies.get(COOKIE_NAME))
     except HTTPException as e:

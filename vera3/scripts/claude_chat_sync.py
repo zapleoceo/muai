@@ -30,10 +30,9 @@ import logging
 import os
 import sys
 import time
-from pathlib import Path
-
-import urllib.request
 import urllib.error
+import urllib.request
+from pathlib import Path
 
 # ─── Config ──────────────────────────────────────────────────────────────
 

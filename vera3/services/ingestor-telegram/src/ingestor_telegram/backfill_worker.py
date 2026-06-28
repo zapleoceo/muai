@@ -17,18 +17,17 @@ Use:
 from __future__ import annotations
 
 import asyncio
-import contextlib
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import datetime
 
+from sqlalchemy import select as sa_select
 from sqlalchemy import text
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
-from sqlalchemy import select as sa_select
 
 log = logging.getLogger("tg-backfill-queue")
 

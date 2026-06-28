@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any
 
 from sqlalchemy import text
 
@@ -73,11 +72,10 @@ async def _resolve_entity(name: str) -> int | None:
         if eid:
             return eid
         # Alias display_name
-        eid = (await s.execute(text(
+        return (await s.execute(text(
             "SELECT entity_id FROM entity_aliases "
             "WHERE LOWER(display_name) = LOWER(:n) LIMIT 1"
         ), {"n": name.strip()})).scalar()
-        return eid
 
 
 async def extract_and_store(event_id: int, body: str) -> int:
