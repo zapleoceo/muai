@@ -821,7 +821,8 @@ async def search_ui(request: Request, q: str = Form(...)):
 def _render(active: str, body: str) -> str:
     nav = []
     items = [("home", "/", "главная"), ("tokens", "/tokens", "токены"),
-             ("events", "/events", "события"), ("sources", "/sources", "источники")]
+             ("events", "/events", "события"), ("sources", "/sources", "источники"),
+             ("entities", "/entities/duplicates", "сущности")]
     for key, href, label in items:
         cls = "active" if active == key else ""
         nav.append(f'<a href="{href}" class="{cls}">{label}</a>')
@@ -915,6 +916,88 @@ p { color: #888; margin: 12px 0 28px; }
         data-request-access="write"></script>
 </div>
 </div></body></html>"""
+
+@app.get("/entities/duplicates", response_class=HTMLResponse)
+async def entity_duplicates_page(request: Request):
+    try:
+        require_owner(request, request.cookies.get(COOKIE_NAME))
+    except HTTPException as e:
+        return HTMLResponse(_AUTH_ERROR
+                            .replace("__MSG__", esc(e.detail))
+                            .replace("__FAVICON__", FAVICON_LINKS),
+                            status_code=e.status_code)
+
+    from vera_shared.graph.dedup import find_duplicates_by_name, get_entity_context
+
+    groups = await find_duplicates_by_name(min_group=2)
+    rows_html = []
+    for g in groups[:50]:    # top-50 to keep page bounded
+        cands = g["candidates"]
+        # Per-candidate sub-row with alias count + recent activity
+        sub = []
+        contexts = {}
+        for c in cands:
+            ctx = await get_entity_context(c["id"])
+            contexts[c["id"]] = ctx
+            sub.append(
+                f'<tr><td>#{c["id"]}</td><td>{esc(c["name"])}</td>'
+                f'<td>{len(ctx["aliases"])}</td>'
+                f'<td>{ctx["recent_30d_messages"]}</td>'
+                f'<td>{len(ctx["memberships"])}</td></tr>'
+            )
+        # Merge form: user picks one keeper + one to merge into it
+        cand_options = "".join(
+            f'<option value="{c["id"]}">#{c["id"]} {esc(c["name"])} '
+            f'({contexts[c["id"]]["recent_30d_messages"]} recent)</option>'
+            for c in cands
+        )
+        merge_form = (
+            f'<form method="post" action="/entities/merge" style="margin-top:6px">'
+            f'  keeper: <select name="keeper_id">{cand_options}</select>'
+            f'  merged: <select name="merged_id">{cand_options}</select>'
+            f'  <button>merge</button>'
+            f'</form>'
+        )
+        rows_html.append(
+            f'<div class="dup-group" style="border:1px solid #2a2d34;'
+            f'padding:10px;margin:10px 0;border-radius:6px">'
+            f'<b>«{esc(g["normalized"])}»</b> — {g["size"]} candidates'
+            f'<table style="width:100%;margin-top:6px;font-size:13px">'
+            f'<thead><tr><th>id</th><th>name</th><th>aliases</th>'
+            f'<th>recent 30d msgs</th><th>memberships</th></tr></thead>'
+            f'<tbody>{"".join(sub)}</tbody></table>'
+            f'{merge_form}'
+            f'</div>'
+        )
+
+    return HTMLResponse(_render("entities", f"""
+      <h2>👥 Кандидаты на объединение</h2>
+      <p class="mute">Группы entity-строк с одинаковым нормализованным именем.
+      Выбери «keeper» и «merged» — после кнопки merge все aliases / memberships /
+      relationships переедут на keeper, дубль удалится.</p>
+      <p class="mute">Найдено групп: <b>{len(groups)}</b> (показано {min(50,len(groups))}).</p>
+      {''.join(rows_html) or '<p class="mute">Чисто — дублей по имени нет.</p>'}
+    """))
+
+
+@app.post("/entities/merge")
+async def entity_merge(request: Request,
+                       keeper_id: int = Form(...),
+                       merged_id: int = Form(...)):
+    try:
+        require_owner(request, request.cookies.get(COOKIE_NAME))
+    except HTTPException as e:
+        return HTMLResponse(_AUTH_ERROR
+                            .replace("__MSG__", esc(e.detail))
+                            .replace("__FAVICON__", FAVICON_LINKS),
+                            status_code=e.status_code)
+    from vera_shared.graph.dedup import merge_entities
+    result = await merge_entities(keeper_id, merged_id)
+    return RedirectResponse(
+        f"/entities/duplicates?merged={result}",
+        status_code=303,
+    )
+
 
 _AUTH_ERROR = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>Доступ запрещён</title>__FAVICON__
 <style>body{font-family:sans-serif;background:#0f1115;color:#e4e6eb;

@@ -308,6 +308,14 @@ async def process_pending() -> int:
                     )
                 )
                 processed += 1
+                # Fire relationship extraction in background — non-blocking,
+                # doesn't gate triage success. Only for high-signal events.
+                if metadata and metadata.get("importance", 0) >= 3:
+                    row = next((r for r in rows if r.id == event_id), None)
+                    if row and row.content_text:
+                        asyncio.create_task(
+                            _safe_rel_extract(event_id, row.content_text)
+                        )
             else:  # error
                 # nature детерминируема по source даже без LLM
                 err_nature = NATURE_BY_SOURCE.get(
@@ -356,6 +364,15 @@ async def _watchdog_loop() -> None:
                             len(stuck), stuck[:5])
         except Exception as e:
             log.warning("Watchdog error: %s", e)
+
+
+async def _safe_rel_extract(event_id: int, body: str) -> None:
+    """Fire-and-forget rel extraction; never crashes triage."""
+    try:
+        from vera_shared.graph.rel_extract import extract_and_store
+        await extract_and_store(event_id, body)
+    except Exception as e:
+        log.debug("rel_extract event=%s failed: %s", event_id, e)
 
 
 BACKOFF_MINUTES = [1, 5, 30, 120, 720]   # 1m, 5m, 30m, 2h, 12h → then dead
