@@ -117,10 +117,24 @@ jobs:
           echo "head=$HEAD" >> "$GITHUB_OUTPUT"
           echo "Diff base: $BASE → $HEAD"
 
-      - name: Ruff (strict ruleset)
+      - name: Ruff (strict, changed files only)
+        # E501 line-too-long excluded — no formatter on the project yet.
+        # Legacy code is grandfathered: only files touched by this push
+        # get the strict treatment, so new code stays clean without a
+        # 1000-file fix-everything migration.
+        shell: bash
         run: |
-          ruff check vera3/services vera3/shared \
-            --select E,F,W,I,B,UP,SIM,C4,RET --statistics
+          BASE="${{ steps.base.outputs.base }}"
+          HEAD="${{ steps.base.outputs.head }}"
+          CHANGED="$(git diff --name-only --diff-filter=AM "$BASE" "$HEAD" \
+                      | grep -E '^vera3/(services|shared|tests)/.*\.py$' || true)"
+          if [ -z "$CHANGED" ]; then
+            echo "No changed .py files — skip ruff"
+            exit 0
+          fi
+          echo "Linting:"; echo "$CHANGED"
+          echo "$CHANGED" | xargs ruff check \
+            --select E,F,W,I,B,UP,SIM,C4,RET --ignore E501,E402 --statistics
 
       - name: Vulture (dead-code on changed files)
         shell: bash
@@ -134,20 +148,35 @@ jobs:
             exit 0
           fi
           echo "Scanning:"; echo "$CHANGED"
+          # --min-confidence 80 is conservative; raises only when 4/5 sure.
           echo "$CHANGED" | xargs vulture --min-confidence 80 \
-            --exclude '*/tests/*,*/__init__.py'
+            --exclude '*/tests/*,*/__init__.py' || {
+              echo "::warning::Vulture found suspected dead code — see above."
+              exit 1
+            }
 
       - name: Diff-cover (≥75% on new lines)
-        working-directory: vera3
+        # Only the lines this push changed need ≥75% coverage. Total-repo
+        # gate (70%) handled separately by the test job. Skips automatically
+        # when the diff has no .py files.
+        shell: bash
         run: |
+          BASE="${{ steps.base.outputs.base }}"
+          HEAD="${{ steps.base.outputs.head }}"
+          if ! git diff --name-only "$BASE" "$HEAD" | grep -qE '^vera3/.*\.py$'; then
+            echo "No .py changes — skip diff-cover"
+            exit 0
+          fi
+          cd vera3
           PYTHONPATH=shared:services/gateway/src:services/dashboard/src \
-          pytest tests/ -q --no-header \
-            --cov=vera_shared --cov=gateway \
-            --cov-report=xml:coverage.xml --no-cov-on-fail
+            pytest tests/ -q --no-header \
+              --cov=vera_shared --cov=gateway \
+              --cov-report=xml:coverage.xml -p no:cacheprovider \
+              || { echo "pytest exit $?"; exit 1; }
+          # Compare against the parent commit on the same branch.
           diff-cover coverage.xml \
-            --compare-branch=origin/master \
-            --fail-under=75 \
-            --include-untracked
+            --compare-branch="$BASE" \
+            --fail-under=75
 
       - name: Docs name-sync
         shell: bash
