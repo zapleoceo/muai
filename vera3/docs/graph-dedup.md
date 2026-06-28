@@ -50,3 +50,21 @@ for audit/rollback.
 Fire-and-forget — runs as `asyncio.create_task`, never blocks triage.
 
 ## Status: shipped 2026-06-28
+
+## Bugfix 2026-06-28: real memberships schema
+
+The first deploy used wrong column names (`member_entity_id`/`group_entity_id`).
+Actual schema is `child_entity_id`/`parent_entity_id`. UNIQUE constraint is
+`(parent_entity_id, child_entity_id, source)` — conflict-check fixed
+accordingly.
+
+## Honest note on auto-merge
+
+Each "Alex"/"Сергей" duplicate group is N distinct Telegram user_ids, so
+auto-merge by name alone is wrong. UNIQUE(source,sender_id) on aliases
+already prevents the trivial case (same TG-id → same entity row).
+
+Real auto-merge needs: phone overlap, @username overlap, OR embedding
+similarity of message corpora > 0.85. None of those signals are present
+in today's data — every alias is a unique TG-id. Manual review remains
+the right path.
