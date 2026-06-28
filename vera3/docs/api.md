@@ -7,6 +7,7 @@
 | `/healthz` | GET | none | Liveness |
 | `/event/{source}` | POST | `X-Internal-Secret` | Ingest endpoint — dedupes by `source_event_id` |
 | `/webhook/{source}` | POST | source-specific | Webhook receiver (Telegram, etc.) |
+| `/v1/claude/remember` | POST | `X-Internal-Secret` | Fact ingest from Claude conversations. Two-layer dedup: exact sha256 of text + semantic cosine ≥ 0.92 over last 7 days of claude-source events. Body: `{text, kind: "fact"\|"decision"\|"todo"\|"preference", context?, tags?}`. Returns `{ok, event_id, deduped, dedup_reason: "exact"\|"semantic"\|null, similar_event_id?, similarity?}`. Called by the `vera-mcp` MCP server (see `mcp-claude.md`). |
 
 The body of `/event/<source>` is an EventEnvelope:
 

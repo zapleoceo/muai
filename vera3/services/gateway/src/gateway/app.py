@@ -10,6 +10,7 @@ from fastapi import FastAPI, Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import Response
 
+from gateway.claude import router as claude_router
 from gateway.config import get_settings
 from gateway.events import router as events_router
 
@@ -61,6 +62,7 @@ def create_app() -> FastAPI:
     app.add_middleware(MaxBodySizeMiddleware)
 
     app.include_router(events_router)
+    app.include_router(claude_router)
 
     @app.get("/healthz")
     async def healthz() -> dict:
