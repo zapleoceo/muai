@@ -184,6 +184,46 @@ def build_app(client: TelegramClient) -> FastAPI:
         except Exception as e:
             return {"error": f"{type(e).__name__}: {e}"}
 
+    @app.post("/media/download")
+    async def media_download(
+        body: dict[str, Any],
+        x_internal_secret: str | None = Header(None, alias="X-Internal-Secret"),
+    ) -> dict[str, Any]:
+        """Download media bytes for (chat_id, msg_id). Returns base64+mime.
+
+        Used by media-worker to grab photo/voice/audio for vision/whisper.
+        Returns up to 25 MB; larger files refused (Whisper hard limit).
+        """
+        from base64 import b64encode
+
+        _check_secret(x_internal_secret)
+        chat_id = int(body["chat_id"])
+        msg_id = int(body["msg_id"])
+        try:
+            msg = await client.get_messages(chat_id, ids=msg_id)
+            if msg is None:
+                return {"error": "message not found"}
+            if not getattr(msg, "media", None):
+                return {"error": "no media on this message"}
+            data = await msg.download_media(file=bytes)
+            if data is None:
+                return {"error": "download returned None (deleted?)"}
+            size = len(data)
+            if size > 25 * 1024 * 1024:
+                return {"error": f"too large: {size} bytes (>25MB)"}
+            mime = None
+            if getattr(msg, "voice", None):
+                mime = "audio/ogg"
+            elif getattr(msg, "audio", None):
+                mime = getattr(msg.audio, "mime_type", "audio/mpeg")
+            elif getattr(msg, "photo", None):
+                mime = "image/jpeg"
+            elif getattr(msg, "document", None):
+                mime = getattr(msg.document, "mime_type", "application/octet-stream")
+            return {"b64": b64encode(data).decode("ascii"), "mime": mime, "size": size}
+        except Exception as e:
+            return {"error": f"{type(e).__name__}: {e}"}
+
     return app
 
 

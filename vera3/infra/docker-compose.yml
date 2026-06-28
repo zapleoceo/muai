@@ -170,6 +170,32 @@ services:
       IG_POLL_INTERVAL_S: "90"
     restart: unless-stopped
 
+  # ─── Media Worker ───────────────────────────────────────────────────────
+  # Polls triage_status='media_pending', downloads photo/voice via
+  # ingestor-telegram /media/download, runs vision/whisper, appends
+  # recognized text. Then triage_status='pending' → normal triage picks up.
+  media-worker:
+    build:
+      context: ..
+      dockerfile: services/media-worker/Dockerfile
+    container_name: vera3-media-worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+      ingestor-telegram:
+        condition: service_started
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
+      TOKEN_SECRET: ${TOKEN_SECRET}
+      INTERNAL_SECRET: ${INTERNAL_SECRET:?INTERNAL_SECRET must be set}
+      TELEGRAM_TOOLS_URL: http://ingestor-telegram:8000
+      GROQ_API_KEY: ${GROQ_API_KEY:-}
+      BROKER_URL: ${BROKER_URL:-}
+      BROKER_PROJECT_KEY: ${BROKER_PROJECT_KEY:-}
+      MEDIA_POLL_S: "10"
+      MEDIA_BATCH: "3"
+    restart: unless-stopped
+
   # ─── Dashboard ──────────────────────────────────────────────────────────
   dashboard:
     build:
