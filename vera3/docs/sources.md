@@ -8,7 +8,7 @@ via `gateway /event/<source>` with `X-Internal-Secret`.
 - Container: `vera3-ingestor-telegram`
 - Mechanism: Telethon userbot (MTProto), single StringSession for `@zapleosoft` stored encrypted in `telegram_sessions`.
 - What it captures: every incoming + outgoing message in every dialog (DM, groups, supergroups, channels where the user is a member).
-- Format: text only — media gets a `[photo]` / `[voice]` / `[video]` placeholder (TODO: extract via Gemini Vision / Whisper).
+- Format: every message saved. Pure-text — as-is. Media — placeholder `[photo]` / `[voice:12s]` / `[video]` / `[sticker:😀]` etc. + `metadata.media_kind` + `media_meta`. Photo/voice/audio get `triage_status='media_pending'` so the media-worker (PR2) can download and run vision/whisper, then move to normal triage.
 - Tools server: same container exposes `:8000/tools/*` for the agent loop (`list_dialogs`, `get_participants`, `get_chat_info`, etc.).
 
 ## gmail

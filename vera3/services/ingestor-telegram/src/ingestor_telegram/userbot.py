@@ -66,6 +66,53 @@ async def save_message(client: TelegramClient, msg) -> None:
     chat_type = type(chat).__name__.lower()
     text = (msg.message or msg.text or "")[:8000]
 
+    # Media — было: пустой text → событие терялось. Стало: всегда плейсхолдер
+    # + media_kind в metadata. media_pending → отдельный воркер скачает и
+    # распознает (vision/whisper), допишет content_text.
+    media_kind: str | None = None
+    media_meta: dict[str, Any] = {}
+    needs_recognition = False
+    if getattr(msg, "photo", None):
+        media_kind = "photo"
+        needs_recognition = True
+    elif getattr(msg, "voice", None):
+        media_kind = "voice"
+        media_meta["duration_s"] = getattr(msg.voice, "duration", None)
+        needs_recognition = True
+    elif getattr(msg, "video_note", None):
+        media_kind = "video_note"
+        media_meta["duration_s"] = getattr(msg.video_note, "duration", None)
+    elif getattr(msg, "video", None):
+        media_kind = "video"
+        media_meta["duration_s"] = getattr(msg.video, "duration", None)
+    elif getattr(msg, "audio", None):
+        media_kind = "audio"
+        media_meta["duration_s"] = getattr(msg.audio, "duration", None)
+        needs_recognition = True  # music/podcast also goes through whisper
+    elif getattr(msg, "sticker", None):
+        media_kind = "sticker"
+        media_meta["emoji"] = getattr(msg.sticker, "alt", None) or ""
+    elif getattr(msg, "document", None):
+        media_kind = "document"
+        media_meta["mime"] = getattr(msg.document, "mime_type", None)
+        media_meta["size"] = getattr(msg.document, "size", None)
+    elif getattr(msg, "media", None):
+        media_kind = type(msg.media).__name__.lower()
+
+    if not text and media_kind:
+        text = f"[{media_kind}]"
+        if media_meta.get("duration_s"):
+            text = f"[{media_kind}: {media_meta['duration_s']}s]"
+        elif media_meta.get("emoji"):
+            text = f"[sticker: {media_meta['emoji']}]"
+    elif media_kind:
+        # caption + media: keep both
+        text = f"[{media_kind}] {text}"
+
+    if not text:
+        # truly empty (no media, no caption) — skip to keep DB clean
+        return
+
     me = await client.get_me()
     direction = "sent" if (sender and sender.id == me.id) else "received"
     author_role = "self" if direction == "sent" else "counterparty"
@@ -117,8 +164,11 @@ async def save_message(client: TelegramClient, msg) -> None:
                 "is_channel": chat_type in {"channel"},
                 "is_group": chat_type in {"chat", "chatfull"},
                 "is_supergroup": chat_type == "channel" and getattr(chat, "megagroup", False),
+                "media_kind": media_kind,
+                "media_meta": media_meta or None,
+                "needs_recognition": needs_recognition,
             },
-            triage_status="pending",
+            triage_status="media_pending" if needs_recognition else "pending",
         ))
 
     # Side-effect: keep entities/memberships in sync with reality.
