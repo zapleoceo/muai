@@ -4,13 +4,24 @@ from __future__ import annotations
 import os
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
 # Set env BEFORE gateway imports — config reads at module load.
 os.environ.setdefault("INTERNAL_SECRET", "test-internal-secret")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
-from gateway.claude import _content_hash, _cosine  # noqa: E402
+import pydantic  # noqa: E402
+import pytest  # noqa: E402
+from fastapi import HTTPException  # noqa: E402
+
+from gateway.claude import (  # noqa: E402
+    SEMANTIC_DEDUP_THRESHOLD,
+    SEMANTIC_LOOKBACK_DAYS,
+    LLMCallFailed,
+    RememberRequest,
+    _check_internal_secret,
+    _content_hash,
+    _cosine,
+    _find_semantic_neighbour,
+)
 
 
 # ─── Pure functions ────────────────────────────────────────────────────────
@@ -58,44 +69,25 @@ def test_cosine_handles_zero_vector():
 
 
 def test_remember_request_validates_kind():
-    from gateway.claude import RememberRequest
-    import pydantic
     # valid kinds
     for k in ("fact", "decision", "todo", "preference"):
         RememberRequest(text="some fact", kind=k)
     # invalid
-    try:
-        RememberRequest(text="x", kind="random")
-    except pydantic.ValidationError:
-        pass
-    else:
-        raise AssertionError("kind='random' should have been rejected")
+    with pytest.raises(pydantic.ValidationError):
+        RememberRequest(text="some fact", kind="random")
 
 
 def test_remember_request_min_text_length():
-    from gateway.claude import RememberRequest
-    import pydantic
-    try:
+    with pytest.raises(pydantic.ValidationError):
         RememberRequest(text="x")
-    except pydantic.ValidationError:
-        pass
-    else:
-        raise AssertionError("text too short should have been rejected")
 
 
 def test_remember_request_max_text_length():
-    from gateway.claude import RememberRequest
-    import pydantic
-    try:
+    with pytest.raises(pydantic.ValidationError):
         RememberRequest(text="x" * 8001)
-    except pydantic.ValidationError:
-        pass
-    else:
-        raise AssertionError("text too long should have been rejected")
 
 
 def test_remember_request_defaults():
-    from gateway.claude import RememberRequest
     r = RememberRequest(text="hello world")
     assert r.kind == "fact"
     assert r.context is None
@@ -103,44 +95,27 @@ def test_remember_request_defaults():
 
 
 def test_remember_request_max_tags():
-    from gateway.claude import RememberRequest
-    import pydantic
-    try:
+    with pytest.raises(pydantic.ValidationError):
         RememberRequest(text="hello world", tags=["t"] * 11)
-    except pydantic.ValidationError:
-        pass
-    else:
-        raise AssertionError("more than 10 tags should have been rejected")
 
 
 # ─── Internal secret check ─────────────────────────────────────────────────
 
 
 def test_check_internal_secret_accepts_correct():
-    from gateway.claude import _check_internal_secret
     _check_internal_secret("test-internal-secret")   # no raise
 
 
 def test_check_internal_secret_rejects_wrong():
-    from fastapi import HTTPException
-    from gateway.claude import _check_internal_secret
-    try:
+    with pytest.raises(HTTPException) as exc:
         _check_internal_secret("wrong")
-    except HTTPException as e:
-        assert e.status_code == 401
-    else:
-        raise AssertionError("wrong secret should have been rejected")
+    assert exc.value.status_code == 401
 
 
 def test_check_internal_secret_rejects_missing():
-    from fastapi import HTTPException
-    from gateway.claude import _check_internal_secret
-    try:
+    with pytest.raises(HTTPException) as exc:
         _check_internal_secret(None)
-    except HTTPException as e:
-        assert e.status_code == 401
-    else:
-        raise AssertionError("missing secret should have been rejected")
+    assert exc.value.status_code == 401
 
 
 # ─── Semantic neighbour finder ─────────────────────────────────────────────
@@ -150,15 +125,14 @@ def test_check_internal_secret_rejects_missing():
 async def test_find_semantic_neighbour_returns_none_on_embed_fail():
     """If broker is down, semantic check must skip gracefully (return None),
     NOT crash the endpoint — exact dedup still works."""
-    from gateway.claude import LLMCallFailed, _find_semantic_neighbour
-    with patch("gateway.claude.embed", AsyncMock(side_effect=LLMCallFailed("broker down"))):
+    with patch("gateway.claude.embed",
+               AsyncMock(side_effect=LLMCallFailed("broker down"))):
         result = await _find_semantic_neighbour("hello")
     assert result is None
 
 
 @pytest.mark.asyncio
 async def test_find_semantic_neighbour_returns_none_on_empty_vectors():
-    from gateway.claude import _find_semantic_neighbour
     with patch("gateway.claude.embed", AsyncMock(return_value=[])):
         result = await _find_semantic_neighbour("hello")
     assert result is None
@@ -170,10 +144,8 @@ async def test_find_semantic_neighbour_returns_none_on_empty_vectors():
 def test_dedup_threshold_is_strict():
     """0.92 chosen to balance 'Дима в Джакарте' / 'Дима живёт в Джакарте'
     (sim ≈ 0.94) against unrelated facts (sim < 0.7)."""
-    from gateway.claude import SEMANTIC_DEDUP_THRESHOLD
     assert 0.85 <= SEMANTIC_DEDUP_THRESHOLD <= 0.99
 
 
 def test_lookback_window_one_week():
-    from gateway.claude import SEMANTIC_LOOKBACK_DAYS
     assert SEMANTIC_LOOKBACK_DAYS == 7
