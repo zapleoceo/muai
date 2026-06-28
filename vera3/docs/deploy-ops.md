@@ -2,17 +2,41 @@
 
 ## Auto-deploy
 
-Push to `master` → `.github/workflows/deploy.yml` runs **three jobs**:
+Push to `master` → `.github/workflows/deploy.yml` runs **four jobs**:
 
-1. **`docs` job** — fails if any change under `vera3/services/` or
-   `vera3/shared/` lands without a matching change under `vera3/docs/`.
+1. **`docs` job** — any file changed under `vera3/services/` or
+   `vera3/shared/` must be matched by a change under `vera3/docs/`.
    Opt-out per commit: literal `docs-not-needed`.
-2. **`test` job** — pytest must pass; coverage gate currently **60%** on
+2. **`test` job** — pytest must pass; total coverage gate **70%** on
    `vera_shared` + `gateway`.
-3. **`deploy` job** — `needs: [docs, test]`. SSH to the server with a
-   restricted key. The key is wired in `/root/.ssh/authorized_keys` to
-   `command="/usr/local/bin/vera3-deploy"` — connecting at all runs the
-   wrapper, anything the client sends is ignored.
+3. **`quality` job** — strict static analysis on the diff:
+   - **Ruff** with extended ruleset `E,F,W,I,B,UP,SIM,C4,RET` — no
+     warnings tolerated (`SIM` = simplify, `C4` = comprehensions,
+     `RET` = unreachable-after-return).
+   - **Vulture** dead-code detector on the files this push touched
+     (`--min-confidence 80`) — surfaces unused funcs, classes, vars
+     that ruff's `F401`/`F841` miss.
+   - **Diff-cover** — every new/changed line must be ≥75% covered by
+     tests in this PR (separate from the repo-wide 70% gate). Caught:
+     "added a function without a test".
+   - **Docs name-sync** — extract every public symbol added/removed in
+     the diff (lowercase `def foo`, PascalCase `class Bar`; skip
+     `_private`, `test_*`, dunders). Each **added** name must appear
+     somewhere in `vera3/docs/`; each **removed** name must NOT remain
+     in `vera3/docs/` (orphaned reference = stale doc). Opt-out:
+     `docs-not-needed`.
+4. **`deploy` job** — `needs: [docs, test, quality]`. SSH to the server
+   with a restricted key wired in `/root/.ssh/authorized_keys` to
+   `command="/usr/local/bin/vera3-deploy"` — anything the client sends
+   is ignored.
+
+### What this guarantees
+
+Any commit that reaches production has: passing tests, ≥75% coverage on
+the actual changes, no dead code in the touched files, no syntax/import
+nits, every public name documented, no orphan references to removed
+code. If any of those fails, deploy is **blocked** until fixed — you
+don't have to remember to check anything yourself.
 
 The wrapper does:
 

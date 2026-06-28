@@ -77,10 +77,127 @@ jobs:
             --cov-report=term-missing \
             --cov-fail-under=70
 
-  # ─── 3. Deploy ───────────────────────────────────────────────────────────
-  # Hard-gated: both docs AND tests must pass.
+  # ─── 3. Quality gate ─────────────────────────────────────────────────────
+  # Strict static analysis on the diff:
+  #   (a) Ruff with extended ruleset (E,F,W,I,B,UP,SIM,C4,RET) — no warnings.
+  #   (b) Vulture — flags dead/unused code in files touched by this push.
+  #   (c) Diff-cover — ≥75% line coverage on the diff itself (not just repo total).
+  #   (d) Docs-name sync — every newly-added public symbol (def foo / class Bar)
+  #       must appear in vera3/docs/*; every removed symbol must NOT remain there.
+  # Opt-out per commit: `docs-not-needed` (skips d only).
+  quality:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          pip install -e ./vera3/shared[dev] aiosqlite
+          pip install -e ./vera3/services/gateway[dev]
+          pip install -e ./vera3/services/dashboard
+          pip install vulture==2.13 diff-cover==9.2.0 ruff==0.7.4
+
+      - name: Compute diff base
+        id: base
+        shell: bash
+        run: |
+          BASE="${{ github.event.before }}"
+          HEAD="${{ github.sha }}"
+          if [ -z "${BASE:-}" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
+             || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
+            BASE="$(git rev-parse "${HEAD}~1" 2>/dev/null || echo "$HEAD")"
+          fi
+          echo "base=$BASE" >> "$GITHUB_OUTPUT"
+          echo "head=$HEAD" >> "$GITHUB_OUTPUT"
+          echo "Diff base: $BASE → $HEAD"
+
+      - name: Ruff (strict ruleset)
+        run: |
+          ruff check vera3/services vera3/shared \
+            --select E,F,W,I,B,UP,SIM,C4,RET --statistics
+
+      - name: Vulture (dead-code on changed files)
+        shell: bash
+        run: |
+          BASE="${{ steps.base.outputs.base }}"
+          HEAD="${{ steps.base.outputs.head }}"
+          CHANGED="$(git diff --name-only --diff-filter=AM "$BASE" "$HEAD" \
+                      | grep -E '^vera3/(services|shared)/.*\.py$' || true)"
+          if [ -z "$CHANGED" ]; then
+            echo "No Python changes under vera3/services|shared — skip."
+            exit 0
+          fi
+          echo "Scanning:"; echo "$CHANGED"
+          echo "$CHANGED" | xargs vulture --min-confidence 80 \
+            --exclude '*/tests/*,*/__init__.py'
+
+      - name: Diff-cover (≥75% on new lines)
+        working-directory: vera3
+        run: |
+          PYTHONPATH=shared:services/gateway/src:services/dashboard/src \
+          pytest tests/ -q --no-header \
+            --cov=vera_shared --cov=gateway \
+            --cov-report=xml:coverage.xml --no-cov-on-fail
+          diff-cover coverage.xml \
+            --compare-branch=origin/master \
+            --fail-under=75 \
+            --include-untracked
+
+      - name: Docs name-sync
+        shell: bash
+        run: |
+          set -euo pipefail
+          BASE="${{ steps.base.outputs.base }}"
+          HEAD="${{ steps.base.outputs.head }}"
+          if git log --format=%B "${BASE}..${HEAD}" 2>/dev/null | grep -qiF "docs-not-needed"; then
+            echo "::notice::'docs-not-needed' marker — skip docs name-sync"
+            exit 0
+          fi
+          # Public names = lowercase def + PascalCase class. Skip _private, test_, dunder.
+          NAME_RE='^[+-](async )?def [a-z][a-z0-9_]*\(|^[+-]class [A-Z][A-Za-z0-9_]*[\(:]'
+          DIFF="$(git diff "$BASE" "$HEAD" -- 'vera3/services/**/*.py' 'vera3/shared/**/*.py' || true)"
+          ADDED="$(echo "$DIFF" | grep -E "^\+" | grep -E "$NAME_RE" \
+                    | sed -E 's/^\+(async )?def ([a-z][a-z0-9_]*)\(.*/\2/;
+                              s/^\+class ([A-Z][A-Za-z0-9_]*).*/\1/' \
+                    | grep -vE '^test_|^_' | sort -u || true)"
+          REMOVED="$(echo "$DIFF" | grep -E "^-" | grep -E "$NAME_RE" \
+                      | sed -E 's/^-(async )?def ([a-z][a-z0-9_]*)\(.*/\2/;
+                                s/^-class ([A-Z][A-Za-z0-9_]*).*/\1/' \
+                      | grep -vE '^test_|^_' | sort -u || true)"
+          NET_ADDED="$(comm -23 <(echo "$ADDED") <(echo "$REMOVED") | grep -v '^$' || true)"
+          NET_REMOVED="$(comm -23 <(echo "$REMOVED") <(echo "$ADDED") | grep -v '^$' || true)"
+          fail=0
+          if [ -n "$NET_ADDED" ]; then
+            echo "Added public names: $NET_ADDED"
+            for name in $NET_ADDED; do
+              if ! grep -rqF -- "$name" vera3/docs/ 2>/dev/null; then
+                echo "::error::Added public symbol '$name' not mentioned anywhere in vera3/docs/"
+                fail=1
+              fi
+            done
+          fi
+          if [ -n "$NET_REMOVED" ]; then
+            echo "Removed public names: $NET_REMOVED"
+            for name in $NET_REMOVED; do
+              if grep -rqF -- "$name" vera3/docs/ 2>/dev/null; then
+                echo "::error::Removed symbol '$name' still referenced in vera3/docs/ (orphan)"
+                fail=1
+              fi
+            done
+          fi
+          [ "$fail" -eq 0 ] && echo "docs name-sync passed"
+          exit $fail
+
+  # ─── 4. Deploy ───────────────────────────────────────────────────────────
+  # Hard-gated: docs + tests + quality must ALL pass.
   deploy:
-    needs: [docs, test]
+    needs: [docs, test, quality]
     runs-on: ubuntu-latest
     timeout-minutes: 15
     env:
