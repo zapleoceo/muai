@@ -5,9 +5,21 @@ __FAVICON__ placeholder) and the SVG itself stays well-formed.
 """
 from __future__ import annotations
 
-from fastapi.testclient import TestClient
+import base64
+import os
 
-from dashboard.app import FAVICON_LINKS, FAVICON_SVG, app
+# dashboard.app reads TOKEN_SECRET / TELEGRAM_BOT_TOKEN / OWNER_TELEGRAM_ID
+# at import time. Provide CI-safe defaults BEFORE the import.
+os.environ.setdefault(
+    "TOKEN_SECRET", base64.urlsafe_b64encode(b"0" * 32).decode()
+)
+os.environ.setdefault("TELEGRAM_BOT_TOKEN", "1:test")
+os.environ.setdefault("OWNER_TELEGRAM_ID", "169510539")
+os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+
+from fastapi.testclient import TestClient  # noqa: E402
+
+from dashboard.app import FAVICON_LINKS, FAVICON_SVG, app  # noqa: E402
 
 client = TestClient(app)
 
