@@ -47,6 +47,42 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(title="Vera 3.0 Dashboard", lifespan=lifespan)
 
+
+# ─── Favicon (SVG, 32x32 viewBox, scales to 16x16 in tab strips) ────────────
+# Visual identity: stylised "V" of two strokes meeting at a bright pulse
+# node — events flowing in, settling into memory. Distinct from AIbroker's
+# hub-and-spokes icon. Single source of truth: this string is served at
+# both /favicon.svg and /favicon.ico, and linked from every HTML page.
+FAVICON_SVG = (
+    '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">'
+    '<rect width="32" height="32" rx="6" fill="#0f1115"/>'
+    '<line x1="8"  y1="9"  x2="16" y2="22" stroke="#4dabf7" stroke-width="3" stroke-linecap="round"/>'
+    '<line x1="24" y1="9"  x2="16" y2="22" stroke="#4dabf7" stroke-width="3" stroke-linecap="round"/>'
+    '<circle cx="8"  cy="9"  r="2.5" fill="#4dabf7"/>'
+    '<circle cx="24" cy="9"  r="2.5" fill="#4dabf7"/>'
+    '<circle cx="16" cy="22" r="3.5" fill="#ffffff"/>'
+    '</svg>'
+)
+FAVICON_LINKS = (
+    '<link rel="icon" type="image/svg+xml" href="/favicon.svg">'
+    '<link rel="alternate icon" href="/favicon.ico">'
+    '<link rel="apple-touch-icon" href="/favicon.svg">'
+)
+
+
+@app.get("/favicon.svg")
+async def favicon_svg() -> Response:
+    return Response(content=FAVICON_SVG, media_type="image/svg+xml",
+                     headers={"Cache-Control": "public, max-age=86400"})
+
+
+@app.get("/favicon.ico")
+async def favicon_ico() -> Response:
+    # Modern browsers (2020+) accept image/svg+xml at .ico paths — avoids
+    # 404 spam in dev consoles without shipping a separate bitmap.
+    return Response(content=FAVICON_SVG, media_type="image/svg+xml",
+                     headers={"Cache-Control": "public, max-age=86400"})
+
 from dashboard.gmail_oauth import router as gmail_oauth_router
 app.include_router(gmail_oauth_router)
 
@@ -65,7 +101,9 @@ def _set_session_cookie(resp: Response) -> None:
 @app.get("/login", response_class=HTMLResponse)
 async def login_page(request: Request):
     bot = get_bot_username()
-    return HTMLResponse(_LOGIN_HTML.replace("__BOT__", bot))
+    return HTMLResponse(
+        _LOGIN_HTML.replace("__BOT__", bot).replace("__FAVICON__", FAVICON_LINKS)
+    )
 
 
 @app.get("/api/tg_login")
@@ -73,9 +111,17 @@ async def tg_login(request: Request):
     data = dict(request.query_params)
     user_id = verify_telegram_auth(data)
     if user_id is None:
-        return HTMLResponse(_AUTH_ERROR.replace("__MSG__", "Невалидная подпись Telegram"), status_code=403)
+        return HTMLResponse(
+            _AUTH_ERROR.replace("__MSG__", "Невалидная подпись Telegram")
+                       .replace("__FAVICON__", FAVICON_LINKS),
+            status_code=403,
+        )
     if user_id != OWNER_ID:
-        return HTMLResponse(_AUTH_ERROR.replace("__MSG__", f"Доступ запрещён для user_id {user_id}"), status_code=403)
+        return HTMLResponse(
+            _AUTH_ERROR.replace("__MSG__", f"Доступ запрещён для user_id {user_id}")
+                       .replace("__FAVICON__", FAVICON_LINKS),
+            status_code=403,
+        )
     resp = RedirectResponse(url="/", status_code=303)
     _set_session_cookie(resp)
     return resp
@@ -764,11 +810,14 @@ def _render(active: str, body: str) -> str:
         nav.append(f'<a href="{href}" class="{cls}">{label}</a>')
     nav.append('<a href="/api/logout" style="margin-left:auto;color:#888">выйти</a>')
 
-    return _HTML_HEAD.replace("__NAV__", "".join(nav)) + body + _HTML_FOOT
+    return (_HTML_HEAD
+            .replace("__FAVICON__", FAVICON_LINKS)
+            .replace("__NAV__", "".join(nav))
+            + body + _HTML_FOOT)
 
 
 _HTML_HEAD = """<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
-<title>Vera 3.0</title>
+<title>Vera 3.0</title>__FAVICON__
 <script src="https://unpkg.com/htmx.org@1.9.10"></script>
 <style>
 * { box-sizing: border-box; }
@@ -827,7 +876,7 @@ _HTML_FOOT = "</body></html>"
 
 
 _LOGIN_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8">
-<title>Vera 3.0 — вход</title>
+<title>Vera 3.0 — вход</title>__FAVICON__
 <style>
 body { font-family: -apple-system, sans-serif; background: #0f1115; color: #e4e6eb;
        display: flex; align-items: center; justify-content: center; min-height: 100vh;
@@ -850,7 +899,7 @@ p { color: #888; margin: 12px 0 28px; }
 </div>
 </div></body></html>"""
 
-_AUTH_ERROR = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>Доступ запрещён</title>
+_AUTH_ERROR = """<!DOCTYPE html><html><head><meta charset="utf-8"><title>Доступ запрещён</title>__FAVICON__
 <style>body{font-family:sans-serif;background:#0f1115;color:#e4e6eb;
        display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}
 .box{background:#4a1a1d;padding:40px;border-radius:16px;text-align:center;color:#ffaaaa;max-width:400px}
