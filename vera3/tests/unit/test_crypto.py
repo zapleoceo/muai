@@ -69,5 +69,5 @@ def test_decrypt_modified_payload_fails():
     encrypted = encrypt("secret", secret=SECRET)
     # Изменяем один байт
     bad = encrypted[:-5] + "XXXXX"
-    with pytest.raises(Exception):
+    with pytest.raises(InvalidToken):
         decrypt(bad, secret=SECRET)

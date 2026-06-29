@@ -135,8 +135,11 @@ jobs:
             exit 0
           fi
           echo "Linting:"; echo "$CHANGED"
+          # B008 ignored: Depends()/Query()/File() in FastAPI param defaults
+          # is THE idiomatic pattern (ruff docs recommend ignoring it for
+          # FastAPI). Matches AIbroker's config.
           echo "$CHANGED" | xargs ruff check \
-            --select E,F,W,I,B,UP,SIM,C4,RET --ignore E501,E402 --statistics
+            --select E,F,W,I,B,UP,SIM,C4,RET --ignore E501,E402,B008
 
       - name: Vulture (dead-code on changed files)
         shell: bash
