@@ -172,3 +172,16 @@ class UsageLogRow(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(),
     )
+
+
+class AppControlRow(Base):
+    """Table app_control — runtime key/value flags polled by workers
+    (e.g. backfill_paused). See vera_shared.control + migration 009."""
+
+    __tablename__ = "app_control"
+
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(),
+    )

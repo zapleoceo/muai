@@ -12,6 +12,7 @@ import httpx
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select, text
+from vera_shared.control import is_backfill_paused, set_backfill_paused
 from vera_shared.db.engine import close_engine, get_session, init_engine
 from vera_shared.db.models import EventRow, UsageLogRow
 from vera_shared.db.models_sources import (
@@ -237,7 +238,7 @@ async def home(request: Request):
             <div class="card-sub">{calls_today:,} LLM-вызовов · мес ${cost_month:.2f}</div></div>
         </div>
 
-        <div class="section" hx-get="/_progress" hx-trigger="load, every 10s" hx-swap="innerHTML">
+        <div id="live-progress" class="section" hx-get="/_progress" hx-trigger="load, every 10s" hx-swap="innerHTML">
           <h2>📥 Live прогресс</h2>
           <div class="mute" style="font-size:13px">загружается…</div>
         </div>
@@ -273,10 +274,26 @@ async def progress_fragment(request: Request):
         require_owner(request, request.cookies.get(COOKIE_NAME))
     except HTTPException:
         return HTMLResponse("", status_code=401)
+    return HTMLResponse(await _build_progress_fragment())
 
+
+@app.post("/control/backfill", response_class=HTMLResponse)
+async def control_backfill(request: Request, action: str = Form(...)):
+    """Pause/resume the brain-triage + media backfill. Owner-only. Returns the
+    refreshed progress fragment so HTMX swaps it in place."""
+    try:
+        require_owner(request, request.cookies.get(COOKIE_NAME))
+    except HTTPException:
+        return HTMLResponse("", status_code=401)
+    await set_backfill_paused(action == "pause")
+    return HTMLResponse(await _build_progress_fragment())
+
+
+async def _build_progress_fragment() -> str:
     from datetime import datetime as dt
     from datetime import timedelta as td
     now = dt.utcnow()
+    paused = await is_backfill_paused()
 
     async with get_session() as s:
         # Темп прихода событий
@@ -347,8 +364,25 @@ async def progress_fragment(request: Request):
     total_events = backlog_total + (triage_24h if triage_24h else 1)
     pct_pending = min(100, int(100 * backlog_total / max(total_events, 1)))
 
-    return HTMLResponse(f"""
+    if paused:
+        pause_ui = (
+            '<span class="bf-badge bf-paused">⏸ Бэкфилл на паузе</span>'
+            '<button class="bf-btn bf-resume" hx-post="/control/backfill" '
+            'hx-vals=\'{"action":"resume"}\' hx-target="#live-progress" '
+            'hx-swap="innerHTML">▶ Продолжить</button>'
+        )
+    else:
+        pause_ui = (
+            '<span class="bf-badge bf-run">▶ Бэкфилл идёт</span>'
+            '<button class="bf-btn bf-pause" hx-post="/control/backfill" '
+            'hx-vals=\'{"action":"pause"}\' hx-target="#live-progress" '
+            'hx-swap="innerHTML">⏸ Пауза</button>'
+        )
+
+    return f"""
       <h2>📥 Live прогресс <span style="font-size:12px;color:#888">(обновляется каждые 10с)</span></h2>
+
+      <div class="bf-control">{pause_ui}</div>
 
       <div class="prog-grid">
         <div class="prog-cell">
@@ -404,8 +438,17 @@ async def progress_fragment(request: Request):
                      transition:width 1s ease; }}
         .chip {{ display:inline-block; padding:4px 10px; background:#0f1115;
                  border:1px solid #2a2d34; border-radius:999px; font-size:12px; }}
+        .bf-control {{ display:flex; align-items:center; gap:12px; margin:6px 0 14px; }}
+        .bf-badge {{ font-size:12px; font-weight:600; padding:4px 12px; border-radius:999px; }}
+        .bf-run {{ background:#14422c; color:#6dd687; }}
+        .bf-paused {{ background:#4a3a14; color:#ffc864; }}
+        .bf-btn {{ padding:7px 16px; border:none; border-radius:8px; font-weight:600;
+                   cursor:pointer; font-size:13px; color:#fff; }}
+        .bf-pause {{ background:#b8860b; }}
+        .bf-resume {{ background:#2f9e44; }}
+        .bf-btn:hover {{ filter:brightness(1.12); }}
       </style>
-    """)
+    """
 
 
 # ─── Tokens ────────────────────────────────────────────────────────────────

@@ -29,6 +29,7 @@ import os
 
 import httpx
 from sqlalchemy import text
+from vera_shared.control import is_backfill_paused
 from vera_shared.db.engine import get_session, init_engine
 
 log = logging.getLogger("media-worker")
@@ -283,6 +284,9 @@ async def main_loop() -> None:
     log.info("media-worker started, poll=%ss batch=%s", POLL_S, BATCH)
 
     while True:
+        if await is_backfill_paused():
+            await asyncio.sleep(POLL_S)   # paused from dashboard
+            continue
         try:
             rows = await _claim_batch()
         except Exception as e:

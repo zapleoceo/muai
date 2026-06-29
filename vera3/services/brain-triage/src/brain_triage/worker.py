@@ -19,6 +19,7 @@ from typing import Any
 
 from sqlalchemy import text, update
 
+from vera_shared.control import is_backfill_paused
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.llm.client import LLMCallFailed, chat, embed
@@ -261,6 +262,8 @@ async def _process_one_with_sem(
 
 async def process_pending() -> int:
     """Захватить batch, эмбедить parallel, триаж concurrent, UPDATE."""
+    if await is_backfill_paused():
+        return 0   # paused from dashboard — skip claiming, main loop sleeps
     rows = await _claim_batch()
     if not rows:
         return 0

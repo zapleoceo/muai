@@ -12,6 +12,18 @@ The "intelligence layer" — three sub-services that turn events into useful ans
 - Concurrency: `TRIAGE_CONCURRENCY=5` events processed in parallel per worker.
 - Scale: replicas. `docker compose up -d --scale brain-triage=3` triples throughput safely (SKIP LOCKED guards).
 
+## Backfill pause/resume
+
+A dashboard button (📥 Live прогресс card → ⏸ Пауза / ▶ Продолжить)
+pauses the heavy backfill. It flips `backfill_paused` in the
+`app_control` KV table (`vera_shared.control`, migration 009). Both
+`brain-triage` `process_pending()` and `media-worker`'s loop check
+`is_backfill_paused()` at the top of each cycle and skip claiming work
+while paused — events just stay `pending` / `media_pending` and resume
+where they left off. The flag lives in Postgres, so a pause holds across
+restarts and deploys. Live events keep ingesting; only LLM-consuming
+processing is paused.
+
 ## brain-search
 
 `services/brain-search/src/brain_search/app.py`
