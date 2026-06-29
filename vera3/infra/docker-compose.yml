@@ -189,9 +189,9 @@ services:
       TOKEN_SECRET: ${TOKEN_SECRET}
       INTERNAL_SECRET: ${INTERNAL_SECRET:?INTERNAL_SECRET must be set}
       TELEGRAM_TOOLS_URL: http://ingestor-telegram:8000
-      GROQ_API_KEY: ${GROQ_API_KEY:-}
-      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_VISION_MODEL: ${GEMINI_VISION_MODEL:-gemini-2.0-flash}
+      # Vision + whisper go through the broker — no provider keys here.
+      BROKER_URL: ${BROKER_URL:-}
+      BROKER_PROJECT_KEY: ${BROKER_PROJECT_KEY:-}
       MEDIA_POLL_S: "10"
       MEDIA_BATCH: "3"
     restart: unless-stopped

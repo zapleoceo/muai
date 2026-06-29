@@ -218,6 +218,8 @@ def build_app(client: TelegramClient) -> FastAPI:
                 mime = getattr(msg.audio, "mime_type", "audio/mpeg")
             elif getattr(msg, "photo", None):
                 mime = "image/jpeg"
+            elif getattr(msg, "sticker", None):
+                mime = getattr(msg.sticker, "mime_type", "image/webp")
             elif getattr(msg, "document", None):
                 mime = getattr(msg.document, "mime_type", "application/octet-stream")
             return {"b64": b64encode(data).decode("ascii"), "mime": mime, "size": size}

@@ -65,6 +65,11 @@ async def backfill_dialog(client: TelegramClient, dialog, cutoff: datetime, me) 
             elif getattr(msg, "sticker", None):
                 media_kind = "sticker"
                 media_meta["emoji"] = getattr(msg.sticker, "alt", None) or ""
+                _mime = getattr(msg.sticker, "mime_type", "") or ""
+                media_meta["mime"] = _mime
+                # Static webp → vision; animated .tgs / video .webm keep emoji.
+                if _mime == "image/webp":
+                    needs_recognition = True
             elif getattr(msg, "document", None):
                 media_kind = "document"
                 media_meta["mime"] = getattr(msg.document, "mime_type", None)

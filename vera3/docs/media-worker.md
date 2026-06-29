@@ -11,11 +11,13 @@ Recognizes photo (vision) and voice/audio (whisper) for events with
 2. media-worker polls these events (batch of 3, every 10s) using
    `FOR UPDATE SKIP LOCKED`.
 3. For each: POST to ingestor-telegram `/media/download` → bytes + mime.
-4. Photo → **Gemini `generateContent` DIRECT** (GEMINI_API_KEY) with
+4. Photo → **broker `POST /v1/chat?capability=vision`** with OpenAI-style
+   multimodal content (`text` block + `image_url` data-URI) and an
    OCR/caption prompt (Russian, 1-3 sentences + verbatim text under
-   `Текст:` if readable). The broker (aib.zapleo.com) is text-only and
-   422s on multimodal content, so vision bypasses it — same as whisper.
-5. Voice/audio → Groq Whisper `whisper-large-v3-turbo` DIRECT call.
+   `Текст:` if readable). The broker picks a vision key (gemini →
+   anthropic → openai) — no provider keys live in media-worker.
+5. Voice/audio → **broker `POST /v1/transcribe`** (multipart upload).
+   Broker routes groq whisper-large-v3-turbo (free) → openai whisper-1.
 6. On success: append `\n--- recognized photo ---\n<text>` (or
    `voice transcription` / `audio transcription`) to `content_text`,
    set `triage_status='pending'` so normal triage takes over.
@@ -35,8 +37,8 @@ Outcomes:
 | Kind | Result |
 |---|---|
 | Success | append recognized text, `triage_status='pending'` |
-| Transient fail (5xx, 429, network) | `media_pending` + backoff, up to 3 tries |
-| Permanent (key missing, 4xx, safety-block) | **degrade now** |
+| Transient fail (broker 5xx/429, network) | `media_pending` + backoff, up to 3 tries |
+| Permanent (4xx scope/bad-req, 413 oversize, empty text) | **degrade now** |
 | After 3 transient tries | **degrade** |
 
 **Degrade** = keep the placeholder (`[photo]`/`[voice: Ns]`), set
@@ -48,13 +50,32 @@ lost. When keys are added later, re-seed degraded events if desired.
 
 - `INTERNAL_SECRET` — required, used to call ingestor-telegram
 - `TELEGRAM_TOOLS_URL` — default `http://ingestor-telegram:8000`
-- `GROQ_API_KEY` — required for voice/audio (else they degrade)
-- `GEMINI_API_KEY` — required for photo (else they degrade)
-- `GEMINI_VISION_MODEL` — default `gemini-2.0-flash`
+- `BROKER_URL` — broker base, e.g. `https://aib.zapleo.com`
+- `BROKER_PROJECT_KEY` — `aib_prj_…`; project must hold `llm:vision` +
+  `llm:audio` scopes (set on the `vera` project)
 - `MEDIA_POLL_S` (default 10), `MEDIA_BATCH` (default 3)
+
+No provider keys here — vision/whisper keys live in the broker. Whisper
+audio is capped at 25 MB (mirrors the broker's limit); larger files degrade.
 
 ## Cost
 
-- Vision: Gemini 2.0 Flash free tier (AI Studio) ~15 RPM, then ~$0.0001/img
-- Whisper: `whisper-large-v3-turbo` Groq free tier ~25 RPM, $0.04/hr beyond
-- Video, video_note, sticker — NOT recognized (user decision).
+Goes through the broker's free-first chains:
+- Vision: gemini free → anthropic → openai
+- Whisper: groq whisper-large-v3-turbo free → openai whisper-1
+
+## Media kinds
+
+| Kind | Recognized? | How |
+|---|---|---|
+| photo | ✅ | vision |
+| sticker (static `image/webp`) | ✅ | vision (`recognized sticker`) |
+| sticker (animated `.tgs` / video `.webm`) | ⬇ placeholder | emoji alt-text only — not an image |
+| voice / audio | ✅ | whisper |
+| video / video_note | ❌ | not processed |
+| document | ❌ | not processed |
+
+Stickers were enabled 2026-06-29 (user wanted all images + stickers).
+The ingestor sets `needs_recognition=True` only for `image/webp` stickers;
+animated/video stickers keep their `[sticker: <emoji>]` placeholder since
+they aren't single images.

@@ -5,18 +5,20 @@ ingestor-telegram's /media/download, runs recognition, appends extracted
 text to content_text, sets triage_status='pending' so normal triage picks
 it up.
 
-Providers (both DIRECT — the broker is text-only and 422s on media):
-  - vision  → Gemini generateContent direct (GEMINI_API_KEY)
-  - whisper → Groq audio/transcriptions direct (GROQ_API_KEY)
+Recognition goes through the BROKER (aib.zapleo.com) like every other LLM
+call in Vera — no provider keys live here:
+  - vision  → POST /v1/chat?capability=vision  (multimodal content blocks)
+  - whisper → POST /v1/transcribe              (multipart audio upload)
 
-If a key is missing or recognition fails permanently, the event degrades:
-its placeholder ([photo]/[voice: Ns]) stays and it enters normal triage,
-so media is never lost — recognition is best-effort.
+The broker handles key selection, free-first routing, cost guard and
+cooldowns. If recognition fails permanently the event degrades: its
+placeholder ([photo]/[voice: Ns]) stays and it enters normal triage, so
+media is never lost — recognition is best-effort.
 
 Failures policy:
-  - Telethon-download fail (deleted msg, no access): mark 'error' with reason
-  - Recognition fail: keep status='media_pending' (next iteration retries)
-  - Hard size limit 25 MB (Whisper limit); larger files marked 'error'
+  - Telethon-download fail (deleted msg, no access): backoff retry → degrade
+  - Recognition fail: backoff retry (media_next_retry_at), then degrade
+  - Hard size limit 25 MB (Whisper limit); larger files degrade
 """
 from __future__ import annotations
 
@@ -33,13 +35,11 @@ log = logging.getLogger("media-worker")
 
 TELEGRAM_TOOLS_URL = os.environ.get("TELEGRAM_TOOLS_URL", "http://ingestor-telegram:8000")
 INTERNAL_SECRET = os.environ["INTERNAL_SECRET"]
-GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
-# Vision goes DIRECT to Gemini — the broker (aib.zapleo.com) is text-only
-# and 422s on multimodal content. Same reason whisper goes direct to Groq.
-GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
-GEMINI_VISION_MODEL = os.environ.get("GEMINI_VISION_MODEL", "gemini-2.0-flash")
+BROKER_URL = os.environ.get("BROKER_URL", "").rstrip("/")
+BROKER_PROJECT_KEY = os.environ.get("BROKER_PROJECT_KEY", "")
 POLL_S = int(os.environ.get("MEDIA_POLL_S", "10"))
 BATCH = int(os.environ.get("MEDIA_BATCH", "3"))
+_MAX_AUDIO_BYTES = 25 * 1024 * 1024   # Whisper limit, mirror broker's guard
 
 
 async def _download(chat_id: int, msg_id: int) -> tuple[bytes | None, str | None, str | None]:
@@ -66,52 +66,54 @@ _VISION_PROMPT = (
 )
 
 
+def _broker_headers() -> dict[str, str]:
+    if not (BROKER_URL and BROKER_PROJECT_KEY):
+        raise RuntimeError("BROKER_URL/BROKER_PROJECT_KEY not set")
+    return {"X-Project-Key": BROKER_PROJECT_KEY}
+
+
 async def _recognize_photo(image_b64: str, mime: str) -> str:
-    """Vision DIRECT to Gemini generateContent (broker is text-only)."""
-    if not GEMINI_API_KEY:
-        raise RuntimeError("GEMINI_API_KEY not set")
-    url = (
-        f"https://generativelanguage.googleapis.com/v1beta/models/"
-        f"{GEMINI_VISION_MODEL}:generateContent?key={GEMINI_API_KEY}"
-    )
+    """Vision via broker /v1/chat?capability=vision (multimodal content)."""
     payload = {
-        "contents": [{
-            "parts": [
-                {"text": _VISION_PROMPT},
-                {"inline_data": {"mime_type": mime or "image/jpeg", "data": image_b64}},
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": _VISION_PROMPT},
+                {"type": "image_url", "image_url": {
+                    "url": f"data:{mime or 'image/jpeg'};base64,{image_b64}"}},
             ],
         }],
-        "generationConfig": {"temperature": 0.1, "maxOutputTokens": 400},
+        "max_tokens": 400,
+        "temperature": 0.1,
+        "workflow": "media_vision",
     }
-    async with httpx.AsyncClient(timeout=60) as c:
-        r = await c.post(url, json=payload)
+    async with httpx.AsyncClient(timeout=90) as c:
+        r = await c.post(
+            f"{BROKER_URL}/v1/chat", params={"capability": "vision"},
+            json=payload, headers=_broker_headers(),
+        )
     if r.status_code >= 400:
-        raise RuntimeError(f"Gemini vision HTTP {r.status_code}: {r.text[:200]}")
-    data = r.json()
-    try:
-        return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    except (KeyError, IndexError) as e:
-        # Safety block or empty — surface so we don't loop on it
-        reason = data.get("candidates", [{}])[0].get("finishReason", "unknown")
-        raise RuntimeError(f"Gemini vision no text (finishReason={reason})") from e
+        raise RuntimeError(f"broker vision HTTP {r.status_code}: {r.text[:200]}")
+    txt = (r.json().get("text") or "").strip()
+    if not txt:
+        raise RuntimeError("broker vision returned empty text")
+    return txt
 
 
 async def _recognize_audio(audio_bytes: bytes, mime: str) -> str:
-    """Groq Whisper direct call (broker не пропускает audio multipart)."""
-    if not GROQ_API_KEY:
-        raise RuntimeError("GROQ_API_KEY not set")
+    """Whisper via broker /v1/transcribe (multipart upload)."""
+    if len(audio_bytes) > _MAX_AUDIO_BYTES:
+        raise RuntimeError(f"http 413: audio > {_MAX_AUDIO_BYTES // (1024 * 1024)}MB")
     suffix = ".ogg" if "ogg" in (mime or "") else ".mp3"
     files = {"file": (f"audio{suffix}", audio_bytes, mime or "audio/ogg")}
-    data = {"model": "whisper-large-v3-turbo", "response_format": "text"}
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
-    async with httpx.AsyncClient(timeout=90) as c:
+    async with httpx.AsyncClient(timeout=120) as c:
         r = await c.post(
-            "https://api.groq.com/openai/v1/audio/transcriptions",
-            files=files, data=data, headers=headers,
+            f"{BROKER_URL}/v1/transcribe", params={"workflow": "media_voice"},
+            files=files, headers=_broker_headers(),
         )
     if r.status_code >= 400:
-        raise RuntimeError(f"Groq Whisper HTTP {r.status_code}: {r.text[:200]}")
-    return r.text.strip()
+        raise RuntimeError(f"broker whisper HTTP {r.status_code}: {r.text[:200]}")
+    return (r.json().get("text") or "").strip()
 
 
 async def _process_one(row: dict) -> tuple[str, str | None]:
@@ -127,13 +129,14 @@ async def _process_one(row: dict) -> tuple[str, str | None]:
     if err:
         return "", f"download: {err}"
 
-    if kind == "photo":
+    if kind in {"photo", "sticker"}:
         try:
             txt = await _recognize_photo(base64.b64encode(raw).decode("ascii"),
                                          mime or "image/jpeg")
         except Exception as e:
             return "", f"vision: {e}"
-        return f"\n--- recognized photo ---\n{txt}", None
+        label = "recognized photo" if kind == "photo" else "recognized sticker"
+        return f"\n--- {label} ---\n{txt}", None
 
     if kind in {"voice", "audio"}:
         try:
@@ -151,14 +154,18 @@ BACKOFF_MIN = [2, 15, 60]   # minutes for retry 1, 2, 3
 
 
 def _is_permanent(err: str) -> bool:
-    """Config/permission errors — retrying won't help, degrade immediately."""
+    """Errors where retrying won't help — degrade immediately instead of
+    burning the backoff budget."""
     e = err.lower()
-    if "api_key not set" in e:                  # GROQ/GEMINI key missing
+    if "broker_url" in e:                        # broker not configured
         return True
-    if "no text (finishreason" in e:            # safety-blocked image
+    if "empty text" in e:                        # vision safety-block / blank
         return True
-    # 4xx from provider = bad request / unauth (429 rate-limit is transient)
-    return any(c in e for c in ("http 400", "http 401", "http 403", "http 404"))
+    # Broker/client 4xx = bad request / scope / payload-too-large.
+    # 429 (rate-limit) and 5xx (broker/provider down) stay transient → retry.
+    return any(c in e for c in (
+        "http 400", "http 401", "http 403", "http 404", "http 413",
+    ))
 
 
 async def _claim_batch() -> list[dict]:
