@@ -1,8 +1,8 @@
 """media_worker — recognition via broker + failure classification.
 
-Env defaults set in conftest.py before collection. media_worker reads
-INTERNAL_SECRET at import (os.environ[...]), so it must be present.
+Env defaults set before import (media_worker reads them at module load).
 """
+# ruff: noqa: I001  # env setup intentionally split around imports
 from __future__ import annotations
 
 import os
@@ -94,9 +94,9 @@ async def test_recognize_photo_raises_on_broker_error():
     async def fake_post(self, *a, **kw):
         return FakeResp()
 
-    with patch("httpx.AsyncClient.post", fake_post):
-        with pytest.raises(RuntimeError, match="503"):
-            await mw._recognize_photo("x", "image/png")
+    with patch("httpx.AsyncClient.post", fake_post), \
+            pytest.raises(RuntimeError, match="503"):
+        await mw._recognize_photo("x", "image/png")
 
 
 @pytest.mark.asyncio
@@ -109,9 +109,9 @@ async def test_recognize_photo_raises_on_empty_text():
     async def fake_post(self, *a, **kw):
         return FakeResp()
 
-    with patch("httpx.AsyncClient.post", fake_post):
-        with pytest.raises(RuntimeError, match="empty text"):
-            await mw._recognize_photo("x", "image/png")
+    with patch("httpx.AsyncClient.post", fake_post), \
+            pytest.raises(RuntimeError, match="empty text"):
+        await mw._recognize_photo("x", "image/png")
 
 
 # ─── _recognize_audio (broker whisper) ─────────────────────────────────────
