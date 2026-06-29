@@ -64,7 +64,7 @@ async def _mark_job(job_id: int, **fields) -> None:
                         fields)
 
 
-async def _process_page(client: TelegramClient, job: dict, me_id: int) -> dict:
+async def _process_page(client: TelegramClient, job: dict) -> dict:
     """One page (PAGE_SIZE messages backwards). Returns delta dict."""
     from ingestor_telegram.userbot import save_message  # reuse the saver
 
@@ -146,7 +146,6 @@ async def _reset_errored_jobs() -> int:
 
 async def backfill_loop(client: TelegramClient) -> None:
     """Run forever. One job → walk to floor → next job."""
-    me = await client.get_me()
     log.info("backfill-queue worker started")
 
     # One-time: warm cache + revive entity-resolution failures.
@@ -171,7 +170,7 @@ async def backfill_loop(client: TelegramClient) -> None:
         # Walk pages until done / error
         while True:
             try:
-                result = await _process_page(client, job, me.id)
+                result = await _process_page(client, job)
             except FloodWaitError as e:
                 wait = min(int(e.seconds) + 5, 600)
                 log.warning("FloodWait %ss on job %s — sleeping",
