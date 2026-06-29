@@ -35,10 +35,10 @@ def test_control_backfill_requires_action_field():
 
 def test_control_backfill_pause_sets_flag_when_authed():
     """With a valid owner session, pause calls set_backfill_paused(True)."""
-    from dashboard.app import _set_session_cookie
-
     # Mint a session cookie the same way the app does.
     from starlette.responses import Response
+
+    from dashboard.app import _set_session_cookie
     resp = Response()
     _set_session_cookie(resp)
     cookie_header = resp.headers.get("set-cookie", "")
@@ -59,8 +59,9 @@ def test_control_backfill_pause_sets_flag_when_authed():
 
 
 def test_control_backfill_resume_clears_flag_when_authed():
-    from dashboard.app import _set_session_cookie
     from starlette.responses import Response
+
+    from dashboard.app import _set_session_cookie
     resp = Response()
     _set_session_cookie(resp)
     cookie_header = resp.headers.get("set-cookie", "")

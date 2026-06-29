@@ -18,7 +18,6 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import text, update
-
 from vera_shared.control import is_backfill_paused
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
