@@ -118,10 +118,46 @@ async def _process_page(client: TelegramClient, job: dict, me_id: int) -> dict:
     }
 
 
+async def _warm_entity_cache(client: TelegramClient) -> int:
+    """Populate the Telethon session entity cache by walking all dialogs.
+
+    Without this, get_entity(int(chat_id)) for private chats fails with
+    "Could not find the input entity for PeerUser" — Telethon needs the
+    access_hash, which it only has after seeing the entity via iter_dialogs.
+    """
+    n = 0
+    async for _d in client.iter_dialogs():
+        n += 1
+    log.info("entity cache warmed: %d dialogs", n)
+    return n
+
+
+async def _reset_errored_jobs() -> int:
+    """Return 'error' jobs (mostly stale entity-resolution failures) to pending
+    so the warmed cache gets a second chance at them."""
+    async with get_session() as s:
+        rs = await s.execute(text(
+            "UPDATE backfill_jobs SET status='pending', last_error=NULL "
+            "WHERE status='error' "
+            "  AND last_error LIKE '%Could not find the input entity%' "
+            "RETURNING id"
+        ))
+        return len(list(rs.scalars().all()))
+
+
 async def backfill_loop(client: TelegramClient) -> None:
     """Run forever. One job → walk to floor → next job."""
     me = await client.get_me()
     log.info("backfill-queue worker started")
+
+    # One-time: warm cache + revive entity-resolution failures.
+    try:
+        await _warm_entity_cache(client)
+        revived = await _reset_errored_jobs()
+        if revived:
+            log.info("revived %d errored jobs after cache warm", revived)
+    except Exception as e:
+        log.warning("cache warm / revive failed: %s", e)
 
     while True:
         job = await _claim_next_job()
