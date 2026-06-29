@@ -449,7 +449,7 @@ async def tokens_page(request: Request, _=Depends(lambda r=Request: None)):
 
 
 @app.get("/events", response_class=HTMLResponse)
-async def events_page(request: Request, limit: int = Query(100, ge=1, le=500),
+async def events_page(request: Request, limit: int = Query(100, ge=1, le=500),  # noqa: B008
                        source: str | None = None,
                        status: str | None = None):
     try:
@@ -890,7 +890,7 @@ async def sources_page(request: Request):
 
 
 @app.post("/search-ui", response_class=HTMLResponse)
-async def search_ui(request: Request, q: str = Form(...)):
+async def search_ui(request: Request, q: str = Form(...)):  # noqa: B008
     try:
         require_owner(request, request.cookies.get(COOKIE_NAME))
     except HTTPException:
