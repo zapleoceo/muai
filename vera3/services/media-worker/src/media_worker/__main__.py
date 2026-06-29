@@ -202,18 +202,40 @@ async def _on_success(event_id: int, append: str) -> None:
         """), {"app": append, "id": event_id})
 
 
-async def _on_failure(event_id: int, meta: dict, err: str) -> str:
-    """Increment retry; schedule backoff or degrade to plain triage.
+def _plan_failure(meta: dict | None, err: str) -> dict:
+    """Pure decision: given prior metadata + an error, decide degrade-vs-retry.
 
-    Degraded events keep their placeholder ([photo]/[voice: Ns]) and go to
-    'pending' so they still enter the brain — recognition was best-effort.
-    Returns the action taken for logging.
-    """
+    Returns a plan dict (no DB, no clock) so it's unit-testable:
+      degrade=True            → hand to normal triage now (placeholder kept)
+      degrade=False           → schedule a backoff retry
+      retry_count, backoff_min, action(for logs)
+    Degrade when the error is permanent OR the next attempt would be the
+    Nth (MAX_MEDIA_RETRIES)."""
     retries = int((meta or {}).get("media_retry_count", 0))
     permanent = _is_permanent(err)
-
     if permanent or retries + 1 >= MAX_MEDIA_RETRIES:
-        # Give up — placeholder already in content_text, hand to normal triage.
+        return {
+            "degrade": True,
+            "action": "degraded(permanent)" if permanent else "degraded",
+            "retry_count": retries,
+            "backoff_min": 0,
+        }
+    backoff = BACKOFF_MIN[min(retries, len(BACKOFF_MIN) - 1)]
+    return {
+        "degrade": False,
+        "action": f"retry#{retries + 1} in {backoff}m",
+        "retry_count": retries + 1,
+        "backoff_min": backoff,
+    }
+
+
+async def _on_failure(event_id: int, meta: dict, err: str) -> str:
+    """Apply the failure plan. Degraded events keep their placeholder
+    ([photo]/[voice: Ns]) and go to 'pending' so they still enter the brain —
+    recognition is best-effort. Returns the action taken for logging."""
+    plan = _plan_failure(meta, err)
+
+    if plan["degrade"]:
         async with get_session() as s:
             await s.execute(text("""
                 UPDATE events
@@ -225,24 +247,29 @@ async def _on_failure(event_id: int, meta: dict, err: str) -> str:
                     )
                 WHERE id = :id
             """), {"err": err[:300], "id": event_id})
-        return "degraded" if not permanent else "degraded(permanent)"
+        return plan["action"]
 
-    backoff = BACKOFF_MIN[min(retries, len(BACKOFF_MIN) - 1)]
+    # Backoff retry. retry_count bound as text → cast to int inside to_jsonb
+    # via CAST() (NOT '::int' — SQLAlchemy text() mangles '::' next to a bind).
+    # next_retry_at computed server-side with make_interval(mins => …).
     async with get_session() as s:
-        await s.execute(text(f"""
+        await s.execute(text("""
             UPDATE events
             SET triage_error = :err,
                 metadata = jsonb_set(
                   jsonb_set(
-                    COALESCE(metadata, '{{}}'::jsonb),
-                    '{{media_retry_count}}', to_jsonb(:cnt::int)
+                    COALESCE(metadata, '{}'::jsonb),
+                    '{media_retry_count}', to_jsonb(CAST(:cnt AS integer))
                   ),
-                  '{{media_next_retry_at}}',
-                  to_jsonb((NOW() + INTERVAL '{backoff} minutes')::text)
+                  '{media_next_retry_at}',
+                  to_jsonb(
+                    (NOW() + make_interval(mins => CAST(:backoff AS integer)))::text
+                  )
                 )
             WHERE id = :id
-        """), {"err": err[:300], "cnt": retries + 1, "id": event_id})
-    return f"retry#{retries + 1} in {backoff}m"
+        """), {"err": err[:300], "cnt": plan["retry_count"],
+               "backoff": plan["backoff_min"], "id": event_id})
+    return plan["action"]
 
 
 async def main_loop() -> None:

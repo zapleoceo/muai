@@ -40,6 +40,41 @@ def test_permanent_on_misconfig_and_empty():
     assert mw._is_permanent("broker vision returned empty text") is True
 
 
+# ─── _plan_failure (pure retry/degrade decision) ───────────────────────────
+
+
+def test_plan_failure_first_transient_schedules_retry():
+    plan = mw._plan_failure({}, "broker vision HTTP 503: no provider")
+    assert plan["degrade"] is False
+    assert plan["retry_count"] == 1
+    assert plan["backoff_min"] == mw.BACKOFF_MIN[0]
+    assert "retry#1" in plan["action"]
+
+
+def test_plan_failure_escalates_backoff():
+    p2 = mw._plan_failure({"media_retry_count": 1}, "HTTP 429")
+    assert p2["retry_count"] == 2
+    assert p2["backoff_min"] == mw.BACKOFF_MIN[1]
+
+
+def test_plan_failure_degrades_after_max_retries():
+    plan = mw._plan_failure({"media_retry_count": mw.MAX_MEDIA_RETRIES - 1},
+                            "HTTP 503")
+    assert plan["degrade"] is True
+    assert plan["action"] == "degraded"
+
+
+def test_plan_failure_degrades_immediately_on_permanent():
+    plan = mw._plan_failure({}, "broker vision HTTP 403: scope")
+    assert plan["degrade"] is True
+    assert plan["action"] == "degraded(permanent)"
+
+
+def test_plan_failure_handles_none_meta():
+    plan = mw._plan_failure(None, "HTTP 503")
+    assert plan["retry_count"] == 1
+
+
 # ─── _broker_headers ───────────────────────────────────────────────────────
 
 
