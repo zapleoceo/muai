@@ -582,95 +582,6 @@ def self_ig_block(ig_sessions, ig_total, ig_1h, ig_24h, ig_last,
     """
 
 
-@app.get("/backfill", response_class=HTMLResponse)
-async def backfill_page(request: Request):
-    """Backfill progress — one row per persistent job in backfill_jobs."""
-    try:
-        require_owner(request, request.cookies.get(COOKIE_NAME))
-    except HTTPException as e:
-        return HTMLResponse(
-            _AUTH_ERROR.replace("__MSG__", esc(e.detail))
-                       .replace("__FAVICON__", FAVICON_LINKS),
-            status_code=e.status_code,
-        )
-
-    async with get_session() as s:
-        by_status = list((await s.execute(text(
-            "SELECT status, COUNT(*), SUM(messages_inserted), SUM(pages_done) "
-            "FROM backfill_jobs GROUP BY 1 ORDER BY 1"
-        ))).all())
-
-        floor_dates = list((await s.execute(text(
-            "SELECT target_floor_date::date AS floor, COUNT(*) AS jobs, "
-            "  SUM(CASE WHEN status='completed' THEN 1 ELSE 0 END) AS done "
-            "FROM backfill_jobs GROUP BY 1 ORDER BY 1"
-        ))).all())
-
-        # Top-30 active jobs (in_progress first, then pending oldest)
-        rows = list((await s.execute(text(
-            "SELECT id, chat_title, status, cursor_oldest_date, target_floor_date, "
-            "       pages_done, messages_inserted, last_error "
-            "FROM backfill_jobs "
-            "ORDER BY (status='in_progress') DESC, status, created_at "
-            "LIMIT 30"
-        ))).mappings().all())
-
-    cards = []
-    total_jobs = sum(c for _, c, *_ in by_status)
-    for status, cnt, ins, pgs in by_status:
-        pct = int(100 * cnt / max(total_jobs, 1))
-        emoji = {"pending": "⏳", "in_progress": "🔄", "completed": "✅",
-                 "error": "❌"}.get(status, "?")
-        cards.append(
-            f'<div class="card"><div class="card-label">{emoji} {esc(status)}</div>'
-            f'<div class="card-value">{cnt:,}<small> ({pct}%)</small></div>'
-            f'<div class="card-sub">+{int(ins or 0):,} msgs · {int(pgs or 0):,} pages</div></div>'
-        )
-
-    floor_html = "".join(
-        f'<div class="row"><span>до {esc(str(fd))}</span>'
-        f'<span class="mute">{done:,}/{jobs:,} ({int(100*done/max(jobs,1))}%)</span></div>'
-        for fd, jobs, done in floor_dates
-    )
-
-    tbl_rows = []
-    for r in rows:
-        last_err = (r.get("last_error") or "")[:80]
-        tbl_rows.append(
-            f'<tr><td>#{r["id"]}</td>'
-            f'<td>{esc(r["chat_title"] or "(no title)")[:60]}</td>'
-            f'<td>{esc(r["status"])}</td>'
-            f'<td>{esc(str(r.get("cursor_oldest_date") or "—"))[:19]}</td>'
-            f'<td>{esc(str(r["target_floor_date"]))[:10]}</td>'
-            f'<td>{r["pages_done"]}</td>'
-            f'<td>{r["messages_inserted"]:,}</td>'
-            f'<td><span class="mute">{esc(last_err)}</span></td></tr>'
-        )
-
-    return HTMLResponse(_render("backfill", f"""
-      <h2>⏪ Backfill (история телеграма)</h2>
-      <p class="mute">Очередь: 1 job на каждый диалог × target_floor_date.
-      Worker внутри ingestor-telegram грызёт по одному, страницами по 100,
-      переживает flood-wait.</p>
-      <div class="cards">{''.join(cards) or '<div class="mute">Очередь пуста</div>'}</div>
-
-      <div class="section">
-        <h2>По target_floor_date</h2>
-        {floor_html or '<div class="mute">—</div>'}
-      </div>
-
-      <div class="section">
-        <h2>Top-30 активных job</h2>
-        <table class="data">
-          <thead><tr><th>id</th><th>chat</th><th>status</th>
-          <th>cursor (старшее дошли)</th><th>target floor</th>
-          <th>pages</th><th>msgs</th><th>last note</th></tr></thead>
-          <tbody>{''.join(tbl_rows)}</tbody>
-        </table>
-      </div>
-    """))
-
-
 @app.get("/sources", response_class=HTMLResponse)
 async def sources_page(request: Request):
     try:
@@ -920,7 +831,6 @@ def _render(active: str, body: str) -> str:
     nav = []
     items = [("home", "/", "главная"), ("tokens", "/tokens", "токены"),
              ("events", "/events", "события"), ("sources", "/sources", "источники"),
-             ("backfill", "/backfill", "backfill"),
              ("entities", "/entities/duplicates", "сущности")]
     for key, href, label in items:
         cls = "active" if active == key else ""
