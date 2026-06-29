@@ -27,7 +27,6 @@ import os
 
 import httpx
 from sqlalchemy import text
-
 from vera_shared.db.engine import get_session, init_engine
 
 log = logging.getLogger("media-worker")
@@ -91,10 +90,10 @@ async def _recognize_photo(image_b64: str, mime: str) -> str:
     data = r.json()
     try:
         return data["candidates"][0]["content"]["parts"][0]["text"].strip()
-    except (KeyError, IndexError):
+    except (KeyError, IndexError) as e:
         # Safety block or empty — surface so we don't loop on it
         reason = data.get("candidates", [{}])[0].get("finishReason", "unknown")
-        raise RuntimeError(f"Gemini vision no text (finishReason={reason})")
+        raise RuntimeError(f"Gemini vision no text (finishReason={reason})") from e
 
 
 async def _recognize_audio(audio_bytes: bytes, mime: str) -> str:
@@ -122,7 +121,7 @@ async def _process_one(row: dict) -> tuple[str, str | None]:
     msg_id = meta.get("msg_id")
     kind = meta.get("media_kind")
     if not chat_id or not msg_id or not kind:
-        return "", f"missing chat_id/msg_id/media_kind in metadata"
+        return "", "missing chat_id/msg_id/media_kind in metadata"
 
     raw, mime, err = await _download(chat_id, msg_id)
     if err:
@@ -159,10 +158,7 @@ def _is_permanent(err: str) -> bool:
     if "no text (finishreason" in e:            # safety-blocked image
         return True
     # 4xx from provider = bad request / unauth (429 rate-limit is transient)
-    for code in ("http 400", "http 401", "http 403", "http 404"):
-        if code in e:
-            return True
-    return False
+    return any(c in e for c in ("http 400", "http 401", "http 403", "http 404"))
 
 
 async def _claim_batch() -> list[dict]:

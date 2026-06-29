@@ -25,7 +25,6 @@ from sqlalchemy import select as sa_select
 from sqlalchemy import text
 from telethon import TelegramClient
 from telethon.errors import FloodWaitError
-
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
 
@@ -67,7 +66,7 @@ async def _mark_job(job_id: int, **fields) -> None:
 
 async def _process_page(client: TelegramClient, job: dict, me_id: int) -> dict:
     """One page (PAGE_SIZE messages backwards). Returns delta dict."""
-    from ingestor_telegram.userbot import save_message   # reuse the saver
+    from ingestor_telegram.userbot import save_message  # reuse the saver
 
     chat = await client.get_entity(int(job["chat_id"]))
     offset_id = int(job["cursor_msg_id"] or 0)
