@@ -225,6 +225,49 @@ async def test_process_one_sticker_goes_through_vision():
     assert "recognized sticker" in seg
 
 
+# ─── _on_failure (applies the plan; DB mocked) ─────────────────────────────
+
+
+class _FakeSession:
+    """Async-ctx session whose execute() just records calls — no real DB."""
+    def __init__(self):
+        self.calls = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def execute(self, stmt, params=None):
+        self.calls.append((str(stmt), params))
+
+
+@pytest.mark.asyncio
+async def test_on_failure_degrade_branch_runs_sql():
+    sess = _FakeSession()
+    with patch.object(mw, "get_session", lambda: sess):
+        action = await mw._on_failure(42, {}, "broker vision HTTP 403: scope")
+    assert action == "degraded(permanent)"
+    sql, params = sess.calls[0]
+    assert "media_recognition" in sql
+    assert params["id"] == 42
+
+
+@pytest.mark.asyncio
+async def test_on_failure_retry_branch_runs_sql():
+    sess = _FakeSession()
+    with patch.object(mw, "get_session", lambda: sess):
+        action = await mw._on_failure(7, {}, "broker vision HTTP 503: busy")
+    assert "retry#1" in action
+    sql, params = sess.calls[0]
+    assert "media_next_retry_at" in sql
+    assert "make_interval" in sql
+    assert params["cnt"] == 1
+    assert params["backoff"] == mw.BACKOFF_MIN[0]
+    assert params["id"] == 7
+
+
 @pytest.mark.asyncio
 async def test_process_one_voice_happy():
     row = {"id": 1, "content_text": "[voice: 5s]",
