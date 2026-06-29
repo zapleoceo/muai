@@ -3,9 +3,7 @@ from __future__ import annotations
 
 import pytest
 from cryptography.fernet import InvalidToken
-
 from vera_shared.crypto import ENCRYPTED_PREFIX, decrypt, encrypt, is_encrypted
-
 
 SECRET = "test-secret-key-for-encryption-32bytes-long-enough"
 
@@ -44,7 +42,7 @@ def test_is_encrypted():
 
 def test_decrypt_with_wrong_secret_raises():
     encrypted = encrypt("secret-data", secret=SECRET)
-    with pytest.raises(Exception):
+    with pytest.raises(InvalidToken):
         decrypt(encrypted, secret="completely-different-secret")
 
 

@@ -12,10 +12,9 @@ import os
 from sqlalchemy import select
 from telethon import TelegramClient
 from telethon.sessions import SQLiteSession, StringSession
-
+from vera_shared.crypto import encrypt
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models_sources import TelegramSessionRow
-from vera_shared.crypto import encrypt
 
 
 async def main():

@@ -1,7 +1,7 @@
 """SQLAlchemy DB layer — Postgres + pgvector."""
 from vera_shared.db.engine import (
-    Base,
     AsyncSessionLocal,
+    Base,
     get_engine,
     get_session,
     init_engine,

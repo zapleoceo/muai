@@ -33,7 +33,6 @@ BigIntPk = BigInteger().with_variant(Integer(), "sqlite")
 
 from vera_shared.db.engine import Base
 
-
 # NOTE: TokenRow / `tokens` table removed 2026-06-29. Vera holds no LLM
 # provider keys — every chat/embed/vision/transcribe call goes through the
 # broker (aib.zapleo.com), which owns all keys. See migration 008.

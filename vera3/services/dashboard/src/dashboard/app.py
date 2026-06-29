@@ -12,14 +12,21 @@ import httpx
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select, text
-
 from vera_shared.db.engine import close_engine, get_session, init_engine
 from vera_shared.db.models import EventRow, UsageLogRow
-from vera_shared.db.models_sources import GmailAccountRow, InstagramSessionRow, TelegramSessionRow
+from vera_shared.db.models_sources import (
+    GmailAccountRow,
+    InstagramSessionRow,
+    TelegramSessionRow,
+)
 
 from dashboard.auth import (
-    COOKIE_NAME, get_bot_username, issue_session,
-    require_owner, verify_telegram_auth, OWNER_ID,
+    COOKIE_NAME,
+    OWNER_ID,
+    get_bot_username,
+    issue_session,
+    require_owner,
+    verify_telegram_auth,
 )
 
 
@@ -84,6 +91,7 @@ async def favicon_ico() -> Response:
                      headers={"Cache-Control": "public, max-age=86400"})
 
 from dashboard.gmail_oauth import router as gmail_oauth_router
+
 app.include_router(gmail_oauth_router)
 
 
@@ -266,7 +274,8 @@ async def progress_fragment(request: Request):
     except HTTPException:
         return HTMLResponse("", status_code=401)
 
-    from datetime import datetime as dt, timedelta as td
+    from datetime import datetime as dt
+    from datetime import timedelta as td
     now = dt.utcnow()
 
     async with get_session() as s:

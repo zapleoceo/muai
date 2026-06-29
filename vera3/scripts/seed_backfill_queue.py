@@ -18,14 +18,12 @@ import os
 import sys
 from datetime import datetime
 
-from sqlalchemy import text
+from sqlalchemy import select, text
 from telethon import TelegramClient
 from telethon.sessions import StringSession
-
+from vera_shared.crypto import decrypt
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models_sources import TelegramSessionRow
-from vera_shared.crypto import decrypt
-from sqlalchemy import select
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(message)s")

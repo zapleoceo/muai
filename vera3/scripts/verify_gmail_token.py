@@ -1,12 +1,12 @@
 """Тест что Vera 2.0 → Vera 3.0 decrypt дал валидный Gmail refresh token."""
 import asyncio
 import os
-import httpx
 
+import httpx
+from sqlalchemy import select
+from vera_shared.crypto import decrypt
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models_sources import GmailAccountRow
-from vera_shared.crypto import decrypt
-from sqlalchemy import select
 
 
 async def main():

@@ -9,19 +9,18 @@
 import asyncio
 import json
 import os
-import sys
 import time
 
-from sqlalchemy import select
 from instagrapi import Client
 from instagrapi.exceptions import (
-    BadPassword, ChallengeRequired, TwoFactorRequired,
+    BadPassword,
+    ChallengeRequired,
+    TwoFactorRequired,
 )
-
+from sqlalchemy import select
+from vera_shared.crypto import encrypt
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models_sources import InstagramSessionRow
-from vera_shared.crypto import encrypt
-
 
 CHALLENGE_FILE = "/tmp/ig_challenge"   # код из почты/SMS
 TFA_FILE = "/tmp/ig_2fa"               # 6-значный TOTP

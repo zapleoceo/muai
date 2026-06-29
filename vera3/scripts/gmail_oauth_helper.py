@@ -10,17 +10,15 @@
     https://dima.veranda.my/start
 для начала flow.
 """
-import asyncio
 import logging
 import os
 import secrets
-from datetime import datetime
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import FastAPI, Request, HTTPException
-from fastapi.responses import RedirectResponse, HTMLResponse
 import uvicorn
+from fastapi import FastAPI, Request
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s: %(message)s")
 log = logging.getLogger("oauth")
@@ -121,10 +119,10 @@ async def callback(request: Request):
 
     # Save to Postgres
     try:
+        from sqlalchemy import select
+        from vera_shared.crypto import encrypt
         from vera_shared.db.engine import get_session, init_engine
         from vera_shared.db.models_sources import GmailAccountRow
-        from vera_shared.crypto import encrypt
-        from sqlalchemy import select, update
 
         await init_engine()
         refresh_enc = encrypt(refresh)
@@ -172,9 +170,9 @@ async def callback(request: Request):
 
 @app.get("/list")
 async def list_accounts():
+    from sqlalchemy import select
     from vera_shared.db.engine import get_session, init_engine
     from vera_shared.db.models_sources import GmailAccountRow
-    from sqlalchemy import select
     await init_engine()
     async with get_session() as s:
         rows = (await s.execute(select(GmailAccountRow))).scalars().all()

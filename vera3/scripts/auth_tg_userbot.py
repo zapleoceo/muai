@@ -11,11 +11,9 @@ import sys
 from sqlalchemy import select
 from telethon import TelegramClient
 from telethon.sessions import StringSession
-
+from vera_shared.crypto import encrypt
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models_sources import TelegramSessionRow
-from vera_shared.crypto import encrypt
-
 
 API_ID = int(os.environ["TELEGRAM_API_ID"])
 API_HASH = os.environ["TELEGRAM_API_HASH"]
@@ -45,7 +43,7 @@ async def main():
 
     # stage == 'login'
     if not os.path.exists(state_file):
-        print(f"✗ no state file — run with arg=request first")
+        print("✗ no state file — run with arg=request first")
         return
     if not os.path.exists(CODE_FILE):
         print(f"✗ code file missing: {CODE_FILE}")

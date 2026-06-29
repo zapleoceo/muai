@@ -14,16 +14,18 @@ import os
 from urllib.parse import urlencode
 
 import httpx
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import select
-
+from vera_shared.crypto import encrypt
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_sources import GmailAccountRow
-from vera_shared.crypto import encrypt
 
 from dashboard.auth import (
-    COOKIE_NAME, issue_oauth_state, require_owner, verify_oauth_state,
+    COOKIE_NAME,
+    issue_oauth_state,
+    require_owner,
+    verify_oauth_state,
 )
 
 log = logging.getLogger(__name__)
