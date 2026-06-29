@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 from cryptography.fernet import InvalidToken
 
-from vera_shared.tokens.crypto import ENCRYPTED_PREFIX, decrypt, encrypt, is_encrypted
+from vera_shared.crypto import ENCRYPTED_PREFIX, decrypt, encrypt, is_encrypted
 
 
 SECRET = "test-secret-key-for-encryption-32bytes-long-enough"

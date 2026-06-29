@@ -14,7 +14,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select, text
 
 from vera_shared.db.engine import close_engine, get_session, init_engine
-from vera_shared.db.models import EventRow, TokenRow, UsageLogRow
+from vera_shared.db.models import EventRow, UsageLogRow
 from vera_shared.db.models_sources import GmailAccountRow, InstagramSessionRow, TelegramSessionRow
 
 from dashboard.auth import (
@@ -420,10 +420,10 @@ async def tokens_page(request: Request, _=Depends(lambda r=Request: None)):
         🔑 LLM-ключи Vera полностью на стороне брокера
       </div>
       <div style="font-size:13px; color:#9ab; line-height:1.6;">
-        Все вызовы (chat + embed) идут через aibroker; добавление,
-        ротация, ограничения, health-monitoring — всё там. Локальная
-        таблица <code>tokens</code> в БД оставлена dormant как
-        аварийный резерв (на runtime не читается).
+        Все вызовы (chat, embed, vision, transcribe) идут через aibroker;
+        добавление, ротация, ограничения, health-monitoring — всё там.
+        У Веры собственных LLM-ключей нет — таблица <code>tokens</code>
+        удалена (миграция 005).
       </div>
       <div style="margin-top:14px;">
         <a href="{esc(broker_link)}" target="_blank" style="display:inline-block;

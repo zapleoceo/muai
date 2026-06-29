@@ -40,6 +40,15 @@ def test_permanent_on_misconfig_and_empty():
     assert mw._is_permanent("broker vision returned empty text") is True
 
 
+def test_no_provider_503_is_transient():
+    # 503 "no provider available" = all gemini keys momentarily cooled
+    # (free-tier churn). They recover in minutes, so this MUST be transient —
+    # the backoff retry catches a live key. Degrading would lose the image.
+    assert mw._is_permanent(
+        "broker vision HTTP 503: no provider available for capability=vision"
+    ) is False
+
+
 # ─── _plan_failure (pure retry/degrade decision) ───────────────────────────
 
 

@@ -14,7 +14,7 @@ from telethon.sessions import StringSession
 
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models_sources import TelegramSessionRow
-from vera_shared.tokens.crypto import encrypt
+from vera_shared.crypto import encrypt
 
 
 API_ID = int(os.environ["TELEGRAM_API_ID"])

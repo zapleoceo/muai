@@ -20,7 +20,7 @@ from sqlalchemy import select
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_sources import GmailAccountRow
-from vera_shared.tokens.crypto import encrypt
+from vera_shared.crypto import encrypt
 
 from dashboard.auth import (
     COOKIE_NAME, issue_oauth_state, require_owner, verify_oauth_state,

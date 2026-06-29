@@ -17,7 +17,6 @@ admin path checks against it:
 | Gmail refresh tokens | `gmail_accounts.refresh_token_enc` | Fernet (key from `TOKEN_SECRET`) |
 | TG MTProto session | `telegram_sessions.session_string_enc` | Fernet |
 | Instagram sessionid | `instagram_sessions.session_json_enc` | Fernet |
-| LLM provider tokens | `tokens.token_encrypted` (cold fallback) — primary copy in AIbroker DB | Fernet |
 | Service-to-service | `INTERNAL_SECRET` env on every container | none (intra-host) |
 
 `TOKEN_SECRET` itself lives in `.env` (mode 600). If it leaks, ALL of the

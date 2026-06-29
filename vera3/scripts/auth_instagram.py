@@ -20,7 +20,7 @@ from instagrapi.exceptions import (
 
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models_sources import InstagramSessionRow
-from vera_shared.tokens.crypto import encrypt
+from vera_shared.crypto import encrypt
 
 
 CHALLENGE_FILE = "/tmp/ig_challenge"   # код из почты/SMS

@@ -83,9 +83,9 @@ async def cmd_start(message: Message):
 async def cmd_stats(message: Message):
     if not _owner_only(message):
         return
-    from sqlalchemy import select, func
+    from sqlalchemy import func, select
     from vera_shared.db.engine import get_session
-    from vera_shared.db.models import EventRow, TokenRow
+    from vera_shared.db.models import EventRow
 
     async with get_session() as s:
         total_events = (await s.execute(select(func.count(EventRow.id)))).scalar() or 0
@@ -96,11 +96,6 @@ async def cmd_stats(message: Message):
             select(func.count(EventRow.id))
             .where(EventRow.embedding_voyage_3.is_not(None))
         )).scalar() or 0
-        free_tokens = (await s.execute(
-            select(func.count(TokenRow.id))
-            .where(TokenRow.is_active.is_(True))
-            .where(TokenRow.tier == "free")
-        )).scalar() or 0
 
     pct_triaged = 100 * triaged // max(total_events, 1)
     pct_emb = 100 * with_emb // max(total_events, 1)
@@ -109,7 +104,7 @@ async def cmd_stats(message: Message):
         f"События: <b>{total_events}</b>\n"
         f"Триаж: <b>{triaged}</b> ({pct_triaged}%)\n"
         f"Embeddings: <b>{with_emb}</b> ({pct_emb}%)\n"
-        f"Free LLM keys активны: <b>{free_tokens}</b>"
+        f"LLM: через брокер (aib.zapleo.com)"
     )
 
 

@@ -33,12 +33,17 @@ jobs:
         # test_favicon imports the dashboard package — without this it can't be collected.
         run: pip install -e ./services/dashboard
 
+      - name: Install media-worker
+        # test_media_worker imports the media_worker package.
+        run: pip install -e ./services/media-worker
+
       - name: Run all tests with coverage
         run: |
-          PYTHONPATH=shared:services/gateway/src:services/dashboard/src \
+          PYTHONPATH=shared:services/gateway/src:services/dashboard/src:services/media-worker/src \
           pytest tests/ \
             --cov=vera_shared \
             --cov=gateway \
+            --cov=media_worker \
             --cov-report=term-missing \
             --cov-report=xml \
             --cov-fail-under=40

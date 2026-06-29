@@ -19,7 +19,7 @@ from telethon.sessions import StringSession
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import TelegramSessionRow
-from vera_shared.tokens.crypto import decrypt
+from vera_shared.crypto import decrypt
 
 from ingestor_telegram.entity_sync import sync_message_entities
 from ingestor_telegram.tools_http import build_app

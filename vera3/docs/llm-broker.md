@@ -1,10 +1,10 @@
 # LLM via AIbroker (broker-only mode)
 
-Since 2026-06-26 Vera is **broker-only**. There is no local-token fallback
-in `client.py` anymore. `chat()` and `embed()` either succeed via
-[AIbroker](https://aib.zapleo.com) or raise `LLMCallFailed`. The local
-`tokens` table is dormant — kept in the DB as an emergency reserve, not
-read at runtime.
+Since 2026-06-26 Vera is **broker-only**, and since 2026-06-29 it holds
+**no LLM keys at all**. `chat()`, `embed()`, vision and transcribe either
+succeed via [AIbroker](https://aib.zapleo.com) or raise `LLMCallFailed`.
+The `tokens` table was **dropped** (migration 008) — there is no local
+pool, dormant or otherwise. Every provider key lives in the broker.
 
 ## Why fully on broker
 
@@ -44,16 +44,20 @@ re-raised as `LLMCallFailed`. Caller decides:
 - `vera_shared/llm/cost_guard.py` — broker now decides caps
 - `vera_shared/llm/registry.py` — broker knows providers
 - `vera_shared/llm/routing.py` reduced to a `Capability` Literal alias
-- `vera_shared/tokens/repository.py` + `tokens/model.py` — local pool ops
-- `client.py` 470 → 70 lines (broker facade only)
-- Dashboard `/tokens` is now a stub redirect to broker dashboard
+- `vera_shared/tokens/` package — entire local pool (repository, model,
+  crypto moved out). Removed 2026-06-29.
+- the token ORM model + the `tokens` Postgres table (migration 008)
+- `usage_log.token_id` FK column (migration 008)
+- `client.py` 470 → 86 lines (broker facade only)
+- bot `/stats` no longer counts local keys; dashboard `/tokens` is an
+  info page pointing at the broker
 
 ## What survives
 
-- `tokens` table in Postgres (kept as cold reserve at user request)
-- `vera_shared/tokens/crypto.py` — Fernet helpers, used by ingestors to
-  encrypt Gmail OAuth refresh tokens, IG sessionid, TG userbot sessions
-  (these are NOT LLM tokens — different domain)
+- `vera_shared/crypto.py` — Fernet helpers (moved here from
+  `tokens/crypto.py`), used by ingestors to encrypt Gmail OAuth refresh
+  tokens, IG sessionid, TG userbot sessions. These are session secrets,
+  NOT LLM keys — different domain.
 - `usage_log` table — broker_client mirrors every call into it so
   dashboard charts keep working without hitting broker
 
@@ -90,20 +94,15 @@ of `BATCH_SIZE=50` per worker (3 replicas, configurable). A 10-min
 outage at typical Vera traffic (~1 msg/min) yields ~10 pending events,
 cleared in one tick.
 
-## Emergency fallback (if broker is down for hours)
+## If the broker is down for hours
 
-Only the LLM path is broken; ingest keeps writing. If you must restore
-service before broker is fixed:
-
-```bash
-ssh hetzner-root
-# 1. Re-add the legacy local code (revert this commit's client.py)
-# 2. Or — manual triage from a local Python:
-docker exec -it vera3-bot-telegram python -c "..."
-```
-
-The `tokens` table still has 24 active keys, so manual fallback is possible.
-But normal recovery path is "wait for broker, queue drains itself".
+Only the LLM path is affected; ingest keeps writing, so nothing is lost —
+events pile up in `triage_status='pending'` and drain once the broker is
+back. There is no local fallback by design (Vera has no keys). The fix is
+always "restore the broker", not "fail over inside Vera". The broker
+itself has the redundancy: many keys across many providers, free-first
+chains, health monitoring. `vera3-monitor.sh` alerts on Telegram if the
+broker's `/healthz` is unreachable for ~10 min.
 
 ## Verifying it's working
 

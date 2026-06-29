@@ -161,6 +161,10 @@ def _is_permanent(err: str) -> bool:
         return True
     if "empty text" in e:                        # vision safety-block / blank
         return True
+    # NOTE: 503 "no provider available" is TRANSIENT, not permanent — it
+    # happens when all gemini keys are momentarily in cooldown (free-tier
+    # rate-limit churn). They recover within minutes, so the backoff retry
+    # (2m/15m/60m) catches a live key. Degrading here would lose the image.
     # Broker/client 4xx = bad request / scope / payload-too-large.
     # 429 (rate-limit) and 5xx (broker/provider down) stay transient → retry.
     return any(c in e for c in (

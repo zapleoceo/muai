@@ -24,7 +24,7 @@ from telethon.sessions import StringSession
 
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models_sources import TelegramSessionRow
-from vera_shared.tokens.crypto import decrypt
+from vera_shared.crypto import decrypt
 from sqlalchemy import select
 
 logging.basicConfig(level=logging.INFO,

@@ -14,7 +14,7 @@ in the commit message (for cosmetic refactors only).
 | [brain.md](./brain.md) | Triage worker, agent loop, search synthesis, memory |
 | [api.md](./api.md) | Gateway endpoints, dashboard routes |
 | [deploy-ops.md](./deploy-ops.md) | rsync deploy, secrets, monitor, runbook |
-| [domain-model.md](./domain-model.md) | Postgres schema (events, tokens, gmail_accounts, …) |
+| [domain-model.md](./domain-model.md) | Postgres schema (events, usage_log, gmail_accounts, …) |
 | [security.md](./security.md) | OAuth permanence, owner gate, encryption at rest |
 | [conventions.md](./conventions.md) | File layout, async, types, comments |
 

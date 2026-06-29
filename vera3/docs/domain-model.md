@@ -25,14 +25,11 @@ Append-only signal log. Every observation enters here.
 | `embedding_voyage_3` | pgvector 1024-dim |
 | `metadata` | JSONB, source-specific (chat_id, sender_username, direction, …) |
 
-### `tokens`
-
-Now a cold fallback after AIbroker migration. Schema same as broker's
-`api_keys`. See `llm-broker.md`.
-
 ### `usage_log`
 
-LLM call accounting. Mirror of broker's view for dashboard/analytics.
+LLM call accounting. Mirror of the broker's view for dashboard/analytics.
+Vera has **no `tokens` table** — dropped in migration 008. All provider
+keys live in AIbroker; Vera holds none. See `llm-broker.md`.
 
 ### Source-specific config
 

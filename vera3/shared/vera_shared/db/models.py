@@ -1,22 +1,20 @@
 """ORM models — соответствуют Pydantic схемам из vera_shared.events/tokens.
 
-Принцип: ORM-модели (TokenRow, EventRow) — для БД.
+Принцип: ORM-модели (EventRow, UsageLogRow) — для БД.
 Pydantic-модели (Token, RawEvent) — для бизнес-логики и API.
 Маппинг через `to_dict()` / `from_dict()`.
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import datetime
 from typing import Any
 
 from sqlalchemy import (
     JSON,
     BigInteger,
     Boolean,
-    Date,
     DateTime,
     Float,
-    ForeignKey,
     Index,
     Integer,
     String,
@@ -36,40 +34,9 @@ BigIntPk = BigInteger().with_variant(Integer(), "sqlite")
 from vera_shared.db.engine import Base
 
 
-class TokenRow(Base):
-    """Table tokens — API ключи провайдеров с tier и cost caps."""
-
-    __tablename__ = "tokens"
-    __table_args__ = (
-        UniqueConstraint("provider", "label", name="uq_token_provider_label"),
-        Index("ix_tokens_provider_active", "provider", "is_active"),
-    )
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    provider: Mapped[str] = mapped_column(String(50), nullable=False)
-    label: Mapped[str] = mapped_column(String(100), nullable=False)
-    token_encrypted: Mapped[str] = mapped_column(Text, nullable=False)
-    tier: Mapped[str] = mapped_column(String(10), nullable=False, default="free")
-    capabilities: Mapped[list[str]] = mapped_column(JsonType, nullable=False, default=list)
-    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-
-    daily_limit: Mapped[int] = mapped_column(Integer, nullable=False, default=999_999)
-    daily_used: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    daily_cost_cap_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
-    daily_cost_used_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    monthly_cost_cap_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
-    monthly_cost_used_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-    total_cost_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
-
-    daily_reset_at: Mapped[date | None] = mapped_column(Date, nullable=True)
-    cooldown_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    error_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
-    last_used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-
-    notes: Mapped[str] = mapped_column(Text, nullable=False, default="")
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now(),
-    )
+# NOTE: TokenRow / `tokens` table removed 2026-06-29. Vera holds no LLM
+# provider keys — every chat/embed/vision/transcribe call goes through the
+# broker (aib.zapleo.com), which owns all keys. See migration 008.
 
 
 class SourceRow(Base):
@@ -188,14 +155,10 @@ class UsageLogRow(Base):
 
     __tablename__ = "usage_log"
     __table_args__ = (
-        Index("ix_usage_token_date", "token_id", "created_at"),
         Index("ix_usage_provider_date", "provider", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(BigIntPk, primary_key=True, autoincrement=True)
-    token_id: Mapped[int | None] = mapped_column(
-        ForeignKey("tokens.id", ondelete="SET NULL"), nullable=True,
-    )
     provider: Mapped[str] = mapped_column(String(50), nullable=False)
     model: Mapped[str] = mapped_column(String(100), nullable=False)
     capability: Mapped[str] = mapped_column(String(30), nullable=False)

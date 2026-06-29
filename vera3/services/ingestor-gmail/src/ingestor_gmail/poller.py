@@ -20,7 +20,7 @@ from sqlalchemy import select, update
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import GmailAccountRow
-from vera_shared.tokens.crypto import decrypt
+from vera_shared.crypto import decrypt
 
 log = logging.getLogger("gmail")
 

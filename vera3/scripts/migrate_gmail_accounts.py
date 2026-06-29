@@ -15,7 +15,7 @@ from sqlalchemy import select
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import Base
 from vera_shared.db.models_sources import GmailAccountRow
-from vera_shared.tokens.crypto import encrypt
+from vera_shared.crypto import encrypt
 
 
 def _vera2_derive_key(master: str) -> bytes:
