@@ -235,7 +235,7 @@ async def _on_failure(event_id: int, meta: dict, err: str) -> str:
                 metadata = jsonb_set(
                   jsonb_set(
                     COALESCE(metadata, '{{}}'::jsonb),
-                    '{{media_retry_count}}', to_jsonb(:cnt)
+                    '{{media_retry_count}}', to_jsonb(:cnt::int)
                   ),
                   '{{media_next_retry_at}}',
                   to_jsonb((NOW() + INTERVAL '{backoff} minutes')::text)
