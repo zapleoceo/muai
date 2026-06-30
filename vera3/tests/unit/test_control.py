@@ -1,6 +1,7 @@
 """vera_shared.control — runtime pause flag (DB mocked, Postgres-only SQL)."""
 from __future__ import annotations
 
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -20,9 +21,12 @@ class _FakeSession:
 
     async def execute(self, stmt, params=None):
         self.calls.append((str(stmt), params))
-        res = AsyncMock()
-        res.scalar_one_or_none = lambda: self._scalar
-        return res
+        # Plain object so .scalar()/.scalar_one_or_none() are sync, not
+        # AsyncMock coroutines.
+        return SimpleNamespace(
+            scalar=lambda: self._scalar,
+            scalar_one_or_none=lambda: self._scalar,
+        )
 
 
 def test_backfill_flag_constant():
