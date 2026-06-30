@@ -79,3 +79,30 @@ def test_control_backfill_resume_clears_flag_when_authed():
         )
     assert r.status_code == 200
     fake_set.assert_awaited_once_with(False)
+
+
+def test_control_rate_requires_auth():
+    r = client.post("/control/backfill-rate", data={"max_per_hour": "600"})
+    assert r.status_code == 401
+
+
+def test_control_rate_sets_cap_when_authed():
+    from starlette.responses import Response
+
+    from dashboard.app import _set_session_cookie
+    resp = Response()
+    _set_session_cookie(resp)
+    ch = resp.headers.get("set-cookie", "")
+    cookie_val = ch.split(";")[0].split("=", 1)[1] if "=" in ch else ""
+    from dashboard.auth import COOKIE_NAME
+
+    with patch("dashboard.app.set_backfill_max_per_hour", AsyncMock()) as fake_set, \
+         patch("dashboard.app._build_progress_fragment",
+               AsyncMock(return_value="<div>ok</div>")):
+        r = client.post(
+            "/control/backfill-rate",
+            data={"max_per_hour": "600"},
+            cookies={COOKIE_NAME: cookie_val},
+        )
+    assert r.status_code == 200
+    fake_set.assert_awaited_once_with(600)

@@ -29,7 +29,7 @@ import os
 
 import httpx
 from sqlalchemy import text
-from vera_shared.control import is_backfill_paused
+from vera_shared.control import backfill_minute_allowance, is_backfill_paused
 from vera_shared.db.engine import get_session, init_engine
 
 log = logging.getLogger("media-worker")
@@ -173,13 +173,16 @@ def _is_permanent(err: str) -> bool:
     ))
 
 
-async def _claim_batch() -> list[dict]:
+async def _claim_batch(limit: int = BATCH) -> list[dict]:
     """Claim media_pending whose retry window is due.
 
     media_next_retry_at lives in metadata (jsonb) — NULL means never tried.
     Filtering by it means a failed event with a future retry time is SKIPPED,
     so the queue advances instead of looping on the first N forever.
+    `limit` is trimmed by the backfill rate limiter.
     """
+    if limit <= 0:
+        return []
     async with get_session() as s:
         rs = (await s.execute(text("""
             SELECT id, content_text, metadata
@@ -192,7 +195,7 @@ async def _claim_batch() -> list[dict]:
             ORDER BY id
             FOR UPDATE SKIP LOCKED
             LIMIT :lim
-        """), {"lim": BATCH})).mappings().all()
+        """), {"lim": limit})).mappings().all()
     return [dict(r) for r in rs]
 
 
@@ -287,8 +290,14 @@ async def main_loop() -> None:
         if await is_backfill_paused():
             await asyncio.sleep(POLL_S)   # paused from dashboard
             continue
+        # Even-tempo rate limit shared with triage (global usage_log budget).
+        allowance = await backfill_minute_allowance()
+        if allowance is not None and allowance <= 0:
+            await asyncio.sleep(POLL_S)
+            continue
+        batch = BATCH if allowance is None else min(BATCH, allowance)
         try:
-            rows = await _claim_batch()
+            rows = await _claim_batch(batch)
         except Exception as e:
             log.exception("claim failed: %s", e)
             await asyncio.sleep(POLL_S)

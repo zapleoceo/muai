@@ -76,3 +76,57 @@ async def test_get_control_returns_default_when_missing():
     sess = _FakeSession(scalar=None)
     with patch.object(control, "get_session", lambda: sess):
         assert await control.get_control("nope", "fallback") == "fallback"
+
+
+# ─── rate limit ────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_max_per_hour_parses_int():
+    sess = _FakeSession(scalar="600")
+    with patch.object(control, "get_session", lambda: sess):
+        assert await control.get_backfill_max_per_hour() == 600
+
+
+@pytest.mark.asyncio
+async def test_get_max_per_hour_garbage_is_zero():
+    sess = _FakeSession(scalar="abc")
+    with patch.object(control, "get_session", lambda: sess):
+        assert await control.get_backfill_max_per_hour() == 0
+
+
+@pytest.mark.asyncio
+async def test_set_max_per_hour_clamps_negative():
+    sess = _FakeSession()
+    with patch.object(control, "get_session", lambda: sess):
+        await control.set_backfill_max_per_hour(-50)
+    assert sess.calls[0][1]["v"] == "0"
+
+
+@pytest.mark.asyncio
+async def test_allowance_none_when_unlimited():
+    with patch.object(control, "get_backfill_max_per_hour", AsyncMock(return_value=0)):
+        assert await control.backfill_minute_allowance() is None
+
+
+@pytest.mark.asyncio
+async def test_allowance_remaining_under_budget():
+    # cap 600/h → 10/min; 4 used this minute → 6 left
+    with patch.object(control, "get_backfill_max_per_hour", AsyncMock(return_value=600)), \
+         patch.object(control, "_requests_last_minute", AsyncMock(return_value=4)):
+        assert await control.backfill_minute_allowance() == 6
+
+
+@pytest.mark.asyncio
+async def test_allowance_zero_when_budget_spent():
+    with patch.object(control, "get_backfill_max_per_hour", AsyncMock(return_value=600)), \
+         patch.object(control, "_requests_last_minute", AsyncMock(return_value=15)):
+        assert await control.backfill_minute_allowance() == 0
+
+
+@pytest.mark.asyncio
+async def test_allowance_floor_one_per_minute_for_small_cap():
+    # cap 30/h rounds to <1/min but floors to 1 so backfill never fully stalls
+    with patch.object(control, "get_backfill_max_per_hour", AsyncMock(return_value=30)), \
+         patch.object(control, "_requests_last_minute", AsyncMock(return_value=0)):
+        assert await control.backfill_minute_allowance() == 1

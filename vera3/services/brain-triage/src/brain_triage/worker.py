@@ -18,7 +18,7 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import text, update
-from vera_shared.control import is_backfill_paused
+from vera_shared.control import backfill_minute_allowance, is_backfill_paused
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.llm.client import LLMCallFailed, chat, embed
@@ -185,13 +185,15 @@ async def triage_one(event_row: EventRow) -> dict[str, Any] | None:
     return parsed
 
 
-async def _claim_batch() -> list[EventRow]:
+async def _claim_batch(limit: int = BATCH_SIZE) -> list[EventRow]:
     """Захватить batch событий ОДНИМ запросом через UPDATE ... RETURNING *.
 
     Старый код делал UPDATE + второй SELECT — между ними окно для гонки/потери
     видимости. Теперь всё в одной сессии, и `triage_started_at = NOW()` ставится
-    атомарно вместе с claim'ом.
+    атомарно вместе с claim'ом. `limit` урезается rate-лимитером бэкфилла.
     """
+    if limit <= 0:
+        return []
     async with get_session() as s:
         rs = await s.execute(text(
             """
@@ -208,7 +210,7 @@ async def _claim_batch() -> list[EventRow]:
             RETURNING id, source, source_event_id, account, category,
                       content_text, occurred_at, importance
             """
-        ), {"batch": BATCH_SIZE})
+        ), {"batch": limit})
         mappings = list(rs.mappings().all())
 
     if not mappings:
@@ -263,7 +265,12 @@ async def process_pending() -> int:
     """Захватить batch, эмбедить parallel, триаж concurrent, UPDATE."""
     if await is_backfill_paused():
         return 0   # paused from dashboard — skip claiming, main loop sleeps
-    rows = await _claim_batch()
+    # Even-tempo rate limit: claim at most this minute's remaining budget.
+    allowance = await backfill_minute_allowance()
+    if allowance is not None and allowance <= 0:
+        return 0   # rate reached — main loop sleeps, recheck next cycle
+    batch = BATCH_SIZE if allowance is None else min(BATCH_SIZE, allowance)
+    rows = await _claim_batch(batch)
     if not rows:
         return 0
 

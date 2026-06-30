@@ -12,7 +12,12 @@ import httpx
 from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select, text
-from vera_shared.control import is_backfill_paused, set_backfill_paused
+from vera_shared.control import (
+    get_backfill_max_per_hour,
+    is_backfill_paused,
+    set_backfill_max_per_hour,
+    set_backfill_paused,
+)
 from vera_shared.db.engine import close_engine, get_session, init_engine
 from vera_shared.db.models import EventRow, UsageLogRow
 from vera_shared.db.models_sources import (
@@ -289,11 +294,24 @@ async def control_backfill(request: Request, action: str = Form(...)):
     return HTMLResponse(await _build_progress_fragment())
 
 
+@app.post("/control/backfill-rate", response_class=HTMLResponse)
+async def control_backfill_rate(request: Request, max_per_hour: int = Form(0)):
+    """Set the even-tempo backfill request cap (per hour). 0 = unlimited.
+    Owner-only. Returns the refreshed progress fragment."""
+    try:
+        require_owner(request, request.cookies.get(COOKIE_NAME))
+    except HTTPException:
+        return HTMLResponse("", status_code=401)
+    await set_backfill_max_per_hour(max(0, max_per_hour))
+    return HTMLResponse(await _build_progress_fragment())
+
+
 async def _build_progress_fragment() -> str:
     from datetime import datetime as dt
     from datetime import timedelta as td
     now = dt.utcnow()
     paused = await is_backfill_paused()
+    max_per_hour = await get_backfill_max_per_hour()
 
     async with get_session() as s:
         # Темп прихода событий
@@ -379,10 +397,24 @@ async def _build_progress_fragment() -> str:
             'hx-swap="innerHTML">⏸ Пауза</button>'
         )
 
+    rate_val = "" if max_per_hour <= 0 else str(max_per_hour)
+    rate_hint = ("без лимита" if max_per_hour <= 0
+                 else f"≈ {max(1, round(max_per_hour / 60))}/мин равномерно")
+    rate_ui = (
+        '<form class="bf-rate" hx-post="/control/backfill-rate" '
+        'hx-target="#live-progress" hx-swap="innerHTML">'
+        '<label>Лимит запросов/час:</label>'
+        f'<input type="number" name="max_per_hour" min="0" step="50" '
+        f'value="{rate_val}" placeholder="0 = без лимита">'
+        '<button class="bf-btn bf-save" type="submit">Сохранить</button>'
+        f'<span class="bf-hint">{rate_hint}</span></form>'
+    )
+
     return f"""
       <h2>📥 Live прогресс <span style="font-size:12px;color:#888">(обновляется каждые 10с)</span></h2>
 
       <div class="bf-control">{pause_ui}</div>
+      <div class="bf-control">{rate_ui}</div>
 
       <div class="prog-grid">
         <div class="prog-cell">
@@ -446,7 +478,12 @@ async def _build_progress_fragment() -> str:
                    cursor:pointer; font-size:13px; color:#fff; }}
         .bf-pause {{ background:#b8860b; }}
         .bf-resume {{ background:#2f9e44; }}
+        .bf-save {{ background:#4dabf7; }}
         .bf-btn:hover {{ filter:brightness(1.12); }}
+        .bf-rate {{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }}
+        .bf-rate label {{ font-size:12px; color:#aab; }}
+        .bf-rate input {{ width:120px; padding:6px 10px; }}
+        .bf-hint {{ font-size:12px; color:#888; }}
       </style>
     """
 

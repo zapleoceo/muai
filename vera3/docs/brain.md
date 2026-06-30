@@ -12,17 +12,28 @@ The "intelligence layer" — three sub-services that turn events into useful ans
 - Concurrency: `TRIAGE_CONCURRENCY=5` events processed in parallel per worker.
 - Scale: replicas. `docker compose up -d --scale brain-triage=3` triples throughput safely (SKIP LOCKED guards).
 
-## Backfill pause/resume
+## Backfill pause + rate limit
 
-A dashboard button (📥 Live прогресс card → ⏸ Пауза / ▶ Продолжить)
-pauses the heavy backfill. It flips `backfill_paused` in the
-`app_control` KV table (`vera_shared.control`, migration 009). Both
-`brain-triage` `process_pending()` and `media-worker`'s loop check
-`is_backfill_paused()` at the top of each cycle and skip claiming work
-while paused — events just stay `pending` / `media_pending` and resume
-where they left off. The flag lives in Postgres, so a pause holds across
-restarts and deploys. Live events keep ingesting; only LLM-consuming
-processing is paused.
+Two controls on the 📥 Live прогресс dashboard card, both stored in the
+`app_control` KV table (`vera_shared.control`, migration 009), so they
+hold across restarts/deploys:
+
+- **⏸ Пауза / ▶ Продолжить** — flips `backfill_paused`. Both
+  `brain-triage` `process_pending()` and `media-worker`'s loop check
+  `is_backfill_paused()` at the top of each cycle and skip claiming while
+  paused. Events stay `pending` / `media_pending` and resume in place.
+- **Лимит запросов/час** — `backfill_max_per_hour` (0 = unlimited).
+  Even-tempo throttle: the hourly cap is spread to a per-minute budget
+  (`backfill_minute_allowance()`), and each worker claims at most that
+  many items per cycle, so the request rate stays flat instead of
+  bursting and burning the providers' free-tier quota. The budget is
+  global across triage + media + replicas — measured from `usage_log`
+  (`workflow IN triage/media_vision/media_voice` in the trailing 60 s).
+  Live events share the same budget (they also write `workflow=triage`),
+  so the cap bounds total throughput, leaving headroom for new messages.
+
+Live ingest (Telegram/Gmail/IG) is never throttled — only LLM-consuming
+processing is paused/paced.
 
 ## brain-search
 
