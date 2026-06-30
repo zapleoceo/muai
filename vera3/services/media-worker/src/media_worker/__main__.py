@@ -280,6 +280,17 @@ async def _on_failure(event_id: int, meta: dict, err: str) -> str:
     return plan["action"]
 
 
+async def _claim_limit() -> int:
+    """How many media events this cycle may claim. 0 = skip (paused or rate
+    budget spent); else the batch size capped by the even-tempo allowance."""
+    if await is_backfill_paused():
+        return 0
+    allowance = await backfill_minute_allowance()
+    if allowance is None:
+        return BATCH
+    return min(BATCH, allowance)
+
+
 async def main_loop() -> None:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -287,17 +298,12 @@ async def main_loop() -> None:
     log.info("media-worker started, poll=%ss batch=%s", POLL_S, BATCH)
 
     while True:
-        if await is_backfill_paused():
-            await asyncio.sleep(POLL_S)   # paused from dashboard
+        limit = await _claim_limit()
+        if limit <= 0:
+            await asyncio.sleep(POLL_S)   # paused or rate budget spent
             continue
-        # Even-tempo rate limit shared with triage (global usage_log budget).
-        allowance = await backfill_minute_allowance()
-        if allowance is not None and allowance <= 0:
-            await asyncio.sleep(POLL_S)
-            continue
-        batch = BATCH if allowance is None else min(BATCH, allowance)
         try:
-            rows = await _claim_batch(batch)
+            rows = await _claim_batch(limit)
         except Exception as e:
             log.exception("claim failed: %s", e)
             await asyncio.sleep(POLL_S)

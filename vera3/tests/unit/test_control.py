@@ -130,3 +130,14 @@ async def test_allowance_floor_one_per_minute_for_small_cap():
     with patch.object(control, "get_backfill_max_per_hour", AsyncMock(return_value=30)), \
          patch.object(control, "_requests_last_minute", AsyncMock(return_value=0)):
         assert await control.backfill_minute_allowance() == 1
+
+
+@pytest.mark.asyncio
+async def test_requests_last_minute_runs_count_query():
+    sess = _FakeSession(scalar=7)
+    with patch.object(control, "get_session", lambda: sess):
+        n = await control._requests_last_minute()
+    assert n == 7
+    sql, params = sess.calls[0]
+    assert "COUNT(*)" in sql and "usage_log" in sql
+    assert params["wf"] == list(control._RATE_WORKFLOWS)
