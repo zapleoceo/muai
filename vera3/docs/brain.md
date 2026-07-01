@@ -9,8 +9,18 @@ The "intelligence layer" — three sub-services that turn events into useful ans
 - Loop: every 5s claim a batch of `pending` events via `UPDATE … FOR UPDATE SKIP LOCKED RETURNING`.
 - For each event: build a structured prompt → call AIbroker `chat:fast` with `response_format=json_object` → parse → write to `events.triage_metadata` (importance, topics, people, signals, needs_action).
 - Voyage embedding in the same loop, batched (one call per N events).
-- Concurrency: `TRIAGE_CONCURRENCY=5` events processed in parallel per worker.
-- Scale: replicas. `docker compose up -d --scale brain-triage=3` triples throughput safely (SKIP LOCKED guards).
+- Concurrency: `TRIAGE_CONCURRENCY=10` events in parallel per worker
+  (was 5; bumped 2026-07-01 for backfill drainage — Mistral latency
+  ~1.1s, 0.05% error rate leaves plenty of headroom).
+- Scale: replicas. Default `BRAIN_TRIAGE_REPLICAS=5` in compose (was 3);
+  `docker compose up -d --scale brain-triage=N` still works. `SELECT FOR
+  UPDATE SKIP LOCKED` guarantees no two workers claim the same event.
+- Combined ceiling: 5 replicas × 10 concurrency = 50 in-flight LLM
+  calls at any time; practical throughput bounded by broker rate limits
+  (~10-14k triage/hour on the current key pool).
+- If you need to walk it down (broker/Postgres pressure): edit the
+  defaults in `vera3/infra/docker-compose.yml` or override in server
+  `.env` (`TRIAGE_CONCURRENCY=…`, `BRAIN_TRIAGE_REPLICAS=…`) + restart.
 
 ## Backfill pause + rate limit
 

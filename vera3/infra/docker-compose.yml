@@ -43,8 +43,10 @@ services:
     restart: unless-stopped
 
   # ─── Brain: Triage Workers (scalable) ──────────────────────────────────
-  # SELECT FOR UPDATE SKIP LOCKED исключает race condition между воркерами
-  # Скейл: docker compose up -d --scale brain-triage=3
+  # SELECT FOR UPDATE SKIP LOCKED исключает race condition между воркерами.
+  # deploy.replicas — чтобы обычный `docker compose up -d` поднимал 3 реплики,
+  # а не сбрасывал до 1 (раньше скейл жил только пока не сделаешь up без --scale).
+  # Переопределить: BRAIN_TRIAGE_REPLICAS=N docker compose up -d
   brain-triage:
     build:
       context: ..
@@ -53,12 +55,20 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+    deploy:
+      # 2026-07-01: 3 → 5 реплик для разбора >90-дневного бекфила
+      # (142k pending). Broker/DB держат — mistral идёт в 0.05% ошибок,
+      # SELECT FOR UPDATE SKIP LOCKED масштабируется.
+      replicas: ${BRAIN_TRIAGE_REPLICAS:-5}
     environment:
       DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
       TOKEN_SECRET: ${TOKEN_SECRET}
       TRIAGE_POLL_INTERVAL_S: ${TRIAGE_POLL_INTERVAL_S:-5}
       TRIAGE_BATCH_SIZE: ${TRIAGE_BATCH_SIZE:-16}
-      TRIAGE_CONCURRENCY: ${TRIAGE_CONCURRENCY:-5}
+      # 2026-07-01: 5 → 10 параллельных LLM-вызовов на реплику. Broker'у
+      # без проблем (Mistral latency ~1.1s, 0.05% ошибок сейчас).
+      # Итого 5×10 = 50 in-flight (было 15). Даёт ~10-14k triage/ч.
+      TRIAGE_CONCURRENCY: ${TRIAGE_CONCURRENCY:-10}
       TRIAGE_PACE_S: ${TRIAGE_PACE_S:-0.5}
       VERA_DAILY_GLOBAL_CAP_USD: ${VERA_DAILY_GLOBAL_CAP_USD:-2.0}
       BROKER_URL: ${BROKER_URL:-}
