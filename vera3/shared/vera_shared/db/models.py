@@ -146,6 +146,30 @@ class JobRow(Base):
     )
 
 
+class ProjectMembershipRow(Base):
+    """Принадлежность чата/человека/аккаунта к проекту.
+
+    Источник истины — папки Telegram + правила имён (см. projects/rules.py).
+    Синхронизируется sync_projects.py.
+    """
+    __tablename__ = "project_membership"
+    __table_args__ = (
+        Index("ix_pm_kind_key", "kind", "key"),
+    )
+
+    project: Mapped[str] = mapped_column(String(24), primary_key=True)
+    kind: Mapped[str] = mapped_column(String(10), primary_key=True)  # chat|person|account
+    key: Mapped[str] = mapped_column(String(64), primary_key=True)
+    label: Mapped[str | None] = mapped_column(Text, nullable=True)
+    source: Mapped[str] = mapped_column(String(60), nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(),
+    )
+
+
 class UsageLogRow(Base):
     """Table usage_log — каждый LLM-вызов трейсится здесь.
 

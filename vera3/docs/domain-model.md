@@ -39,6 +39,29 @@ keys live in AIbroker; Vera holds none. See `llm-broker.md`.
 | `telegram_sessions` | Telethon MTProto session (StringSession), encrypted. |
 | `instagram_sessions` | instagrapi sessionid + device fingerprint, encrypted. |
 
+### `project_membership` (migration 010)
+
+Deterministic source of truth for `events.project`, replacing pure
+LLM-guessing for `itstep`/`veranda`. Populated by
+`ingestor-telegram/sync_projects.py` (manual/cron run) from:
+
+| `kind` | `key` | Rule (see `vera_shared/projects/rules.py`) |
+|---|---|---|
+| `chat` | canonical chat_id (supergroup `-100` prefix stripped) | Telegram folder "ItStep" → `itstep`; chat title contains "veranda"/"веранда" → `veranda` |
+| `account` | ILIKE pattern | Gmail account `%itstep.org%` → `itstep` |
+| `person` | Telegram sender_id | Derived: anyone who posted in a project chat (excluding owner) |
+
+PK `(project, kind, key)` — a person/chat can belong to only one row per
+project (but the same key can appear under multiple projects if someone
+is in chats for two different projects).
+
+`brain_triage/worker.py::process_pending()` applies this after every
+triage batch: chat/account membership overrides the LLM's `project`
+guess, and any LLM-guessed `itstep`/`veranda` on a telegram chat that
+ISN'T in `project_membership` gets reset to `other` (closes the loop —
+LLM can no longer silently misclassify a chat as itstep/veranda that
+membership doesn't recognize).
+
 ## Substrate (L1/L2/L3 graph)
 
 Materialized in Postgres. Behind `vera_shared/graph/repo.py` API so a future
