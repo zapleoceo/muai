@@ -9,7 +9,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
 
-from vera_shared.db import models_graph  # noqa: F401  — регистрирует таблицы на Base
+from vera_shared.db import models_graph
 from vera_shared.db.engine import Base
 
 
@@ -76,6 +76,8 @@ async def test_metadata_create_all_compiles_on_sqlite():
     таблицам своего сервиса. entities/memberships/patterns/identity_nodes
     все несут JSONB-колонки — этот тест реально их создаёт на SQLite,
     а не просто импортирует модуль."""
+    assert models_graph.EntityRow.__table__.name == "entities"  # registers on Base
+
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     try:
         async with engine.begin() as conn:
