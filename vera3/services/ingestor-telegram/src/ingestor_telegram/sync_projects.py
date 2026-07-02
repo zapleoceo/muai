@@ -11,6 +11,7 @@
 Запуск:
   docker exec vera3-ingestor-telegram python -m ingestor_telegram.sync_projects
 """
+# ruff: noqa: I001  # sibling-package + first-party imports mixed, isort keeps flip-flopping
 from __future__ import annotations
 
 import asyncio
