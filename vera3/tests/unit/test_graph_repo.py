@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import pytest
 from sqlalchemy.ext.asyncio import create_async_engine
-
 from vera_shared.db import models_graph
 from vera_shared.db.engine import Base
 
