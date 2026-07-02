@@ -69,10 +69,15 @@ jobs:
           pip install -e ./services/gateway[dev]
           pip install -e ./services/dashboard
           pip install -e ./services/media-worker
+          pip install -e ./services/ingestor-telegram
       - name: Pytest
         # Coverage gate stair-step. 2026-06-24: 40 → 60 → 70 (246 passed, 74.17%)
+        env:
+          TELEGRAM_API_ID: "1"
+          TELEGRAM_API_HASH: "test"
+          TELEGRAM_PHONE: "+10000000000"
         run: |
-          PYTHONPATH=shared:services/gateway/src:services/dashboard/src:services/media-worker/src \
+          PYTHONPATH=shared:services/gateway/src:services/dashboard/src:services/media-worker/src:services/ingestor-telegram/src \
           pytest tests/ \
             --cov=vera_shared --cov=gateway \
             --cov-report=term-missing \
@@ -103,6 +108,7 @@ jobs:
           pip install -e ./vera3/services/gateway[dev]
           pip install -e ./vera3/services/dashboard
           pip install -e ./vera3/services/media-worker
+          pip install -e ./vera3/services/ingestor-telegram
           pip install vulture==2.13 diff-cover==9.2.0 ruff==0.7.4
 
       - name: Compute diff base
@@ -173,7 +179,8 @@ jobs:
             exit 0
           fi
           cd vera3
-          PYTHONPATH=shared:services/gateway/src:services/dashboard/src:services/media-worker/src \
+          export TELEGRAM_API_ID=1 TELEGRAM_API_HASH=test TELEGRAM_PHONE=+10000000000
+          PYTHONPATH=shared:services/gateway/src:services/dashboard/src:services/media-worker/src:services/ingestor-telegram/src \
             pytest tests/ -q --no-header \
               --cov=vera_shared --cov=gateway --cov=media_worker \
               --cov-report=xml:coverage.xml -p no:cacheprovider \
