@@ -22,13 +22,8 @@ from vera_shared.control import backfill_minute_allowance, is_backfill_paused
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.llm.client import LLMCallFailed, chat, embed
-from vera_shared.projects.rules import chat_id_canon_sql
 
 log = logging.getLogger(__name__)
-
-# Каноникализация chat_id (снимает -100-префикс супергрупп) для матча с
-# project_membership. alias 'e' — таблица events в UPDATE ниже.
-_CHAT_CANON = chat_id_canon_sql("e")
 
 POLL_INTERVAL_S = float(os.environ.get("TRIAGE_POLL_INTERVAL_S", "5"))
 BATCH_SIZE = int(os.environ.get("TRIAGE_BATCH_SIZE", "16"))
@@ -394,37 +389,6 @@ async def process_pending() -> int:
                         triage_started_at=None,
                     )
                 )
-
-    # Детерминированный оверрайд project по папкам/аккаунтам (источник истины —
-    # project_membership). Побеждает LLM-догадку для известных чатов/ящиков.
-    batch_ids = [r.id for r in rows]
-    if batch_ids:
-        async with get_session() as s:
-            await s.execute(text(f"""
-                UPDATE events e SET project = pm.project
-                FROM project_membership pm
-                WHERE e.id = ANY(:ids) AND pm.kind='chat' AND e.source='telegram'
-                  AND e.metadata->>'chat_id' IS NOT NULL
-                  AND {_CHAT_CANON} = pm.key::bigint
-                  AND e.project IS DISTINCT FROM pm.project
-            """), {"ids": batch_ids})
-            await s.execute(text("""
-                UPDATE events e SET project = pm.project
-                FROM project_membership pm
-                WHERE e.id = ANY(:ids) AND pm.kind='account' AND e.source='gmail'
-                  AND e.account ILIKE pm.key
-                  AND e.project IS DISTINCT FROM pm.project
-            """), {"ids": batch_ids})
-            # itstep/veranda для telegram — ТОЛЬКО из папок/имён. LLM-догадку
-            # этих проектов на чате вне membership сбрасываем в 'other'.
-            await s.execute(text(f"""
-                UPDATE events e SET project = 'other'
-                WHERE e.id = ANY(:ids) AND e.source='telegram'
-                  AND e.project IN ('itstep','veranda')
-                  AND (e.metadata->>'chat_id') IS NOT NULL
-                  AND {_CHAT_CANON} NOT IN (
-                      SELECT key::bigint FROM project_membership WHERE kind='chat')
-            """), {"ids": batch_ids})
 
     log.info("[%s] processed: %d done, %d exhausted, %d errors",
              WORKER_ID, processed, llm_exhausted, len(rows) - processed - llm_exhausted)
