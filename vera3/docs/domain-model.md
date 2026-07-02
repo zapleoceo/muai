@@ -25,6 +25,17 @@ Append-only signal log. Every observation enters here.
 | `embedding_voyage_3` | pgvector 1024-dim |
 | `metadata` | JSONB, source-specific (chat_id, sender_username, direction, …) |
 
+For `source='telegram'`, `metadata.chat_kind` is `private` / `group` /
+`channel` / `other` — the single field for that distinction. Computed by
+`ingestor_telegram.userbot.classify_chat_kind()`. Supergroups are a
+Telethon `Channel` object just like broadcast channels — only
+`chat.megagroup` tells them apart, so `chat_kind` (not the legacy
+`is_channel`/`is_group`/`is_supergroup` fields, kept for back-compat but
+don't rely on them) is the correct signal for "is this a real group chat."
+`brain_triage.worker.chat_kind()` recomputes the same classification from
+older `chat_type`/`is_supergroup` fields for events written before this
+field existed — no backfill/migration needed.
+
 ### `usage_log`
 
 LLM call accounting. Mirror of the broker's view for dashboard/analytics.

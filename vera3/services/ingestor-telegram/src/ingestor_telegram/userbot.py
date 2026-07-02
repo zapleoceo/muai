@@ -29,6 +29,23 @@ API_HASH = os.environ["TELEGRAM_API_HASH"]
 PHONE = os.environ["TELEGRAM_PHONE"]
 
 
+def classify_chat_kind(chat_type: str, is_megagroup: bool) -> str:
+    """private | group | channel — единственный источник правды на "тип чата".
+
+    Telethon отдаёт супергруппы КАК Channel-объект (chat_type=="channel"),
+    поэтому просто "chat_type=='channel' → канал" — БАГ: 96% реальных
+    "групп" сегодня это именно супергруппы (легаси Chat почти не осталось),
+    и без is_megagroup их бы ошибочно посчитали вещательными каналами.
+    """
+    if chat_type == "user":
+        return "private"
+    if chat_type in {"chat", "chatfull"}:
+        return "group"
+    if chat_type == "channel":
+        return "group" if is_megagroup else "channel"
+    return "other"
+
+
 async def load_session_string() -> str:
     async with get_session() as s:
         row = (await s.execute(
@@ -168,6 +185,13 @@ async def save_message(client: TelegramClient, msg) -> None:
                 "author_role": author_role,
                 "author_label": author_label,
                 "msg_id": msg.id,
+                # chat_kind — единственное поле для различения приватный/группа/
+                # канал, см. classify_chat_kind().
+                "chat_kind": classify_chat_kind(
+                    chat_type, getattr(chat, "megagroup", False),
+                ),
+                # Оставлены для обратной совместимости — НЕ используй is_channel
+                # для «это вещательный канал», используй chat_kind=="channel".
                 "is_channel": chat_type in {"channel"},
                 "is_group": chat_type in {"chat", "chatfull"},
                 "is_supergroup": chat_type == "channel" and getattr(chat, "megagroup", False),

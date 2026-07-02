@@ -71,6 +71,46 @@ Providers ignoring `strict` json_schema (or not supporting it) just fall
 back to a normal completion guided by the prompt's `"Верни СТРОГО JSON
 по схеме"` instruction — same behavior as before, no regression.
 
+## Group message batching
+
+2026-07-02: `backfill_max_per_hour` rate-limits LLM **calls**, not
+events (see below). The one lever that increases effective throughput
+without touching that cap is packing more events into each call.
+
+Telegram group chats (`metadata.chat_kind == "group"` — supergroups +
+legacy small `Chat`) carry short messages (median ~260 chars in the
+current backlog). `process_pending()` batches up to
+`TRIAGE_GROUP_BATCH_SIZE` (default 10) of them into **one** `chat()`
+call using `TRIAGE_BATCH_JSON_SCHEMA` (an array of per-event results,
+each tagged `event_id` so the response maps back correctly — LLM
+response order isn't guaranteed). `_chunk_group_rows()` also caps total
+batch text at `TRIAGE_GROUP_BATCH_MAX_CHARS` (default 6000) so one
+outlier-long message can't blow up a batch's context.
+
+**Channels** (`chat_kind == "channel"`, broadcast, longer posts —
+median ~370 chars, p99 ~2200) and **private chats**
+(`chat_kind == "private"`) are **not** batched — each event still gets
+its own `triage_one()` call, same as before this feature. Rationale:
+mixing unrelated broadcast posts in one call dilutes context quality;
+private messages (mostly Dima's own conversations) get full per-message
+model attention deliberately.
+
+Batching changes nothing about **what gets stored**: `events.metadata`
+(author, chat_id, direction, sender — set at ingest by `userbot.py`) is
+never touched by triage, batched or not. Only the *triage call grouping*
+changes — `events.triage_metadata` is still written per-event from the
+batch response, same shape as the single-event path.
+
+**Partial-response handling**: if the LLM returns fewer `results` than
+events sent (truncation, refusal on one item), the missing event_ids get
+`None` → `triage_group_batch()` returns `{event_id: None}` for them →
+the caller sets those back to `pending` for an individual retry on the
+next cycle. Nothing is silently dropped. A hallucinated `event_id` not
+in the request is ignored rather than corrupting an unrelated event.
+
+`rel_extract` is **not** batched (fires per-event, fire-and-forget,
+unaffected either way).
+
 ## Backfill pause + rate limit
 
 Two controls on the 📥 Live прогресс dashboard card, both stored in the

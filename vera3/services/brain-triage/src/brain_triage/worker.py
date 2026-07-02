@@ -39,6 +39,19 @@ WORKER_ID = os.environ.get("HOSTNAME", "worker") + ":" + str(os.getpid())
 # Должно быть БОЛЬШЕ чем самый медленный LLM-вызов × CONCURRENCY.
 STUCK_AFTER_S = int(os.environ.get("TRIAGE_STUCK_AFTER_S", "600"))
 
+# ─── Групповой батчинг ───────────────────────────────────────────────────────
+# Rate limiter (backfill_max_per_hour) считает LLM-ВЫЗОВЫ, не события. Группы
+# (супергруппы + легаси Chat) — короткие сообщения (медиана ~260 симв.),
+# батчим по TRIAGE_GROUP_BATCH_SIZE в ОДИН вызов → в N раз больше событий на
+# тот же call-budget. Каналы (длиннее, медиана ~370, p99 ~2200) и личные чаты
+# — НЕ батчим: канал — искажает контекст пачкой разнородных постов, личка —
+# каждое сообщение Димы разбирается отдельно с полным вниманием модели.
+TRIAGE_GROUP_BATCH_SIZE = int(os.environ.get("TRIAGE_GROUP_BATCH_SIZE", "10"))
+# Safety valve: даже если чат числится "group", один аномально длинный текст
+# не должен раздувать один LLM-вызов — сборка батча останавливается раньше
+# TRIAGE_GROUP_BATCH_SIZE, если суммарный текст превысил это число символов.
+TRIAGE_GROUP_BATCH_MAX_CHARS = int(os.environ.get("TRIAGE_GROUP_BATCH_MAX_CHARS", "6000"))
+
 
 TRIAGE_PROMPT_TEMPLATE = """Ты — Вера, цифровая память Димы. Прочитай событие и извлеки структуру.
 
@@ -122,6 +135,45 @@ SKIP_EMBED_SOURCES = {"vera_chat", "perplexity"}
 # postprocess_triage() остаётся: providers без constrained-decoding
 # (litellm's drop_params тихо роняет response_format) всё ещё нуждаются
 # в client-side защите.
+#
+# _TRIAGE_ITEM_PROPERTIES — общий "один результат триажа" переиспользуется в
+# одиночной схеме (TRIAGE_JSON_SCHEMA) и в батч-схеме (TRIAGE_BATCH_JSON_SCHEMA,
+# где это ITEM внутри массива "results" + event_id). Не дублируем руками —
+# batch-схема добавляет event_id к тем же полям.
+_TRIAGE_ITEM_PROPERTIES: dict[str, Any] = {
+    "importance": {"type": "integer", "minimum": 0, "maximum": 100},
+    "project": {"type": "string", "enum": sorted(PROJECT_VOCAB)},
+    "nature": {"type": "string", "enum": ["world_event", "my_intent"]},
+    "topics": {"type": "array", "items": {"type": "string"}},
+    "people_mentioned": {"type": "array", "items": {"type": "string"}},
+    "signals": {
+        "type": "array",
+        "items": {
+            "type": "object",
+            "properties": {
+                "type": {
+                    "type": "string",
+                    "enum": ["task", "event", "news", "offer",
+                             "question", "decision", "anomaly"],
+                },
+                "summary": {"type": "string"},
+                "date": {"type": ["string", "null"]},
+            },
+            "required": ["type", "summary", "date"],
+            "additionalProperties": False,
+        },
+    },
+    "needs_action": {"type": "boolean"},
+    "ready_subtype": {
+        "type": ["string", "null"],
+        "enum": ["deal", "openhouse", None],
+    },
+}
+_TRIAGE_ITEM_REQUIRED = [
+    "importance", "project", "nature", "topics",
+    "people_mentioned", "signals", "needs_action", "ready_subtype",
+]
+
 TRIAGE_JSON_SCHEMA = {
     "type": "json_schema",
     "json_schema": {
@@ -129,43 +181,104 @@ TRIAGE_JSON_SCHEMA = {
         "strict": True,
         "schema": {
             "type": "object",
-            "properties": {
-                "importance": {"type": "integer", "minimum": 0, "maximum": 100},
-                "project": {"type": "string", "enum": sorted(PROJECT_VOCAB)},
-                "nature": {"type": "string", "enum": ["world_event", "my_intent"]},
-                "topics": {"type": "array", "items": {"type": "string"}},
-                "people_mentioned": {"type": "array", "items": {"type": "string"}},
-                "signals": {
-                    "type": "array",
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "type": {
-                                "type": "string",
-                                "enum": ["task", "event", "news", "offer",
-                                         "question", "decision", "anomaly"],
-                            },
-                            "summary": {"type": "string"},
-                            "date": {"type": ["string", "null"]},
-                        },
-                        "required": ["type", "summary", "date"],
-                        "additionalProperties": False,
-                    },
-                },
-                "needs_action": {"type": "boolean"},
-                "ready_subtype": {
-                    "type": ["string", "null"],
-                    "enum": ["deal", "openhouse", None],
-                },
-            },
-            "required": [
-                "importance", "project", "nature", "topics",
-                "people_mentioned", "signals", "needs_action", "ready_subtype",
-            ],
+            "properties": _TRIAGE_ITEM_PROPERTIES,
+            "required": _TRIAGE_ITEM_REQUIRED,
             "additionalProperties": False,
         },
     },
 }
+
+# Батч-версия: массив результатов, каждый привязан к event_id, чтобы ответ
+# разложить обратно по событиям (порядок ответа LLM не гарантирован).
+TRIAGE_BATCH_JSON_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "triage_batch",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "results": {
+                    "type": "array",
+                    "maxItems": TRIAGE_GROUP_BATCH_SIZE,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "event_id": {"type": "integer"},
+                            **_TRIAGE_ITEM_PROPERTIES,
+                        },
+                        "required": ["event_id", *_TRIAGE_ITEM_REQUIRED],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["results"],
+            "additionalProperties": False,
+        },
+    },
+}
+
+TRIAGE_BATCH_PROMPT_HEADER = """Ты — Вера, цифровая память Димы. Ниже — {n} коротких сообщений
+из ОДНОГО группового чата. Разбери КАЖДОЕ по отдельности и верни результат
+для каждого, привязанный к его event_id.
+
+Контекст Димы (его текущая жизнь):
+- Branch Director IT STEP Academy Jakarta с апреля 2026 (проект itstep)
+- Переезд в Индонезию, виза, KPI команды
+- Совладелец бара Veranda во Вьетнаме (проект veranda)
+- Жена Маша, дочь Лиза (family)
+- Босс Дмитрий Егоров (yegorov@itstep.org)
+
+События:
+{events_block}
+
+Верни СТРОГО JSON: {{"results": [{{"event_id": <int>, ...те же поля что для
+одного события, см. ниже}}, ...]}} — ОДИН объект на КАЖДЫЙ event_id выше,
+ничего не пропускай.
+
+Поля на каждый результат:
+  "importance": <0-100, насколько Дима должен это видеть>,
+  "project": "<РОВНО ОДНО из: itstep | veranda | family | personal | news | other>",
+  "nature": "<РОВНО ОДНО из: world_event | my_intent>",
+  "topics": [<2-4 тега: русский, нижний регистр, 1-2 слова. Канонические:
+    финансы, должники, расписание, найм, продажи, маркетинг, crm,
+    бар, меню, поставки, персонал, зарплата,
+    виза, переезд, семья, здоровье, новости, война, политика,
+    техника, недвижимость, документы>],
+  "people_mentioned": [<упомянутые люди>],
+  "signals": [{{"type": "task|event|news|offer|question|decision|anomaly",
+                "summary": "<краткое>", "date": "<ISO дата если есть, иначе null>"}}],
+  "needs_action": <true/false>,
+  "ready_subtype": <null | "deal" | "openhouse">
+
+Правила project: itstep — академия в Джакарте (группы/студенты/должники/лиды/
+команда); veranda — бар во Вьетнаме (смены/заказы/выручка/поставки); family —
+Маша/Лиза/родители; personal — личные дела Димы; news — новости/рассылки;
+other — всё прочее.
+Правила nature: world_event — факт мира; my_intent — Дима сам формулирует
+запрос/идею.
+ready_subtype ТОЛЬКО если needs_action=true: "deal" — явное намерение купить
+курс + готов действовать сейчас; "openhouse" — интерес к Open House 29 июня
+(не покупка); иначе null.
+
+ВАЖНО: только JSON, без префиксов и комментариев. КАЖДЫЙ event_id из списка
+выше должен появиться РОВНО ОДИН раз в results."""
+
+
+def _event_block(row: EventRow) -> str:
+    """Один блок в батч-промпте — event_id явно в заголовке, чтобы LLM могла
+    привязать свой результат к правильному событию."""
+    content = (row.content_text or "")[:2000]
+    return (
+        f"[event_id={row.id}] источник={row.source} account={row.account or '—'} "
+        f"occurred_at={row.occurred_at.isoformat() if row.occurred_at else '—'}\n"
+        f"---\n{content}\n---"
+    )
+
+
+def build_batch_prompt(rows: list[EventRow]) -> str:
+    events_block = "\n\n".join(_event_block(r) for r in rows)
+    return TRIAGE_BATCH_PROMPT_HEADER.format(n=len(rows), events_block=events_block)
 
 
 def postprocess_triage(parsed: dict[str, Any], source: str) -> dict[str, Any]:
@@ -241,6 +354,66 @@ async def triage_one(event_row: EventRow) -> dict[str, Any] | None:
     return parsed
 
 
+async def triage_group_batch(rows: list[EventRow]) -> dict[int, dict[str, Any] | None]:
+    """Триаж ОДНОГО batch'а (≤TRIAGE_GROUP_BATCH_SIZE) групповых сообщений
+    ОДНИМ LLM-вызовом. Возвращает {event_id: metadata|None} — None для
+    событий, которых LLM не вернула (партиальный ответ, обрезка) — вызывающий
+    код возвращает их в pending для одиночного ретрая, ничего не теряется.
+
+    Все rows должны быть из одного вызова (общий workflow='triage', общий
+    event_id = id первого события — для usage_log/cost-трейсинга; broker не
+    поддерживает multi-event_id на один call).
+    """
+    if not rows:
+        return {}
+    prompt = build_batch_prompt(rows)
+
+    response_text, meta = await chat(
+        messages=[{"role": "user", "content": prompt}],
+        capability="chat:fast",
+        response_format=TRIAGE_BATCH_JSON_SCHEMA,
+        max_tokens=350 * len(rows) + 500,
+        temperature=0.3,
+        workflow="triage",
+        event_id=rows[0].id,
+    )
+
+    response_text = response_text.strip()
+    if response_text.startswith("```"):
+        response_text = re.sub(r"^```(?:json)?\n?", "", response_text)
+        response_text = re.sub(r"\n?```$", "", response_text)
+
+    try:
+        parsed = json.loads(response_text)
+    except json.JSONDecodeError:
+        match = re.search(r"\{.*\}", response_text, re.DOTALL)
+        if not match:
+            raise
+        parsed = json.loads(match.group(0))
+
+    if not isinstance(parsed, dict) or not isinstance(parsed.get("results"), list):
+        raise ValueError(f"Expected {{'results': [...]}}, got {type(parsed).__name__}")
+
+    by_id: dict[int, dict[str, Any]] = {}
+    src_by_id = {r.id: r.source for r in rows}
+    for item in parsed["results"]:
+        if not isinstance(item, dict):
+            continue
+        eid = item.get("event_id")
+        if not isinstance(eid, int) or eid not in src_by_id:
+            continue  # LLM выдумала event_id — игнорируем, не наше событие
+        item.pop("event_id", None)
+        item = postprocess_triage(item, src_by_id[eid])
+        item["triaged_by_provider"] = meta.get("provider")
+        item["triaged_by_model"] = meta.get("model")
+        item["triaged_at"] = datetime.utcnow().isoformat()
+        by_id[eid] = item
+
+    # Событие, которое LLM не вернула (обрезка/пропуск) — None, вызывающий
+    # код вернёт его в pending на одиночный ретрай, не потеряет.
+    return {r.id: by_id.get(r.id) for r in rows}
+
+
 async def _claim_batch(limit: int = BATCH_SIZE) -> list[EventRow]:
     """Захватить batch событий ОДНИМ запросом через UPDATE ... RETURNING *.
 
@@ -264,7 +437,7 @@ async def _claim_batch(limit: int = BATCH_SIZE) -> list[EventRow]:
               FOR UPDATE SKIP LOCKED
             )
             RETURNING id, source, source_event_id, account, category,
-                      content_text, occurred_at, importance
+                      content_text, occurred_at, importance, metadata
             """
         ), {"batch": limit})
         mappings = list(rs.mappings().all())
@@ -279,10 +452,54 @@ async def _claim_batch(limit: int = BATCH_SIZE) -> list[EventRow]:
             id=m["id"], source=m["source"], source_event_id=m["source_event_id"],
             account=m["account"], category=m["category"],
             content_text=m["content_text"], occurred_at=m["occurred_at"],
-            importance=m["importance"],
+            importance=m["importance"], metadata_=m["metadata"],
         )
         out.append(ev)
     return out
+
+
+def chat_kind(row: EventRow) -> str:
+    """private | group | channel | other — из metadata события.
+
+    Новые события (после фикса is_channel/is_group) несут явное
+    metadata.chat_kind. Для существующего backlog (записан до фикса)
+    считаем то же самое из старых chat_type/is_supergroup — ничего не
+    теряем, весь текущий backlog классифицируем на лету, без миграции.
+    """
+    meta = row.metadata_ or {}
+    if "chat_kind" in meta:
+        return meta["chat_kind"] or "other"
+    chat_type = meta.get("chat_type")
+    if chat_type == "user":
+        return "private"
+    if chat_type in {"chat", "chatfull"}:
+        return "group"
+    if chat_type == "channel":
+        return "group" if meta.get("is_supergroup") else "channel"
+    return "other"
+
+
+def _chunk_group_rows(
+    rows: list[EventRow],
+    max_batch: int = TRIAGE_GROUP_BATCH_SIZE,
+    max_chars: int = TRIAGE_GROUP_BATCH_MAX_CHARS,
+) -> list[list[EventRow]]:
+    """Пачки для группового батчинга: до max_batch событий, но не больше
+    max_chars суммарного текста — один аномально длинный текст не должен
+    раздувать один LLM-вызов."""
+    chunks: list[list[EventRow]] = []
+    current: list[EventRow] = []
+    current_chars = 0
+    for row in rows:
+        length = len(row.content_text or "")
+        if current and (len(current) >= max_batch or current_chars + length > max_chars):
+            chunks.append(current)
+            current, current_chars = [], 0
+        current.append(row)
+        current_chars += length
+    if current:
+        chunks.append(current)
+    return chunks
 
 
 async def _embed_batch(texts: list[str]) -> list[list[float] | None]:
@@ -302,19 +519,53 @@ async def _embed_batch(texts: list[str]) -> list[list[float] | None]:
 
 async def _process_one_with_sem(
     sem: asyncio.Semaphore, row: EventRow,
-) -> tuple[int, str, dict | None, str | None]:
-    """Triage под семафором. Возвращает (event_id, status, metadata, error)."""
+) -> list[tuple[int, str, dict | None, str | None]]:
+    """Triage под семафором. Возвращает [(event_id, status, metadata, error)] —
+    список из ОДНОГО элемента, чтобы форма результата совпадала с
+    _process_group_chunk_with_sem() и обе ветки flatten'ились одним кодом
+    в process_pending()."""
     async with sem:
         try:
             metadata = await asyncio.wait_for(triage_one(row), timeout=120)
-            return row.id, "done", metadata, None
+            return [(row.id, "done", metadata, None)]
         except asyncio.TimeoutError:
-            return row.id, "pending", None, "timeout"
+            return [(row.id, "pending", None, "timeout")]
         except LLMCallFailed as e:
-            return row.id, "pending", None, str(e)[:200]
+            return [(row.id, "pending", None, str(e)[:200])]
         except Exception as e:
             log.warning("Triage failed for event %s: %s", row.id, e)
-            return row.id, "error", None, str(e)[:500]
+            return [(row.id, "error", None, str(e)[:500])]
+
+
+async def _process_group_chunk_with_sem(
+    sem: asyncio.Semaphore, chunk: list[EventRow],
+) -> list[tuple[int, str, dict | None, str | None]]:
+    """Один групповой batch (≤TRIAGE_GROUP_BATCH_SIZE событий) под семафором —
+    ОДИН LLM-вызов на весь chunk. Возвращает список результатов, по одному
+    на событие — событие которое LLM не вернула (partial response) идёт
+    обратно в pending на одиночный ретрай, не теряется."""
+    async with sem:
+        try:
+            by_id = await asyncio.wait_for(
+                triage_group_batch(chunk), timeout=180,
+            )
+            out = []
+            for row in chunk:
+                metadata = by_id.get(row.id)
+                if metadata is None:
+                    out.append((row.id, "pending", None,
+                                "missing from batch LLM response"))
+                else:
+                    out.append((row.id, "done", metadata, None))
+            return out
+        except asyncio.TimeoutError:
+            return [(row.id, "pending", None, "timeout") for row in chunk]
+        except LLMCallFailed as e:
+            return [(row.id, "pending", None, str(e)[:200]) for row in chunk]
+        except Exception as e:
+            log.warning("Group batch triage failed (%d events): %s",
+                        len(chunk), e)
+            return [(row.id, "error", None, str(e)[:500]) for row in chunk]
 
 
 async def process_pending() -> int:
@@ -337,19 +588,35 @@ async def process_pending() -> int:
     embed_idx = [i for i, r in enumerate(rows) if r.source not in SKIP_EMBED_SOURCES]
     embed_texts = [(rows[i].content_text or "")[:8000] for i in embed_idx]
     embed_vectors = await _embed_batch(embed_texts)
-    embeddings: list[list[float] | None] = [None] * len(rows)
+    # by event_id, НЕ by position — группировка ниже переупорядочивает rows
+    # (single_rows + group-chunks), positional zip() с embeddings был бы багом:
+    # embedding события A мог бы приклеиться к triage-результату события B.
+    embeddings_by_id: dict[int, list[float] | None] = {r.id: None for r in rows}
     for pos, vec in zip(embed_idx, embed_vectors):
-        embeddings[pos] = vec
+        embeddings_by_id[rows[pos].id] = vec
+
+    # Групповые telegram-сообщения (супергруппы + легаси Chat) батчатся по
+    # TRIAGE_GROUP_BATCH_SIZE в один LLM-вызов — короткие тексты, экономия
+    # call-budget под rate limiter. Каналы/личка/остальные источники — как
+    # раньше, по одному, каждое сообщение разбирается отдельно.
+    group_ids = {r.id for r in rows
+                 if r.source == "telegram" and chat_kind(r) == "group"}
+    group_rows = [r for r in rows if r.id in group_ids]
+    single_rows = [r for r in rows if r.id not in group_ids]
 
     sem = asyncio.Semaphore(CONCURRENCY)
-    tasks = [_process_one_with_sem(sem, row) for row in rows]
-    results = await asyncio.gather(*tasks, return_exceptions=False)
+    tasks = [_process_one_with_sem(sem, row) for row in single_rows]
+    tasks += [_process_group_chunk_with_sem(sem, chunk)
+              for chunk in _chunk_group_rows(group_rows)]
+    nested_results = await asyncio.gather(*tasks, return_exceptions=False)
+    results = [item for sub in nested_results for item in sub]
 
     src_by_id = {r.id: r.source for r in rows}
     processed = 0
     llm_exhausted = 0
     async with get_session() as s:
-        for (event_id, status, metadata, error), embedding in zip(results, embeddings):
+        for event_id, status, metadata, error in results:
+            embedding = embeddings_by_id.get(event_id)
             if status == "pending":
                 # LLM пул занят — вернём в pending, освобождаем triage_started_at
                 await s.execute(
