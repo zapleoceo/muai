@@ -40,7 +40,6 @@ async def chat(
     messages: list[dict[str, Any]],
     *,
     capability: Capability = "chat:fast",
-    require_json_schema: bool = False,
     response_format: dict | None = None,
     max_tokens: int = 2000,
     temperature: float = 0.7,

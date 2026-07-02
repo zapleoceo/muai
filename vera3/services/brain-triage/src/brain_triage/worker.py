@@ -22,8 +22,13 @@ from vera_shared.control import backfill_minute_allowance, is_backfill_paused
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.llm.client import LLMCallFailed, chat, embed
+from vera_shared.projects.rules import chat_id_canon_sql
 
 log = logging.getLogger(__name__)
+
+# Каноникализация chat_id (снимает -100-префикс супергрупп) для матча с
+# project_membership. alias 'e' — таблица events в UPDATE ниже.
+_CHAT_CANON = chat_id_canon_sql("e")
 
 POLL_INTERVAL_S = float(os.environ.get("TRIAGE_POLL_INTERVAL_S", "5"))
 BATCH_SIZE = int(os.environ.get("TRIAGE_BATCH_SIZE", "16"))
@@ -110,6 +115,58 @@ PROJECT_VOCAB = {"itstep", "veranda", "family", "personal", "news", "other"}
 # Источники-намерения не эмбеддим: их вектора засоряют семантический поиск
 SKIP_EMBED_SOURCES = {"vera_chat", "perplexity"}
 
+# json_schema (не json_object) — провайдеры с grammar-constrained decoding
+# (gemini, openai, groq) физически не могут выдать невалидный JSON или
+# значение вне enum. json_object давал модели "как получится" — часть
+# ответов (особенно cerebras gpt-oss) приходила битой и терялась.
+# postprocess_triage() остаётся: providers без constrained-decoding
+# (litellm's drop_params тихо роняет response_format) всё ещё нуждаются
+# в client-side защите.
+TRIAGE_JSON_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "triage",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "importance": {"type": "integer", "minimum": 0, "maximum": 100},
+                "project": {"type": "string", "enum": sorted(PROJECT_VOCAB)},
+                "nature": {"type": "string", "enum": ["world_event", "my_intent"]},
+                "topics": {"type": "array", "items": {"type": "string"}},
+                "people_mentioned": {"type": "array", "items": {"type": "string"}},
+                "signals": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "type": {
+                                "type": "string",
+                                "enum": ["task", "event", "news", "offer",
+                                         "question", "decision", "anomaly"],
+                            },
+                            "summary": {"type": "string"},
+                            "date": {"type": ["string", "null"]},
+                        },
+                        "required": ["type", "summary", "date"],
+                        "additionalProperties": False,
+                    },
+                },
+                "needs_action": {"type": "boolean"},
+                "ready_subtype": {
+                    "type": ["string", "null"],
+                    "enum": ["deal", "openhouse", None],
+                },
+            },
+            "required": [
+                "importance", "project", "nature", "topics",
+                "people_mentioned", "signals", "needs_action", "ready_subtype",
+            ],
+            "additionalProperties": False,
+        },
+    },
+}
+
 
 def postprocess_triage(parsed: dict[str, Any], source: str) -> dict[str, Any]:
     """Валидация LLM-классификации против словарей + override по source."""
@@ -149,8 +206,7 @@ async def triage_one(event_row: EventRow) -> dict[str, Any] | None:
     response_text, meta = await chat(
         messages=[{"role": "user", "content": prompt}],
         capability="chat:fast",
-        require_json_schema=False,
-        response_format={"type": "json_object"},
+        response_format=TRIAGE_JSON_SCHEMA,
         max_tokens=1500,
         temperature=0.3,
         workflow="triage",
@@ -338,6 +394,37 @@ async def process_pending() -> int:
                         triage_started_at=None,
                     )
                 )
+
+    # Детерминированный оверрайд project по папкам/аккаунтам (источник истины —
+    # project_membership). Побеждает LLM-догадку для известных чатов/ящиков.
+    batch_ids = [r.id for r in rows]
+    if batch_ids:
+        async with get_session() as s:
+            await s.execute(text(f"""
+                UPDATE events e SET project = pm.project
+                FROM project_membership pm
+                WHERE e.id = ANY(:ids) AND pm.kind='chat' AND e.source='telegram'
+                  AND e.metadata->>'chat_id' IS NOT NULL
+                  AND {_CHAT_CANON} = pm.key::bigint
+                  AND e.project IS DISTINCT FROM pm.project
+            """), {"ids": batch_ids})
+            await s.execute(text("""
+                UPDATE events e SET project = pm.project
+                FROM project_membership pm
+                WHERE e.id = ANY(:ids) AND pm.kind='account' AND e.source='gmail'
+                  AND e.account ILIKE pm.key
+                  AND e.project IS DISTINCT FROM pm.project
+            """), {"ids": batch_ids})
+            # itstep/veranda для telegram — ТОЛЬКО из папок/имён. LLM-догадку
+            # этих проектов на чате вне membership сбрасываем в 'other'.
+            await s.execute(text(f"""
+                UPDATE events e SET project = 'other'
+                WHERE e.id = ANY(:ids) AND e.source='telegram'
+                  AND e.project IN ('itstep','veranda')
+                  AND (e.metadata->>'chat_id') IS NOT NULL
+                  AND {_CHAT_CANON} NOT IN (
+                      SELECT key::bigint FROM project_membership WHERE kind='chat')
+            """), {"ids": batch_ids})
 
     log.info("[%s] processed: %d done, %d exhausted, %d errors",
              WORKER_ID, processed, llm_exhausted, len(rows) - processed - llm_exhausted)

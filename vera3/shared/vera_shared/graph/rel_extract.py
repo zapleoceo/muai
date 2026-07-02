@@ -61,6 +61,45 @@ Schema:
 Текст:
 {body}"""
 
+# json_schema вместо json_object — форсит grammar-constrained decoding у
+# провайдеров которые его поддерживают (gemini/openai/groq), так что
+# битый JSON (частая причина потерь на cerebras gpt-oss) физически не
+# может быть сгенерирован. predicate ограничен PREDICATES прямо в схеме —
+# не полагаемся только на промпт-инструкцию.
+REL_EXTRACT_JSON_SCHEMA = {
+    "type": "json_schema",
+    "json_schema": {
+        "name": "rel_extract",
+        "strict": True,
+        "schema": {
+            "type": "object",
+            "properties": {
+                "relationships": {
+                    "type": "array",
+                    "maxItems": 3,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "subject": {"type": "string"},
+                            "predicate": {"type": "string", "enum": PREDICATES},
+                            "object": {"type": "string"},
+                            "fact": {"type": "string"},
+                            "confidence": {"type": "number", "minimum": 0.0,
+                                           "maximum": 1.0},
+                        },
+                        "required": [
+                            "subject", "predicate", "object", "fact", "confidence",
+                        ],
+                        "additionalProperties": False,
+                    },
+                },
+            },
+            "required": ["relationships"],
+            "additionalProperties": False,
+        },
+    },
+}
+
 
 async def _resolve_entity(name: str) -> int | None:
     """Find entity_id by name or alias display_name match. None if unknown."""
@@ -87,7 +126,7 @@ async def extract_and_store(event_id: int, body: str) -> int:
         raw, _meta = await chat(
             messages=[{"role": "user", "content": prompt}],
             capability="structured",
-            response_format={"type": "json_object"},
+            response_format=REL_EXTRACT_JSON_SCHEMA,
             max_tokens=300,
             temperature=0.1,
             workflow="rel_extract",

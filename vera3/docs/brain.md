@@ -7,7 +7,7 @@ The "intelligence layer" — three sub-services that turn events into useful ans
 `services/brain-triage/src/brain_triage/worker.py`
 
 - Loop: every 5s claim a batch of `pending` events via `UPDATE … FOR UPDATE SKIP LOCKED RETURNING`.
-- For each event: build a structured prompt → call AIbroker `chat:fast` with `response_format=json_object` → parse → write to `events.triage_metadata` (importance, topics, people, signals, needs_action).
+- For each event: build a structured prompt → call AIbroker `chat:fast` with `response_format=TRIAGE_JSON_SCHEMA` (json_schema, strict=True — see below) → parse → write to `events.triage_metadata` (importance, topics, people, signals, needs_action).
 - Voyage embedding in the same loop, batched (one call per N events).
 - Concurrency: `TRIAGE_CONCURRENCY=10` events in parallel per worker
   (was 5; bumped 2026-07-01 for backfill drainage — Mistral latency
@@ -21,6 +21,55 @@ The "intelligence layer" — three sub-services that turn events into useful ans
 - If you need to walk it down (broker/Postgres pressure): edit the
   defaults in `vera3/infra/docker-compose.yml` or override in server
   `.env` (`TRIAGE_CONCURRENCY=…`, `BRAIN_TRIAGE_REPLICAS=…`) + restart.
+
+## Structured output: json_schema, not json_object
+
+2026-07-02: both `worker.py::triage_one` (workflow=`triage`) and
+`vera_shared/graph/rel_extract.py::extract_and_store` (workflow=`rel_extract`,
+~214k calls/week — the largest structured-traffic source) switched from
+`response_format={"type": "json_object"}` to a full `json_schema` with
+`strict: true`:
+
+```python
+{
+  "type": "json_schema",
+  "json_schema": {
+    "name": "triage",           # or "rel_extract"
+    "strict": True,
+    "schema": {"type": "object", "properties": {...},
+               "required": [...], "additionalProperties": False},
+  },
+}
+```
+
+Why: `json_object` just tells the model "output JSON" — the model still
+picks its own shape, and providers without careful prompting (cerebras
+gpt-oss was the worst offender) sometimes emit malformed JSON that
+`json.loads()` can't parse. `json_schema` with `strict: true` triggers
+**grammar-constrained decoding** on providers that support it (gemini,
+openai-compatible, groq) — the model is *physically* prevented from
+emitting a token that violates the schema (wrong enum value, missing
+required key, extra property). AIbroker forwards `response_format`
+verbatim to LiteLLM (`routes/proxy.py` → `litellm_adapter.py`); it does
+no schema validation/transformation itself, so the schema Vera sends is
+exactly what reaches the provider.
+
+Constants: `brain_triage.worker.TRIAGE_JSON_SCHEMA`,
+`vera_shared.graph.rel_extract.REL_EXTRACT_JSON_SCHEMA`. Both are built
+from the same enum sources the code already validates against
+(`PROJECT_VOCAB`, `PREDICATES`) so the schema and the client-side
+`postprocess_triage()` / predicate check can't silently drift apart —
+see `vera3/tests/unit/test_triage_json_schema.py` and
+`test_rel_extract_schema.py` for the drift guards.
+
+`postprocess_triage()` is **not** removed even though the schema now
+constrains generation — providers where LiteLLM's `drop_params` silently
+strips an unsupported `response_format` still need the client-side
+defense-in-depth.
+
+Providers ignoring `strict` json_schema (or not supporting it) just fall
+back to a normal completion guided by the prompt's `"Верни СТРОГО JSON
+по схеме"` instruction — same behavior as before, no regression.
 
 ## Backfill pause + rate limit
 
