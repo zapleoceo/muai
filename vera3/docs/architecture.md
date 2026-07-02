@@ -32,7 +32,7 @@
               │  @Dimondra_Ai_Bot — owner-only DM  │
               └────────────────────────────────────┘
               ┌─────────── dashboard ──────────────┐
-              │  /events /sources /tokens /search  │
+              │  /events /sources /settings /search  │
               └────────────────────────────────────┘
 ```
 

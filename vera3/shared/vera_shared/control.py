@@ -81,3 +81,64 @@ async def backfill_minute_allowance() -> int | None:
     per_min = max(1, round(cap / 60))
     used = await _requests_last_minute()
     return max(0, per_min - used)
+
+
+# ─── Runtime settings registry ──────────────────────────────────────────────
+# Параметры, редактируемые из дашборда (раздел «настройки»). Живут в app_control,
+# читаются на лету — менять можно без передеплоя. Монитор (bash) читает те же
+# ключи из app_control напрямую.
+
+MONITOR_THROTTLE_MIN = "monitor_throttle_min"
+TRIAGE_BACKLOG_WARN = "triage_backlog_warn"
+TRIAGE_BACKLOG_HUGE = "triage_backlog_huge"
+MONITOR_BACKLOG_ENABLED = "monitor_backlog_enabled"
+
+
+class Setting:
+    """Описание настраиваемого параметра для UI + документации."""
+    def __init__(self, key: str, label: str, default: str, unit: str,
+                 desc: str, kind: str = "int"):
+        self.key = key
+        self.label = label
+        self.default = default
+        self.unit = unit
+        self.desc = desc
+        self.kind = kind  # int | bool
+
+
+# Порядок = порядок в UI.
+SETTINGS: list[Setting] = [
+    Setting(MONITOR_THROTTLE_MIN, "Пауза между повторами алерта", "30", "мин",
+            "Как часто монитор повторяет ОДИН И ТОТ ЖЕ алерт (напр. «backlog "
+            "HUGE»). Было захардкожено 30 мин — отсюда сообщение каждые полчаса. "
+            "Поставь 180 = раз в 3 часа, 1440 = раз в сутки."),
+    Setting(MONITOR_BACKLOG_ENABLED, "Алерты про backlog триажа", "1", "",
+            "Слать ли вообще алерты «Triage backlog большой». Во время разбора "
+            "исторического бэкфила очередь заведомо большая — можно выключить (0), "
+            "чтобы не спамило, и включить (1) когда бэкфил разобран.", kind="bool"),
+    Setting(TRIAGE_BACKLOG_WARN, "Порог WARN очереди триажа", "5000", "событий",
+            "Выше этого числа pending-событий монитор шлёт мягкое предупреждение."),
+    Setting(TRIAGE_BACKLOG_HUGE, "Порог HUGE очереди триажа", "10000", "событий",
+            "Выше этого — алерт «backlog HUGE». Держи заметно выше текущего "
+            "бэклога, если он рассасывается штатно."),
+    Setting(BACKFILL_MAX_PER_HOUR, "Лимит триажа (запросов/час)", "0", "req/ч",
+            "Ровный темп триажа: 0 = без лимита (максимальная скорость). Ставь "
+            "число, чтобы сгладить нагрузку на брокер (напр. 6000 = 100/мин)."),
+]
+
+
+async def get_settings_values() -> dict[str, str]:
+    """Текущие значения всех настроек (с дефолтами для незаданных)."""
+    async with get_session() as s:
+        rows = (await s.execute(text(
+            "SELECT key, value FROM app_control WHERE key = ANY(:keys)"
+        ), {"keys": [x.key for x in SETTINGS]})).all()
+    stored = {k: v for k, v in rows}
+    return {x.key: stored.get(x.key, x.default) for x in SETTINGS}
+
+
+async def get_int_setting(key: str, default: int) -> int:
+    try:
+        return int(await get_control(key, str(default)))
+    except ValueError:
+        return default

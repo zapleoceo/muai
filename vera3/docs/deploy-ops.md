@@ -101,7 +101,53 @@ Checks 11 dimensions:
 11. SSL cert expiry on `aib.zapleo.com` Origin cert <14 days
 
 Alerts to `@Dimondra_Ai_Bot` DM to `OWNER_TELEGRAM_ID`. State-file
-throttle 30 min. Recovery messages on flip back to healthy.
+throttle 30 min (or `monitor_throttle_min` setting — see below).
+Recovery messages on flip back to healthy.
+
+## Runtime settings (`/settings` dashboard page)
+
+Monitor thresholds and the backfill rate limit are editable at runtime
+from `/settings` — no redeploy needed. Registry: `vera_shared.control.SETTINGS`.
+Values live in `app_control` (same KV table as `backfill_paused`); the
+Bash monitor script reads them directly via `psql` on each tick.
+
+| Setting | Default | What it does |
+|---|---|---|
+| `monitor_throttle_min` | 30 min | Repeat-alert cooldown per alert key |
+| `monitor_backlog_enabled` | on | Whether to alert on triage backlog size at all (turn off during a known-large backfill) |
+| `triage_backlog_warn` / `_huge` | 5000 / 10000 | Pending-event thresholds for the two backlog alert levels |
+| `backfill_max_per_hour` | 0 (unlimited) | Even-tempo cap on triage+media LLM requests/hour, shared globally across all replicas — see `brain.md` |
+
+Deploy-time parameters (replicas, concurrency, batch size) are shown
+read-only on the same page for reference — they require a redeploy to
+change (`docker-compose.yml` / server `.env`).
+
+## Project membership sync
+
+`ingestor-telegram/sync_projects.py` populates `project_membership`
+(migration 010) from Telegram folders + chat-name rules + Gmail account
+patterns — the deterministic source of truth `brain_triage/worker.py`
+uses to override the LLM's `project` guess. See `domain-model.md` for
+the table shape and matching rules.
+
+Run manually (uses the ingestor's live Telethon session):
+```bash
+docker exec vera3-ingestor-telegram python -m ingestor_telegram.sync_projects
+```
+
+Not on a cron yet — folder/name-rule membership changes rarely (new
+project chat added, folder reorganized). Re-run by hand after either.
+Safe to re-run anytime: every write is idempotent (`ON CONFLICT ...
+DO UPDATE`), and `derive_people()` does a clean delete+reinsert of
+`kind='person'` rows each run.
+
+**Deploy-order caution:** the very first run after migration 010 lands
+should happen *before* any triage batch executes the membership-override
+UPDATE in `worker.py` — otherwise that override's third query (reset
+LLM-guessed itstep/veranda to `other` for chats not yet in
+`project_membership`) will wipe existing classifications on an empty
+table. Safe if triage is paused (`backfill_paused=1`) while you apply
+the migration and run the sync once.
 
 ## Secrets
 
@@ -110,7 +156,7 @@ Server `.env` at `/var/www/vera3/infra/.env` (mode 600):
 | Var | Purpose |
 |---|---|
 | `POSTGRES_PASSWORD` | postgres root |
-| `TOKEN_SECRET` | Fernet for `tokens.token_encrypted` (legacy fallback) |
+| `TOKEN_SECRET` | Fernet for Gmail refresh tokens & session cookies (no `tokens` table) |
 | `INTERNAL_SECRET` | gateway X-Internal-Secret |
 | `OWNER_TELEGRAM_ID` | `169510539` |
 | `TELEGRAM_BOT_TOKEN` / `_USERNAME` | `@Dimondra_Ai_Bot` |

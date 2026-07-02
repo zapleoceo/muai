@@ -28,7 +28,20 @@ if [ -z "$TELEGRAM_BOT_TOKEN" ] || [ -z "$OWNER_TELEGRAM_ID" ]; then
     exit 1
 fi
 
-THROTTLE_MIN=30  # минут между повторными алертами одного и того же ключа
+THROTTLE_MIN=30  # дефолт; переопределяется настройкой monitor_throttle_min
+
+# ─── setting(key, default) ──────────────────────────────────────────────────
+# Читает значение из app_control (редактируется в дашборде /settings).
+# Пусто/ошибка → default. Так пороги и частота алертов меняются без передеплоя.
+setting() {
+    local key="$1"; local def="$2"; local v
+    v=$(docker exec vera3-postgres psql -U vera -d vera -tAc \
+        "SELECT value FROM app_control WHERE key='${key}'" 2>/dev/null | tr -d '[:space:]')
+    if [ -z "$v" ]; then echo "$def"; else echo "$v"; fi
+}
+
+# Глобальная частота повтора алертов — из настройки (дефолт 30 мин).
+THROTTLE_MIN=$(setting monitor_throttle_min 30)
 
 # ─── alert(key, message) ────────────────────────────────────────────────────
 # Тишина если последний alert по этому key был меньше THROTTLE_MIN минут назад.
@@ -175,16 +188,21 @@ else
     recover "telegram_silent" "Telegram events flowing ($tg_count in last 1h)."
 fi
 
-# ─── 7. Triage queue ─────────────────────────────────────────────────────────
+# ─── 7. Triage queue (пороги + частота настраиваются в дашборде) ─────────────
+BACKLOG_ENABLED=$(setting monitor_backlog_enabled 1)
+BACKLOG_WARN=$(setting triage_backlog_warn 5000)
+BACKLOG_HUGE=$(setting triage_backlog_huge 10000)
 pending=$(docker exec vera3-postgres psql -U vera -d vera -tAc \
     "SELECT COUNT(*) FROM events WHERE triage_status='pending'" 2>/dev/null || echo "0")
-if [ "${pending:-0}" -gt 10000 ]; then
-    alert "triage_backlog" "Triage backlog HUGE: ${pending} pending events."
-elif [ "${pending:-0}" -gt 5000 ]; then
-    alert "triage_warn" "Triage backlog ${pending} pending."
-else
-    recover "triage_backlog" "Triage backlog OK (${pending})."
-    recover "triage_warn" "Triage backlog OK (${pending})."
+if [ "$BACKLOG_ENABLED" = "1" ]; then
+    if [ "${pending:-0}" -gt "$BACKLOG_HUGE" ]; then
+        alert "triage_backlog" "Triage backlog HUGE: ${pending} pending events."
+    elif [ "${pending:-0}" -gt "$BACKLOG_WARN" ]; then
+        alert "triage_warn" "Triage backlog ${pending} pending."
+    else
+        recover "triage_backlog" "Triage backlog OK (${pending})."
+        recover "triage_warn" "Triage backlog OK (${pending})."
+    fi
 fi
 
 # ─── 8. AIbroker reachable ──────────────────────────────────────────────────
