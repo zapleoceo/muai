@@ -74,8 +74,8 @@ async def test_metadata_create_all_compiles_on_sqlite():
     а не просто импортирует модуль."""
     from sqlalchemy.ext.asyncio import create_async_engine
 
-    from vera_shared.db import models_graph  # noqa: F401  — регистрирует таблицы на Base
     from vera_shared.db.engine import Base
+    from vera_shared.db import models_graph  # noqa: F401  — регистрирует таблицы на Base
 
     engine = create_async_engine("sqlite+aiosqlite:///:memory:")
     try:
