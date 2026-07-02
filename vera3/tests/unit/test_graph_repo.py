@@ -6,6 +6,8 @@ behavior is integration-tested.
 """
 from __future__ import annotations
 
+import pytest
+
 
 def test_module_imports():
     from vera_shared.graph import repo
@@ -59,3 +61,25 @@ def test_identity_node_payload_default_dict():
     )
     assert row.label == "Style for Маша"
     assert row.type == "style"
+
+
+@pytest.mark.asyncio
+async def test_metadata_create_all_compiles_on_sqlite():
+    """Regression: JSONB (postgres-only) без .with_variant(JSON, "sqlite")
+    ломает ЛЮБОЙ тест что делает Base.metadata.create_all() на SQLite —
+    даже тесты не связанные с graph-слоем (напр. gateway service tests),
+    т.к. create_all проходит по ВСЕЙ shared Base.metadata, а не только по
+    таблицам своего сервиса. entities/memberships/patterns/identity_nodes
+    все несут JSONB-колонки — этот тест реально их создаёт на SQLite,
+    а не просто импортирует модуль."""
+    from sqlalchemy.ext.asyncio import create_async_engine
+
+    import vera_shared.db.models_graph  # noqa: F401  — регистрирует таблицы на Base
+    from vera_shared.db.engine import Base
+
+    engine = create_async_engine("sqlite+aiosqlite:///:memory:")
+    try:
+        async with engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    finally:
+        await engine.dispose()
