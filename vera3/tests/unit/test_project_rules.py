@@ -1,4 +1,5 @@
 """Тесты правил принадлежности к проектам (папки TG + имена)."""
+# ruff: noqa: I001  # env setup intentionally split around imports
 from __future__ import annotations
 
 import os

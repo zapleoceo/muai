@@ -133,7 +133,7 @@ async def get_settings_values() -> dict[str, str]:
         rows = (await s.execute(text(
             "SELECT key, value FROM app_control WHERE key = ANY(:keys)"
         ), {"keys": [x.key for x in SETTINGS]})).all()
-    stored = {k: v for k, v in rows}
+    stored = dict(rows)
     return {x.key: stored.get(x.key, x.default) for x in SETTINGS}
 
 

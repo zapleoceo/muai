@@ -9,7 +9,7 @@ from html import escape as _esc
 from typing import AsyncIterator
 
 import httpx
-from fastapi import Depends, FastAPI, Form, HTTPException, Query, Request, Response
+from fastapi import FastAPI, Form, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from sqlalchemy import func, select, text
 from vera_shared.control import (

@@ -16,17 +16,16 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from ingestor_telegram.userbot import API_ID, API_HASH, load_session_string
 from sqlalchemy import text
 from telethon import TelegramClient
 from telethon.sessions import StringSession
 from telethon.tl.functions.messages import GetDialogFiltersRequest
-
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.projects.rules import (
     ACCOUNT_RULES, NAME_RULES, OWNER_TG_ID, chat_id_canon_sql, chat_key,
     folder_to_project,
 )
-from ingestor_telegram.userbot import API_ID, API_HASH, load_session_string
 
 logging.basicConfig(level=logging.INFO,
                     format="%(asctime)s %(levelname)s %(name)s: %(message)s")
