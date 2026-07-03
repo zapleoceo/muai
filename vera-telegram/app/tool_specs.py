@@ -22,6 +22,20 @@ TOOLS: list[ToolSpec] = [
         ],
     ),
     ToolSpec(
+        name="telegram_search_public",
+        description=(
+            "GLOBAL Telegram search for public groups, channels and users — "
+            "including ones the user has NOT joined yet. Use for 'find public "
+            "groups about X', 'are there channels on Y'. Returns id, name, "
+            "type, username, t.me link, participants count. Differs from "
+            "telegram_search_dialogs, which only searches the user's OWN chats."
+        ),
+        params=[
+            ToolParam("query", "string", "Search string (title/username)."),
+            ToolParam("limit", "integer", "Max results.", required=False, default=20),
+        ],
+    ),
+    ToolSpec(
         name="telegram_search_dialogs",
         description=(
             "Find Telegram chats/channels/users by name OR by folder "
