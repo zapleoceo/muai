@@ -8,14 +8,26 @@ MCP host) write facts to and search Vera's brain. Set up 2026-06-28.
 | Tool | What it does | Endpoint |
 |---|---|---|
 | `vera_remember(text, kind, context?, tags?)` | Write a fact / decision / todo / preference into Vera's events table with `source='claude'`. Two-layer dedup (exact sha256 + semantic cosine ≥0.92, 7-day window). | `POST /v1/claude/remember` |
-| `vera_recall(query, limit?)` | Semantic search across the whole brain (every gmail/tg/ig event + previous Claude facts). | `POST /v1/search` (TODO: not yet exposed via gateway) |
-| `vera_recent(hours?, source?)` | Recent events, optionally filtered by source. | `GET /v1/events/recent` (TODO) |
-| `vera_context(entity_name)` | Everything Vera knows about a named person/project (graph traversal + recent mentions). | `GET /v1/entity/context` (TODO) |
+| `vera_recall(query, limit?)` | Semantic search across the whole brain (every gmail/tg/ig event + previous Claude facts). | `POST /v1/search` |
+| `vera_recent(hours?, source?)` | Recent events, optionally filtered by source. | `GET /v1/events/recent` |
+| `vera_context(entity_name)` | Everything Vera knows about a named person/project (graph traversal + recent mentions). | `GET /v1/entity/context` |
 
-Currently **only `vera_remember` works end-to-end** — the other three
-return a `not-implemented-yet` JSON message so Claude doesn't hang. The
-search tools will start working once the gateway exposes those endpoints
-(they exist inside `brain-search` already, just need a thin proxy).
+**All four tools work end-to-end** (wired up 2026-07-03,
+`services/gateway/src/gateway/query.py`):
+
+- `POST /v1/search` → handler `search_proxy()`, request model
+  `SearchProxyRequest`. Thin proxy to `brain-search`'s existing
+  `/search` (plain FTS + vector retrieval, `use_agent=false` so no LLM
+  cost — brain-search's ReAct agent loop is skipped entirely).
+- `GET /v1/events/recent` → handler `recent_events()`. Queries `events`
+  directly (capped at 200 rows, `truncated: true` if the cap was hit).
+- `GET /v1/entity/context` → handler `entity_context()`. Resolves the
+  name via `vera_shared.graph.repo.find_entity_by_name`, then composes
+  aliases + memberships + recent-30d-message-count
+  (`graph/dedup.py:get_entity_context`), group membership
+  (`graph/repo.py:list_members`), and current relationships (direct
+  query on `relationships` joined to `entities` both directions, ranked
+  by confidence, capped at 50).
 
 ## How it talks to Vera
 
@@ -29,12 +41,12 @@ vera-mcp server (Python, uv-managed deps)
 nginx (/v1/) → vera3-gateway :8001
   │
   ▼
-gateway/claude.py /v1/claude/remember
-  │ ├─ exact dedup via UNIQUE (source, source_event_id)
-  │ └─ semantic dedup via embed_via_broker + cosine NN
-  ▼
-events table (source='claude', triage_status='pending')
-  │
+gateway/claude.py /v1/claude/remember      gateway/query.py /v1/search, /v1/events/recent, /v1/entity/context
+  │ ├─ exact dedup via UNIQUE (source, source_event_id)     │ ├─ /v1/search      → HTTP proxy to brain-search:8000/search
+  │ └─ semantic dedup via embed_via_broker + cosine NN      │ ├─ /v1/events/recent → direct SELECT on events
+  ▼                                                          │ └─ /v1/entity/context → vera_shared.graph.repo + dedup
+events table (source='claude', triage_status='pending')     ▼
+  │                                                    entities / relationships / memberships / events (read-only)
   ▼
 brain-triage picks up → embedding + entity extraction
 ```

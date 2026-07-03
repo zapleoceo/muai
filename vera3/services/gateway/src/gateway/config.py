@@ -19,6 +19,7 @@ class Settings(BaseSettings):
 
     # External services
     hatchet_url: str = "http://hatchet:7077"
+    search_url: str = "http://brain-search:8000"
 
     # Database
     database_url: str = "postgresql+asyncpg://vera:vera@postgres:5432/vera"
