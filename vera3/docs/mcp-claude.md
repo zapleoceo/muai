@@ -135,6 +135,10 @@ event → embedding + entity extraction → graph linkage.
 This means `vera_recall` searches Claude-facts alongside emails and
 TG messages, which is the point.
 
+`vera_recall`/`vera_recent`/`vera_context` read from the same tables
+(`events`, `entities`, `relationships`, `memberships`) via the
+`gateway/query.py` proxies above — no new tables there either.
+
 ## Cost
 
 Per `vera_remember`: ~1 Voyage embedding call (~1k tokens, sub-cent on
