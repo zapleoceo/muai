@@ -50,16 +50,19 @@ async def search_proxy(
 ) -> dict[str, Any]:
     """Thin proxy to brain-search's /search — no logic here, just auth + forward.
 
-    brain-search still runs one broker LLM call to synthesize `answer` even
-    with use_agent=false (only the ReAct tool-calling loop is skipped) — a
-    30s timeout measured ReadTimeout under real broker latency, so this
-    matches the round-trip budget already used elsewhere for broker calls.
+    brain-search's _finish_search() ALWAYS runs a broker LLM call to
+    synthesize `answer`, even with use_agent=false (only the ReAct
+    tool-calling loop is skipped) — and that call carries its own 90s
+    internal timeout with a graceful text fallback. This proxy's timeout
+    must clear brain-search's own ceiling, or we cut it off before its
+    fallback ever gets a chance to fire. Measured in production: a real
+    call took 101s end-to-end under broker load.
     """
     _check_internal_secret(x_internal_secret)
 
     url = f"{get_settings().search_url}/search"
     try:
-        async with httpx.AsyncClient(timeout=60.0) as c:
+        async with httpx.AsyncClient(timeout=100.0) as c:
             r = await c.post(url, json=body.model_dump())
     except httpx.HTTPError as e:
         raise HTTPException(502, f"brain-search unreachable: {e}") from e

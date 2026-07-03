@@ -67,7 +67,7 @@ brain-triage picks up → embedding + entity extraction
          "env": {
            "VERA_URL": "https://dima.veranda.my",
            "VERA_INTERNAL_SECRET": "<INTERNAL_SECRET from server .env>",
-           "VERA_TIMEOUT_S": "30"
+           "VERA_TIMEOUT_S": "110"
          }
        }
      }
@@ -76,6 +76,15 @@ brain-triage picks up → embedding + entity extraction
    `~/.claude/mcp.json` is **not** in any git repo, so the secret stays
    local. If the secret leaks, attacker can only POST to
    `/v1/claude/remember` and add events (write-only, no read).
+
+   `VERA_TIMEOUT_S=110` — `vera_recall` isn't a cheap lookup:
+   brain-search's `_finish_search()` always runs one broker LLM call to
+   synthesize `answer`, even with `use_agent=false` (only the ReAct
+   tool-calling loop is skipped), carrying its own 90s internal timeout.
+   `gateway/query.py`'s proxy timeout is 100s to clear that; the MCP
+   client timeout needs headroom above the proxy's. In practice this
+   call is usually a few seconds but can spike past a minute under
+   broker load — `vera_recall` can visibly hang, that's expected.
 
 3. **When-to-call rule** in `~/.claude/CLAUDE.md` — a paragraph telling
    Claude to invoke `vera_remember` ONCE at the end of substantive
