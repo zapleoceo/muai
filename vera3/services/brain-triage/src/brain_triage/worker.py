@@ -692,6 +692,16 @@ async def process_pending() -> int:
                   AND {_CHAT_CANON} NOT IN (
                       SELECT key::bigint FROM project_membership WHERE kind='chat')
             """), {"ids": batch_ids})
+            # Ручные заметки (source='manual', напр. саммари созвонов, дневные
+            # апдейты) несут явный metadata.project_hint от автора — сильнее
+            # LLM-догадки по тексту. 'stepan' маппится в 'itstep': Stepan —
+            # продукт IT STEP Jakarta, не отдельный проект.
+            await s.execute(text("""
+                UPDATE events e SET project = 'itstep'
+                WHERE e.id = ANY(:ids) AND e.source='manual'
+                  AND e.metadata->>'project_hint' IN ('itstep', 'stepan')
+                  AND e.project IS DISTINCT FROM 'itstep'
+            """), {"ids": batch_ids})
 
     log.info("[%s] processed: %d done, %d exhausted, %d errors",
              WORKER_ID, processed, llm_exhausted, len(rows) - processed - llm_exhausted)

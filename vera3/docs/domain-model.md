@@ -73,6 +73,14 @@ ISN'T in `project_membership` gets reset to `other` (closes the loop —
 LLM can no longer silently misclassify a chat as itstep/veranda that
 membership doesn't recognize).
 
+A fourth override in the same block handles `source='manual'` events
+(notes inserted directly via `gateway`'s `/event/manual`, e.g. call
+summaries, daily updates): if the event's own `metadata.project_hint`
+is `itstep` or `stepan` (Stepan is an IT STEP Jakarta product, not a
+separate project), `project` is forced to `itstep` — the note author's
+own hint outranks the LLM's text-only guess, same precedence rule as
+chat/account membership.
+
 ## Substrate (L1/L2/L3 graph)
 
 Materialized in Postgres. Behind `vera_shared/graph/repo.py` API so a future
