@@ -13,7 +13,6 @@ import httpx
 import pydantic
 import pytest
 from fastapi import HTTPException
-
 from gateway.query import (
     RECENT_EVENTS_LIMIT,
     RELATIONSHIPS_LIMIT,
@@ -127,10 +126,10 @@ async def test_search_proxy_forwards_and_returns_json():
 async def test_search_proxy_raises_502_on_connection_error():
     with patch("gateway.query.httpx.AsyncClient",
                MagicMock(return_value=_FakeAsyncClient(
-                   raise_error=httpx.ConnectError("down")))):
-        with pytest.raises(HTTPException) as exc:
-            await search_proxy(SearchProxyRequest(q="x"),
-                                x_internal_secret="test-internal-secret")
+                   raise_error=httpx.ConnectError("down")))), \
+         pytest.raises(HTTPException) as exc:
+        await search_proxy(SearchProxyRequest(q="x"),
+                            x_internal_secret="test-internal-secret")
     assert exc.value.status_code == 502
 
 
@@ -138,10 +137,10 @@ async def test_search_proxy_raises_502_on_connection_error():
 async def test_search_proxy_forwards_upstream_error_status():
     fake_resp = _FakeResponse(404, text="not found")
     with patch("gateway.query.httpx.AsyncClient",
-               MagicMock(return_value=_FakeAsyncClient(response=fake_resp))):
-        with pytest.raises(HTTPException) as exc:
-            await search_proxy(SearchProxyRequest(q="x"),
-                                x_internal_secret="test-internal-secret")
+               MagicMock(return_value=_FakeAsyncClient(response=fake_resp))), \
+         pytest.raises(HTTPException) as exc:
+        await search_proxy(SearchProxyRequest(q="x"),
+                            x_internal_secret="test-internal-secret")
     assert exc.value.status_code == 404
 
 
@@ -258,10 +257,10 @@ async def test_entity_context_composes_full_response():
 
 @pytest.mark.asyncio
 async def test_entity_context_404_when_not_found():
-    with patch("gateway.query.find_entity_by_name", AsyncMock(return_value=None)):
-        with pytest.raises(HTTPException) as exc:
-            await entity_context(name="Unknown Person",
-                                  x_internal_secret="test-internal-secret")
+    with patch("gateway.query.find_entity_by_name", AsyncMock(return_value=None)), \
+         pytest.raises(HTTPException) as exc:
+        await entity_context(name="Unknown Person",
+                              x_internal_secret="test-internal-secret")
     assert exc.value.status_code == 404
 
 
