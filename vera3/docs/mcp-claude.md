@@ -77,6 +77,15 @@ brain-triage picks up → embedding + entity extraction
    local. If the secret leaks, attacker can only POST to
    `/v1/claude/remember` and add events (write-only, no read).
 
+   **2026-07-03 correction**: on this Claude Code build, `~/.claude/mcp.json`
+   is not actually read — MCP servers must be registered under the
+   `mcpServers` key in `~/.claude/settings.json` instead (same file as
+   other project settings like `permissions`/`theme`). Put the exact
+   same `command`/`args`/`env` block there. Restarting the app alone
+   isn't enough either — a resumed/continued conversation keeps its
+   original MCP server list; open a genuinely new chat to see `vera`'s
+   tools appear.
+
    `VERA_TIMEOUT_S=110` — `vera_recall` isn't a cheap lookup:
    brain-search's `_finish_search()` always runs one broker LLM call to
    synthesize `answer`, even with `use_agent=false` (only the ReAct
