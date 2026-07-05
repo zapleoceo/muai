@@ -493,6 +493,28 @@ async def _build_progress_fragment() -> str:
 
 # ─── Events ────────────────────────────────────────────────────────────────
 
+# events.triage_status → (эмодзи в таблице, русское пояснение для title=).
+TRIAGE_STATUS_INFO: dict[str, tuple[str, str]] = {
+    "done": ("✓", "обработано триажем (важность/проект/темы проставлены)"),
+    "pending": ("⏳", "ждёт очереди на обработку триажем"),
+    "processing": ("⏳", "обрабатывается прямо сейчас"),
+    "error": ("✗", "ошибка при обработке, будет повторная попытка (см. triage_error)"),
+    "dead": ("☠", "превышено число попыток — требует ручного разбора"),
+    "superseded": ("≈", "заменено похожим более новым событием (семантический дедуп)"),
+    "media_pending": ("🖼", "медиа (фото/голос) ждёт vision/распознавания через брокер"),
+}
+
+# Заголовки колонок /events — подсказки на русском (title=, наведение мышью).
+EVENTS_COLUMN_HINTS: dict[str, str] = {
+    "id": "Внутренний ID события в базе",
+    "tr": "Статус триажа — обработки события ИИ. Наведите на значок в строке для деталей",
+    "imp": "Важность события, 0–100 — оценивает ИИ при триаже. «—» = ещё не оценено",
+    "src": "Источник события: telegram / gmail / instagram / manual / monitor и т.д.",
+    "account": "Аккаунт, бот или ящик, через который пришло событие",
+    "time": "Когда событие произошло (occurred_at)",
+    "preview": "Первые символы текста события",
+}
+
 
 @app.get("/events", response_class=HTMLResponse)
 async def events_page(request: Request, limit: int = Query(100, ge=1, le=500),  # noqa: B008
@@ -514,12 +536,13 @@ async def events_page(request: Request, limit: int = Query(100, ge=1, le=500),  
 
     tbody = []
     for e in rows:
-        status_emoji = {"done": "✓", "pending": "⏳", "processing": "⏳",
-                        "error": "✗"}.get(e.triage_status, "?")
+        emoji, desc = TRIAGE_STATUS_INFO.get(
+            e.triage_status, ("?", "неизвестный статус триажа"))
+        status_title = esc(f"{e.triage_status or '(пусто)'} — {desc}")
         imp = e.importance if e.importance is not None else "—"
         preview = esc((e.content_text or "")[:160])
         tbody.append(
-            f'<tr><td>{e.id}</td><td>{status_emoji}</td><td>{imp}</td>'
+            f'<tr><td>{e.id}</td><td title="{status_title}">{emoji}</td><td>{imp}</td>'
             f'<td>{esc(e.source)}</td><td>{esc(e.account or "—")}</td>'
             f'<td class="mute">{e.occurred_at.strftime("%Y-%m-%d %H:%M")}</td>'
             f'<td class="preview">{preview}…</td></tr>'
@@ -545,12 +568,15 @@ async def events_page(request: Request, limit: int = Query(100, ge=1, le=500),  
       </form>
     """
 
+    thead = "".join(
+        f'<th title="{esc(hint)}">{col}</th>'
+        for col, hint in EVENTS_COLUMN_HINTS.items()
+    )
     return HTMLResponse(_render("events", f"""
         <h2>События ({len(rows)})</h2>
         {filters}
         <table class="data">
-          <thead><tr><th>id</th><th>tr</th><th>imp</th><th>src</th>
-          <th>account</th><th>time</th><th>preview</th></tr></thead>
+          <thead><tr>{thead}</tr></thead>
           <tbody>{''.join(tbody)}</tbody>
         </table>
     """))

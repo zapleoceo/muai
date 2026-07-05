@@ -19,7 +19,7 @@ Append-only signal log. Every observation enters here.
 | `content_text` | Plain text body. Media → placeholder strings. |
 | `occurred_at` | When the event happened (sender clock) |
 | `received_at` | When Vera saw it |
-| `triage_status` | `pending` / `processing` / `done` / `error` |
+| `triage_status` | `pending` / `processing` / `done` / `error` / `dead` (retries exhausted) / `superseded` (semantic dedup, see `gateway/claude.py`) / `media_pending` (photo/voice waiting on broker vision/transcription) |
 | `triage_metadata` | JSONB: importance, topics, people, signals, needs_action |
 | `importance` | 0-100 (denormalized from triage_metadata for fast filters) |
 | `embedding_voyage_3` | pgvector 1024-dim |
