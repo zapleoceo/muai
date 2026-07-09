@@ -22,6 +22,31 @@ The "intelligence layer" — three sub-services that turn events into useful ans
   defaults in `vera3/infra/docker-compose.yml` or override in server
   `.env` (`TRIAGE_CONCURRENCY=…`, `BRAIN_TRIAGE_REPLICAS=…`) + restart.
 
+> **Prompt compressed ~30% (2026-07-08), token quota is the real constraint,
+> not $ cost.** Confirmed live via Cerebras' own API: `usage.prompt_tokens`
+> for a repeated-prefix request is IDENTICAL whether the prefix hits their
+> server-side cache or not (`cached_tokens=640/750` vs `0/750`, same total).
+> Caching is their internal speed optimization — it does **not** discount
+> against our daily token quota (`x-ratelimit-*-tokens-day`). The static
+> instructional part of `TRIAGE_PROMPT_TEMPLATE`/`TRIAGE_BATCH_PROMPT_HEADER`
+> (role, Dima's context, JSON shape spelled out, project/nature/ready_subtype
+> rules) was ~750-950 tokens repeated on every single call — at ~16-17k
+> triage calls/day, enough alone to saturate cerebras' whole 14-key daily
+> budget with zero real message content. Compressed the wording (verbose
+> multi-line JSON block → one-line shape; 2-3 examples per ready_subtype case
+> → one each) and extracted the duplicated context/rules text (previously two
+> independently-hand-written copies) into shared `_TRIAGE_CONTEXT`/
+> `_TRIAGE_RULES`/`_TRIAGE_TOPICS` constants — one source to keep in sync
+> going forward. All field names/enum values/semantics are unchanged;
+> `TRIAGE_JSON_SCHEMA`/`TRIAGE_BATCH_JSON_SCHEMA` (the enforced structure for
+> schema-capable providers) and `postprocess_triage()`'s validation/
+> normalization are untouched — this only compresses the human-readable
+> instructions. Confirmed live on Cerebras (`gpt-oss-120b`, real API, same
+> test content): **898 → 628 prompt tokens (-30%)**, and the compressed
+> prompt still produces correct, complete JSON (`project`, `needs_action`,
+> `people_mentioned` all verified against a known-answer test message).
+> `tests/unit/test_triage_group_batch.py` (35 tests) still passes unchanged.
+
 ## Structured output: json_schema, not json_object
 
 2026-07-02: both `worker.py::triage_one` (workflow=`triage`) and

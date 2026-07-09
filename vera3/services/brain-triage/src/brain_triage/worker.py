@@ -53,66 +53,62 @@ TRIAGE_GROUP_BATCH_SIZE = int(os.environ.get("TRIAGE_GROUP_BATCH_SIZE", "10"))
 TRIAGE_GROUP_BATCH_MAX_CHARS = int(os.environ.get("TRIAGE_GROUP_BATCH_MAX_CHARS", "6000"))
 
 
+# 2026-07-08: extracted from what used to be two independently-hand-written
+# copies (single-event TRIAGE_PROMPT_TEMPLATE + TRIAGE_BATCH_PROMPT_HEADER) —
+# same context/rules text, drifting risk on every edit. Also compressed
+# wording (verbose multi-line JSON block + 2-3 examples per ready_subtype
+# case -> one-line JSON shape + one example each): confirmed live via
+# Cerebras' own API response that `usage.prompt_tokens` is IDENTICAL whether
+# a repeated prefix hits their server-side cache or not (cached_tokens=640/750
+# vs 0/750, same total) — our daily token quota is charged full price
+# regardless of caching, so the only real lever is a shorter prompt. This was
+# ~750-950 tokens of IDENTICAL text on every single triage call (~16-17k
+# calls/day) — enough alone to saturate cerebras' whole 14-key daily budget.
+# All field names/enum values/semantics are unchanged — TRIAGE_JSON_SCHEMA /
+# TRIAGE_BATCH_JSON_SCHEMA (the enforced structure for schema-capable
+# providers) and postprocess_triage's validation/normalization are untouched;
+# this only compresses the human-readable instructions.
+_TRIAGE_CONTEXT = (
+    "Контекст Димы: Branch Director IT STEP Academy Jakarta (апрель 2026, "
+    "проект itstep), переезд в Индонезию/виза, совладелец бара Veranda во "
+    "Вьетнаме (проект veranda), жена Маша и дочь Лиза (family), босс "
+    "Дмитрий Егоров (yegorov@itstep.org)."
+)
+_TRIAGE_RULES = (
+    "Правила project: itstep — академия в Джакарте (группы/студенты/"
+    "должники/лиды/команда); veranda — бар во Вьетнаме (смены/заказы/"
+    "выручка/поставки); family — Маша/Лиза/родители; personal — личные "
+    "дела Димы; news — новости/рассылки; other — всё прочее.\n"
+    "Правила nature: world_event — факт мира; my_intent — Дима сам "
+    "формулирует запрос/идею.\n"
+    'ready_subtype ТОЛЬКО если needs_action=true: "deal" — явное намерение '
+    'купить курс + готов действовать сейчас (пример: "хочу записаться, вот '
+    'номер +62..."); "openhouse" — интерес к Open House 29 июня, не покупка '
+    '(пример: "когда опен хаус? хочу прийти"); иначе null.'
+)
+_TRIAGE_TOPICS = (
+    "финансы, должники, расписание, найм, продажи, маркетинг, crm, бар, "
+    "меню, поставки, персонал, зарплата, виза, переезд, семья, здоровье, "
+    "новости, война, политика, техника, недвижимость, документы"
+)
+
 TRIAGE_PROMPT_TEMPLATE = """Ты — Вера, цифровая память Димы. Прочитай событие и извлеки структуру.
 
-Контекст Димы (его текущая жизнь):
-- Branch Director IT STEP Academy Jakarta с апреля 2026 (проект itstep)
-- Переезд в Индонезию, виза, KPI команды
-- Совладелец бара Veranda во Вьетнаме (проект veranda)
-- Жена Маша, дочь Лиза (family)
-- Босс Дмитрий Егоров (yegorov@itstep.org)
+""" + _TRIAGE_CONTEXT + """
 
 Событие (источник={source}, account={account}, occurred_at={occurred_at}):
 ---
 {content}
 ---
 
-Верни СТРОГО JSON по схеме:
-{{
-  "importance": <0-100, насколько Дима должен это видеть>,
-  "project": "<РОВНО ОДНО из: itstep | veranda | family | personal | news | other>",
-  "nature": "<РОВНО ОДНО из: world_event | my_intent>",
-  "topics": [<2-4 тега: русский, нижний регистр, 1-2 слова. Канонические:
-    финансы, должники, расписание, найм, продажи, маркетинг, crm,
-    бар, меню, поставки, персонал, зарплата,
-    виза, переезд, семья, здоровье, новости, война, политика,
-    техника, недвижимость, документы>],
-  "people_mentioned": [<упомянутые люди>],
-  "signals": [
-    {{"type": "task|event|news|offer|question|decision|anomaly",
-      "summary": "<краткое>",
-      "date": "<ISO дата если есть, иначе null>"}}
-  ],
-  "needs_action": <true/false>,
-  "ready_subtype": <null | "deal" | "openhouse" — см. ниже>
-}}
+Верни СТРОГО JSON: {{"importance": <0-100>, "project": "<itstep|veranda|family|""" \
+    """personal|news|other>", "nature": "<world_event|my_intent>", "topics": [<2-4 """ \
+    """рус. тега нижний регистр из: """ + _TRIAGE_TOPICS + """>], "people_mentioned": """ \
+    """[<люди>], "signals": [{{"type": "task|event|news|offer|question|decision|""" \
+    """anomaly", "summary": "<кратко>", "date": "<ISO|null>"}}], "needs_action": """ \
+    """<bool>, "ready_subtype": <null|"deal"|"openhouse">}}
 
-Правила project:
-- itstep — академия в Джакарте: группы, студенты, должники, лиды, команда филиала
-- veranda — бар во Вьетнаме: смены, заказы, выручка, поставки
-- family — Маша, Лиза, родители
-- personal — личные дела Димы (банки, виза, здоровье, друзья)
-- news — новостные каналы и рассылки
-- other — всё прочее
-
-Правила nature:
-- world_event — письмо/сообщение от человека или системы, факт мира
-- my_intent — Дима сам формулирует запрос/черновик/идею (не свершившийся факт)
-
-Правило ready_subtype (заполни ТОЛЬКО если needs_action=true):
-- "deal": лид ИМЕЕТ контакт И ЯВНОЕ намерение купить курс И готов действовать ЧАС/ДЕНЬ
-  Примеры: "Привет, я хочу записаться на курс. Вот мой номер: +62812..."
-           "Готов платить, когда начнём?"
-           "Как записаться? Дайте счёт."
-
-- "openhouse": лид заинтересован ПОСЕТИТЬ Open House 29 июня (НЕ покупка, это мероприятие)
-  Примеры: "Подойдёт ли мне курс? Я на Опен Хаусе узнаю подробнее?"
-           "Когда у вас опен хаус? Хочу прийти 29 июня"
-           "Расскажите про мероприятие на 29 числа"
-
-- null (если needs_action=false ИЛИ если готовность неясна)
-  Примеры: лид просто спрашивает про программу (информационный запрос)
-           лид высказывает сомнения или еще не готов
+""" + _TRIAGE_RULES + """
 
 ВАЖНО: только JSON, без префиксов и комментариев."""
 
@@ -222,44 +218,21 @@ TRIAGE_BATCH_PROMPT_HEADER = """Ты — Вера, цифровая память
 из ОДНОГО группового чата. Разбери КАЖДОЕ по отдельности и верни результат
 для каждого, привязанный к его event_id.
 
-Контекст Димы (его текущая жизнь):
-- Branch Director IT STEP Academy Jakarta с апреля 2026 (проект itstep)
-- Переезд в Индонезию, виза, KPI команды
-- Совладелец бара Veranda во Вьетнаме (проект veranda)
-- Жена Маша, дочь Лиза (family)
-- Босс Дмитрий Егоров (yegorov@itstep.org)
+""" + _TRIAGE_CONTEXT + """
 
 События:
 {events_block}
 
-Верни СТРОГО JSON: {{"results": [{{"event_id": <int>, ...те же поля что для
-одного события, см. ниже}}, ...]}} — ОДИН объект на КАЖДЫЙ event_id выше,
-ничего не пропускай.
+Верни СТРОГО JSON: {{"results": [{{"event_id": <int>, "importance": <0-100>, """ \
+    """"project": "<itstep|veranda|family|personal|news|other>", "nature": """ \
+    """"<world_event|my_intent>", "topics": [<2-4 рус. тега нижний регистр из: """ \
+    + _TRIAGE_TOPICS + """>], "people_mentioned": [<люди>], "signals": [{{"type": """ \
+    """"task|event|news|offer|question|decision|anomaly", "summary": "<кратко>", """ \
+    """"date": "<ISO|null>"}}], "needs_action": <bool>, "ready_subtype": """ \
+    """<null|"deal"|"openhouse">}}, ...]}} — ОДИН объект на КАЖДЫЙ event_id выше, """ \
+    """ничего не пропускай.
 
-Поля на каждый результат:
-  "importance": <0-100, насколько Дима должен это видеть>,
-  "project": "<РОВНО ОДНО из: itstep | veranda | family | personal | news | other>",
-  "nature": "<РОВНО ОДНО из: world_event | my_intent>",
-  "topics": [<2-4 тега: русский, нижний регистр, 1-2 слова. Канонические:
-    финансы, должники, расписание, найм, продажи, маркетинг, crm,
-    бар, меню, поставки, персонал, зарплата,
-    виза, переезд, семья, здоровье, новости, война, политика,
-    техника, недвижимость, документы>],
-  "people_mentioned": [<упомянутые люди>],
-  "signals": [{{"type": "task|event|news|offer|question|decision|anomaly",
-                "summary": "<краткое>", "date": "<ISO дата если есть, иначе null>"}}],
-  "needs_action": <true/false>,
-  "ready_subtype": <null | "deal" | "openhouse">
-
-Правила project: itstep — академия в Джакарте (группы/студенты/должники/лиды/
-команда); veranda — бар во Вьетнаме (смены/заказы/выручка/поставки); family —
-Маша/Лиза/родители; personal — личные дела Димы; news — новости/рассылки;
-other — всё прочее.
-Правила nature: world_event — факт мира; my_intent — Дима сам формулирует
-запрос/идею.
-ready_subtype ТОЛЬКО если needs_action=true: "deal" — явное намерение купить
-курс + готов действовать сейчас; "openhouse" — интерес к Open House 29 июня
-(не покупка); иначе null.
+""" + _TRIAGE_RULES + """
 
 ВАЖНО: только JSON, без префиксов и комментариев. КАЖДЫЙ event_id из списка
 выше должен появиться РОВНО ОДИН раз в results."""
@@ -614,9 +587,13 @@ async def process_pending() -> int:
     src_by_id = {r.id: r.source for r in rows}
     processed = 0
     llm_exhausted = 0
+    emb_writes: list[tuple[int, list[float]]] = []  # → event_embeddings upsert
+    rel_candidates: list[tuple[int, str]] = []       # → rel-extract после коммита триажа
     async with get_session() as s:
         for event_id, status, metadata, error in results:
             embedding = embeddings_by_id.get(event_id)
+            if embedding is not None and status in ("done", "error"):
+                emb_writes.append((event_id, embedding))
             if status == "pending":
                 # LLM пул занят — вернём в pending, освобождаем triage_started_at
                 await s.execute(
@@ -635,19 +612,17 @@ async def process_pending() -> int:
                         nature=metadata.get("nature") if metadata else None,
                         project=metadata.get("project") if metadata else None,
                         ready_subtype=metadata.get("ready_subtype") if metadata else None,
-                        embedding_voyage_3=embedding,
                         triage_started_at=None,
                     )
                 )
                 processed += 1
-                # Fire relationship extraction in background — non-blocking,
-                # doesn't gate triage success. Only for high-signal events.
+                # Собираем кандидатов на rel-extract — запускаем ПОСЛЕ коммита
+                # триажа (иначе фоновая задача читает событие до записи nature/
+                # project). Только для high-signal событий.
                 if metadata and metadata.get("importance", 0) >= 3:
                     row = next((r for r in rows if r.id == event_id), None)
                     if row and row.content_text:
-                        asyncio.create_task(
-                            _safe_rel_extract(event_id, row.content_text)
-                        )
+                        rel_candidates.append((event_id, row.content_text))
             else:  # error
                 # nature детерминируема по source даже без LLM
                 err_nature = NATURE_BY_SOURCE.get(
@@ -657,10 +632,32 @@ async def process_pending() -> int:
                         triage_status="error",
                         triage_error=error,
                         nature=err_nature,
-                        embedding_voyage_3=embedding,
                         triage_started_at=None,
                     )
                 )
+
+    # Эмбеддинги — ОТДЕЛЬНОЙ транзакцией после коммита статусов: одно битое
+    # событие в event_embeddings не должно откатывать triage_status всего батча
+    # (иначе события зависают в processing до watchdog). Savepoint на строку.
+    if emb_writes:
+        async with get_session() as s:
+            for eid, emb in emb_writes:
+                try:
+                    async with s.begin_nested():
+                        await s.execute(text("""
+                            INSERT INTO event_embeddings (event_id, embedding)
+                            VALUES (:eid, CAST(:emb AS jsonb))
+                            ON CONFLICT (event_id) DO UPDATE SET embedding = EXCLUDED.embedding
+                        """), {"eid": eid, "emb": json.dumps(emb)})
+                except Exception as e:
+                    log.warning("embedding upsert failed event=%s: %s", eid, e)
+
+    # Rel-extract — после коммита триажа, со ссылкой в _bg_tasks (иначе задачу
+    # может собрать GC и связи молча потеряются).
+    for eid, body in rel_candidates:
+        t = asyncio.create_task(_safe_rel_extract(eid, body))
+        _bg_tasks.add(t)
+        t.add_done_callback(_bg_tasks.discard)
 
     # Детерминированный оверрайд project по папкам/аккаунтам (источник истины —
     # project_membership). Побеждает LLM-догадку для известных чатов/ящиков.
@@ -739,13 +736,17 @@ async def _watchdog_loop() -> None:
             log.warning("Watchdog error: %s", e)
 
 
+# Держим ссылки на фоновые rel-extract задачи, иначе GC может их выбросить.
+_bg_tasks: set[asyncio.Task] = set()
+
+
 async def _safe_rel_extract(event_id: int, body: str) -> None:
-    """Fire-and-forget rel extraction; never crashes triage."""
+    """Rel extraction в фоне; никогда не роняет триаж, но сбой виден в логах."""
     try:
         from vera_shared.graph.rel_extract import extract_and_store
         await extract_and_store(event_id, body)
     except Exception as e:
-        log.debug("rel_extract event=%s failed: %s", event_id, e)
+        log.warning("rel_extract event=%s failed (граф не построен): %s", event_id, e)
 
 
 BACKOFF_MINUTES = [1, 5, 30, 120, 720]   # 1m, 5m, 30m, 2h, 12h → then dead
@@ -765,26 +766,26 @@ async def _retry_failed_loop() -> None:
             async with get_session() as s:
                 # Schedule retries: bump counter, push to pending, advance next_retry_at.
                 # CASE picks the right backoff for the *next* (retry_count+1) attempt.
-                bumped = await s.execute(text(f"""
+                bumped = await s.execute(text("""
                     UPDATE events SET
                       triage_status = CASE
-                        WHEN triage_retry_count + 1 >= {MAX_RETRIES} THEN 'dead'
+                        WHEN triage_retry_count + 1 >= :max_retries THEN 'dead'
                         ELSE 'pending'
                       END,
                       triage_retry_count = triage_retry_count + 1,
                       triage_started_at = NULL,
                       triage_next_retry_at = CASE
-                        WHEN triage_retry_count + 1 >= {MAX_RETRIES} THEN NULL
+                        WHEN triage_retry_count + 1 >= :max_retries THEN NULL
                         ELSE NOW() + (
-                          (ARRAY{BACKOFF_MINUTES})[triage_retry_count + 2]
+                          (CAST(:backoff AS int[]))[triage_retry_count + 2]
                           || ' minutes'
                         )::interval
                       END
                     WHERE triage_status = 'error'
-                      AND triage_retry_count < {MAX_RETRIES}
+                      AND triage_retry_count < :max_retries
                       AND (triage_next_retry_at IS NULL OR triage_next_retry_at < NOW())
                     RETURNING id, triage_retry_count, triage_status
-                """))
+                """), {"max_retries": MAX_RETRIES, "backoff": BACKOFF_MINUTES})
                 rows = list(bumped.mappings().all())
             if rows:
                 live = [r for r in rows if r["triage_status"] == "pending"]
