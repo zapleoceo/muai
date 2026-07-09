@@ -8,8 +8,14 @@ Recognizes photo (vision) and voice/audio (whisper) for events with
 1. ingestor-telegram saves a photo/voice/audio message with placeholder text
    (e.g. `[voice: 12s]`) and `triage_status='media_pending'` plus
    `metadata.media_kind`, `chat_id`, `msg_id`.
-2. media-worker polls these events (batch of 3, every 10s) using
-   `FOR UPDATE SKIP LOCKED`.
+2. media-worker polls these events (batch of 3, every 10s). `_claim_batch`
+   does the claim as ONE atomic `UPDATE ... FOR UPDATE SKIP LOCKED ...
+   RETURNING` that stamps a 10-minute `media_next_retry_at` lease on the
+   selected rows — a plain `SELECT ... FOR UPDATE` in its own transaction
+   released the lock the moment the `SELECT` closed, before the row was
+   actually processed, so a second worker instance (or the next poll
+   tick, if finalize crashed) could re-claim and double-process the same
+   event.
 3. For each: POST to ingestor-telegram `/media/download` → bytes + mime.
 4. Photo → **broker `POST /v1/chat?capability=vision`** with OpenAI-style
    multimodal content (`text` block + `image_url` data-URI) and an

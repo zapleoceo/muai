@@ -10,8 +10,11 @@ import httpx
 from aiogram import Bot, Dispatcher, F
 from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import Message
+
+from bot_telegram.formatting import format_error, format_reply, plain_fallback
 
 log = logging.getLogger(__name__)
 
@@ -83,7 +86,7 @@ async def cmd_start(message: Message):
 async def cmd_stats(message: Message):
     if not _owner_only(message):
         return
-    from sqlalchemy import func, select
+    from sqlalchemy import func, select, text
     from vera_shared.db.engine import get_session
     from vera_shared.db.models import EventRow
 
@@ -92,10 +95,9 @@ async def cmd_stats(message: Message):
         triaged = (await s.execute(
             select(func.count(EventRow.id)).where(EventRow.triage_status == "done")
         )).scalar() or 0
+        # Эмбеддинги вынесены в event_embeddings (миграция 011)
         with_emb = (await s.execute(
-            select(func.count(EventRow.id))
-            .where(EventRow.embedding_voyage_3.is_not(None))
-        )).scalar() or 0
+            text("SELECT COUNT(*) FROM event_embeddings"))).scalar() or 0
 
     pct_triaged = 100 * triaged // max(total_events, 1)
     pct_emb = 100 * with_emb // max(total_events, 1)
@@ -139,26 +141,34 @@ async def on_message(message: Message):
             await placeholder.edit_text(f"⚠ Ошибка поиска: HTTP {r.status_code}")
             return
         data = r.json()
-        answer = data.get("answer", "(пустой ответ)")
+        raw_answer = data.get("answer", "(пустой ответ)")
         provider = data.get("provider") or "—"
         cost = data.get("cost_usd", 0.0)
         n_results = len(data.get("results", []))
         n_history = data.get("history_used", 0)
 
-        footer = f"\n\n<i>via {provider}, ${cost:.4f}, {n_results} событий · {n_history} реплик контекста</i>"
-        # Telegram limit 4096. Footer (с <i></i>) оставляем целиком —
-        # резать может только сам answer, иначе разорвёт HTML-теги.
-        max_answer = 4096 - len(footer)
-        if len(answer) > max_answer:
-            answer = answer[:max_answer - 1] + "…"
-        sent = await placeholder.edit_text(answer + footer)
+        reply_text = format_reply(raw_answer, provider, cost, n_results, n_history)
+        try:
+            sent = await placeholder.edit_text(reply_text)
+        except TelegramBadRequest as e:
+            # Экранирование в format_reply должно исключать это, но это
+            # второй рубеж: если Telegram всё равно отклонил HTML (edge
+            # case юникода/лимитов) — шлём без всякого форматирования,
+            # чтобы Дима гарантированно получил ответ, а не тишину.
+            log.warning("HTML reply rejected by Telegram (%s) — plain fallback", e)
+            sent = await placeholder.edit_text(
+                plain_fallback(raw_answer, provider), parse_mode=None,
+            )
 
-        # Сохраняем ответ Веры тоже как событие
+        # Сохраняем ответ Веры тоже как событие (сырой текст, без escape)
         reply_msg_id = sent.message_id if hasattr(sent, "message_id") else placeholder.message_id
-        await _save_event(chat_id, reply_msg_id, "vera", answer)
+        await _save_event(chat_id, reply_msg_id, "vera", raw_answer)
     except Exception as e:
         log.exception("Reply failed: %s", e)
-        await placeholder.edit_text(f"⚠ Ошибка: {e}")
+        try:
+            await placeholder.edit_text(format_error(e), parse_mode=None)
+        except Exception:
+            log.exception("Failed to deliver error message to Telegram")
 
 
 async def main():

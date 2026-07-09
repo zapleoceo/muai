@@ -16,7 +16,8 @@ from datetime import datetime
 
 import httpx
 from instagrapi import Client
-from sqlalchemy import select
+from instagrapi.exceptions import ChallengeRequired, LoginRequired
+from sqlalchemy import select, update
 from vera_shared.crypto import decrypt
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
@@ -24,11 +25,18 @@ from vera_shared.db.models_sources import InstagramSessionRow
 
 log = logging.getLogger("ig")
 
+
+class SessionDead(Exception):
+    """Сессия IG протухла/челлендж — нужен ручной ре-логин."""
+
+
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://gateway:8000")
 INTERNAL_SECRET = os.environ.get("INTERNAL_SECRET", "")
 POLL_INTERVAL_S = int(os.environ.get("IG_POLL_INTERVAL_S", "90"))
 THREADS_PER_POLL = int(os.environ.get("IG_THREADS_PER_POLL", "20"))
-MSGS_PER_THREAD = int(os.environ.get("IG_MSGS_PER_THREAD", "20"))
+# Потолок сообщений на тред за прогон — safety от потери при активной переписке
+# (>окна между поллами). Ранний выход по уже виденным делает это дёшево.
+MSGS_PER_THREAD = int(os.environ.get("IG_MSGS_PER_THREAD", "50"))
 
 
 async def load_client() -> tuple[Client, str]:
@@ -53,24 +61,32 @@ async def post_event(payload: dict) -> None:
                      headers={"X-Internal-Secret": INTERNAL_SECRET})
 
 
-async def _already_seen(source_event_id: str) -> bool:
+async def _existing_sids(sids: list[str]) -> set[str]:
+    """Один запрос вместо N — какие source_event_id уже в БД."""
+    if not sids:
+        return set()
     async with get_session() as s:
-        existing = (await s.execute(
-            select(EventRow.id).where(
+        rows = (await s.execute(
+            select(EventRow.source_event_id).where(
                 EventRow.source == "instagram",
-                EventRow.source_event_id == source_event_id,
+                EventRow.source_event_id.in_(sids),
             )
-        )).scalar_one_or_none()
-    return existing is not None
+        )).scalars().all()
+    return set(rows)
 
 
 async def poll_once(cl: Client, username: str) -> int:
     """Один цикл polling. Возвращает кол-во новых сообщений."""
-    threads = await asyncio.to_thread(cl.direct_threads, amount=THREADS_PER_POLL)
+    try:
+        threads = await asyncio.to_thread(cl.direct_threads, amount=THREADS_PER_POLL)
+    except (LoginRequired, ChallengeRequired) as e:
+        raise SessionDead(str(e)) from e
     saved = 0
     for t in threads:
         try:
             msgs = await asyncio.to_thread(cl.direct_messages, t.id, amount=MSGS_PER_THREAD)
+        except (LoginRequired, ChallengeRequired) as e:
+            raise SessionDead(str(e)) from e
         except Exception as e:
             log.warning("thread %s msgs fetch failed: %s", t.id, e)
             continue
@@ -78,9 +94,10 @@ async def poll_once(cl: Client, username: str) -> int:
         chat_title = ", ".join(u.username for u in t.users) or t.thread_title or "(no users)"
         is_group = len(t.users) > 1
 
+        seen = await _existing_sids([f"ig:{t.id}:{m.id}" for m in msgs])
         for m in msgs:
             sid = f"ig:{t.id}:{m.id}"
-            if await _already_seen(sid):
+            if sid in seen:
                 continue
 
             sender_id = getattr(m, "user_id", None)
@@ -145,7 +162,18 @@ async def main():
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     await init_engine()
 
-    cl, username = await load_client()
+    # Нет активной сессии (не подключено / протухла) — не роняем процесс:
+    # restart:unless-stopped устроил бы вечный crash-loop, шумящий в мониторинге.
+    # Ждём и периодически перепроверяем — подхватит сессию сама после ре-логина.
+    while True:
+        try:
+            cl, username = await load_client()
+            break
+        except RuntimeError as e:
+            log.warning("Нет активной Instagram-сессии (%s) — жду ре-логин, "
+                        "проверка через 10 мин", e)
+            await asyncio.sleep(600)
+
     log.info("Loaded Instagram session for @%s, poll every %ss", username, POLL_INTERVAL_S)
 
     while True:
@@ -153,12 +181,23 @@ async def main():
             n = await poll_once(cl, username)
             if n:
                 log.info("polled: %d new messages saved", n)
-            # update last_polled_at
             async with get_session() as s:
-                row = (await s.execute(
-                    select(InstagramSessionRow).where(InstagramSessionRow.username == username)
-                )).scalar_one()
-                row.last_polled_at = datetime.utcnow()
+                await s.execute(
+                    update(InstagramSessionRow)
+                    .where(InstagramSessionRow.username == username)
+                    .values(last_polled_at=datetime.utcnow())
+                )
+        except SessionDead as e:
+            # Сессия мертва — помечаем неактивной (оператор увидит в UI) и
+            # выходим, вместо вечного долбления в мёртвую сессию.
+            log.error("Instagram-сессия @%s протухла — нужен ре-логин: %s", username, e)
+            async with get_session() as s:
+                await s.execute(
+                    update(InstagramSessionRow)
+                    .where(InstagramSessionRow.username == username)
+                    .values(is_active=False)
+                )
+            return
         except Exception as e:
             log.exception("poll failed: %s", e)
 

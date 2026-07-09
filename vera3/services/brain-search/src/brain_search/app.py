@@ -12,7 +12,6 @@ from typing import Any, AsyncIterator
 from fastapi import FastAPI
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text
-
 from vera_shared.db.engine import close_engine, get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import GmailAccountRow
@@ -26,6 +25,14 @@ from brain_search.query_parse import (
     parse_time_range,
     resolve_project,
     source_weight,
+)
+from brain_search.reports import (
+    build_monthly_report,
+    detect_report_request,
+    detect_target_field,
+    find_report_chat,
+    render_report_markdown,
+    render_simple_markdown,
 )
 
 log = logging.getLogger(__name__)
@@ -189,6 +196,26 @@ async def _self_context() -> str:
 @app.post("/search", response_model=AnswerResponse)
 async def search(query: SearchQuery) -> AnswerResponse:
     """Гибридный поиск + LLM-синтез ответа."""
+    # 0. «Отчёт помесячно за <год>» по конкретному чату — точная SQL-агрегация
+    # ВСЕХ сообщений периода, а не пересказ top-N LLM'ом (см. reports.py).
+    # Без chat-match не перехватываем — обычный путь справится сам.
+    wants_report, report_year = detect_report_request(query.q)
+    if wants_report:
+        chat_match = await find_report_chat(query.q)
+        if chat_match:
+            chat_id, chat_title = chat_match
+            report = await build_monthly_report(chat_id, chat_title, report_year)
+            target_field = detect_target_field(query.q)
+            log.info("Report: chat=%s year=%s messages=%d field=%s",
+                     chat_title, report_year, report["total_messages"], target_field)
+            answer = (render_simple_markdown(report, target_field) if target_field
+                      else render_report_markdown(report))
+            return AnswerResponse(
+                answer=answer,
+                results=[], provider="vera-report (точный расчёт, без LLM)",
+                cost_usd=0.0,
+            )
+
     # 1. Embed запроса — ВАЖНО передаём как list[str], НЕ str.
     # `embed(str)` сейчас правильно оборачивает в [str], но явный list безопаснее.
     q_vec: list[float] | None = None
@@ -236,8 +263,10 @@ async def search(query: SearchQuery) -> AnswerResponse:
         async with get_session() as s:
             stmt = text(f"""
                 SELECT id, source, source_event_id, occurred_at, content_text,
-                       importance, embedding_voyage_3, 0.0 AS rank, account
-                FROM events WHERE {where_sql}
+                       importance, ee.embedding, 0.0 AS rank, account
+                FROM events
+                LEFT JOIN event_embeddings ee ON ee.event_id = events.id
+                WHERE {where_sql}
                 ORDER BY occurred_at DESC
                 LIMIT :lim
             """)
@@ -278,12 +307,13 @@ async def search(query: SearchQuery) -> AnswerResponse:
             # (англ. письма) отрезаются LIMIT 200 в пользу FTS-матчей.
             stmt = text(f"""
                 SELECT id, source, source_event_id, occurred_at, content_text,
-                       importance, embedding_voyage_3,
+                       importance, ee.embedding,
                        ts_rank(to_tsvector('russian', content_text),
                                to_tsquery('russian', :tsq)) AS rank,
                        account,
                        {acc_match_expr} AS acc_match
                 FROM events
+                LEFT JOIN event_embeddings ee ON ee.event_id = events.id
                 WHERE (to_tsvector('russian', content_text)
                       @@ to_tsquery('russian', :tsq){acc_where}){time_where}{base_where}
                 ORDER BY acc_match DESC, rank DESC, occurred_at DESC
@@ -294,8 +324,9 @@ async def search(query: SearchQuery) -> AnswerResponse:
             if not rs and time_range:
                 stmt = text(f"""
                     SELECT id, source, source_event_id, occurred_at, content_text,
-                           importance, embedding_voyage_3, 0.0 AS rank, account
+                           importance, ee.embedding, 0.0 AS rank, account
                     FROM events
+                    LEFT JOIN event_embeddings ee ON ee.event_id = events.id
                     WHERE 1=1{time_where}{base_where}
                     ORDER BY occurred_at DESC LIMIT 200
                 """)
@@ -303,26 +334,32 @@ async def search(query: SearchQuery) -> AnswerResponse:
         elif time_range:
             stmt = text(f"""
                 SELECT id, source, source_event_id, occurred_at, content_text,
-                       importance, embedding_voyage_3, 0.0 AS rank, account
+                       importance, ee.embedding, 0.0 AS rank, account
                 FROM events
+                LEFT JOIN event_embeddings ee ON ee.event_id = events.id
                 WHERE 1=1{time_where}{base_where}
                 ORDER BY occurred_at DESC LIMIT 200
             """)
             rs = (await s.execute(stmt, time_params)).all()
         elif q_vec:
+            # Есть вектор запроса, но нет ключевых слов — берём недавние
+            # события С эмбеддингом (INNER JOIN сам фильтрует).
             stmt = text(f"""
                 SELECT id, source, source_event_id, occurred_at, content_text,
-                       importance, embedding_voyage_3, 0.0 AS rank, account
+                       importance, ee.embedding, 0.0 AS rank, account
                 FROM events
-                WHERE embedding_voyage_3 IS NOT NULL{base_where}
+                JOIN event_embeddings ee ON ee.event_id = events.id
+                WHERE 1=1{base_where}
                 ORDER BY occurred_at DESC LIMIT 200
             """)
             rs = (await s.execute(stmt)).all()
         else:
             stmt = text(f"""
                 SELECT id, source, source_event_id, occurred_at, content_text,
-                       importance, embedding_voyage_3, 0.0 AS rank, account
-                FROM events WHERE 1=1{base_where}
+                       importance, ee.embedding, 0.0 AS rank, account
+                FROM events
+                LEFT JOIN event_embeddings ee ON ee.event_id = events.id
+                WHERE 1=1{base_where}
                 ORDER BY occurred_at DESC LIMIT 30
             """)
             rs = (await s.execute(stmt)).all()

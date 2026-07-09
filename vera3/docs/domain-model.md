@@ -22,8 +22,13 @@ Append-only signal log. Every observation enters here.
 | `triage_status` | `pending` / `processing` / `done` / `error` / `dead` (retries exhausted) / `superseded` (semantic dedup, see `gateway/claude.py`) / `media_pending` (photo/voice waiting on broker vision/transcription) |
 | `triage_metadata` | JSONB: importance, topics, people, signals, needs_action |
 | `importance` | 0-100 (denormalized from triage_metadata for fast filters) |
-| `embedding_voyage_3` | pgvector 1024-dim |
 | `metadata` | JSONB, source-specific (chat_id, sender_username, direction, …) |
+
+Embedding is **not** a column on `events` (migration 011 moved it out —
+see `event_embeddings` below). Any ORM code doing `select(EventRow)` that
+still references `embedding_voyage_3` will crash with `UndefinedColumnError`
+— this happened once already after the split; the mapped_column was
+removed from `EventRow` and only a comment marks where it used to live.
 
 For `source='telegram'`, `metadata.chat_kind` is `private` / `group` /
 `channel` / `other` — the single field for that distinction. Computed by
@@ -36,11 +41,30 @@ don't rely on them) is the correct signal for "is this a real group chat."
 older `chat_type`/`is_supergroup` fields for events written before this
 field existed — no backfill/migration needed.
 
+### `event_embeddings` (migration 011)
+
+`EventEmbeddingRow` — Voyage embedding, split out of `events` into its own
+narrow table: `event_id` (PK, FK → `events.id` ON DELETE CASCADE),
+`embedding` (JSONB, 1024-dim vector), `created_at`. Reason: embeddings
+inline made `events` ~3.9GB, so every `COUNT`/`GROUP BY` scanned the whole
+table. Search/dedup/triage all read/write this table via `LEFT JOIN
+event_embeddings ee ON ee.event_id = events.id` — never the old column.
+
 ### `usage_log`
 
 LLM call accounting. Mirror of the broker's view for dashboard/analytics.
 Vera has **no `tokens` table** — dropped in migration 008. All provider
 keys live in AIbroker; Vera holds none. See `llm-broker.md`.
+
+`request_id` and `key_label` (migration 012) — captured from the broker's
+`/v1/chat` and `/v1/embed` responses (`request_id` arrives as an int,
+cast to `str` before insert — the column is `VARCHAR`). Joined into the
+dashboard's `/events` (renamed "log") page via a `LEFT JOIN LATERAL` on
+the latest row per `event_id`, showing which model/tokens/cost produced
+each event's triage. Batch-triaged group messages share ONE `usage_log`
+row (the broker call covers N events) — the log page shows those as
+"в пачке ✓" rather than a blank, since the event genuinely was processed,
+just not with its own billed row.
 
 ### Source-specific config
 
@@ -91,7 +115,11 @@ Neo4j swap is a one-file change.
 - `entities` — resolved real-world thing (person, group, channel, place, project)
 - `entity_aliases` — `(source, identifier) → entity_id` for identity resolution
 - `memberships` — "X is in Y" (e.g. user is member of TG group)
-- `relationships` — Graphiti-style edges with `predicate`, `fact`, `confidence`
+- `relationships` — Graphiti-style edges with `predicate`, `fact`, `confidence`.
+  `derived_from_event_id` has an FK → `events.id` ON DELETE SET NULL
+  (migration 013, added `NOT VALID` — enforces on new/changed rows without
+  scanning/locking existing ones). Deleting an event no longer leaves a
+  dangling reference in the graph.
 
 ### L2 — Patterns (reserved for future)
 

@@ -183,18 +183,31 @@ async def _claim_batch(limit: int = BATCH) -> list[dict]:
     """
     if limit <= 0:
         return []
+    # Атомарный lease-claim: одним UPDATE проставляем media_next_retry_at на
+    # 10 мин вперёд у выбранных строк и их же возвращаем. Это (а) не даёт
+    # второму инстансу/следующему поллу забрать те же события (claim атомарен
+    # со сменой состояния, чего SELECT FOR UPDATE в отдельной транзакции не
+    # давал), (б) если finalize упадёт — строка не зациклится, лиз оттолкнёт
+    # следующую попытку на 10 мин.
     async with get_session() as s:
         rs = (await s.execute(text("""
-            SELECT id, content_text, metadata
-            FROM events
-            WHERE triage_status = 'media_pending'
-              AND (
-                metadata->>'media_next_retry_at' IS NULL
-                OR (metadata->>'media_next_retry_at')::timestamp < NOW()
-              )
-            ORDER BY id
-            FOR UPDATE SKIP LOCKED
-            LIMIT :lim
+            UPDATE events SET metadata = jsonb_set(
+                COALESCE(metadata, '{}'::jsonb),
+                '{media_next_retry_at}',
+                to_jsonb((NOW() + interval '10 minutes')::text)
+            )
+            WHERE id IN (
+                SELECT id FROM events
+                WHERE triage_status = 'media_pending'
+                  AND (
+                    metadata->>'media_next_retry_at' IS NULL
+                    OR (metadata->>'media_next_retry_at')::timestamp < NOW()
+                  )
+                ORDER BY id
+                FOR UPDATE SKIP LOCKED
+                LIMIT :lim
+            )
+            RETURNING id, content_text, metadata
         """), {"lim": limit})).mappings().all()
     return [dict(r) for r in rs]
 

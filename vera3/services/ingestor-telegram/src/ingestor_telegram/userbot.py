@@ -230,7 +230,16 @@ async def main():
         try:
             await save_message(client, event.message)
         except Exception as e:
-            log.warning("Save failed: %s", e)
+            log.warning("Save failed, повтор once: %s", e)
+            try:
+                await save_message(client, event.message)
+            except Exception as e2:
+                # Сообщение потеряно live-путём. ERROR (не warning), чтобы было
+                # видно в мониторинге; backfill подхватит его позже по history.
+                log.error("Save FAILED — сообщение потеряно live (backfill подхватит): "
+                          "chat=%s msg=%s: %s",
+                          getattr(event.message, "chat_id", "?"),
+                          getattr(event.message, "id", "?"), e2)
 
     log.info("Listening for new messages…")
 

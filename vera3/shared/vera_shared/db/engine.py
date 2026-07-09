@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -43,9 +43,23 @@ async def init_engine(url: str | None = None, echo: bool = False) -> AsyncEngine
         return _engine
     actual_url = url or database_url()
     kwargs: dict = {"echo": echo}
-    # Pool sizing applies only to real databases, не SQLite
+    # Pool sizing applies only to real databases, не SQLite.
+    # pool_size = сколько соединений держим ОТКРЫТЫМИ постоянно (в простое).
+    # max_overflow = временные сверх пула, закрываются после использования.
+    # Раньше pool_size=10 на КАЖДУЮ из ~13 служб → ~57 idle-коннектов забивали
+    # память хоста (swap). 3 хватает низконагруженным сервисам; overflow=7
+    # сохраняет burst до 10 при пиках (эти соединения не висят в простое).
+    # DB_POOL_SIZE позволяет поднять на службе, которой реально нужно больше.
     if not actual_url.startswith("sqlite"):
-        kwargs.update(pool_pre_ping=True, pool_size=10, max_overflow=20)
+        pool_size = int(os.environ.get("DB_POOL_SIZE", "3"))
+        max_overflow = int(os.environ.get("DB_MAX_OVERFLOW", "7"))
+        kwargs.update(
+            pool_pre_ping=True,
+            pool_size=pool_size,
+            max_overflow=max_overflow,
+            pool_recycle=1800,   # переоткрывать соединение раз в 30 мин (свежесть)
+            pool_timeout=30,
+        )
     _engine = create_async_engine(actual_url, **kwargs)
     AsyncSessionLocal = async_sessionmaker(
         bind=_engine, expire_on_commit=False, class_=AsyncSession,

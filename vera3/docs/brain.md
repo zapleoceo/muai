@@ -169,6 +169,41 @@ processing is paused/paced.
   - LLM emits strict JSON each step: `{action: 'tool', name, params}` or `{action: 'answer', text}`.
   - Tools available: `search_events`, `memory.remember`, plus everything from `ingestor-telegram` via `/tools/spec` HTTP discovery.
   - Max 6 steps. Returns AnswerResponse with provider, cost, agent_trace.
+  - Each step is wrapped in `asyncio.wait_for(..., timeout=AGENT_STEP_TIMEOUT_S)`
+    (default 90s, env-overridable) — a hung broker call used to block
+    `/search` indefinitely; now it returns "LLM не ответил вовремя" instead.
+
+### Monthly reports (`reports.py`) — exact aggregation, no LLM
+
+For requests like "отчёт заказов помесячно за 2026 год": summing numbers
+across a whole year is the wrong job for retrieval-then-LLM-synthesize —
+even a widened limit truncates most months, and an LLM shouldn't be
+trusted to add up hundreds of numbers correctly anyway. This path
+intercepts the request in `search()` *before* the embed call and answers
+straight from SQL, `cost_usd=0.0`, `provider="vera-report"`:
+
+1. `detect_report_request(q)` — trigger words ("отчёт", "помесячно", "по
+   месяцам", "статистик") + optional year.
+2. `find_report_chat(q)` — matches a `project_membership.label` (exact
+   chat title) as a substring of the query. No match → falls through to
+   normal retrieval; we never guess which chat "заказы" means.
+3. `build_monthly_report(chat_id, chat_title, year)` — pulls every event
+   for that chat/year (no LIMIT — the whole point is a complete sum),
+   parses `key: value` lines appearing after a `---` body separator, and
+   groups by month. Fields are split into two kinds: flow fields (`b/n`,
+   `contract, SC`, `expenses` — summed per month) and snapshot fields
+   (`ost`, `Lead Point` — a running balance/score, so the month's value
+   is the *last* one seen, never a sum of snapshots).
+4. `detect_target_field(q)` — a business-term → field-name map
+   (`FIELD_INTENT_MAP`, e.g. "заказ" → `b/n`, set per Dima's own
+   definition for the "Jakarta: sms report" chat) controls the output
+   shape: `render_simple_markdown()` (compact "месяц — сумма" for one
+   field) by default, or `render_report_markdown()` (every field) when
+   the query says "детально"/"подробно"/"все поля".
+
+Chat message formats are not guaranteed stable over time — messages that
+don't parse as `key: value` are counted as "unstructured" and excluded
+from sums rather than silently treated as zero.
 
 ## bot-telegram
 
@@ -178,6 +213,13 @@ processing is paused/paced.
 - Owner-only — every message checked against `OWNER_TELEGRAM_ID`.
 - Persists user query AND Vera reply to `events` with `source='vera_chat'` — that's how conversation history survives bot restarts.
 - Calls `brain-search /search` with `conversation: {chat_id}` so search itself pulls last N pairs as context.
+- `bot_telegram/formatting.py` — `format_reply()` HTML-escapes the LLM
+  answer before sending with `parse_mode=HTML` (unescaped `<no-reply@...>`
+  style addresses in an answer used to break Telegram's HTML parser and
+  silently drop the reply). `plain_fallback()` is the second line of
+  defense: if Telegram still rejects the HTML (`TelegramBadRequest`),
+  resend as plain text rather than lose the answer. `format_error()`
+  formats the user-facing error message on any other failure.
 
 ## Identity / memory
 

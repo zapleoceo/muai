@@ -13,6 +13,7 @@ from typing import Any
 
 from sqlalchemy import (
     JSON,
+    BigInteger,
     Boolean,
     DateTime,
     Float,
@@ -136,7 +137,9 @@ class RelationshipRow(Base):
     predicate: Mapped[str] = mapped_column(String(80), nullable=False)
     fact: Mapped[str | None] = mapped_column(Text, nullable=True)
     confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.6)
-    derived_from_event_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    derived_from_event_id: Mapped[int | None] = mapped_column(
+        BigInteger, ForeignKey("events.id", ondelete="SET NULL"), nullable=True,
+    )
     first_seen_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(),
     )

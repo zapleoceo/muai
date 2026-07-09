@@ -60,8 +60,9 @@ def decrypt(stored: str, secret: str | None = None) -> str:
     plaintext value" vector."""
     if not stored.startswith(ENCRYPTED_PREFIX):
         if os.environ.get("ALLOW_PLAINTEXT_TOKENS") == "1":
-            log.warning("Plaintext secret in DB (legacy bypass active) — len=%d",
-                        len(stored))
+            # DEBUG, не WARNING: длина секрета — слабый сигнал, а на INFO/WARNING
+            # это шумит в проде, если флаг случайно оставлен включённым.
+            log.debug("Plaintext secret in DB (legacy bypass active)")
             return stored
         raise InvalidToken(
             "Stored secret is not encrypted (no enc1: prefix). For a legacy "

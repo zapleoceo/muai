@@ -30,6 +30,23 @@ Push to `master` → `.github/workflows/deploy.yml` runs **four jobs**:
    `command="/usr/local/bin/vera3-deploy"` — anything the client sends
    is ignored.
 
+### ⚠️ Manual server edits are NOT durable
+
+`vera3-deploy` does `git reset --hard origin/master` in the checkout,
+then `rsync -az --delete` that checkout onto `/var/www/vera3/` (env files
+and sessions excluded, everything else replaced). Any file edited or
+`scp`'d directly onto the server **that isn't committed to `master`**
+gets silently wiped back to whatever `master` last had, the next time
+this pipeline runs (push to master, or a manual `workflow_dispatch`) —
+even if that run isn't about your change at all. This already happened
+once (2026-07): a long session's worth of uncommitted hotfixes across
+~20 files got reverted in one shot, including a fix that was masking a
+production crash, which promptly came back. Database migrations are safe
+(they're not part of the file sync — Postgres state persists
+independently), but application code is not. If you patch the server
+directly for a live incident, commit-and-push the same fix before
+considering it done — otherwise it's living on borrowed time.
+
 ### What this guarantees
 
 Any commit that reaches production has: passing tests, ≥75% coverage on

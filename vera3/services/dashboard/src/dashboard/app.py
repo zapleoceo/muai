@@ -4,14 +4,14 @@ from __future__ import annotations
 import logging
 import os
 from contextlib import asynccontextmanager
-from datetime import datetime, timedelta
+from datetime import datetime
 from html import escape as _esc
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import httpx
 from fastapi import FastAPI, Form, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import func, select, text
+from sqlalchemy import select, text
 from vera_shared.control import (
     SETTINGS,
     get_backfill_max_per_hour,
@@ -22,7 +22,6 @@ from vera_shared.control import (
     set_control,
 )
 from vera_shared.db.engine import close_engine, get_session, init_engine
-from vera_shared.db.models import EventRow, UsageLogRow
 from vera_shared.db.models_sources import (
     GmailAccountRow,
     InstagramSessionRow,
@@ -37,6 +36,7 @@ from dashboard.auth import (
     require_owner,
     verify_telegram_auth,
 )
+from dashboard.stats import get_sources_stats, get_stats
 
 
 def esc(v) -> str:
@@ -100,8 +100,10 @@ async def favicon_ico() -> Response:
                      headers={"Cache-Control": "public, max-age=86400"})
 
 from dashboard.gmail_oauth import router as gmail_oauth_router
+from dashboard.instagram_login import router as instagram_login_router
 
 app.include_router(gmail_oauth_router)
+app.include_router(instagram_login_router)
 
 
 def _set_session_cookie(resp: Response) -> None:
@@ -166,49 +168,23 @@ async def home(request: Request):
     except HTTPException:
         return RedirectResponse(url="/login", status_code=303)
 
-    async with get_session() as s:
-        total_events = (await s.execute(select(func.count(EventRow.id)))).scalar() or 0
-        triaged = (await s.execute(select(func.count(EventRow.id)).where(EventRow.triage_status == "done"))).scalar() or 0
-        pending = (await s.execute(select(func.count(EventRow.id)).where(EventRow.triage_status == "pending"))).scalar() or 0
-        with_emb = (await s.execute(
-            select(func.count(EventRow.id)).where(EventRow.embedding_voyage_3.is_not(None))
-        )).scalar() or 0
-
-        today = datetime.utcnow().date()
-        cost_today = (await s.execute(
-            select(func.coalesce(func.sum(UsageLogRow.cost_usd), 0.0))
-            .where(UsageLogRow.created_at >= today)
-        )).scalar() or 0.0
-        calls_today = (await s.execute(
-            select(func.count(UsageLogRow.id)).where(UsageLogRow.created_at >= today)
-        )).scalar() or 0
-        cost_month = (await s.execute(
-            select(func.coalesce(func.sum(UsageLogRow.cost_usd), 0.0))
-            .where(UsageLogRow.created_at >= today - timedelta(days=30))
-        )).scalar() or 0.0
-
-        # Top sources
-        sources = (await s.execute(text(
-            "SELECT source, COUNT(*) FROM events GROUP BY source ORDER BY 2 DESC LIMIT 5"
-        ))).all()
-
-        # Backfill progress: events added in last hour (used by /_progress route)
-        hour_ago = datetime.utcnow() - timedelta(hours=1)
-        # Triage rate
-        triage_1h = (await s.execute(text(
-            "SELECT COUNT(*) FROM usage_log WHERE workflow='triage' AND created_at >= :t"
-        ), {"t": hour_ago})).scalar() or 0
-        # Earliest event date (depth of history)
-        earliest = (await s.execute(
-            select(func.min(EventRow.occurred_at))
-        )).scalar()
+    st = await get_stats()
+    total_events = st["total"]
+    triaged = st["done"]
+    pending = st["backlog_total"]        # вся очередь, не только pending
+    with_emb = st["with_emb"]
+    cost_today = st["cost_today"]
+    calls_today = st["calls_today"]
+    cost_month = st["cost_month"]
+    triage_1h = st["triage_1h"]
+    earliest = st["earliest"]
 
     pct_triaged = 100 * triaged // max(total_events, 1)
     pct_emb = 100 * with_emb // max(total_events, 1)
 
     sources_html = "".join(
         f'<div class="row"><span>{esc(src)}</span><span class="mute">{cnt:,}</span></div>'
-        for src, cnt in sources
+        for src, cnt in st["sources_top"][:5]
     )
 
     # ETA для триажа
@@ -246,7 +222,7 @@ async def home(request: Request):
             <div class="card-sub">{calls_today:,} LLM-вызовов · мес ${cost_month:.2f}</div></div>
         </div>
 
-        <div id="live-progress" class="section" hx-get="/_progress" hx-trigger="load, every 10s" hx-swap="innerHTML">
+        <div id="live-progress" class="section" hx-get="/_progress" hx-trigger="load, every 30s" hx-swap="innerHTML">
           <h2>📥 Live прогресс</h2>
           <div class="mute" style="font-size:13px">загружается…</div>
         </div>
@@ -311,46 +287,25 @@ async def control_backfill_rate(request: Request, max_per_hour: int = Form(0)):
 
 async def _build_progress_fragment() -> str:
     from datetime import datetime as dt
-    from datetime import timedelta as td
     now = dt.utcnow()
     paused = await is_backfill_paused()
     max_per_hour = await get_backfill_max_per_hour()
 
+    # Всё тяжёлое — из общего кэша (один проход по БД раз в TTL, см. stats.py).
+    st = await get_stats()
+    ingest_1h = st["ingest_1h"]
+    ingest_24h = st["ingest_24h"]
+    triage_1h = st["triage_1h"]
+    triage_24h = st["triage_24h"]
+    pending = st["pending"]
+    media_pending = st["media_pending"]
+    errored = st["error"]
+    dead = st["dead"]
+    backlog_total = st["backlog_total"]
+    per_source_1h = st["per_source_1h"]
+
     async with get_session() as s:
-        # Темп прихода событий
-        ingest_1h = (await s.execute(
-            select(func.count(EventRow.id)).where(EventRow.received_at >= now - td(hours=1))
-        )).scalar() or 0
-        ingest_24h = (await s.execute(
-            select(func.count(EventRow.id)).where(EventRow.received_at >= now - td(hours=24))
-        )).scalar() or 0
-        # Темп триажа
-        triage_1h = (await s.execute(text(
-            "SELECT COUNT(*) FROM usage_log WHERE workflow='triage' AND created_at >= :t"
-        ), {"t": now - td(hours=1)})).scalar() or 0
-        triage_24h = (await s.execute(text(
-            "SELECT COUNT(*) FROM usage_log WHERE workflow='triage' AND created_at >= :t"
-        ), {"t": now - td(hours=24)})).scalar() or 0
-        # Backlog breakdown — pending + media_pending (waiting for vision/whisper) +
-        # error (retry-loop will pick them up) + dead (exhausted retries → manual review).
-        # Bar should reflect ALL waiting work, not just pending — otherwise stuck error
-        # batches stay invisible (this is exactly what bit us with the 2018 record_free_usage rows).
-        backlog_breakdown = dict((await s.execute(text(
-            "SELECT triage_status, COUNT(*) FROM events "
-            "WHERE triage_status IN ('pending','media_pending','error','dead') "
-            "GROUP BY 1"
-        ))).all())
-        pending = backlog_breakdown.get("pending", 0)
-        media_pending = backlog_breakdown.get("media_pending", 0)
-        errored = backlog_breakdown.get("error", 0)
-        dead = backlog_breakdown.get("dead", 0)
-        backlog_total = pending + media_pending + errored + dead
-        # Per-source за последний час (что льётся)
-        per_source_1h = (await s.execute(text(
-            "SELECT source, COUNT(*) FROM events WHERE received_at >= :t "
-            "GROUP BY source ORDER BY 2 DESC"
-        ), {"t": now - td(hours=1)})).all()
-        # Активные Gmail аккаунты + их прогресс
+        # Gmail-аккаунты — лёгкий запрос (3 строки), держим живым (не кэшируем).
         gmail = (await s.execute(
             select(GmailAccountRow).order_by(GmailAccountRow.id)
         )).scalars().all()
@@ -513,6 +468,10 @@ EVENTS_COLUMN_HINTS: dict[str, str] = {
     "account": "Аккаунт, бот или ящик, через который пришло событие",
     "time": "Когда событие произошло (occurred_at)",
     "preview": "Первые символы текста события",
+    "req": "ID запроса к брокеру (request_id) — последний LLM-вызов по этому событию",
+    "model": "Какая модель отвечала на этот запрос (через aibroker)",
+    "tokens": "Токены запроса: вход → выход",
+    "cost": "Стоимость запроса к брокеру, USD",
 }
 
 
@@ -525,27 +484,66 @@ async def events_page(request: Request, limit: int = Query(100, ge=1, le=500),  
     except HTTPException:
         return RedirectResponse("/login", status_code=303)
 
-    q = select(EventRow).order_by(EventRow.occurred_at.desc()).limit(limit)
+    # LATERAL-джойн подтягивает ПОСЛЕДНИЙ брокер-вызов по каждому событию
+    # (request_id / модель / токены / цена) из usage_log — индекс ix_usage_event.
+    where = []
+    params: dict[str, Any] = {"limit": limit}
     if source:
-        q = q.where(EventRow.source == source)
+        where.append("e.source = :source")
+        params["source"] = source
     if status:
-        q = q.where(EventRow.triage_status == status)
+        where.append("e.triage_status = :status")
+        params["status"] = status
+    where_sql = ("WHERE " + " AND ".join(where)) if where else ""
 
     async with get_session() as s:
-        rows = (await s.execute(q)).scalars().all()
+        rows = (await s.execute(text(f"""
+            SELECT e.id, e.triage_status, e.importance, e.source, e.account,
+                   e.occurred_at, e.content_text, e.nature,
+                   EXISTS(SELECT 1 FROM event_embeddings ee WHERE ee.event_id = e.id) AS has_emb,
+                   u.request_id, u.model, u.tokens_in, u.tokens_out, u.cost_usd
+            FROM events e
+            LEFT JOIN LATERAL (
+                SELECT request_id, model, tokens_in, tokens_out, cost_usd
+                FROM usage_log ul
+                WHERE ul.event_id = e.id
+                ORDER BY ul.created_at DESC
+                LIMIT 1
+            ) u ON true
+            {where_sql}
+            ORDER BY e.occurred_at DESC
+            LIMIT :limit
+        """), params)).mappings().all()
 
     tbody = []
     for e in rows:
         emoji, desc = TRIAGE_STATUS_INFO.get(
-            e.triage_status, ("?", "неизвестный статус триажа"))
-        status_title = esc(f"{e.triage_status or '(пусто)'} — {desc}")
-        imp = e.importance if e.importance is not None else "—"
-        preview = esc((e.content_text or "")[:160])
+            e["triage_status"], ("?", "неизвестный статус триажа"))
+        status_title = esc(f"{e['triage_status'] or '(пусто)'} — {desc}")
+        imp = e["importance"] if e["importance"] is not None else "—"
+        preview = esc((e["content_text"] or "")[:160])
+        # Три состояния события: свой брокер-вызов / обработано в пачке / ещё не триажено.
+        has_own = e["model"] is not None
+        in_batch = (not has_own) and e["nature"] is not None and e["has_emb"]
+        req = e["request_id"]
+        req_cell = f'<span title="{esc(req)}">{esc(req[:8])}…</span>' if req else "—"
+        if has_own:
+            model = esc(e["model"])
+            tokens = f'{e["tokens_in"]}→{e["tokens_out"]}'
+            cost = f'${e["cost_usd"]:.5f}'
+        elif in_batch:
+            model = '<span class="mute" title="классифицировано групповым вызовом — токены учтены в строке первого события пачки">в пачке ✓</span>'
+            tokens = '<span class="mute">учтено в пачке</span>'
+            cost = "—"
+        else:
+            model = tokens = cost = "—"
         tbody.append(
-            f'<tr><td>{e.id}</td><td title="{status_title}">{emoji}</td><td>{imp}</td>'
-            f'<td>{esc(e.source)}</td><td>{esc(e.account or "—")}</td>'
-            f'<td class="mute">{e.occurred_at.strftime("%Y-%m-%d %H:%M")}</td>'
-            f'<td class="preview">{preview}…</td></tr>'
+            f'<tr><td>{e["id"]}</td><td title="{status_title}">{emoji}</td><td>{imp}</td>'
+            f'<td>{esc(e["source"])}</td><td>{esc(e["account"] or "—")}</td>'
+            f'<td class="mute">{e["occurred_at"].strftime("%Y-%m-%d %H:%M")}</td>'
+            f'<td class="preview">{preview}…</td>'
+            f'<td class="mute">{req_cell}</td><td>{model}</td>'
+            f'<td class="mute">{tokens}</td><td class="mute">{cost}</td></tr>'
         )
 
     filters = f"""
@@ -573,7 +571,7 @@ async def events_page(request: Request, limit: int = Query(100, ge=1, le=500),  
         for col, hint in EVENTS_COLUMN_HINTS.items()
     )
     return HTMLResponse(_render("events", f"""
-        <h2>События ({len(rows)})</h2>
+        <h2>Log ({len(rows)})</h2>
         {filters}
         <table class="data">
           <thead><tr>{thead}</tr></thead>
@@ -621,9 +619,21 @@ def self_ig_block(ig_sessions, ig_total, ig_1h, ig_24h, ig_last,
         for title, is_group, cnt in ig_top_threads
     ) or '<div class="mute">пока нет данных</div>'
 
+    any_inactive = any(not s.is_active for s in ig_sessions) or not ig_sessions
+    connect_btn = (
+        '<a href="/api/instagram/start" '
+        'style="display:inline-block;margin:10px 0;padding:10px 18px;'
+        'background:#4dabf7;color:#fff;border-radius:8px;font-weight:600">'
+        '🔑 Подключить Instagram</a>'
+        + ('<div class="mute" style="font-size:12px;margin-top:4px">'
+           'Сессия неактивна/отсутствует — жми и войди заново (логин+пароль, '
+           'при 2FA/challenge попросит код).</div>' if any_inactive else "")
+    )
+
     return f"""
         <h2 style="margin-top:32px">📸 Instagram</h2>
         <div style="margin-bottom:12px">Статус потока: {freshness}</div>
+        {connect_btn}
         <table class="data">
           <thead><tr><th>id</th><th>username</th><th>state</th><th>last polled</th></tr></thead>
           <tbody>{''.join(rows) or '<tr><td colspan=4 class="mute">нет сессий</td></tr>'}</tbody>
@@ -662,9 +672,8 @@ async def sources_page(request: Request):
         return RedirectResponse("/login", status_code=303)
 
     now = datetime.utcnow()
-    hour_ago = now - timedelta(hours=1)
-    day_ago = now - timedelta(hours=24)
 
+    # Списки аккаунтов/сессий — маленькие таблицы, держим живыми.
     async with get_session() as s:
         gmail_rows = (await s.execute(
             select(GmailAccountRow).order_by(GmailAccountRow.id)
@@ -675,68 +684,20 @@ async def sources_page(request: Request):
         ig_sessions = (await s.execute(
             select(InstagramSessionRow).order_by(InstagramSessionRow.id)
         )).scalars().all()
-        events_by_src = (await s.execute(text(
-            "SELECT source, COUNT(*) FROM events GROUP BY source ORDER BY 2 DESC"
-        ))).all()
-        # Telegram стата
-        tg_total = (await s.execute(text(
-            "SELECT COUNT(*) FROM events WHERE source='telegram'"
-        ))).scalar() or 0
-        tg_1h = (await s.execute(text(
-            "SELECT COUNT(*) FROM events WHERE source='telegram' AND received_at >= :t"
-        ), {"t": hour_ago})).scalar() or 0
-        tg_24h = (await s.execute(text(
-            "SELECT COUNT(*) FROM events WHERE source='telegram' AND received_at >= :t"
-        ), {"t": day_ago})).scalar() or 0
-        tg_by_type = (await s.execute(text(
-            "SELECT COALESCE(metadata->>'chat_type', category) AS t, COUNT(*) "
-            "FROM events WHERE source='telegram' GROUP BY 1 ORDER BY 2 DESC"
-        ))).all()
-        tg_by_direction = (await s.execute(text(
-            "SELECT COALESCE(metadata->>'direction','?'), COUNT(*) "
-            "FROM events WHERE source='telegram' GROUP BY 1 ORDER BY 2 DESC"
-        ))).all()
-        tg_top_chats = (await s.execute(text(
-            "SELECT COALESCE(metadata->>'chat_title','(unknown)'), "
-            "COALESCE(metadata->>'chat_type','?'), COUNT(*) "
-            "FROM events WHERE source='telegram' "
-            "GROUP BY 1,2 ORDER BY 3 DESC LIMIT 20"
-        ))).all()
-        tg_last = (await s.execute(text(
-            "SELECT MAX(received_at) FROM events WHERE source='telegram'"
-        ))).scalar()
-        # Instagram стата
-        ig_total = (await s.execute(text(
-            "SELECT COUNT(*) FROM events WHERE source='instagram'"
-        ))).scalar() or 0
-        ig_1h = (await s.execute(text(
-            "SELECT COUNT(*) FROM events WHERE source='instagram' AND received_at >= :t"
-        ), {"t": hour_ago})).scalar() or 0
-        ig_24h = (await s.execute(text(
-            "SELECT COUNT(*) FROM events WHERE source='instagram' AND received_at >= :t"
-        ), {"t": day_ago})).scalar() or 0
-        ig_by_direction = (await s.execute(text(
-            "SELECT COALESCE(metadata->>'direction','?'), COUNT(*) "
-            "FROM events WHERE source='instagram' GROUP BY 1 ORDER BY 2 DESC"
-        ))).all()
-        ig_top_threads = (await s.execute(text(
-            "SELECT COALESCE(metadata->>'thread_title','(unknown)'), "
-            "COALESCE((metadata->>'is_group')::text,'false'), COUNT(*) "
-            "FROM events WHERE source='instagram' "
-            "GROUP BY 1,2 ORDER BY 3 DESC LIMIT 20"
-        ))).all()
-        ig_last = (await s.execute(text(
-            "SELECT MAX(received_at) FROM events WHERE source='instagram'"
-        ))).scalar()
 
-    # Gmail
+    # Все тяжёлые агрегаты по events — из кэша (один набор сканов раз в TTL).
+    ss = await get_sources_stats()
+    events_by_src = ss["events_by_src"]
+    tg_total, tg_1h, tg_24h, tg_last = ss["tg_total"], ss["tg_1h"], ss["tg_24h"], ss["tg_last"]
+    tg_by_type, tg_by_direction, tg_top_chats = ss["tg_by_type"], ss["tg_by_direction"], ss["tg_top_chats"]
+    ig_total, ig_1h, ig_24h, ig_last = ss["ig_total"], ss["ig_1h"], ss["ig_24h"], ss["ig_last"]
+    ig_by_direction, ig_top_threads = ss["ig_by_direction"], ss["ig_top_threads"]
+    gmail_counts = ss["gmail_counts"]
+
+    # Gmail (per-account count из кэша, без N+1)
     gmail_html = []
     for g in gmail_rows:
-        async with get_session() as s:
-            ev_count = (await s.execute(
-                select(func.count(EventRow.id))
-                .where(EventRow.source == "gmail", EventRow.account == g.email)
-            )).scalar() or 0
+        ev_count = gmail_counts.get(g.email, 0)
         last = g.last_polled_at.strftime("%Y-%m-%d %H:%M") if g.last_polled_at else "никогда"
         # Честный статус: needs_reauth важнее is_active
         if getattr(g, "needs_reauth", False):
@@ -881,19 +842,29 @@ async def search_ui(request: Request, q: str = Form(...)):  # noqa: B008
     try:
         async with httpx.AsyncClient(timeout=90) as c:
             r = await c.post(f"{SEARCH_URL}/search", json={"q": q, "limit": 15})
-        data = r.json()
-        # Полный HTML escape ответа + перевод \n в <br>. quote=True закрывает
-        # XSS через атрибуты, не только теги.
-        answer = esc(data.get("answer", "—")).replace("\n", "<br>")
-        provider = esc(data.get("provider") or "—")
-        cost = float(data.get("cost_usd", 0.0))
-        n = len(data.get("results", []))
+    except httpx.HTTPError as e:
+        log.warning("search proxy: brain-search недоступен: %s", e)
         return HTMLResponse(
-            f'<div class="answer"><b>Ответ:</b><br>{answer}</div>'
-            f'<div class="meta">via {provider}, ${cost:.4f}, {n} событий</div>'
+            '<div class="error">Поиск недоступен: сервис не отвечает</div>',
+            status_code=502,
         )
-    except Exception as e:
-        return HTMLResponse(f'<div class="error">Ошибка: {esc(str(e))}</div>')
+    if r.status_code != 200:
+        log.warning("search proxy: brain-search HTTP %s: %s", r.status_code, r.text[:200])
+        return HTMLResponse(
+            f'<div class="error">Поиск вернул ошибку (HTTP {r.status_code})</div>',
+            status_code=502,
+        )
+    data = r.json()
+    # Полный HTML escape ответа + перевод \n в <br>. quote=True закрывает
+    # XSS через атрибуты, не только теги.
+    answer = esc(data.get("answer", "—")).replace("\n", "<br>")
+    provider = esc(data.get("provider") or "—")
+    cost = float(data.get("cost_usd", 0.0))
+    n = len(data.get("results", []))
+    return HTMLResponse(
+        f'<div class="answer"><b>Ответ:</b><br>{answer}</div>'
+        f'<div class="meta">via {provider}, ${cost:.4f}, {n} событий</div>'
+    )
 
 
 # ─── Settings ──────────────────────────────────────────────────────────────
@@ -1007,7 +978,7 @@ async def control_settings(request: Request):
 def _render(active: str, body: str) -> str:
     nav = []
     items = [("home", "/", "главная"),
-             ("events", "/events", "события"), ("sources", "/sources", "источники"),
+             ("events", "/events", "log"), ("sources", "/sources", "источники"),
              ("entities", "/entities/duplicates", "сущности"),
              ("settings", "/settings", "настройки")]
     for key, href, label in items:

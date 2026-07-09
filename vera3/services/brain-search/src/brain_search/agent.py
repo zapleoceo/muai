@@ -12,6 +12,7 @@ Loop until 'answer' or max_steps. Telemetry logged per step.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -20,10 +21,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
-
 from vera_shared.llm.client import LLMCallFailed, chat
 
 log = logging.getLogger(__name__)
+
+# Потолок на ОДИН шаг агента — иначе зависший брокер-вызов вешает /search навсегда.
+AGENT_STEP_TIMEOUT_S = float(os.environ.get("AGENT_STEP_TIMEOUT_S", "90"))
 
 TELEGRAM_TOOLS_URL = os.environ.get(
     "TELEGRAM_TOOLS_URL", "http://ingestor-telegram:8000"
@@ -157,8 +160,10 @@ async def _exec_search_events(q: str, source: str = "any",
                                 date_from: str | None = None,
                                 date_to: str | None = None) -> dict[str, Any]:
     from datetime import timedelta
+
     from sqlalchemy import text
     from vera_shared.db.engine import get_session
+
     from brain_search.query_parse import TZ_OFFSET_H
 
     STOPWORDS = {"что", "как", "и", "в", "на", "о", "по", "у", "для", "это",
@@ -229,6 +234,7 @@ async def _exec_search_events(q: str, source: str = "any",
 async def _exec_memory_remember(fact: str, tags: list[str] | None = None,
                                   confidence: float = 0.8) -> dict[str, Any]:
     from datetime import datetime
+
     from vera_shared.db.engine import get_session
     from vera_shared.db.models import EventRow
 
@@ -338,16 +344,19 @@ async def run_agent(
             )
 
         try:
-            raw, meta = await chat(
+            raw, meta = await asyncio.wait_for(chat(
                 messages=[{"role": "user", "content": step_prompt}],
                 capability="chat:smart",
                 response_format={"type": "json_object"},
                 max_tokens=1200,
                 temperature=0.2,
                 workflow="agent_loop",
-            )
+            ), timeout=AGENT_STEP_TIMEOUT_S)
             trace.provider_last = meta.get("provider")
             trace.cost_usd += float(meta.get("cost_usd") or 0)
+        except asyncio.TimeoutError:
+            trace.answer = "LLM не ответил вовремя (агентный шаг превысил таймаут)."
+            return trace
         except LLMCallFailed as e:
             trace.answer = f"LLM недоступен ({e})."
             return trace

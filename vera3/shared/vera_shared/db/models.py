@@ -15,6 +15,7 @@ from sqlalchemy import (
     Boolean,
     DateTime,
     Float,
+    ForeignKey,
     Index,
     Integer,
     String,
@@ -92,12 +93,9 @@ class EventRow(Base):
         DateTime, nullable=False, server_default=func.now(),
     )
 
-    # Embedding — pgvector. Создаётся отдельно через init_pgvector migration.
-    # Можем хранить как bytes (raw) или использовать pgvector type.
-    # Для гибкости — JSONB пока, pgvector type подключим в SQL миграции.
-    embedding_voyage_3: Mapped[list[float] | None] = mapped_column(
-        JsonType, nullable=True,
-    )
+    # Embedding вынесен в отдельную таблицу event_embeddings (миграция 011).
+    # Колонка events.embedding_voyage_3 удалена из БД (VACUUM FULL) — ORM-атрибут
+    # тоже убран, иначе любой SELECT EventRow падает на несуществующей колонке.
 
     # Triage metadata (results от brain-triage)
     triage_metadata: Mapped[dict[str, Any] | None] = mapped_column(JsonType, nullable=True)
@@ -146,6 +144,24 @@ class JobRow(Base):
     )
 
 
+class EventEmbeddingRow(Base):
+    """Voyage-эмбеддинг события — вынесен из events (миграция 011).
+
+    Отдельная узкая таблица: событий ~396k × ~6.5КБ вектор = ~2.5ГБ. Держать
+    их inline в events заставляло каждый COUNT/GROUP BY читать 3.9ГБ. Здесь
+    поиск джойнит по event_id только когда реально нужен вектор.
+    """
+    __tablename__ = "event_embeddings"
+
+    event_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("events.id", ondelete="CASCADE"), primary_key=True,
+    )
+    embedding: Mapped[list[float]] = mapped_column(JsonType, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(),
+    )
+
+
 class ProjectMembershipRow(Base):
     """Принадлежность чата/человека/аккаунта к проекту.
 
@@ -179,6 +195,7 @@ class UsageLogRow(Base):
     __tablename__ = "usage_log"
     __table_args__ = (
         Index("ix_usage_provider_date", "provider", "created_at"),
+        Index("ix_usage_event", "event_id", "created_at"),
     )
 
     id: Mapped[int] = mapped_column(BigIntPk, primary_key=True, autoincrement=True)
@@ -193,6 +210,9 @@ class UsageLogRow(Base):
     error_kind: Mapped[str | None] = mapped_column(String(50), nullable=True)
     workflow: Mapped[str | None] = mapped_column(String(50), nullable=True)
     event_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    # Из ответа брокера — трейс конкретного запроса к aibroker.
+    request_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    key_label: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(),
     )

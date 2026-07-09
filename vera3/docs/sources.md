@@ -19,13 +19,37 @@ via `gateway /event/<source>` with `X-Internal-Secret`.
 - Accounts: 3 (`demoniwwwe@gmail.com`, `zaporozec_d@itstep.org`, `zapleosoft@gmail.com`).
 - Critical caveat: tokens get revoked by Google if the OAuth app sits in
   "Testing" mode for >7 days idle. See `security.md` for re-auth flow.
+- `poller.fetch_messages()` walks Gmail's `nextPageToken` until exhausted
+  (was capped at the first 30-message page — any day with more mail than
+  that silently lost the rest, since the polling cursor still advanced
+  past it). `GMAIL_MAX_PER_RUN` (default 500) is now a safety ceiling, not
+  a per-page limit.
 
 ## instagram
 
 - Container: `vera3-ingestor-instagram`
 - Mechanism: `instagrapi` (unofficial mobile API).
-- Auth: sessionid imported from owner's Chrome cookies (see `scripts/auth_ig_sessionid.py`).
-- Caveat: Instagram aggressively logs out idle sessions. Re-auth ~weekly via the same script.
+- Auth: **dashboard admin UI** — `/sources` → "🔑 Подключить Instagram"
+  button → `dashboard/instagram_login.py` (`instagram_start_form`,
+  `instagram_start`, `instagram_verify`). Username/password login with
+  inline 2FA/challenge-code handling (same flow shape as Stepan2's
+  `ig_client.py`, no proxy — this is a personal account, not multi-tenant).
+  On success the session (`cl.get_settings()`) is encrypted and upserted
+  into `instagram_sessions`, `is_active=True`. The password is held only
+  in an in-memory flow dict for the duration of the 2FA round-trip (TTL
+  600s) — never logged, never persisted in plaintext.
+- If there's no active session, `load_client()` raises `RuntimeError`;
+  `main()` catches it and waits (re-checks every 10 min) instead of
+  crashing — `restart:unless-stopped` previously crash-looped the
+  container forever (RestartCount climbing unbounded) whenever the
+  session was inactive, which is the common case between logins.
+- `SessionDead` (raised from `poll_once()` on `LoginRequired`/
+  `ChallengeRequired` mid-poll) marks the session `is_active=False` and
+  exits the poll loop cleanly, instead of retrying against a dead session
+  every `IG_POLL_INTERVAL_S`.
+- Dedup batches one query per thread (`_existing_sids`) instead of one
+  `SELECT` per message. `IG_MSGS_PER_THREAD` default raised 20→50 — a
+  20-message window could miss messages in an active thread between polls.
 - Tool: `[shared post]` / `[reel]` / `[voice]` / `[media]` placeholders for non-text.
 
 ## vera_chat

@@ -75,11 +75,15 @@ async def sync_tick() -> int:
     # Получим существующие keys для dedup
     keys_to_check = [(r["source"], r["source_event_id"] or f"v2migrated:{r['v2_id']}")
                      for r in rows]
-    async with get_session() as s:
-        for batch_start in range(0, len(keys_to_check), 500):
-            batch = keys_to_check[batch_start:batch_start + 500]
-            srcs = list({k[0] for k in batch})
-            sids = list({k[1] for k in batch})
+    # Каждый под-батч 500 — отдельная транзакция, каждая строка под savepoint.
+    # Иначе одно битое событие (напр. NOT NULL нарушение) откатывало ВЕСЬ тик и
+    # синхронизация зацикливалась на нём навсегда. Теперь битое пропускается.
+    inserted = 0
+    for batch_start in range(0, len(keys_to_check), 500):
+        batch = keys_to_check[batch_start:batch_start + 500]
+        srcs = list({k[0] for k in batch})
+        sids = list({k[1] for k in batch})
+        async with get_session() as s:
             existing_rs = await s.execute(
                 select(EventRow.source, EventRow.source_event_id)
                 .where(EventRow.source.in_(srcs))
@@ -91,22 +95,28 @@ async def sync_tick() -> int:
                 sid = r["source_event_id"] or f"v2migrated:{r['v2_id']}"
                 if (r["source"], sid) in existing:
                     continue
-                row = EventRow(
-                    source=r["source"],
-                    source_event_id=sid,
-                    account=r["account"],
-                    category=r["category"] or "generic",
-                    content_text=r["content_text"] or "",
-                    content_extra=_parse(r["content_extra"]),
-                    entity_hints=_parse(r["entity_hints"]) or [],
-                    metadata_=_parse(r["metadata"]),
-                    occurred_at=_parse_dt(r["occurred_at"]),
-                    graphiti_episode_uuid=r["graphiti_episode_uuid"],
-                    triage_status="pending",
-                )
-                s.add(row)
+                try:
+                    async with s.begin_nested():
+                        s.add(EventRow(
+                            source=r["source"],
+                            source_event_id=sid,
+                            account=r["account"],
+                            category=r["category"] or "generic",
+                            content_text=r["content_text"] or "",
+                            content_extra=_parse(r["content_extra"]),
+                            entity_hints=_parse(r["entity_hints"]) or [],
+                            metadata_=_parse(r["metadata"]),
+                            occurred_at=_parse_dt(r["occurred_at"]),
+                            graphiti_episode_uuid=r["graphiti_episode_uuid"],
+                            triage_status="pending",
+                        ))
+                        await s.flush()
+                    inserted += 1
+                except Exception as e:
+                    log.warning("sync-bridge: пропущено битое событие v2_id=%s: %s",
+                                r["v2_id"], e)
 
-    return len(rows)
+    return inserted
 
 
 async def main():

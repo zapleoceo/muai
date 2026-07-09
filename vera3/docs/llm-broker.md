@@ -59,7 +59,13 @@ re-raised as `LLMCallFailed`. Caller decides:
   tokens, IG sessionid, TG userbot sessions. These are session secrets,
   NOT LLM keys — different domain.
 - `usage_log` table — broker_client mirrors every call into it so
-  dashboard charts keep working without hitting broker
+  dashboard charts keep working without hitting broker. Also captures
+  `request_id`/`key_label` from the broker's response (see
+  `domain-model.md`).
+- The shared `httpx.AsyncClient` in `broker_client._client()` is built
+  under an `asyncio.Lock` with a double-checked `if _http is None` — two
+  concurrent first-callers used to be able to race and each construct
+  their own client, leaking one.
 
 ## Env vars
 

@@ -140,6 +140,8 @@ async def entity_context(
 
     async with get_session() as s:
         entity = await s.get(EntityRow, entity_id)
+        if entity is None:
+            raise HTTPException(404, f"entity {entity_id} vanished")
         rel_rows = (await s.execute(
             _RELATIONSHIPS_SQL, {"eid": entity_id, "limit": RELATIONSHIPS_LIMIT},
         )).mappings().all()
@@ -153,7 +155,7 @@ async def entity_context(
         "type": entity.type,
         "canonical_id": entity.canonical_id,
         "attributes": entity.attributes,
-        "last_seen_at": entity.last_seen_at.isoformat(),
+        "last_seen_at": entity.last_seen_at.isoformat() if entity.last_seen_at else None,
         "aliases": ctx["aliases"],
         "memberships": ctx["memberships"],
         "members": members,

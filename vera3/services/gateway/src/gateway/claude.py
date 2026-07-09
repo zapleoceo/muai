@@ -26,7 +26,6 @@ from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
 from vera_shared.llm.client import LLMCallFailed, embed
@@ -95,26 +94,25 @@ async def _find_semantic_neighbour(
     since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
         days=SEMANTIC_LOOKBACK_DAYS
     )
+    # Эмбеддинги вынесены в event_embeddings (миграция 011) — джойним.
     async with get_session() as s:
         rows = (
-            await s.execute(
-                select(EventRow.id, EventRow.embedding_voyage_3)
-                .where(
-                    EventRow.source == "claude",
-                    EventRow.received_at >= since,
-                    EventRow.embedding_voyage_3.is_not(None),
-                )
-                .order_by(EventRow.received_at.desc())
-                .limit(500)
-            )
+            await s.execute(text("""
+                SELECT e.id, ee.embedding
+                FROM events e
+                JOIN event_embeddings ee ON ee.event_id = e.id
+                WHERE e.source = 'claude' AND e.received_at >= :since
+                ORDER BY e.received_at DESC
+                LIMIT 500
+            """), {"since": since})
         ).all()
 
     best_id: int | None = None
     best_sim = 0.0
     for row in rows:
-        sim = _cosine(q_vec, row.embedding_voyage_3)
+        sim = _cosine(q_vec, row[1])
         if sim > best_sim:
-            best_sim, best_id = sim, row.id
+            best_sim, best_id = sim, row[0]
     if best_id is not None and best_sim >= SEMANTIC_DEDUP_THRESHOLD:
         return best_id, best_sim
     return None

@@ -8,6 +8,7 @@ Same signature/return as the legacy client so callers don't change.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any
@@ -34,15 +35,19 @@ class BrokerCallFailed(Exception):
 
 # Shared httpx client — TLS handshake reuse for performance
 _http: httpx.AsyncClient | None = None
+_http_lock = asyncio.Lock()
 
 
 async def _client() -> httpx.AsyncClient:
     global _http
     if _http is None:
-        _http = httpx.AsyncClient(
-            timeout=BROKER_TIMEOUT_S,
-            headers={"X-Project-Key": BROKER_PROJECT_KEY},
-        )
+        async with _http_lock:
+            # double-check: пока ждали лок, другая корутина могла уже создать
+            if _http is None:
+                _http = httpx.AsyncClient(
+                    timeout=BROKER_TIMEOUT_S,
+                    headers={"X-Project-Key": BROKER_PROJECT_KEY},
+                )
     return _http
 
 
@@ -62,6 +67,8 @@ async def _log_usage(meta: dict[str, Any], workflow: str | None,
                 success=True,
                 workflow=workflow or "",
                 event_id=event_id,
+                request_id=(str(rid) if (rid := meta.get("request_id")) is not None else None),
+                key_label=meta.get("key_label"),
             ))
     except Exception as e:
         log.warning("usage_log write failed: %s", e)
@@ -110,6 +117,8 @@ async def chat_via_broker(
         "tokens_out": data.get("tokens_out", 0),
         "cost_usd": data.get("cost_usd", 0.0),
         "latency_ms": data.get("latency_ms", 0),
+        "request_id": data.get("request_id"),
+        "key_label": data.get("key_label"),
     }
     await _log_usage(meta, workflow, event_id, capability)
     return text, meta
@@ -137,6 +146,8 @@ async def embed_via_broker(texts: str | list[str]) -> list[list[float]]:
         "tokens_out": 0,
         "cost_usd": data.get("cost_usd", 0.0),
         "latency_ms": data.get("latency_ms", 0),
+        "request_id": data.get("request_id"),
+        "key_label": data.get("key_label"),
     }
     await _log_usage(meta, "embed", None, "embedding")
     return data.get("embeddings", [])

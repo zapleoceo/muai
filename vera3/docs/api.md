@@ -53,10 +53,24 @@ Returns `AnswerResponse` with `answer`, `results`, `provider`, `cost_usd`,
 | `/api/tg_login` | GET | TG widget signature | Callback → session cookie |
 | `/logout` | GET | none | Clear cookie |
 | `/` | GET | owner cookie | Home — cards, live progress |
-| `/events` | GET | owner cookie | Event browser with filters |
+| `/events` | GET | owner cookie | Event browser with filters. Nav label is "log" — per-event columns show the broker call that triaged it (`request_id`/model/tokens/cost, via `usage_log`); batch-triaged events show "в пачке ✓" instead of a blank (see `domain-model.md`) |
 | `/sources` | GET | owner cookie | Per-source health (telegram/gmail/instagram) |
+| `/api/instagram/start` | GET | owner cookie | Instagram login form (`instagram_start_form`) |
+| `/api/instagram/start` | POST | owner cookie | Submit username/password (`instagram_start`) — may return a 2FA/challenge code form |
+| `/api/instagram/verify` | POST | owner cookie | Submit 2FA/challenge code (`instagram_verify`) → saves encrypted session |
 | `/tokens` | GET | owner cookie | Now redirects to AIbroker — see `llm-broker.md` |
 | `/search-ui` | POST | owner cookie | "Ask Vera" form handler |
+
+### Stats caching (`dashboard/stats.py`)
+
+`/` and `/sources` used to run ~15-17 heavy `COUNT`/`GROUP BY` scans per
+page load (and again every `/_progress` poll) — the main cause of slow
+page loads before this. `get_stats()` / `get_sources_stats()` collapse
+those into ~2 scans total via `FILTER` aggregates, cached for
+`TTL_S=60` with stale-while-revalidate (`_serve_cached`): a stale value
+is returned instantly while a background refresh (`_bg_refresh`) runs, so
+the heavy scan almost never blocks a request. `cache_age_s()` reports how
+old the cached value is, for the "updated N sec ago" note in the UI.
 
 ## Ingestor-telegram tools (`vera3-ingestor-telegram`, port 8000)
 

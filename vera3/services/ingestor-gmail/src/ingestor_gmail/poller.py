@@ -26,7 +26,8 @@ log = logging.getLogger("gmail")
 CLIENT_ID = os.environ["GMAIL_CLIENT_ID"]
 CLIENT_SECRET = os.environ["GMAIL_CLIENT_SECRET"]
 POLL_S = int(os.environ.get("GMAIL_POLL_S", "300"))  # 5 минут
-MAX_PER_RUN = int(os.environ.get("GMAIL_MAX_PER_RUN", "30"))
+# Предохранитель на прогон (не лимит выборки — идём по всем страницам до него).
+MAX_PER_RUN = int(os.environ.get("GMAIL_MAX_PER_RUN", "500"))
 
 
 class TokenRevoked(Exception):
@@ -55,22 +56,41 @@ async def refresh_access(refresh_token: str) -> dict:
     return r.json()
 
 
-async def fetch_messages(access_token: str, query: str, max_results: int = 30) -> list[dict]:
-    """List + get полных messages по filter."""
+async def fetch_messages(access_token: str, query: str, max_total: int = 500) -> list[dict]:
+    """List (со всеми страницами) + get полных messages по filter.
+
+    ВАЖНО: идём по nextPageToken до конца выборки. Раньше брали только
+    первую страницу (maxResults=30) — в активный день с >30 писем остаток
+    терялся навсегда, т.к. курсор last_polled_at всё равно прыгал на сегодня.
+    max_total — предохранитель от runaway на первом прогоне (newer_than:7d).
+    """
     headers = {"Authorization": f"Bearer {access_token}"}
+    ids: list[str] = []
     async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.get(
-            "https://gmail.googleapis.com/gmail/v1/users/me/messages",
-            params={"q": query, "maxResults": max_results},
-            headers=headers,
-        )
-        if r.status_code == 403 and "insufficient" in r.text.lower():
-            raise ScopeInsufficient(r.text[:200])
-        r.raise_for_status()
-        ids = [m["id"] for m in r.json().get("messages", [])]
+        page_token: str | None = None
+        while len(ids) < max_total:
+            params: dict[str, str | int] = {"q": query, "maxResults": 100}
+            if page_token:
+                params["pageToken"] = page_token
+            r = await c.get(
+                "https://gmail.googleapis.com/gmail/v1/users/me/messages",
+                params=params,
+                headers=headers,
+            )
+            if r.status_code == 403 and "insufficient" in r.text.lower():
+                raise ScopeInsufficient(r.text[:200])
+            r.raise_for_status()
+            body = r.json()
+            ids.extend(m["id"] for m in body.get("messages", []))
+            page_token = body.get("nextPageToken")
+            if not page_token:
+                break
+        if len(ids) >= max_total:
+            log.warning("gmail: выборка достигла предохранителя max_total=%d — "
+                        "возможно, хвост писем не забран за этот прогон", max_total)
 
         messages = []
-        for mid in ids:
+        for mid in ids[:max_total]:
             try:
                 rm = await c.get(
                     f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{mid}",
@@ -79,7 +99,7 @@ async def fetch_messages(access_token: str, query: str, max_results: int = 30) -
                 )
                 if rm.status_code == 200:
                     messages.append(rm.json())
-            except Exception as e:
+            except httpx.HTTPError as e:
                 log.warning("Get message %s failed: %s", mid, e)
     return messages
 
@@ -221,7 +241,7 @@ async def poll_account(acc: GmailAccountRow) -> int:
         query = "newer_than:7d"
 
     try:
-        messages = await fetch_messages(access_token, query, max_results=MAX_PER_RUN)
+        messages = await fetch_messages(access_token, query, max_total=MAX_PER_RUN)
     except ScopeInsufficient as e:
         log.warning("Scope INSUFFICIENT for %s — re-auth with Gmail access: %s",
                     acc.email, e)
@@ -242,20 +262,22 @@ async def poll_account(acc: GmailAccountRow) -> int:
             )
         return 0
 
+    specs = [_format_event(acc.email, msg) for msg in messages]
     inserted = 0
-    for msg in messages:
-        spec = _format_event(acc.email, msg)
+    if specs:
+        ids = [sp["source_event_id"] for sp in specs]
         async with get_session() as s:
-            existing = (await s.execute(
-                select(EventRow.id).where(
+            existing = set((await s.execute(
+                select(EventRow.source_event_id).where(
                     EventRow.source == "gmail",
-                    EventRow.source_event_id == spec["source_event_id"],
+                    EventRow.source_event_id.in_(ids),
                 )
-            )).scalar_one_or_none()
-            if existing:
-                continue
-            s.add(EventRow(triage_status="pending", **spec))
-            inserted += 1
+            )).scalars().all())
+            for sp in specs:
+                if sp["source_event_id"] in existing:
+                    continue
+                s.add(EventRow(triage_status="pending", **sp))
+                inserted += 1
 
     now = datetime.utcnow()
     async with get_session() as s:
