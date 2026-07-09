@@ -69,6 +69,18 @@
 replica by default (handles ~500/h). Burst with `--scale brain-triage=3`
 when there's an import.
 
+## DB connection pool sizing
+
+`vera_shared/db/engine._pool_kwargs()` — every service's Postgres pool is
+`pool_size=3, max_overflow=7` by default (env: `DB_POOL_SIZE`,
+`DB_MAX_OVERFLOW`), down from a flat `pool_size=10, max_overflow=20`.
+~13 services × 10 idle connections was ~57 idle Postgres connections
+sitting in swap on the host; a service that genuinely needs more can
+override via env without touching code. Split into its own function so
+it's unit-testable (`tests/unit/test_db_engine.py`) without needing a
+real Postgres connection — the branch that calls it is skipped entirely
+for SQLite, which is what the test suite runs on.
+
 ## Self-healing
 
 - `vera3-monitor.sh` (cron `*/5`) — 11 dimensions, alerts to TG with
