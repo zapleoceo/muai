@@ -265,6 +265,20 @@ async def test_entity_context_404_when_not_found():
 
 
 @pytest.mark.asyncio
+async def test_entity_context_404_when_entity_vanishes_after_id_lookup():
+    """find_entity_by_name found an id, but s.get(EntityRow, id) returns
+    None (row deleted between the two calls) — must 404, not crash on
+    entity.name below."""
+    session = _context_session(None, [])
+    with patch("gateway.query.get_session",
+               MagicMock(return_value=_FakeSessionCtx(session))), \
+         patch("gateway.query.find_entity_by_name", AsyncMock(return_value=42)), \
+         pytest.raises(HTTPException) as exc:
+        await entity_context(name="X", x_internal_secret="test-internal-secret")
+    assert exc.value.status_code == 404
+
+
+@pytest.mark.asyncio
 async def test_entity_context_rejects_bad_secret():
     with pytest.raises(HTTPException) as exc:
         await entity_context(name="X", x_internal_secret="wrong")

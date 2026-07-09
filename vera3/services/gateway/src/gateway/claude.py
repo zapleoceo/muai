@@ -25,6 +25,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select
+from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
@@ -97,7 +98,7 @@ async def _find_semantic_neighbour(
     # Эмбеддинги вынесены в event_embeddings (миграция 011) — джойним.
     async with get_session() as s:
         rows = (
-            await s.execute(text("""
+            await s.execute(sa_text("""
                 SELECT e.id, ee.embedding
                 FROM events e
                 JOIN event_embeddings ee ON ee.event_id = e.id

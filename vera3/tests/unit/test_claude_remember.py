@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 # Set env BEFORE gateway imports — config reads at module load.
 os.environ.setdefault("INTERNAL_SECRET", "test-internal-secret")
@@ -135,6 +135,49 @@ async def test_find_semantic_neighbour_returns_none_on_embed_fail():
 @pytest.mark.asyncio
 async def test_find_semantic_neighbour_returns_none_on_empty_vectors():
     with patch("gateway.claude.embed", AsyncMock(return_value=[])):
+        result = await _find_semantic_neighbour("hello")
+    assert result is None
+
+
+class _FakeSessionCtx:
+    def __init__(self, session):
+        self._session = session
+
+    async def __aenter__(self):
+        return self._session
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _rows_session(rows):
+    session = MagicMock()
+    execute_result = MagicMock()
+    execute_result.all.return_value = rows
+    session.execute = AsyncMock(return_value=execute_result)
+    return session
+
+
+@pytest.mark.asyncio
+async def test_find_semantic_neighbour_picks_best_match_above_threshold():
+    """Candidate rows scanned in the loop; the closest one above threshold
+    wins, even when it isn't the first row."""
+    rows = [(1, [0.0, 1.0]), (2, [1.0, 0.0])]   # row 2 is identical to q_vec
+    session = _rows_session(rows)
+    with patch("gateway.claude.embed", AsyncMock(return_value=[[1.0, 0.0]])), \
+         patch("gateway.claude.get_session",
+               MagicMock(return_value=_FakeSessionCtx(session))):
+        result = await _find_semantic_neighbour("hello")
+    assert result == (2, pytest.approx(1.0))
+
+
+@pytest.mark.asyncio
+async def test_find_semantic_neighbour_none_when_all_below_threshold():
+    rows = [(1, [0.0, 1.0])]   # orthogonal to q_vec → sim = 0.0
+    session = _rows_session(rows)
+    with patch("gateway.claude.embed", AsyncMock(return_value=[[1.0, 0.0]])), \
+         patch("gateway.claude.get_session",
+               MagicMock(return_value=_FakeSessionCtx(session))):
         result = await _find_semantic_neighbour("hello")
     assert result is None
 
