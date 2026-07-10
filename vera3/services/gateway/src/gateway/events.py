@@ -12,7 +12,6 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
 from vera_shared.events.schema import RawEvent
