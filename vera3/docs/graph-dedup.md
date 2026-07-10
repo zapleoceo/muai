@@ -40,14 +40,22 @@ Predicates: `boss_of`, `reports_to`, `coworker_of`, `co_founder_of`,
 `works_at`, `client_of`, `vendor_of`, `spouse_of`, `parent_of`,
 `child_of`, `friend_of`, `lives_in`.
 
-Resolution: entity name → `entities.name` exact, then
-`entity_aliases.display_name`. Unknown name → skip (no auto-create).
+Resolution: `repo.resolve_entity_exact(name)` — `entities.name` exact
+(case-insensitive), then `entity_aliases.display_name`. Unknown name →
+skip (no auto-create). This is the *exact* resolver; `find_entity_by_name`
+is the separate *fuzzy* (`ILIKE %..%`) one used by the MCP entity lookup.
 
-Dedup: existing `(subject, predicate, object)` → bump `last_seen_at` +
-`confidence = max(old, new)`. Else INSERT with `derived_from_event_id`
-for audit/rollback.
+Dedup: the `(subject, predicate, object)` soft-upsert is
+`repo.upsert_relationship` — the single source of truth (rel_extract used
+to inline a near-identical raw-SQL copy that, unlike repo, never
+back-filled a missing `fact`; that duplication was removed). Existing →
+bump `last_seen_at` + `confidence = max(old, new)` (+ fill `fact` if it
+was empty), returns False. Else INSERT with `derived_from_event_id` for
+audit/rollback, returns True (so `extract_and_store` counts real inserts).
 
-Fire-and-forget — runs as `asyncio.create_task`, never blocks triage.
+Background — spawned as a tracked `asyncio.create_task` held in a module
+set (so the GC can't drop it mid-run), never blocks triage; runs *after*
+the triage transaction commits.
 
 ## Status: shipped 2026-06-28
 
