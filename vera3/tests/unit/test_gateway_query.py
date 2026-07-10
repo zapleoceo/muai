@@ -17,7 +17,7 @@ from gateway.query import (
     RECENT_EVENTS_LIMIT,
     RELATIONSHIPS_LIMIT,
     SearchProxyRequest,
-    _check_internal_secret,
+    check_internal_secret,
     entity_context,
     recent_events,
     search_proxy,
@@ -39,12 +39,12 @@ class _FakeSessionCtx:
 
 
 def test_check_internal_secret_accepts_correct():
-    _check_internal_secret("test-internal-secret")   # no raise
+    check_internal_secret("test-internal-secret")   # no raise
 
 
 def test_check_internal_secret_rejects_wrong():
     with pytest.raises(HTTPException) as exc:
-        _check_internal_secret("wrong")
+        check_internal_secret("wrong")
     assert exc.value.status_code == 401
 
 

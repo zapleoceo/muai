@@ -232,7 +232,9 @@ async def search(query: SearchQuery) -> AnswerResponse:
     if time_range:
         time_where = " AND occurred_at >= :t_start AND occurred_at < :t_end"
         time_params = {"t_start": time_range[0], "t_end": time_range[1]}
-        log.info("Temporal filter: %s → [%s, %s)", query.q[:60], *time_range)
+        # DEBUG, не INFO — query.q содержит текст вопроса Димы (может нести
+        # личные детали), не должен оседать в INFO-логах контейнера.
+        log.debug("Temporal filter: %s → [%s, %s)", query.q[:60], *time_range)
 
     # «по проекту Itstep» → реальные ящики + рабочие чаты (не текст «itstep»)
     project = resolve_project(query.q)

@@ -196,6 +196,11 @@ async def chat_async_via_broker(
             continue
         if status == "error":
             raise BrokerCallFailed(f"job {job_id} failed: {data.get('error')}")
+        if status != "done":
+            # Malformed/unexpected response (bad JSON, new status we don't
+            # know about) must NOT be treated as a silent success with an
+            # empty answer — that's worse than a clear error.
+            raise BrokerCallFailed(f"job {job_id} unexpected status: {status!r}")
 
         text = data.get("text", "")
         meta = {

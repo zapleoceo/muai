@@ -22,7 +22,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
 
-from fastapi import APIRouter, Header, HTTPException
+from fastapi import APIRouter, Header
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy import text as sa_text
@@ -31,7 +31,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
 from vera_shared.llm.client import LLMCallFailed, embed
 
-from gateway.config import get_settings
+from gateway.auth import check_internal_secret
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -39,12 +39,6 @@ router = APIRouter()
 
 SEMANTIC_DEDUP_THRESHOLD = 0.92
 SEMANTIC_LOOKBACK_DAYS = 7
-
-
-def _check_internal_secret(provided: str | None) -> None:
-    expected = get_settings().internal_secret
-    if expected and provided != expected:
-        raise HTTPException(401, "invalid internal secret")
 
 
 def _content_hash(text: str) -> str:
@@ -124,7 +118,7 @@ async def remember(
     body: RememberRequest,
     x_internal_secret: str | None = Header(default=None),
 ) -> RememberResponse:
-    _check_internal_secret(x_internal_secret)
+    check_internal_secret(x_internal_secret)
 
     text = body.text.strip()
     src_id = _content_hash(text)

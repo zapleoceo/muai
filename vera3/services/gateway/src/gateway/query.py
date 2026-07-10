@@ -19,6 +19,7 @@ from vera_shared.db.models_graph import EntityRow
 from vera_shared.graph.dedup import get_entity_context
 from vera_shared.graph.repo import find_entity_by_name, list_members
 
+from gateway.auth import check_internal_secret
 from gateway.config import get_settings
 
 log = logging.getLogger(__name__)
@@ -26,12 +27,6 @@ router = APIRouter()
 
 RECENT_EVENTS_LIMIT = 200
 RELATIONSHIPS_LIMIT = 50
-
-
-def _check_internal_secret(provided: str | None) -> None:
-    expected = get_settings().internal_secret
-    if expected and provided != expected:
-        raise HTTPException(401, "invalid internal secret")
 
 
 # ─── vera_recall → POST /v1/search (proxy to brain-search) ──────────────────
@@ -58,7 +53,7 @@ async def search_proxy(
     fallback ever gets a chance to fire. Measured in production: a real
     call took 101s end-to-end under broker load.
     """
-    _check_internal_secret(x_internal_secret)
+    check_internal_secret(x_internal_secret)
 
     url = f"{get_settings().search_url}/search"
     try:
@@ -81,7 +76,7 @@ async def recent_events(
     source: str | None = None,
     x_internal_secret: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    _check_internal_secret(x_internal_secret)
+    check_internal_secret(x_internal_secret)
 
     since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=hours)
     async with get_session() as s:
@@ -132,7 +127,7 @@ async def entity_context(
     name: str = Query(min_length=2),
     x_internal_secret: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    _check_internal_secret(x_internal_secret)
+    check_internal_secret(x_internal_secret)
 
     entity_id = await find_entity_by_name(name)
     if entity_id is None:

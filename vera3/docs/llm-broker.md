@@ -138,9 +138,9 @@ State counter: `/var/lib/vera3-monitor/broker_fail_streak`.
 The triage worker is self-healing. Events stay in `triage_status='pending'`
 while broker is down (ingestors keep writing them in). When broker comes
 back, the next `_claim_batch` tick grabs the oldest pendings in batches
-of `BATCH_SIZE=50` per worker (3 replicas, configurable). A 10-min
-outage at typical Vera traffic (~1 msg/min) yields ~10 pending events,
-cleared in one tick.
+of `TRIAGE_BATCH_SIZE=16` per worker (`BRAIN_TRIAGE_REPLICAS=5`,
+configurable — see `brain.md`). A 10-min outage at typical Vera traffic
+(~1 msg/min) yields ~10 pending events, cleared in one tick.
 
 ## If the broker is down for hours
 
