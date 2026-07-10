@@ -7,8 +7,10 @@ it up.
 
 Recognition goes through the BROKER (aib.zapleo.com) like every other LLM
 call in Vera — no provider keys live here:
-  - vision  → POST /v1/chat?capability=vision  (multimodal content blocks)
-  - whisper → POST /v1/transcribe              (multipart audio upload)
+  - vision  → chat_async() submit+poll (/v1/jobs?capability=vision),
+              multimodal content blocks — see vera_shared.llm.client
+  - whisper → POST /v1/transcribe (multipart audio upload) — stays sync,
+              transcription isn't on the broker's async-job capability list
 
 The broker handles key selection, free-first routing, cost guard and
 cooldowns. If recognition fails permanently the event degrades: its
