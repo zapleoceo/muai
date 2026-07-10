@@ -7,7 +7,6 @@ import httpx
 import pytest
 import vera_shared.llm.broker_client as bc
 
-
 # ─── _log_usage — null-coalescing (found under concurrent-load testing) ────
 
 
