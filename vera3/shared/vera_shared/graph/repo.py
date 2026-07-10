@@ -10,9 +10,14 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import func, select, update
+
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_graph import (
-    EntityAliasRow, EntityRow, IdentityNodeRow, MembershipRow, RelationshipRow,
+    EntityAliasRow,
+    EntityRow,
+    IdentityNodeRow,
+    MembershipRow,
+    RelationshipRow,
 )
 
 log = logging.getLogger(__name__)

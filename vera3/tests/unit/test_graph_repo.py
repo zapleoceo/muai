@@ -89,16 +89,26 @@ async def sqlite_repo(tmp_path):
 @pytest.mark.asyncio
 async def test_resolve_entity_exact_by_name_and_alias(sqlite_repo):
     repo = sqlite_repo
+    # NOTE: names are ASCII here on purpose — SQLite's built-in lower() only
+    # folds ASCII, so case-insensitive Cyrillic can't be exercised on the
+    # test DB (Postgres LOWER() handles it in prod; the old raw SQL had the
+    # exact same limitation). Cyrillic is covered by the exact-case assert.
     eid = await repo.upsert_entity(
-        type="person", name="Дмитрий", source="telegram", identifier="169",
+        type="person", name="Dmitry", source="telegram", identifier="169",
         display_name="Dima Z",
     )
-    # exact name (case-insensitive), not fuzzy substring
-    assert await repo.resolve_entity_exact("дмитрий") == eid
+    cyr = await repo.upsert_entity(
+        type="person", name="Мария", source="telegram", identifier="170",
+    )
+    # exact name, case-insensitive (ASCII), NOT fuzzy substring
+    assert await repo.resolve_entity_exact("dmitry") == eid
+    assert await repo.resolve_entity_exact("DMITRY") == eid
     # via alias display_name
     assert await repo.resolve_entity_exact("dima z") == eid
-    # unknown → None (and a partial substring must NOT match — it's exact)
-    assert await repo.resolve_entity_exact("Дмит") is None
+    # Cyrillic exact-case works (no lowering needed)
+    assert await repo.resolve_entity_exact("Мария") == cyr
+    # partial substring must NOT match — it's exact, not ILIKE %..%
+    assert await repo.resolve_entity_exact("Dmit") is None
     assert await repo.resolve_entity_exact("nobody") is None
 
 
