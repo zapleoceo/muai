@@ -6,8 +6,8 @@ from __future__ import annotations
 import json
 from unittest.mock import AsyncMock, patch
 
-import pytest
 import brain_search.agent as agent
+import pytest
 
 
 @pytest.mark.asyncio
