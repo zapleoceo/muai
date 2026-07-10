@@ -7,7 +7,6 @@ import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 import brain_search.agent as agent
 
 
