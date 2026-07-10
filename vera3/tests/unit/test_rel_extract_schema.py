@@ -78,7 +78,7 @@ async def test_extract_and_store_passes_schema_not_json_object():
         captured.update(kwargs)
         return json.dumps({"relationships": []}), {"provider": "test"}
 
-    with patch("vera_shared.graph.rel_extract.chat", AsyncMock(side_effect=fake_chat)):
+    with patch("vera_shared.graph.rel_extract.chat_async", AsyncMock(side_effect=fake_chat)):
         n = await extract_and_store(1, "текст события длиннее тридцати символов точно")
 
     assert n == 0   # пустой relationships список — ничего не вставлено
@@ -89,7 +89,7 @@ async def test_extract_and_store_passes_schema_not_json_object():
 @pytest.mark.asyncio
 async def test_extract_and_store_skips_short_body_without_calling_chat():
     """Короткий текст (<30 chars) не должен вообще звонить в LLM — no-op guard."""
-    with patch("vera_shared.graph.rel_extract.chat", AsyncMock()) as m:
+    with patch("vera_shared.graph.rel_extract.chat_async", AsyncMock()) as m:
         n = await extract_and_store(1, "коротко")
     assert n == 0
     m.assert_not_called()

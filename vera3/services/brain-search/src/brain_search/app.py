@@ -15,7 +15,7 @@ from sqlalchemy import select, text
 from vera_shared.db.engine import close_engine, get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import GmailAccountRow
-from vera_shared.llm.client import LLMCallFailed, chat, embed
+from vera_shared.llm.client import LLMCallFailed, chat_async, embed
 
 from brain_search.agent import run_agent
 from brain_search.query_parse import (
@@ -488,7 +488,7 @@ async def _finish_search(
 
     try:
         answer_text, meta = await asyncio.wait_for(
-            chat(
+            chat_async(
                 messages=[{"role": "user", "content": synth_prompt}],
                 capability="chat:smart",
                 max_tokens=900,

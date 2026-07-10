@@ -121,7 +121,7 @@ async def test_triage_one_passes_schema_not_json_object():
             {"provider": "test", "model": "test/model"},
         )
 
-    with patch("brain_triage.worker.chat", AsyncMock(side_effect=fake_chat)):
+    with patch("brain_triage.worker.chat_async", AsyncMock(side_effect=fake_chat)):
         await triage_one(_FakeEvent())
 
     assert captured["response_format"] == TRIAGE_JSON_SCHEMA

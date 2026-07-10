@@ -31,6 +31,7 @@ import httpx
 from sqlalchemy import text
 from vera_shared.control import backfill_minute_allowance, is_backfill_paused
 from vera_shared.db.engine import get_session, init_engine
+from vera_shared.llm.client import LLMCallFailed, chat_async
 
 log = logging.getLogger("media-worker")
 
@@ -73,29 +74,26 @@ def _broker_headers() -> dict[str, str]:
     return {"X-Project-Key": BROKER_PROJECT_KEY}
 
 
-async def _recognize_photo(image_b64: str, mime: str) -> str:
-    """Vision via broker /v1/chat?capability=vision (multimodal content)."""
-    payload = {
-        "messages": [{
-            "role": "user",
-            "content": [
-                {"type": "text", "text": _VISION_PROMPT},
-                {"type": "image_url", "image_url": {
-                    "url": f"data:{mime or 'image/jpeg'};base64,{image_b64}"}},
-            ],
-        }],
-        "max_tokens": 400,
-        "temperature": 0.1,
-        "workflow": "media_vision",
-    }
-    async with httpx.AsyncClient(timeout=90) as c:
-        r = await c.post(
-            f"{BROKER_URL}/v1/chat", params={"capability": "vision"},
-            json=payload, headers=_broker_headers(),
+async def _recognize_photo(image_b64: str, mime: str, event_id: int | None = None) -> str:
+    """Vision via broker — async job (submit+poll /v1/jobs), multimodal content.
+    Routed through the shared client so it's covered by usage_log mirroring
+    like every other capability (vision calls used to bypass it entirely)."""
+    messages = [{
+        "role": "user",
+        "content": [
+            {"type": "text", "text": _VISION_PROMPT},
+            {"type": "image_url", "image_url": {
+                "url": f"data:{mime or 'image/jpeg'};base64,{image_b64}"}},
+        ],
+    }]
+    try:
+        txt, _meta = await chat_async(
+            messages=messages, capability="vision", max_tokens=400,
+            temperature=0.1, workflow="media_vision", event_id=event_id,
         )
-    if r.status_code >= 400:
-        raise RuntimeError(f"broker vision HTTP {r.status_code}: {r.text[:200]}")
-    txt = (r.json().get("text") or "").strip()
+    except LLMCallFailed as e:
+        raise RuntimeError(f"broker vision: {e}") from e
+    txt = txt.strip()
     if not txt:
         raise RuntimeError("broker vision returned empty text")
     return txt
@@ -133,7 +131,7 @@ async def _process_one(row: dict) -> tuple[str, str | None]:
     if kind in {"photo", "sticker"}:
         try:
             txt = await _recognize_photo(base64.b64encode(raw).decode("ascii"),
-                                         mime or "image/jpeg")
+                                         mime or "image/jpeg", event_id=row.get("id"))
         except Exception as e:
             return "", f"vision: {e}"
         label = "recognized photo" if kind == "photo" else "recognized sticker"

@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
-from vera_shared.llm.client import LLMCallFailed, chat
+from vera_shared.llm.client import LLMCallFailed, chat_async
 
 log = logging.getLogger(__name__)
 
@@ -344,7 +344,7 @@ async def run_agent(
             )
 
         try:
-            raw, meta = await asyncio.wait_for(chat(
+            raw, meta = await asyncio.wait_for(chat_async(
                 messages=[{"role": "user", "content": step_prompt}],
                 capability="chat:smart",
                 response_format={"type": "json_object"},

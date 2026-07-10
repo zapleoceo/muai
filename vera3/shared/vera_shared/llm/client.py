@@ -16,6 +16,7 @@ from typing import Any
 from vera_shared.llm.broker_client import (
     BrokerCallFailed,
     broker_enabled,
+    chat_async_via_broker,
     chat_via_broker,
     embed_via_broker,
 )
@@ -61,6 +62,34 @@ async def chat(
         )
     except BrokerCallFailed as e:
         raise LLMCallFailed(f"broker call failed: {e}") from e
+
+
+async def chat_async(
+    messages: list[dict[str, Any]],
+    *,
+    capability: Capability = "chat:fast",
+    response_format: dict | None = None,
+    max_tokens: int = 2000,
+    temperature: float = 0.7,
+    workflow: str | None = None,
+    event_id: int | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Same contract as chat(), submit+poll (/v1/jobs) instead of holding a
+    connection open — a slow provider delays the poll loop, not the caller.
+    Additive: chat() keeps working unchanged. See docs/llm-broker.md."""
+    _require_broker()
+    try:
+        return await chat_async_via_broker(
+            messages=messages,
+            capability=capability,
+            response_format=response_format,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            workflow=workflow,
+            event_id=event_id,
+        )
+    except BrokerCallFailed as e:
+        raise LLMCallFailed(f"broker async call failed: {e}") from e
 
 
 async def embed(text: str | list[str]) -> list[list[float]]:

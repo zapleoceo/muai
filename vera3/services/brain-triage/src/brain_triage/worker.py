@@ -21,7 +21,7 @@ from sqlalchemy import text, update
 from vera_shared.control import backfill_minute_allowance, is_backfill_paused
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
-from vera_shared.llm.client import LLMCallFailed, chat, embed
+from vera_shared.llm.client import LLMCallFailed, chat_async, embed
 from vera_shared.projects.rules import chat_id_canon_sql
 
 log = logging.getLogger(__name__)
@@ -289,7 +289,7 @@ async def triage_one(event_row: EventRow) -> dict[str, Any] | None:
         content=content,
     )
 
-    response_text, meta = await chat(
+    response_text, meta = await chat_async(
         messages=[{"role": "user", "content": prompt}],
         capability="chat:fast",
         response_format=TRIAGE_JSON_SCHEMA,
@@ -341,7 +341,7 @@ async def triage_group_batch(rows: list[EventRow]) -> dict[int, dict[str, Any] |
         return {}
     prompt = build_batch_prompt(rows)
 
-    response_text, meta = await chat(
+    response_text, meta = await chat_async(
         messages=[{"role": "user", "content": prompt}],
         capability="chat:fast",
         response_format=TRIAGE_BATCH_JSON_SCHEMA,
