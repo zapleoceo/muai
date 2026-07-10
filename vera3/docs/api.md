@@ -23,6 +23,18 @@ The body of `/event/<source>` is an EventEnvelope:
 }
 ```
 
+### Internal auth (`gateway/auth.py::check_internal_secret`)
+
+Every gateway route that reads or writes data (`/event/*`, `/v1/claude/*`,
+`/v1/search`, `/v1/events/*`, `/v1/entity/*`, `/api/events/{id}`) requires
+the `X-Internal-Secret` header, checked by the single shared
+`check_internal_secret()` helper. It is **fail-closed**: if
+`INTERNAL_SECRET` is unset/empty, every request is rejected (401) rather
+than let through. `docker-compose.yml` marks the var required
+(`INTERNAL_SECRET:?...`), so a misconfigured non-compose deploy locks down
+instead of exposing event bodies. `/healthz` is the only unauthenticated
+route.
+
 ## Brain Search (`vera3-brain-search`, internal port 8000)
 
 | Path | Method | Auth | Description |
