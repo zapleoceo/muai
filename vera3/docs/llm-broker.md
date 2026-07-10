@@ -70,6 +70,17 @@ media-worker's vision recognition (previously raw httpx bypassing
 nothing in Vera calls them anymore, but removing them is a separate,
 deliberate cleanup once the broker's sync endpoint is actually retired.
 
+**Load-tested** (10 concurrent `chat_async()` calls against the live
+broker, matching brain-triage's `CONCURRENCY=10`): completed in ~4s
+wall-clock, well inside the 120s deadline. Found and fixed one real bug
+in the process — `_log_usage` used `meta.get("provider", "broker")`-style
+defaults, but `dict.get(key, default)` only falls back when the key is
+*absent*; a broker response with `provider`/`model` present-but-`null`
+(seen once under the 10-way burst — likely a broker-side race, not a
+Vera bug) sailed straight through as `None` into `usage_log`'s `NOT NULL`
+columns and crashed the insert. Fixed via `meta.get(...) or fallback`,
+which catches both "missing" and "present but null/empty".
+
 ## What got deleted
 
 - `vera_shared/llm/cost_guard.py` — broker now decides caps
