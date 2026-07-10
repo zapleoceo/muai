@@ -1,12 +1,10 @@
 """vera_shared.llm.broker_client — toggling, response unpacking, fallback."""
 from __future__ import annotations
 
-import os
 from unittest.mock import AsyncMock, patch
 
 import httpx
 import pytest
-
 import vera_shared.llm.broker_client as bc
 
 
@@ -46,12 +44,12 @@ async def test_chat_via_broker_unpacks_response(monkeypatch):
         "latency_ms": 451,
     }
 
-    with patch.object(httpx.AsyncClient, "post", AsyncMock(return_value=fake)):
-        with patch.object(bc, "_log_usage", AsyncMock()):
-            text, meta = await bc.chat_via_broker(
-                messages=[{"role": "user", "content": "x"}],
-                capability="chat:fast",
-            )
+    with patch.object(httpx.AsyncClient, "post", AsyncMock(return_value=fake)), \
+         patch.object(bc, "_log_usage", AsyncMock()):
+        text, meta = await bc.chat_via_broker(
+            messages=[{"role": "user", "content": "x"}],
+            capability="chat:fast",
+        )
     assert text == "hello dima"
     assert meta["provider"] == "cerebras"
     assert meta["tokens_in"] == 12
@@ -67,12 +65,12 @@ async def test_chat_via_broker_raises_on_5xx(monkeypatch):
     fake = AsyncMock()
     fake.status_code = 503
     fake.text = "all providers exhausted"
-    with patch.object(httpx.AsyncClient, "post", AsyncMock(return_value=fake)):
-        with pytest.raises(bc.BrokerCallFailed, match="503"):
-            await bc.chat_via_broker(
-                messages=[{"role": "user", "content": "x"}],
-                capability="chat:fast",
-            )
+    with patch.object(httpx.AsyncClient, "post", AsyncMock(return_value=fake)), \
+         pytest.raises(bc.BrokerCallFailed, match="503"):
+        await bc.chat_via_broker(
+            messages=[{"role": "user", "content": "x"}],
+            capability="chat:fast",
+        )
 
 
 @pytest.mark.asyncio
@@ -99,9 +97,9 @@ async def test_embed_via_broker_with_str_input(monkeypatch):
         }
         return r
 
-    with patch.object(httpx.AsyncClient, "post", fake_post):
-        with patch.object(bc, "_log_usage", AsyncMock()):
-            vectors = await bc.embed_via_broker("hello")
+    with patch.object(httpx.AsyncClient, "post", fake_post), \
+         patch.object(bc, "_log_usage", AsyncMock()):
+        vectors = await bc.embed_via_broker("hello")
 
     assert vectors == [[0.1, 0.2, 0.3]]
     assert captured["json"]["input"] == ["hello"]  # NOT ['h', 'e', 'l', ...]
@@ -162,11 +160,11 @@ async def test_chat_async_via_broker_raises_on_job_error(monkeypatch):
     with patch.object(httpx.AsyncClient, "post", AsyncMock(return_value=_fake_submit())), \
          patch.object(httpx.AsyncClient, "get",
                        AsyncMock(return_value=_fake_poll("error", error="all providers failed"))), \
-         patch.object(bc.asyncio, "sleep", AsyncMock()):
-        with pytest.raises(bc.BrokerCallFailed, match="all providers failed"):
-            await bc.chat_async_via_broker(
-                messages=[{"role": "user", "content": "x"}], capability="chat:fast",
-            )
+         patch.object(bc.asyncio, "sleep", AsyncMock()), \
+         pytest.raises(bc.BrokerCallFailed, match="all providers failed"):
+        await bc.chat_async_via_broker(
+            messages=[{"role": "user", "content": "x"}], capability="chat:fast",
+        )
 
 
 @pytest.mark.asyncio
@@ -178,11 +176,11 @@ async def test_chat_async_via_broker_raises_on_submit_5xx(monkeypatch):
     fake = AsyncMock()
     fake.status_code = 503
     fake.text = "capability not available as async job"
-    with patch.object(httpx.AsyncClient, "post", AsyncMock(return_value=fake)):
-        with pytest.raises(bc.BrokerCallFailed, match="503"):
-            await bc.chat_async_via_broker(
-                messages=[{"role": "user", "content": "x"}], capability="chat:fast",
-            )
+    with patch.object(httpx.AsyncClient, "post", AsyncMock(return_value=fake)), \
+         pytest.raises(bc.BrokerCallFailed, match="503"):
+        await bc.chat_async_via_broker(
+            messages=[{"role": "user", "content": "x"}], capability="chat:fast",
+        )
 
 
 @pytest.mark.asyncio
@@ -201,8 +199,8 @@ async def test_chat_async_via_broker_raises_after_deadline(monkeypatch):
     with patch.object(httpx.AsyncClient, "post", AsyncMock(return_value=_fake_submit())), \
          patch.object(httpx.AsyncClient, "get",
                        AsyncMock(return_value=_fake_poll("pending", poll_after_s=2))), \
-         patch.object(bc.asyncio, "sleep", AsyncMock()):
-        with pytest.raises(bc.BrokerCallFailed, match="still pending"):
-            await bc.chat_async_via_broker(
-                messages=[{"role": "user", "content": "x"}], capability="chat:fast",
-            )
+         patch.object(bc.asyncio, "sleep", AsyncMock()), \
+         pytest.raises(bc.BrokerCallFailed, match="still pending"):
+        await bc.chat_async_via_broker(
+            messages=[{"role": "user", "content": "x"}], capability="chat:fast",
+        )

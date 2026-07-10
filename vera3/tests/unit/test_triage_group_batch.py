@@ -215,7 +215,7 @@ async def test_group_batch_happy_path_all_events_returned():
         out = await triage_group_batch(rows)
 
     assert set(out.keys()) == {1, 2, 3}
-    for eid, meta in out.items():
+    for _eid, meta in out.items():
         assert meta is not None
         assert meta["triaged_by_provider"] == "mistral"
         assert "event_id" not in meta   # stripped before storage
@@ -277,9 +277,9 @@ async def test_group_batch_malformed_top_level_raises():
     async def fake_chat(**kwargs):
         return json.dumps({"not_results": []}), {"provider": "x"}
 
-    with patch("brain_triage.worker.chat_async", AsyncMock(side_effect=fake_chat)):
-        with pytest.raises(ValueError, match="results"):
-            await triage_group_batch(rows)
+    with patch("brain_triage.worker.chat_async", AsyncMock(side_effect=fake_chat)), \
+         pytest.raises(ValueError, match="results"):
+        await triage_group_batch(rows)
 
 
 @pytest.mark.asyncio

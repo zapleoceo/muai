@@ -4,7 +4,6 @@ from __future__ import annotations
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 import vera_shared.llm.client as client
 
 
@@ -25,9 +24,9 @@ async def test_chat_async_delegates_to_broker(monkeypatch):
 async def test_chat_async_raises_llmcallfailed_on_broker_failure(monkeypatch):
     monkeypatch.setattr(client, "broker_enabled", lambda: True)
     with patch.object(client, "chat_async_via_broker",
-                       AsyncMock(side_effect=client.BrokerCallFailed("boom"))):
-        with pytest.raises(client.LLMCallFailed, match="boom"):
-            await client.chat_async([{"role": "user", "content": "x"}])
+                       AsyncMock(side_effect=client.BrokerCallFailed("boom"))), \
+         pytest.raises(client.LLMCallFailed, match="boom"):
+        await client.chat_async([{"role": "user", "content": "x"}])
 
 
 @pytest.mark.asyncio

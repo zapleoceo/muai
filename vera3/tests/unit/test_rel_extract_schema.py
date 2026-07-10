@@ -11,7 +11,6 @@ import json
 from unittest.mock import AsyncMock, patch
 
 import pytest
-
 from vera_shared.graph.rel_extract import (
     PREDICATES,
     REL_EXTRACT_JSON_SCHEMA,
