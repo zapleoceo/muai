@@ -7,6 +7,7 @@ behavior is integration-tested.
 from __future__ import annotations
 
 import pytest
+import pytest_asyncio
 from sqlalchemy.ext.asyncio import create_async_engine
 from vera_shared.db import models_graph
 from vera_shared.db.engine import Base
@@ -64,6 +65,61 @@ def test_identity_node_payload_default_dict():
     )
     assert row.label == "Style for Маша"
     assert row.type == "style"
+
+
+@pytest_asyncio.fixture
+async def sqlite_repo(tmp_path):
+    """Real file-based SQLite so repo functions' get_session() works — same
+    reset pattern as tests/service/test_gateway.py."""
+    db_url = f"sqlite+aiosqlite:///{tmp_path / 'graph.db'}"
+    import vera_shared.db.engine as engine_mod
+    engine_mod._engine = None
+    engine_mod.AsyncSessionLocal = None
+    from vera_shared.db.engine import init_engine
+    engine = await init_engine(db_url)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    from vera_shared.graph import repo
+    yield repo
+    await engine.dispose()
+    engine_mod._engine = None
+    engine_mod.AsyncSessionLocal = None
+
+
+@pytest.mark.asyncio
+async def test_resolve_entity_exact_by_name_and_alias(sqlite_repo):
+    repo = sqlite_repo
+    eid = await repo.upsert_entity(
+        type="person", name="Дмитрий", source="telegram", identifier="169",
+        display_name="Dima Z",
+    )
+    # exact name (case-insensitive), not fuzzy substring
+    assert await repo.resolve_entity_exact("дмитрий") == eid
+    # via alias display_name
+    assert await repo.resolve_entity_exact("dima z") == eid
+    # unknown → None (and a partial substring must NOT match — it's exact)
+    assert await repo.resolve_entity_exact("Дмит") is None
+    assert await repo.resolve_entity_exact("nobody") is None
+
+
+@pytest.mark.asyncio
+async def test_upsert_relationship_returns_true_then_false(sqlite_repo):
+    repo = sqlite_repo
+    a = await repo.upsert_entity(type="person", name="A", source="s", identifier="a")
+    b = await repo.upsert_entity(type="org", name="B", source="s", identifier="b")
+
+    first = await repo.upsert_relationship(
+        subject_entity_id=a, object_entity_id=b, predicate="works_at",
+        fact=None, confidence=0.5, derived_from_event_id=1,
+    )
+    assert first is True   # genuinely inserted
+
+    # same tuple again → soft-upsert, back-fills fact, raises confidence
+    second = await repo.upsert_relationship(
+        subject_entity_id=a, object_entity_id=b, predicate="works_at",
+        fact="works at B", confidence=0.9,
+    )
+    assert second is False   # not a new row
 
 
 @pytest.mark.asyncio

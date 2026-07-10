@@ -10,7 +10,6 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import func, select, update
-
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_graph import (
     EntityAliasRow, EntityRow, IdentityNodeRow, MembershipRow, RelationshipRow,
@@ -75,8 +74,7 @@ async def find_entity_by_name(name: str, type: str | None = None) -> int | None:
         q = select(EntityRow.id).where(EntityRow.name.ilike(f"%{name}%"))
         if type:
             q = q.where(EntityRow.type == type)
-        row = (await s.execute(q.limit(1))).scalar_one_or_none()
-        return row
+        return (await s.execute(q.limit(1))).scalar_one_or_none()
 
 
 async def find_entity_by_alias(source: str, identifier: str) -> int | None:
