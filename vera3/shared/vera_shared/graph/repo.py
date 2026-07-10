@@ -9,8 +9,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import select, update
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import func, select, update
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_graph import (
@@ -90,6 +89,27 @@ async def find_entity_by_alias(source: str, identifier: str) -> int | None:
         )).scalar_one_or_none()
 
 
+async def resolve_entity_exact(name: str) -> int | None:
+    """Exact (case-insensitive) resolve by entity name, then alias
+    display_name. Distinct from find_entity_by_name's fuzzy `ILIKE %..%` —
+    rel-extract needs precision, not recall. Lives here so the repository
+    stays the only layer touching graph tables (was raw SQL in rel_extract)."""
+    n = name.strip()
+    async with get_session() as s:
+        eid = (await s.execute(
+            select(EntityRow.id)
+            .where(func.lower(EntityRow.name) == func.lower(n))
+            .limit(1)
+        )).scalar_one_or_none()
+        if eid:
+            return eid
+        return (await s.execute(
+            select(EntityAliasRow.entity_id)
+            .where(func.lower(EntityAliasRow.display_name) == func.lower(n))
+            .limit(1)
+        )).scalar_one_or_none()
+
+
 # ─── Memberships ─────────────────────────────────────────────────────────────
 
 
@@ -151,9 +171,10 @@ async def upsert_relationship(
     predicate: str, fact: str | None = None,
     confidence: float = 0.6,
     derived_from_event_id: int | None = None,
-) -> None:
-    """Soft-upsert: if (subject, predicate, object) exists → touch last_seen.
-    Otherwise insert."""
+) -> bool:
+    """Soft-upsert: if (subject, predicate, object) exists → touch last_seen
+    and return False. Otherwise insert and return True (so callers like
+    rel-extract can count genuinely new links)."""
     now = datetime.utcnow()
     async with get_session() as s:
         existing = (await s.execute(
@@ -168,7 +189,7 @@ async def upsert_relationship(
             existing.confidence = max(existing.confidence, confidence)
             if fact and not existing.fact:
                 existing.fact = fact
-            return
+            return False
         s.add(RelationshipRow(
             subject_entity_id=subject_entity_id,
             object_entity_id=object_entity_id,
@@ -177,6 +198,7 @@ async def upsert_relationship(
             derived_from_event_id=derived_from_event_id,
             first_seen_at=now, last_seen_at=now, is_current=True,
         ))
+        return True
 
 
 # ─── L3 Identity nodes (Goal/Value/NoGo/Style/Self/Fact) ─────────────────────

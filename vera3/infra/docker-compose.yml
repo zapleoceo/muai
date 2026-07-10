@@ -121,9 +121,6 @@ services:
     restart: unless-stopped
     logging: {driver: json-file, options: {max-size: 10m, max-file: 3}}
 
-  # NOTE: sync-bridge retired 2026-06-09 — Vera 2 is gone, its SQLite no
-  # longer updates. ingestor-{telegram,gmail,instagram} cover everything.
-
   # ─── Gmail Ingestor ─────────────────────────────────────────────────────
   ingestor-gmail:
     build:
@@ -224,7 +221,6 @@ services:
       TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-Dimondra_Ai_Bot}
       OWNER_TELEGRAM_ID: ${OWNER_TELEGRAM_ID}
       SEARCH_URL: http://brain-search:8000
-      BROKER_URL: ${BROKER_URL:-}
       GMAIL_CLIENT_ID: ${GMAIL_CLIENT_ID}
       GMAIL_CLIENT_SECRET: ${GMAIL_CLIENT_SECRET}
       DASHBOARD_BASE_URL: https://dima.veranda.my

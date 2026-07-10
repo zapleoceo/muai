@@ -16,9 +16,7 @@ from __future__ import annotations
 import json
 import logging
 
-from sqlalchemy import text
-
-from vera_shared.db.engine import get_session
+from vera_shared.graph.repo import resolve_entity_exact, upsert_relationship
 from vera_shared.llm.client import LLMCallFailed, chat_async
 
 log = logging.getLogger(__name__)
@@ -101,22 +99,6 @@ REL_EXTRACT_JSON_SCHEMA = {
 }
 
 
-async def _resolve_entity(name: str) -> int | None:
-    """Find entity_id by name or alias display_name match. None if unknown."""
-    async with get_session() as s:
-        # Exact name
-        eid = (await s.execute(text(
-            "SELECT id FROM entities WHERE LOWER(name) = LOWER(:n) LIMIT 1"
-        ), {"n": name.strip()})).scalar()
-        if eid:
-            return eid
-        # Alias display_name
-        return (await s.execute(text(
-            "SELECT entity_id FROM entity_aliases "
-            "WHERE LOWER(display_name) = LOWER(:n) LIMIT 1"
-        ), {"n": name.strip()})).scalar()
-
-
 async def extract_and_store(event_id: int, body: str) -> int:
     """Returns number of relationships inserted."""
     if not body or len(body) < 30:
@@ -155,8 +137,8 @@ async def extract_and_store(event_id: int, body: str) -> int:
         if subj == obj:
             continue
 
-        subj_id = await _resolve_entity(subj)
-        obj_id = await _resolve_entity(obj)
+        subj_id = await resolve_entity_exact(subj)
+        obj_id = await resolve_entity_exact(obj)
         if not subj_id or not obj_id:
             log.debug("rel_extract: skip — entity not found (%s | %s)", subj, obj)
             continue
@@ -164,27 +146,15 @@ async def extract_and_store(event_id: int, body: str) -> int:
         conf = float(r.get("confidence", 0.6))
         fact = (r.get("fact") or "")[:500]
 
-        async with get_session() as s:
-            # Don't duplicate same (subj, pred, obj) — bump last_seen instead
-            existing = (await s.execute(text(
-                "SELECT id FROM relationships "
-                "WHERE subject_entity_id=:s AND object_entity_id=:o "
-                "AND predicate=:p LIMIT 1"
-            ), {"s": subj_id, "o": obj_id, "p": pred})).scalar()
-            if existing:
-                await s.execute(text(
-                    "UPDATE relationships SET last_seen_at = NOW(), "
-                    "confidence = GREATEST(confidence, :c) WHERE id = :id"
-                ), {"c": conf, "id": existing})
-            else:
-                await s.execute(text(
-                    "INSERT INTO relationships "
-                    "(subject_entity_id, object_entity_id, predicate, fact, "
-                    " confidence, derived_from_event_id) "
-                    "VALUES (:s, :o, :p, :f, :c, :ev)"
-                ), {"s": subj_id, "o": obj_id, "p": pred,
-                    "f": fact, "c": conf, "ev": event_id})
-                inserted += 1
+        # Canonical upsert lives in repo.py — single source of truth for the
+        # (subject, predicate, object) soft-upsert (was duplicated raw SQL
+        # here that, unlike repo, never back-filled a missing `fact`).
+        if await upsert_relationship(
+            subject_entity_id=subj_id, object_entity_id=obj_id,
+            predicate=pred, fact=fact, confidence=conf,
+            derived_from_event_id=event_id,
+        ):
+            inserted += 1
 
     if inserted:
         log.info("rel_extract event=%s inserted=%d", event_id, inserted)

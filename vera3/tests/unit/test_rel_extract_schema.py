@@ -92,3 +92,52 @@ async def test_extract_and_store_skips_short_body_without_calling_chat():
         n = await extract_and_store(1, "коротко")
     assert n == 0
     m.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_extract_and_store_upserts_resolved_relationship():
+    """Happy path: a valid tuple with both endpoints resolvable is upserted
+    via repo.upsert_relationship (not the old inline raw SQL). Counts only
+    genuine inserts (upsert returns True)."""
+    async def fake_chat(**kwargs):
+        return json.dumps({"relationships": [
+            {"subject": "Дима", "predicate": "works_at", "object": "ITStep",
+             "fact": "работает в ITStep", "confidence": 0.9},
+        ]}), {"provider": "test"}
+
+    with patch("vera_shared.graph.rel_extract.chat_async",
+               AsyncMock(side_effect=fake_chat)), \
+         patch("vera_shared.graph.rel_extract.resolve_entity_exact",
+               AsyncMock(side_effect=[1, 2])), \
+         patch("vera_shared.graph.rel_extract.upsert_relationship",
+               AsyncMock(return_value=True)) as up:
+        n = await extract_and_store(7, "текст события длиннее тридцати символов точно")
+
+    assert n == 1
+    up.assert_awaited_once()
+    kw = up.await_args.kwargs
+    assert kw["subject_entity_id"] == 1
+    assert kw["object_entity_id"] == 2
+    assert kw["predicate"] == "works_at"
+    assert kw["derived_from_event_id"] == 7
+
+
+@pytest.mark.asyncio
+async def test_extract_and_store_skips_unresolved_entity():
+    """If either endpoint doesn't resolve to a known entity, no upsert."""
+    async def fake_chat(**kwargs):
+        return json.dumps({"relationships": [
+            {"subject": "Некто", "predicate": "works_at", "object": "Нечто",
+             "fact": "x", "confidence": 0.9},
+        ]}), {"provider": "test"}
+
+    with patch("vera_shared.graph.rel_extract.chat_async",
+               AsyncMock(side_effect=fake_chat)), \
+         patch("vera_shared.graph.rel_extract.resolve_entity_exact",
+               AsyncMock(return_value=None)), \
+         patch("vera_shared.graph.rel_extract.upsert_relationship",
+               AsyncMock()) as up:
+        n = await extract_and_store(7, "текст события длиннее тридцати символов точно")
+
+    assert n == 0
+    up.assert_not_awaited()
