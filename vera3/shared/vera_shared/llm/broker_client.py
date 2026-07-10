@@ -24,9 +24,11 @@ log = logging.getLogger(__name__)
 BROKER_URL = os.environ.get("BROKER_URL", "").rstrip("/")
 BROKER_PROJECT_KEY = os.environ.get("BROKER_PROJECT_KEY", "")
 BROKER_TIMEOUT_S = float(os.environ.get("BROKER_TIMEOUT_S", "120"))
-# submit+poll (/v1/jobs) — generous vs sync's timeout since it never holds a
-# connection open; broker itself marks a job 'error' (timeout) after ~20 min.
-JOB_POLL_DEADLINE_S = float(os.environ.get("BROKER_JOB_DEADLINE_S", "600"))
+# submit+poll (/v1/jobs) client-side ceiling — matches the old sync
+# BROKER_TIMEOUT_S (120s/2min), same expectation callers had before the
+# migration. Broker itself marks a job 'error' (timeout) after ~20 min
+# server-side; this is a tighter client-side bound on top of that.
+JOB_POLL_DEADLINE_S = float(os.environ.get("BROKER_JOB_DEADLINE_S", "120"))
 
 
 def broker_enabled() -> bool:
