@@ -63,8 +63,13 @@ async def _log_usage(meta: dict[str, Any], workflow: str | None,
     try:
         async with get_session() as s:
             s.add(UsageLogRow(
-                provider=meta.get("provider", "broker"),
-                model=meta.get("model", ""),
+                # .get(key, default) only falls back when the KEY is absent —
+                # broker responses seen under concurrent load can have the
+                # key present with an explicit null (job raced/errored
+                # mid-write), which .get() would pass straight through as
+                # None into a NOT NULL column. `or` catches both cases.
+                provider=meta.get("provider") or "broker",
+                model=meta.get("model") or "",
                 capability=capability or "",
                 tokens_in=int(meta.get("tokens_in") or 0),
                 tokens_out=int(meta.get("tokens_out") or 0),
