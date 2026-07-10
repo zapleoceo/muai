@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import time
 from typing import Any
 
 import httpx
@@ -23,6 +24,9 @@ log = logging.getLogger(__name__)
 BROKER_URL = os.environ.get("BROKER_URL", "").rstrip("/")
 BROKER_PROJECT_KEY = os.environ.get("BROKER_PROJECT_KEY", "")
 BROKER_TIMEOUT_S = float(os.environ.get("BROKER_TIMEOUT_S", "120"))
+# submit+poll (/v1/jobs) — generous vs sync's timeout since it never holds a
+# connection open; broker itself marks a job 'error' (timeout) after ~20 min.
+JOB_POLL_DEADLINE_S = float(os.environ.get("BROKER_JOB_DEADLINE_S", "600"))
 
 
 def broker_enabled() -> bool:
@@ -122,6 +126,83 @@ async def chat_via_broker(
     }
     await _log_usage(meta, workflow, event_id, capability)
     return text, meta
+
+
+async def chat_async_via_broker(
+    *,
+    messages: list[dict[str, Any]],
+    capability: str = "chat:fast",
+    response_format: dict[str, Any] | None = None,
+    max_tokens: int = 1024,
+    temperature: float = 0.5,
+    workflow: str | None = None,
+    event_id: int | None = None,
+    model: str | None = None,
+) -> tuple[str, dict[str, Any]]:
+    """Submit+poll against /v1/jobs — same request/response contract as
+    chat_via_broker, but never holds the connection open. A slow provider can
+    only delay the poll loop, not 504 the caller. See docs/llm-broker.md.
+    """
+    payload: dict[str, Any] = {
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "workflow": workflow,
+    }
+    if model:
+        payload["model"] = model
+    if response_format:
+        payload["response_format"] = response_format
+
+    c = await _client()
+    try:
+        r = await c.post(
+            f"{BROKER_URL}/v1/jobs", params={"capability": capability}, json=payload,
+        )
+    except Exception as e:
+        raise BrokerCallFailed(f"broker network: {e}") from e
+    if r.status_code >= 400:
+        raise BrokerCallFailed(f"broker {r.status_code}: {r.text[:200]}")
+
+    job = r.json()
+    job_id = job["job_id"]
+    poll_after_s = float(job.get("poll_after_s") or 2)
+    deadline = time.monotonic() + JOB_POLL_DEADLINE_S
+
+    while True:
+        await asyncio.sleep(poll_after_s)
+        try:
+            r = await c.get(f"{BROKER_URL}/v1/jobs/{job_id}")
+        except Exception as e:
+            raise BrokerCallFailed(f"broker poll network: {e}") from e
+        if r.status_code >= 400:
+            raise BrokerCallFailed(f"broker poll {r.status_code}: {r.text[:200]}")
+
+        data = r.json()
+        status = data.get("status")
+        if status == "pending":
+            if time.monotonic() > deadline:
+                raise BrokerCallFailed(
+                    f"job {job_id} still pending after {JOB_POLL_DEADLINE_S:.0f}s"
+                )
+            poll_after_s = float(data.get("poll_after_s") or poll_after_s)
+            continue
+        if status == "error":
+            raise BrokerCallFailed(f"job {job_id} failed: {data.get('error')}")
+
+        text = data.get("text", "")
+        meta = {
+            "provider": data.get("provider"),
+            "model": data.get("model"),
+            "tokens_in": data.get("tokens_in", 0),
+            "tokens_out": data.get("tokens_out", 0),
+            "cost_usd": data.get("cost_usd", 0.0),
+            "latency_ms": data.get("latency_ms", 0),
+            "request_id": data.get("request_id"),
+            "key_label": data.get("key_label"),
+        }
+        await _log_usage(meta, workflow, event_id, capability)
+        return text, meta
 
 
 async def embed_via_broker(texts: str | list[str]) -> list[list[float]]:

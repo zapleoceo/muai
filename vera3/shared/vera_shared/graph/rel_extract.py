@@ -19,7 +19,7 @@ import logging
 from sqlalchemy import text
 
 from vera_shared.db.engine import get_session
-from vera_shared.llm.client import LLMCallFailed, chat
+from vera_shared.llm.client import LLMCallFailed, chat_async
 
 log = logging.getLogger(__name__)
 
@@ -123,7 +123,7 @@ async def extract_and_store(event_id: int, body: str) -> int:
         return 0
     prompt = PROMPT.format(preds=", ".join(PREDICATES), body=body[:2000])
     try:
-        raw, _meta = await chat(
+        raw, _meta = await chat_async(
             messages=[{"role": "user", "content": prompt}],
             capability="structured",
             response_format=REL_EXTRACT_JSON_SCHEMA,

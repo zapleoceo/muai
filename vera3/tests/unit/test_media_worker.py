@@ -134,23 +134,19 @@ def test_broker_headers_raises_when_unconfigured(monkeypatch):
 async def test_recognize_photo_sends_multimodal_and_returns_text():
     captured = {}
 
-    class FakeResp:
-        status_code = 200
-        def json(self):
-            return {"text": "на фото кот"}
+    async def fake_chat_async(*, messages, capability, event_id=None, **kw):
+        captured["capability"] = capability
+        captured["messages"] = messages
+        captured["event_id"] = event_id
+        return "на фото кот", {"provider": "gemini"}
 
-    async def fake_post(self, url, params=None, json=None, headers=None, **kw):
-        captured["url"] = url
-        captured["params"] = params
-        captured["json"] = json
-        return FakeResp()
-
-    with patch("httpx.AsyncClient.post", fake_post):
-        txt = await mw._recognize_photo("BASE64DATA", "image/jpeg")
+    with patch.object(mw, "chat_async", AsyncMock(side_effect=fake_chat_async)):
+        txt = await mw._recognize_photo("BASE64DATA", "image/jpeg", event_id=42)
 
     assert txt == "на фото кот"
-    assert captured["params"] == {"capability": "vision"}
-    content = captured["json"]["messages"][0]["content"]
+    assert captured["capability"] == "vision"
+    assert captured["event_id"] == 42
+    content = captured["messages"][0]["content"]
     assert content[0]["type"] == "text"
     assert content[1]["type"] == "image_url"
     assert content[1]["image_url"]["url"].startswith("data:image/jpeg;base64,BASE64")
@@ -158,31 +154,16 @@ async def test_recognize_photo_sends_multimodal_and_returns_text():
 
 @pytest.mark.asyncio
 async def test_recognize_photo_raises_on_broker_error():
-    class FakeResp:
-        status_code = 503
-        text = "no provider"
-        def json(self):
-            return {}
-
-    async def fake_post(self, *a, **kw):
-        return FakeResp()
-
-    with patch("httpx.AsyncClient.post", fake_post), \
-            pytest.raises(RuntimeError, match="503"):
+    with patch.object(mw, "chat_async",
+                       AsyncMock(side_effect=mw.LLMCallFailed("no provider"))), \
+            pytest.raises(RuntimeError, match="no provider"):
         await mw._recognize_photo("x", "image/png")
 
 
 @pytest.mark.asyncio
 async def test_recognize_photo_raises_on_empty_text():
-    class FakeResp:
-        status_code = 200
-        def json(self):
-            return {"text": "   "}
-
-    async def fake_post(self, *a, **kw):
-        return FakeResp()
-
-    with patch("httpx.AsyncClient.post", fake_post), \
+    with patch.object(mw, "chat_async",
+                       AsyncMock(return_value=("   ", {"provider": "gemini"}))), \
             pytest.raises(RuntimeError, match="empty text"):
         await mw._recognize_photo("x", "image/png")
 

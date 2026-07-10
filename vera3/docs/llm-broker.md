@@ -39,6 +39,31 @@ re-raised as `LLMCallFailed`. Caller decides:
 - **bot-telegram**: sends user a soft "временно недоступно".
 - **brain-search**: returns 502 to the dashboard call.
 
+## Async jobs (`/v1/jobs`) — additive, opt-in
+
+`chat()` holds a connection open for the whole call — a slow provider can
+504 the caller. The broker also exposes a submit+poll shape for any chat
+capability (`chat:fast/smart/code/edit/deep`, `structured`, `prefilter`,
+`translate`, `vision` — NOT `embedding`/`transcription`, those stay sync,
+they're fast): `POST /v1/jobs?capability=X` → `202 {job_id, poll_url,
+poll_after_s}`, then `GET /v1/jobs/{id}` until `status` is `done`/`error`
+(broker times out a stuck job to `error` after ~20 min server-side).
+
+`broker_client.chat_async_via_broker()` / `client.chat_async()` mirror
+`chat_via_broker()`/`chat()`'s exact signature and error contract
+(`BrokerCallFailed`/`LLMCallFailed`) — same `usage_log` mirroring via
+`_log_usage()`, same `request_id`/`key_label` capture. `JOB_POLL_DEADLINE_S`
+(env, default 600s) bounds the poll loop client-side, independent of the
+broker's own 20-min stale-job timeout.
+
+**Not wired into any caller yet.** `chat()`/`chat_via_broker()` are
+unchanged and remain the default for every existing call site. Migrating
+a hot path (brain-triage's `worker.py:process_pending()` is the leading
+candidate — 16k+ triage calls/day, most exposed to broker-pool 504s
+under load) means threading submit-then-poll into that loop's existing
+batching/rate-limiter without blocking the claim of the next batch —
+a deliberate follow-up, not a drop-in swap of `chat()` → `chat_async()`.
+
 ## What got deleted
 
 - `vera_shared/llm/cost_guard.py` — broker now decides caps

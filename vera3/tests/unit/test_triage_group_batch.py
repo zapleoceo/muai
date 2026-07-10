@@ -211,11 +211,11 @@ async def test_group_batch_happy_path_all_events_returned():
             {"provider": "mistral", "model": "mistral/small"},
         )
 
-    with patch("brain_triage.worker.chat", AsyncMock(side_effect=fake_chat)):
+    with patch("brain_triage.worker.chat_async", AsyncMock(side_effect=fake_chat)):
         out = await triage_group_batch(rows)
 
     assert set(out.keys()) == {1, 2, 3}
-    for eid, meta in out.items():
+    for _eid, meta in out.items():
         assert meta is not None
         assert meta["triaged_by_provider"] == "mistral"
         assert "event_id" not in meta   # stripped before storage
@@ -233,7 +233,7 @@ async def test_group_batch_partial_response_missing_event_is_none():
             {"provider": "mistral"},
         )
 
-    with patch("brain_triage.worker.chat", AsyncMock(side_effect=fake_chat)):
+    with patch("brain_triage.worker.chat_async", AsyncMock(side_effect=fake_chat)):
         out = await triage_group_batch(rows)
 
     assert out[1] is not None
@@ -255,7 +255,7 @@ async def test_group_batch_ignores_hallucinated_event_id():
             {"provider": "mistral"},
         )
 
-    with patch("brain_triage.worker.chat", AsyncMock(side_effect=fake_chat)):
+    with patch("brain_triage.worker.chat_async", AsyncMock(side_effect=fake_chat)):
         out = await triage_group_batch(rows)
 
     assert set(out.keys()) == {1}
@@ -264,7 +264,7 @@ async def test_group_batch_ignores_hallucinated_event_id():
 
 @pytest.mark.asyncio
 async def test_group_batch_empty_rows_returns_empty_without_calling_chat():
-    with patch("brain_triage.worker.chat", AsyncMock()) as m:
+    with patch("brain_triage.worker.chat_async", AsyncMock()) as m:
         out = await triage_group_batch([])
     assert out == {}
     m.assert_not_called()
@@ -277,9 +277,9 @@ async def test_group_batch_malformed_top_level_raises():
     async def fake_chat(**kwargs):
         return json.dumps({"not_results": []}), {"provider": "x"}
 
-    with patch("brain_triage.worker.chat", AsyncMock(side_effect=fake_chat)):
-        with pytest.raises(ValueError, match="results"):
-            await triage_group_batch(rows)
+    with patch("brain_triage.worker.chat_async", AsyncMock(side_effect=fake_chat)), \
+         pytest.raises(ValueError, match="results"):
+        await triage_group_batch(rows)
 
 
 @pytest.mark.asyncio
@@ -290,7 +290,7 @@ async def test_group_batch_strips_markdown_fences():
         payload = json.dumps({"results": [_triage_item(1)]})
         return f"```json\n{payload}\n```", {"provider": "x"}
 
-    with patch("brain_triage.worker.chat", AsyncMock(side_effect=fake_chat)):
+    with patch("brain_triage.worker.chat_async", AsyncMock(side_effect=fake_chat)):
         out = await triage_group_batch(rows)
     assert out[1] is not None
 
@@ -305,7 +305,7 @@ async def test_group_batch_passes_batch_schema_and_first_event_id():
         return json.dumps({"results": [_triage_item(5), _triage_item(6)]}), \
             {"provider": "x"}
 
-    with patch("brain_triage.worker.chat", AsyncMock(side_effect=fake_chat)):
+    with patch("brain_triage.worker.chat_async", AsyncMock(side_effect=fake_chat)):
         await triage_group_batch(rows)
 
     assert captured["response_format"] == TRIAGE_BATCH_JSON_SCHEMA
