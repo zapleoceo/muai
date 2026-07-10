@@ -12,24 +12,14 @@ from typing import Any
 from fastapi import APIRouter, Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
 from vera_shared.events.schema import RawEvent
 
-from gateway.config import get_settings
+from gateway.auth import check_internal_secret
 
 log = logging.getLogger(__name__)
 router = APIRouter()
-
-
-def _check_internal_secret(provided: str | None) -> None:
-    expected = get_settings().internal_secret
-    if not expected:
-        # Не падаем если не настроено — для dev mode
-        return
-    if not provided or provided != expected:
-        raise HTTPException(401, "invalid internal secret")
 
 
 @router.post("/event/{source}", status_code=201)
@@ -42,7 +32,7 @@ async def ingest_event(
 
     Path param `source` должен совпадать с event.source (защита от мисматча).
     """
-    _check_internal_secret(x_internal_secret)
+    check_internal_secret(x_internal_secret)
 
     if source.lower() != event.source.lower():
         raise HTTPException(
@@ -92,7 +82,16 @@ async def ingest_event(
 
 
 @router.get("/api/events/{event_id}")
-async def get_event(event_id: int) -> dict[str, Any]:
+async def get_event(
+    event_id: int,
+    x_internal_secret: str | None = Header(default=None),
+) -> dict[str, Any]:
+    # Had NO auth check at all (unlike every other route in this file) —
+    # returns full content_text (email/message body) by event_id. Not
+    # currently internet-reachable (nginx only proxies /event/, /v1/,
+    # /webhook/ to gateway — /api/ falls through to dashboard), but that's
+    # an accident of nginx config, not a guarantee this code should rely on.
+    check_internal_secret(x_internal_secret)
     async with get_session() as s:
         row = await s.get(EventRow, event_id)
         if row is None:

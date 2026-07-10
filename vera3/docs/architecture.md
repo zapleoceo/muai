@@ -57,17 +57,20 @@
 2. Gateway dedupes by `source_event_id`, inserts row in `events` with
    `triage_status='pending'`.
 3. `brain-triage` claims a batch (`UPDATE … FOR UPDATE SKIP LOCKED RETURNING`).
-4. For each event: build prompt → call AIbroker `chat:fast` → parse JSON
-   metadata (importance, topics, people, signals) → update row to `done`.
-5. Embedding worker (same loop): one Voyage call per batch → vector to
-   `embedding_voyage_3`.
+4. For each event: build prompt → `chat_async()` submit+poll AIbroker
+   `chat:fast` (`/v1/jobs`, see `llm-broker.md`) → parse JSON metadata
+   (importance, topics, people, signals) → update row to `done`.
+5. Embedding worker (same loop): one Voyage call per batch → row in the
+   separate `event_embeddings` table (migration 011 — `events` itself has
+   no embedding column anymore).
 6. `brain-search` queries events via FTS + cosine on demand.
 
 ## Triage queue scaling
 
-`UPDATE … FOR UPDATE SKIP LOCKED` makes N workers race-safe. We run 1
-replica by default (handles ~500/h). Burst with `--scale brain-triage=3`
-when there's an import.
+`UPDATE … FOR UPDATE SKIP LOCKED` makes N workers race-safe. Default is
+`BRAIN_TRIAGE_REPLICAS=5` × `TRIAGE_CONCURRENCY=10` (see `brain.md` for the
+current tuning history). Override per-deploy via `.env` or
+`docker compose up -d --scale brain-triage=N`.
 
 ## DB connection pool sizing
 

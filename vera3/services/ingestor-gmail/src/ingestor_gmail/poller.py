@@ -90,17 +90,31 @@ async def fetch_messages(access_token: str, query: str, max_total: int = 500) ->
                         "возможно, хвост писем не забран за этот прогон", max_total)
 
         messages = []
+        failed: list[str] = []
         for mid in ids[:max_total]:
-            try:
-                rm = await c.get(
-                    f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{mid}",
-                    params={"format": "full"},
-                    headers=headers,
-                )
-                if rm.status_code == 200:
-                    messages.append(rm.json())
-            except httpx.HTTPError as e:
-                log.warning("Get message %s failed: %s", mid, e)
+            # last_polled_at advances unconditionally after this run — a
+            # message dropped here without a retry is lost for good (the
+            # date-granular `after:` cursor won't re-fetch it later).
+            # One immediate retry catches transient network blips.
+            for attempt in range(2):
+                try:
+                    rm = await c.get(
+                        f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{mid}",
+                        params={"format": "full"},
+                        headers=headers,
+                    )
+                    if rm.status_code == 200:
+                        messages.append(rm.json())
+                    else:
+                        log.warning("Get message %s: HTTP %s", mid, rm.status_code)
+                    break
+                except httpx.HTTPError as e:
+                    if attempt == 1:
+                        failed.append(mid)
+                        log.warning("Get message %s failed after retry: %s", mid, e)
+        if failed:
+            log.warning("gmail: %d message(s) dropped this run (fetch kept failing): %s",
+                        len(failed), failed[:10])
     return messages
 
 

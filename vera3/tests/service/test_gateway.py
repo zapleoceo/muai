@@ -2,7 +2,6 @@
 from __future__ import annotations
 
 import os
-import tempfile
 from datetime import datetime
 
 import pytest
@@ -126,15 +125,17 @@ class TestIngestEvent:
 
 @pytest.mark.asyncio
 class TestGetEvent:
+    _SECRET = {"X-Internal-Secret": "test-internal-secret"}
+
     async def test_get_existing(self, app_client):
         r = await app_client.post(
             "/event/gmail",
             json=_make_event(sid="get_test"),
-            headers={"X-Internal-Secret": "test-internal-secret"},
+            headers=self._SECRET,
         )
         event_id = r.json()["event_id"]
 
-        r = await app_client.get(f"/api/events/{event_id}")
+        r = await app_client.get(f"/api/events/{event_id}", headers=self._SECRET)
         assert r.status_code == 200
         body = r.json()
         assert body["id"] == event_id
@@ -142,5 +143,10 @@ class TestGetEvent:
         assert body["triage_status"] == "pending"
 
     async def test_get_not_found(self, app_client):
-        r = await app_client.get("/api/events/999999999")
+        r = await app_client.get("/api/events/999999999", headers=self._SECRET)
         assert r.status_code == 404
+
+    async def test_get_requires_secret(self, app_client):
+        # Security fix: this route had no auth before — must reject now.
+        r = await app_client.get("/api/events/1")
+        assert r.status_code == 401

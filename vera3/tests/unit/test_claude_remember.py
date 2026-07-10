@@ -18,10 +18,10 @@ from gateway.claude import (  # noqa: E402
     SEMANTIC_LOOKBACK_DAYS,
     LLMCallFailed,
     RememberRequest,
-    _check_internal_secret,
     _content_hash,
     _cosine,
     _find_semantic_neighbour,
+    check_internal_secret,
 )
 
 
@@ -104,19 +104,33 @@ def test_remember_request_max_tags():
 
 
 def test_check_internal_secret_accepts_correct():
-    _check_internal_secret("test-internal-secret")   # no raise
+    check_internal_secret("test-internal-secret")   # no raise
 
 
 def test_check_internal_secret_rejects_wrong():
     with pytest.raises(HTTPException) as exc:
-        _check_internal_secret("wrong")
+        check_internal_secret("wrong")
     assert exc.value.status_code == 401
 
 
 def test_check_internal_secret_rejects_missing():
     with pytest.raises(HTTPException) as exc:
-        _check_internal_secret(None)
+        check_internal_secret(None)
     assert exc.value.status_code == 401
+
+
+def test_check_internal_secret_fails_closed_when_unconfigured(monkeypatch):
+    """Security fix: an empty/unset INTERNAL_SECRET used to fail OPEN
+    (any caller, even with no header, passed). Must now reject everyone —
+    a misconfigured deployment should be locked down, not wide open."""
+    from gateway import config as gw_config
+    monkeypatch.setattr(gw_config, "_settings", None)
+    monkeypatch.setenv("INTERNAL_SECRET", "")
+    with pytest.raises(HTTPException) as exc:
+        check_internal_secret(None)
+    assert exc.value.status_code == 401
+    with pytest.raises(HTTPException):
+        check_internal_secret("anything")
 
 
 # ─── Semantic neighbour finder ─────────────────────────────────────────────

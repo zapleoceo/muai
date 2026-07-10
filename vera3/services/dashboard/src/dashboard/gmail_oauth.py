@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import logging
 import os
+from html import escape as _esc
 from urllib.parse import urlencode
 
 import httpx
@@ -79,7 +80,9 @@ async def gmail_start(request: Request):
 async def gmail_callback(request: Request):
     qp = dict(request.query_params)
     if qp.get("error"):
-        return _page("OAuth error", f"<h1 class='err'>❌ {qp['error']}</h1>", code=400)
+        # Public, no-auth endpoint (Google redirects here) — qp['error'] is
+        # fully attacker-controlled via a crafted link. Must escape.
+        return _page("OAuth error", f"<h1 class='err'>❌ {_esc(qp['error'])}</h1>", code=400)
     code = qp.get("code")
     if not code:
         return _page("Ошибка", "<h1 class='err'>❌ нет code</h1>", code=400)
@@ -95,7 +98,7 @@ async def gmail_callback(request: Request):
         })
     if r.status_code != 200:
         return _page("Ошибка", f"<h1 class='err'>❌ обмен кода: {r.status_code}</h1>"
-                     f"<pre>{r.text[:300]}</pre>", code=400)
+                     f"<pre>{_esc(r.text[:300])}</pre>", code=400)
     tok = r.json()
     refresh = tok.get("refresh_token")
     access = tok.get("access_token")
@@ -121,7 +124,7 @@ async def gmail_callback(request: Request):
         r2 = await c.get("https://openidconnect.googleapis.com/v1/userinfo",
                          headers={"Authorization": f"Bearer {access}"})
     if r2.status_code != 200:
-        return _page("Ошибка", f"<h1 class='err'>❌ userinfo: {r2.text[:200]}</h1>", code=400)
+        return _page("Ошибка", f"<h1 class='err'>❌ userinfo: {_esc(r2.text[:200])}</h1>", code=400)
     email = r2.json().get("email", "?")
 
     refresh_enc = encrypt(refresh)
@@ -140,6 +143,6 @@ async def gmail_callback(request: Request):
                                   is_active=True, needs_reauth=False))
     log.info("Gmail re-auth OK: %s", email)
     return _page("Готово",
-                 f"<h1>✓</h1><p>Переподключён <span class='email'>{email}</span></p>"
+                 f"<h1>✓</h1><p>Переподключён <span class='email'>{_esc(email)}</span></p>"
                  "<p><a href='/api/gmail/start'>→ ещё аккаунт</a> &nbsp;·&nbsp; "
                  "<a href='/sources'>← к источникам</a></p>")
