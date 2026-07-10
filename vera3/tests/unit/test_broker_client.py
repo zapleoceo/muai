@@ -8,6 +8,40 @@ import pytest
 import vera_shared.llm.broker_client as bc
 
 
+# ─── _log_usage — null-coalescing (found under concurrent-load testing) ────
+
+
+@pytest.mark.asyncio
+async def test_log_usage_coalesces_present_but_null_provider_and_model():
+    """Broker responses under load can have provider/model KEY PRESENT with
+    an explicit null (job raced/errored mid-write) — dict.get(key, default)
+    only falls back when the key is ABSENT, so it let None straight through
+    into usage_log's NOT NULL provider/model columns, crashing the insert."""
+    captured = {}
+
+    class _FakeSession:
+        def add(self, row):
+            captured["row"] = row
+
+    class _FakeCtx:
+        async def __aenter__(self):
+            return _FakeSession()
+
+        async def __aexit__(self, *exc):
+            return False
+
+    with patch.object(bc, "get_session", lambda: _FakeCtx()):
+        await bc._log_usage(
+            {"provider": None, "model": None, "tokens_in": 5, "tokens_out": 1,
+             "cost_usd": 0.0, "latency_ms": 10, "request_id": None, "key_label": None},
+            workflow="test", event_id=None, capability="chat:fast",
+        )
+
+    row = captured["row"]
+    assert row.provider == "broker"
+    assert row.model == ""
+
+
 def test_broker_enabled_requires_both_vars(monkeypatch):
     monkeypatch.setattr(bc, "BROKER_URL", "")
     monkeypatch.setattr(bc, "BROKER_PROJECT_KEY", "")
