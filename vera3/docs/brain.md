@@ -47,6 +47,19 @@ The "intelligence layer" — three sub-services that turn events into useful ans
 > `people_mentioned` all verified against a known-answer test message).
 > `tests/unit/test_triage_group_batch.py` (35 tests) still passes unchanged.
 
+> **`ix_events_pending_claim` (migration 014, 2026-07-11) — the claim query
+> needs a partial index for `triage_status='pending'`, same as the existing
+> ones for `'processing'`/`'error'`.** Without it, once the backlog empties,
+> `_claim_batch()`'s `WHERE triage_status='pending' ORDER BY occurred_at DESC
+> ... FOR UPDATE SKIP LOCKED` has no way to skip non-pending rows — the
+> planner walks `ix_events_occurred_at` backwards, filtering row-by-row,
+> effectively scanning the whole table on every single poll. Measured on
+> production with ~403k rows: 2.9s/call, 387k buffer touches, 0 rows found —
+> ×5 replicas ×every 5s ≈ sustained ~100% CPU on a 2-core box (load average
+> 3.4+) confirming there's nothing to do. After the index: same query,
+> ~0.05ms, 1 buffer touch. Applied `CONCURRENTLY` directly on production
+> (see migration file for why); load average dropped to <1 within a minute.
+
 ## Structured output: json_schema, not json_object
 
 2026-07-02: both `worker.py::triage_one` (workflow=`triage`) and
