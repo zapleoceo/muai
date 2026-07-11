@@ -19,7 +19,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 from fastapi.testclient import TestClient  # noqa: E402
 
-from dashboard.app import FAVICON_LINKS, FAVICON_SVG, app  # noqa: E402
+from dashboard.app import app  # noqa: E402
+from dashboard.render import FAVICON_LINKS, FAVICON_SVG  # noqa: E402
 
 client = TestClient(app)
 

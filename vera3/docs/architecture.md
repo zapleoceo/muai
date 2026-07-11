@@ -51,6 +51,28 @@
 | `vera3-dashboard` | HTMX UI on :8003 |
 | `vera3-prune` | docker system prune --filter='until=72h' daily |
 
+## Dashboard modules
+
+`services/dashboard/src/dashboard/` follows one `APIRouter`-per-feature
+file (was a single 1181-line `app.py` until 2026-07-11 — split to match
+this project's own "~200 lines, one responsibility per file" convention):
+
+| Module | Owns |
+|---|---|
+| `render.py` | Shared HTML chrome — `esc()`, `_render()`, page templates, favicon constants, and the auth-gate shortcuts (`owner_or_redirect`/`owner_or_blank_401`/`owner_or_auth_error`) plus small fragment builders (`row_list`, `data_table`, `freshness_pill`, `format_eta`) used across route modules |
+| `auth_routes.py` | `/login`, `/api/tg_login`, `/api/logout`, `/healthz` |
+| `home_routes.py` | `/` — top-line stats cards |
+| `progress_routes.py` | `/_progress`, `/control/backfill(-rate)` — HTMX live-progress fragment + pause/rate controls |
+| `events_routes.py` | `/events` — triage log table |
+| `sources_routes.py` | `/sources` — Gmail/Telegram/Instagram ingest health |
+| `search_routes.py` | `/search-ui` — proxies to brain-search |
+| `settings_routes.py` | `/settings`, `/control/settings` — SETTINGS registry |
+| `entities_routes.py` | `/entities/duplicates`, `/entities/merge` |
+| `gmail_oauth.py`, `instagram_login.py` | Pre-existing OAuth/login flows — the pattern the above split follows |
+| `stats.py` | Cached (TTL 60s) DB aggregation feeding home/progress/sources |
+| `auth.py` | Telegram Login Widget verification + signed session cookies |
+| `app.py` | Just `FastAPI()` + `lifespan` + favicon routes + `include_router()` for all of the above |
+
 ## Event lifecycle
 
 1. Source pushes an envelope to `gateway /event/<source>` with internal secret.

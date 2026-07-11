@@ -38,7 +38,7 @@ def test_control_backfill_pause_sets_flag_when_authed():
     # Mint a session cookie the same way the app does.
     from starlette.responses import Response
 
-    from dashboard.app import _set_session_cookie
+    from dashboard.auth_routes import _set_session_cookie
     resp = Response()
     _set_session_cookie(resp)
     cookie_header = resp.headers.get("set-cookie", "")
@@ -46,8 +46,8 @@ def test_control_backfill_pause_sets_flag_when_authed():
 
     from dashboard.auth import COOKIE_NAME
 
-    with patch("dashboard.app.set_backfill_paused", AsyncMock()) as fake_set, \
-         patch("dashboard.app._build_progress_fragment",
+    with patch("dashboard.progress_routes.set_backfill_paused", AsyncMock()) as fake_set, \
+         patch("dashboard.progress_routes._build_progress_fragment",
                AsyncMock(return_value="<div>ok</div>")):
         r = client.post(
             "/control/backfill",
@@ -61,7 +61,7 @@ def test_control_backfill_pause_sets_flag_when_authed():
 def test_control_backfill_resume_clears_flag_when_authed():
     from starlette.responses import Response
 
-    from dashboard.app import _set_session_cookie
+    from dashboard.auth_routes import _set_session_cookie
     resp = Response()
     _set_session_cookie(resp)
     cookie_header = resp.headers.get("set-cookie", "")
@@ -69,8 +69,8 @@ def test_control_backfill_resume_clears_flag_when_authed():
 
     from dashboard.auth import COOKIE_NAME
 
-    with patch("dashboard.app.set_backfill_paused", AsyncMock()) as fake_set, \
-         patch("dashboard.app._build_progress_fragment",
+    with patch("dashboard.progress_routes.set_backfill_paused", AsyncMock()) as fake_set, \
+         patch("dashboard.progress_routes._build_progress_fragment",
                AsyncMock(return_value="<div>ok</div>")):
         r = client.post(
             "/control/backfill",
@@ -89,15 +89,15 @@ def test_control_rate_requires_auth():
 def test_control_rate_sets_cap_when_authed():
     from starlette.responses import Response
 
-    from dashboard.app import _set_session_cookie
+    from dashboard.auth_routes import _set_session_cookie
     resp = Response()
     _set_session_cookie(resp)
     ch = resp.headers.get("set-cookie", "")
     cookie_val = ch.split(";")[0].split("=", 1)[1] if "=" in ch else ""
     from dashboard.auth import COOKIE_NAME
 
-    with patch("dashboard.app.set_backfill_max_per_hour", AsyncMock()) as fake_set, \
-         patch("dashboard.app._build_progress_fragment",
+    with patch("dashboard.progress_routes.set_backfill_max_per_hour", AsyncMock()) as fake_set, \
+         patch("dashboard.progress_routes._build_progress_fragment",
                AsyncMock(return_value="<div>ok</div>")):
         r = client.post(
             "/control/backfill-rate",
