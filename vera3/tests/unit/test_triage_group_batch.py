@@ -15,16 +15,15 @@ sys.path.insert(0, os.path.join(
     "services", "brain-triage", "src",
 ))
 
-from brain_triage.worker import (  # noqa: E402
-    TRIAGE_BATCH_JSON_SCHEMA,
+from brain_triage.claim import _chunk_group_rows, chat_kind  # noqa: E402
+from brain_triage.config import (  # noqa: E402
     TRIAGE_GROUP_BATCH_MAX_CHARS,
     TRIAGE_GROUP_BATCH_SIZE,
-    _chunk_group_rows,
-    build_batch_prompt,
-    chat_kind,
-    triage_group_batch,
 )
-from vera_shared.db.models import EventRow
+from brain_triage.prompts import build_batch_prompt  # noqa: E402
+from brain_triage.schemas import TRIAGE_BATCH_JSON_SCHEMA  # noqa: E402
+from brain_triage.triage_calls import triage_group_batch  # noqa: E402
+from vera_shared.db.models import EventRow  # noqa: E402
 
 
 def _row(id_=1, content="привет", metadata=None, source="telegram") -> EventRow:
@@ -211,7 +210,7 @@ async def test_group_batch_happy_path_all_events_returned():
             {"provider": "mistral", "model": "mistral/small"},
         )
 
-    with patch("brain_triage.worker.chat_async", AsyncMock(side_effect=fake_chat)):
+    with patch("brain_triage.triage_calls.chat_async", AsyncMock(side_effect=fake_chat)):
         out = await triage_group_batch(rows)
 
     assert set(out.keys()) == {1, 2, 3}
@@ -233,7 +232,7 @@ async def test_group_batch_partial_response_missing_event_is_none():
             {"provider": "mistral"},
         )
 
-    with patch("brain_triage.worker.chat_async", AsyncMock(side_effect=fake_chat)):
+    with patch("brain_triage.triage_calls.chat_async", AsyncMock(side_effect=fake_chat)):
         out = await triage_group_batch(rows)
 
     assert out[1] is not None
@@ -255,7 +254,7 @@ async def test_group_batch_ignores_hallucinated_event_id():
             {"provider": "mistral"},
         )
 
-    with patch("brain_triage.worker.chat_async", AsyncMock(side_effect=fake_chat)):
+    with patch("brain_triage.triage_calls.chat_async", AsyncMock(side_effect=fake_chat)):
         out = await triage_group_batch(rows)
 
     assert set(out.keys()) == {1}
@@ -264,7 +263,7 @@ async def test_group_batch_ignores_hallucinated_event_id():
 
 @pytest.mark.asyncio
 async def test_group_batch_empty_rows_returns_empty_without_calling_chat():
-    with patch("brain_triage.worker.chat_async", AsyncMock()) as m:
+    with patch("brain_triage.triage_calls.chat_async", AsyncMock()) as m:
         out = await triage_group_batch([])
     assert out == {}
     m.assert_not_called()
@@ -277,7 +276,7 @@ async def test_group_batch_malformed_top_level_raises():
     async def fake_chat(**kwargs):
         return json.dumps({"not_results": []}), {"provider": "x"}
 
-    with patch("brain_triage.worker.chat_async", AsyncMock(side_effect=fake_chat)), \
+    with patch("brain_triage.triage_calls.chat_async", AsyncMock(side_effect=fake_chat)), \
          pytest.raises(ValueError, match="results"):
         await triage_group_batch(rows)
 
@@ -290,7 +289,7 @@ async def test_group_batch_strips_markdown_fences():
         payload = json.dumps({"results": [_triage_item(1)]})
         return f"```json\n{payload}\n```", {"provider": "x"}
 
-    with patch("brain_triage.worker.chat_async", AsyncMock(side_effect=fake_chat)):
+    with patch("brain_triage.triage_calls.chat_async", AsyncMock(side_effect=fake_chat)):
         out = await triage_group_batch(rows)
     assert out[1] is not None
 
@@ -305,7 +304,7 @@ async def test_group_batch_passes_batch_schema_and_first_event_id():
         return json.dumps({"results": [_triage_item(5), _triage_item(6)]}), \
             {"provider": "x"}
 
-    with patch("brain_triage.worker.chat_async", AsyncMock(side_effect=fake_chat)):
+    with patch("brain_triage.triage_calls.chat_async", AsyncMock(side_effect=fake_chat)):
         await triage_group_batch(rows)
 
     assert captured["response_format"] == TRIAGE_BATCH_JSON_SCHEMA

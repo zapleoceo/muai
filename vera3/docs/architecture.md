@@ -92,7 +92,28 @@ this project's own "~200 lines, one responsibility per file" convention):
 `UPDATE … FOR UPDATE SKIP LOCKED` makes N workers race-safe. Default is
 `BRAIN_TRIAGE_REPLICAS=5` × `TRIAGE_CONCURRENCY=10` (see `brain.md` for the
 current tuning history). Override per-deploy via `.env` or
-`docker compose up -d --scale brain-triage=N`.
+`docker compose up -d --scale brain-triage=N`. `events` needs a partial
+index for every `triage_status` the claim query filters on (`pending`,
+`processing`, `error`) — see `brain.md`'s `ix_events_pending_claim` note
+for what happens without one.
+
+## brain-triage modules
+
+`services/brain-triage/src/brain_triage/` (was an 820-line `worker.py`
+until 2026-07-11 — split for the same reason as the dashboard above):
+
+| Module | Owns |
+|---|---|
+| `config.py` | Env-configurable tuning constants (poll/batch/concurrency/pace, group-batch size/char cap, canonical chat_id SQL fragment) |
+| `prompts.py` | Single-event + group-batch prompt templates |
+| `schemas.py` | `TRIAGE_JSON_SCHEMA` / `TRIAGE_BATCH_JSON_SCHEMA` (strict json_schema defs) |
+| `postprocess.py` | `NATURE_BY_SOURCE`/`PROJECT_VOCAB`/`postprocess_triage()` — validates the LLM's output against the closed vocab |
+| `claim.py` | `_claim_batch()` (the `FOR UPDATE SKIP LOCKED` query), `chat_kind()`, group-batch chunking |
+| `triage_calls.py` | `triage_one()`/`triage_group_batch()` — the actual broker calls; raise on failure, don't catch |
+| `concurrency.py` | Semaphore-bounded wrappers normalizing single/group results to one shape |
+| `project_override.py` | `apply_project_override()` — the deterministic `project_membership` fixup (own transaction, see domain-model.md) |
+| `background_loops.py` | Watchdog (recover stuck `processing`) + retry-with-backoff (recover `error` → `dead`) |
+| `worker.py` | `process_pending()` orchestration (claim → embed → dispatch → write, three deliberately-separate transactions) + `main_loop()` |
 
 ## DB connection pool sizing
 

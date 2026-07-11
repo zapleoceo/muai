@@ -20,11 +20,9 @@ sys.path.insert(0, os.path.join(
     "services", "brain-triage", "src",
 ))
 
-from brain_triage.worker import (  # noqa: E402
-    PROJECT_VOCAB,
-    TRIAGE_JSON_SCHEMA,
-    triage_one,
-)
+from brain_triage.postprocess import PROJECT_VOCAB  # noqa: E402
+from brain_triage.schemas import TRIAGE_JSON_SCHEMA  # noqa: E402
+from brain_triage.triage_calls import triage_one  # noqa: E402
 
 
 class _FakeEvent:
@@ -121,7 +119,7 @@ async def test_triage_one_passes_schema_not_json_object():
             {"provider": "test", "model": "test/model"},
         )
 
-    with patch("brain_triage.worker.chat_async", AsyncMock(side_effect=fake_chat)):
+    with patch("brain_triage.triage_calls.chat_async", AsyncMock(side_effect=fake_chat)):
         await triage_one(_FakeEvent())
 
     assert captured["response_format"] == TRIAGE_JSON_SCHEMA

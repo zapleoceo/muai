@@ -4,14 +4,12 @@ from __future__ import annotations
 import os
 import sys
 
-import pytest
-
 sys.path.insert(0, os.path.join(
     os.path.dirname(__file__), "..", "..",
     "services", "brain-triage", "src",
 ))
 
-from brain_triage.worker import (  # noqa: E402
+from brain_triage.postprocess import (  # noqa: E402
     NATURE_BY_SOURCE,
     PROJECT_VOCAB,
     SKIP_EMBED_SOURCES,
@@ -66,8 +64,8 @@ class TestProject:
         assert parsed["project"] == "other"
 
     def test_vocab_is_closed_set(self):
-        assert PROJECT_VOCAB == {"itstep", "veranda", "family",
-                                 "personal", "news", "other"}
+        assert {"itstep", "veranda", "family",
+                                 "personal", "news", "other"} == PROJECT_VOCAB
 
 
 class TestEmbedSkip:
