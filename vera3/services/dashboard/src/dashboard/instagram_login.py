@@ -140,7 +140,13 @@ async def instagram_verify(
 ):
     require_owner(request, request.cookies.get(COOKIE_NAME))
     _prune_flows()
-    flow = _flows.pop(flow_id, None)
+    # НЕ pop() здесь — если verify ниже упадёт (напр. Instagram отказывает
+    # с feedback_required — это бывает без всякой связи с самим кодом), флоу
+    # должен остаться живым для повторной попытки с тем же клиентом/челленджем.
+    # Иначе форма "Instagram — код подтверждения" рисуется повторно, но
+    # ссылается на уже мёртвый flow_id — любой retry гарантированно валится
+    # с "Флоу истёк", маскируя настоящую ошибку.
+    flow = _flows.get(flow_id)
     if flow is None:
         return _page("Ошибка", "<h1 class='err'>Флоу истёк, начни заново</h1>"
                      "<p><a href='/api/instagram/start'>← начать заново</a></p>", code=400)
@@ -156,9 +162,11 @@ async def instagram_verify(
                                  verification_code=code)
     except Exception as e:
         log.warning("instagram verify failed: %s", e)
+        flow["ts"] = time.monotonic()  # продлить TTL на время повторной попытки
         return _page("Instagram — код подтверждения",
                      _verify_form(flow_id) + f'<p class="err">Ошибка: {_esc(str(e)[:200])}</p>')
 
+    _flows.pop(flow_id, None)
     username = flow.get("username") or getattr(cl, "username", "") or "unknown"
     await _save_session(username, cl)
     return _done_page(username)
