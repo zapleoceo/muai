@@ -223,6 +223,29 @@ async def get_entity_dossier(entity_id: int) -> dict:
     return (await get_entity_dossiers([entity_id]))[entity_id]
 
 
+_CHAT_TYPES = {"channel", "supergroup", "group"}
+
+
+async def merge_username_collision_pairs() -> list[dict]:
+    """Авто-слияние однозначных @username-коллизий: ровно 2 сущности с одним
+    username, одна — чат (channel/supergroup/group), вторая — person (канал,
+    постящий от своего имени, порождал обе до фикса entity_sync). Username в
+    Telegram уникален глобально — это детерминированный дубль, не догадка.
+    Keeper — чатовая сущность (человекочитаемое имя-заголовок). Неоднозначные
+    группы (3+ сущностей, две персоны и т.п.) не трогаем — они остаются в UI.
+    Возвращает список слитых пар."""
+    merged: list[dict] = []
+    for g in await find_alias_collisions(min_group=2):
+        cands = g["candidates"]
+        chats = [c for c in cands if c["type"] in _CHAT_TYPES]
+        people = [c for c in cands if c["type"] == "person"]
+        if len(cands) == 2 and len(chats) == 1 and len(people) == 1:
+            await merge_entities(chats[0]["id"], people[0]["id"])
+            merged.append({"username": g["username"],
+                           "keeper": chats[0]["id"], "merged": people[0]["id"]})
+    return merged
+
+
 async def get_entity_context(entity_id: int) -> dict:
     """Pull aliases, membership chats, and recent message count for review UI."""
     async with get_session() as s:

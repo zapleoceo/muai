@@ -48,6 +48,18 @@ status pending|accepted|rejected, UNIQUE(entity_a, entity_b).
 `entities_suggestion` (POST `/entities/suggestion`): «оставить A» /
 «оставить B» (→ `merge_entities`) / «разные люди».
 
+## @username-коллизии сливаются автоматически
+
+Username в Telegram уникален глобально, поэтому две сущности с одним
+@username — детерминированный дубль, не догадка. Однозначные пары
+«чат + персона» (канал, постящий от своего имени, порождал обе до фикса
+в `entity_sync` — теперь Channel-отправитель персону не создаёт) сливает
+`dedup.merge_username_collision_pairs()` — keeper всегда чатовая сущность
+(человекочитаемый заголовок). Кнопка «⚡ Объединить все однозначные пары»
+на `/entities/duplicates` (`entities_merge_collisions`). Неоднозначные
+группы (двое людей с одним username после смены ника и т.п.) остаются
+для ручного разбора.
+
 ## «Я» — это автор сообщения
 
 Первое лицо в тексте резолвится НЕ по имени: `rel_extract` держит

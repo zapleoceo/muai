@@ -49,8 +49,13 @@ async def sync_message_entities(chat: Any, sender: Any) -> None:
             },
         )
 
-    # 2) Person entity (sender)
-    if sender is not None and not getattr(sender, "bot", False):
+    # 2) Person entity (sender). Каналы постят от СВОЕГО имени — Telethon
+    # отдаёт сам Channel как sender'а; персону из него не делаем (chat-entity
+    # выше уже покрывает канал; иначе плодятся дубли channel+person с одним
+    # @username — их потом приходится сливать на /entities/duplicates).
+    sender_is_chat = type(sender).__name__.lower() in {"channel", "chat"}
+    if sender is not None and not sender_is_chat \
+            and not getattr(sender, "bot", False):
         sender_username = getattr(sender, "username", None)
         sender_id = getattr(sender, "id", None)
         if sender_id is not None:

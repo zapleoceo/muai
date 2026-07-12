@@ -140,3 +140,30 @@ async def test_get_entity_dossier_samples_chats_project(db):
     assert ("Семья", 2) in d["top_chats"]
     assert len(d["samples"]) == 3
     assert all("Author:" not in s for s in d["samples"])   # header stripped
+
+
+@pytest.mark.asyncio
+async def test_merge_username_collision_pairs_auto(db):
+    """Логика отбора: однозначная пара канал+персона сливается (keeper —
+    канал), две тёзки-персоны — нет. Сам merge_entities мокается: его SQL
+    (CTE-UPDATE) Postgres-only, проверен на проде."""
+    from unittest.mock import AsyncMock, patch
+
+    from vera_shared.graph import dedup, repo
+    ch = await repo.upsert_entity(type="channel", name="News", source="telegram",
+                                  identifier="chat:-100",
+                                  attributes={"username": "newschan"})
+    pers = await repo.upsert_entity(type="person", name="newschan",
+                                    source="telegram", identifier="user:5",
+                                    attributes={"username": "NewsChan"})
+    # неоднозначная: две ПЕРСОНЫ с одним username → не трогаем
+    await repo.upsert_entity(type="person", name="A", source="telegram",
+                             identifier="user:6", attributes={"username": "twinz"})
+    await repo.upsert_entity(type="person", name="B", source="telegram",
+                             identifier="user:7", attributes={"username": "twinz"})
+
+    with patch.object(dedup, "merge_entities", AsyncMock()) as mm:
+        merged = await dedup.merge_username_collision_pairs()
+
+    assert [(m["keeper"], m["merged"]) for m in merged] == [(ch, pers)]
+    mm.assert_awaited_once_with(ch, pers)   # twinz-пару не тронули

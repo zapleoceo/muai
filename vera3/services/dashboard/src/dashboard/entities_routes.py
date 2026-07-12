@@ -16,6 +16,7 @@ from vera_shared.graph.dedup import (
     get_entity_context,
     get_entity_dossiers,
     merge_entities,
+    merge_username_collision_pairs,
 )
 from vera_shared.graph.identity import (
     list_pending_suggestions,
@@ -121,6 +122,13 @@ def _collision_section(groups: list[dict], dossiers: dict[int, dict]) -> str:
             f'<option value="{c["id"]}">#{c["id"]} {esc(c["name"])} ({esc(c["type"])})</option>'
             for c in cands
         )
+        # merged по умолчанию — ВТОРОЙ кандидат, иначе оба селекта указывают
+        # на одну сущность и merge выглядит бессмысленным (жалоба владельца).
+        merged_opts = "".join(
+            f'<option value="{c["id"]}"{" selected" if i == 1 else ""}>'
+            f'#{c["id"]} {esc(c["name"])} ({esc(c["type"])})</option>'
+            for i, c in enumerate(cands)
+        )
         cards = "".join(_candidate_card(dossiers[c["id"]]) for c in cands)
         blocks.append(
             f'<div class="dup-group" style="border:1px solid #2f9e44;'
@@ -129,17 +137,20 @@ def _collision_section(groups: list[dict], dossiers: dict[int, dict]) -> str:
             f'{cards}'
             f'<form method="post" action="/entities/merge" style="margin-top:6px">'
             f'  keeper: <select name="keeper_id">{cand_opts}</select>'
-            f'  merged: <select name="merged_id">{cand_opts}</select>'
+            f'  merged: <select name="merged_id">{merged_opts}</select>'
             f'  <button>merge</button></form>'
             f'</div>'
         )
     return (
         '<div class="section" style="border-left:3px solid #2f9e44">'
         '<h2>🎯 Точные совпадения по @username</h2>'
-        '<p class="mute">Разные entity-строки с ОДНИМ @username — почти всегда '
-        'один и тот же объект Telegram (напр. канал, который постит от своего '
-        'имени, породил и channel-, и person-сущность). Это настоящие дубли — '
-        'смело объединяй.</p>'
+        '<p class="mute">Разные entity-строки с ОДНИМ @username — это один и '
+        'тот же объект Telegram (username уникален). Однозначные пары '
+        '«канал + персона» сливаются кнопкой ниже одним махом; вручную '
+        'остаются только неоднозначные группы.</p>'
+        '<form method="post" action="/entities/merge-collisions" '
+        'style="margin-bottom:8px"><button style="background:#2f9e44">'
+        '⚡ Объединить все однозначные пары</button></form>'
         f'{"".join(blocks)}</div>'
     )
 
@@ -221,6 +232,16 @@ async def entities_analyze(request: Request):
     if not _analysis["running"]:
         _analysis["running"] = True
         asyncio.create_task(_run_analysis_bg())
+    return RedirectResponse("/entities/duplicates", status_code=303)
+
+
+@router.post("/entities/merge-collisions")
+async def entities_merge_collisions(request: Request):
+    """Слить все однозначные @username-коллизии (канал+персона) одним махом."""
+    if (resp := owner_or_auth_error(request)) is not None:
+        return resp
+    merged = await merge_username_collision_pairs()
+    log.info("username-collision bulk merge: %d pairs", len(merged))
     return RedirectResponse("/entities/duplicates", status_code=303)
 
 
