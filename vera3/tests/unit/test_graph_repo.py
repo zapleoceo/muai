@@ -132,6 +132,64 @@ async def test_upsert_relationship_returns_true_then_false(sqlite_repo):
     assert second is False   # not a new row
 
 
+async def _triangle(repo):
+    """A is the hub (degree 2): A→B works_at, A→C friend_of."""
+    a = await repo.upsert_entity(type="person", name="A", source="s", identifier="a")
+    b = await repo.upsert_entity(type="org", name="B", source="s", identifier="b")
+    c = await repo.upsert_entity(type="person", name="C", source="s", identifier="c")
+    await repo.upsert_relationship(subject_entity_id=a, object_entity_id=b,
+                                   predicate="works_at", confidence=0.8)
+    await repo.upsert_relationship(subject_entity_id=a, object_entity_id=c,
+                                   predicate="friend_of", confidence=0.7)
+    return a, b, c
+
+
+@pytest.mark.asyncio
+async def test_graph_snapshot_core_respects_min_degree(sqlite_repo):
+    repo = sqlite_repo
+    a, b, c = await _triangle(repo)
+
+    # min_degree=1 → all three nodes, both edges
+    snap = await repo.graph_snapshot(min_degree=1, limit=100)
+    assert {n["id"] for n in snap["nodes"]} == {a, b, c}
+    assert len(snap["edges"]) == 2
+    # node carries degree + type for the viz
+    hub = next(n for n in snap["nodes"] if n["id"] == a)
+    assert hub["degree"] == 2 and hub["type"] == "person"
+
+    # min_degree=2 → only the hub qualifies; its edges point to excluded
+    # nodes, so no edge survives the both-endpoints-present filter
+    snap2 = await repo.graph_snapshot(min_degree=2, limit=100)
+    assert [n["id"] for n in snap2["nodes"]] == [a]
+    assert snap2["edges"] == []
+
+
+@pytest.mark.asyncio
+async def test_graph_snapshot_focus_is_ego_network(sqlite_repo):
+    repo = sqlite_repo
+    a, b, c = await _triangle(repo)
+    snap = await repo.graph_snapshot(focus_id=a, limit=100)
+    assert {n["id"] for n in snap["nodes"]} == {a, b, c}
+    assert len(snap["edges"]) == 2
+
+
+@pytest.mark.asyncio
+async def test_graph_snapshot_predicate_filter(sqlite_repo):
+    repo = sqlite_repo
+    a, b, c = await _triangle(repo)
+    snap = await repo.graph_snapshot(min_degree=1, limit=100, predicate="works_at")
+    assert len(snap["edges"]) == 1
+    assert snap["edges"][0]["predicate"] == "works_at"
+
+
+@pytest.mark.asyncio
+async def test_graph_snapshot_empty_when_no_relationships(sqlite_repo):
+    repo = sqlite_repo
+    await repo.upsert_entity(type="person", name="Lonely", source="s", identifier="z")
+    snap = await repo.graph_snapshot(min_degree=1, limit=100)
+    assert snap == {"nodes": [], "edges": []}
+
+
 @pytest.mark.asyncio
 async def test_metadata_create_all_compiles_on_sqlite():
     """Regression: JSONB (postgres-only) без .with_variant(JSON, "sqlite")

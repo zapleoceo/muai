@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import os
+import time
 from unittest.mock import AsyncMock, MagicMock, patch
 
 os.environ.setdefault("TOKEN_SECRET", base64.urlsafe_b64encode(b"0" * 32).decode())
@@ -37,8 +38,13 @@ def _owner_cookie() -> str:
 
 
 def test_failed_verify_keeps_flow_alive_for_retry():
+    # ts must be a fresh monotonic reading — _prune_flows() drops anything
+    # older than _FLOW_TTL_S, and ts=0 is always "expired" (monotonic() is a
+    # large uptime-based number), which would wrongly 400 before the handler
+    # even reaches the flow.
     _flows["testflow"] = {"client": MagicMock(), "kind": "2fa",
-                          "username": "u", "password": "p", "ts": 0}
+                          "username": "u", "password": "p",
+                          "ts": time.monotonic()}
 
     with patch("dashboard.instagram_login._run_in_thread",
                AsyncMock(side_effect=Exception("feedback_required"))):
@@ -56,7 +62,8 @@ def test_failed_verify_keeps_flow_alive_for_retry():
 def test_successful_verify_removes_flow():
     fake_client = MagicMock()
     _flows["testflow2"] = {"client": fake_client, "kind": "2fa",
-                           "username": "u", "password": "p", "ts": 0}
+                           "username": "u", "password": "p",
+                           "ts": time.monotonic()}
 
     with patch("dashboard.instagram_login._run_in_thread", AsyncMock()), \
          patch("dashboard.instagram_login._save_session", AsyncMock()):

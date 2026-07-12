@@ -59,7 +59,7 @@ this project's own "~200 lines, one responsibility per file" convention):
 
 | Module | Owns |
 |---|---|
-| `render.py` | Shared HTML chrome — `esc()`, `_render()`, page templates, favicon constants, and the auth-gate shortcuts (`owner_or_redirect`/`owner_or_blank_401`/`owner_or_auth_error`) plus small fragment builders (`row_list`, `data_table`, `freshness_pill`, `format_eta`) used across route modules |
+| `render.py` | Shared HTML chrome — `esc()`, `_render()`, page templates, favicon constants, and the auth-gate shortcuts (`owner_or_redirect`/`owner_or_blank_401`/`owner_or_auth_error`) plus small fragment builders (`row_list`, `data_table`, `freshness_pill`, `format_eta`, `local_dt`) used across route modules |
 | `auth_routes.py` | `/login`, `/api/tg_login`, `/api/logout`, `/healthz` |
 | `home_routes.py` | `/` — top-line stats cards |
 | `progress_routes.py` | `/_progress`, `/control/backfill(-rate)` — HTMX live-progress fragment + pause/rate controls |
@@ -72,6 +72,22 @@ this project's own "~200 lines, one responsibility per file" convention):
 | `stats.py` | Cached (TTL 60s) DB aggregation feeding home/progress/sources |
 | `auth.py` | Telegram Login Widget verification + signed session cookies |
 | `app.py` | Just `FastAPI()` + `lifespan` + favicon routes + `include_router()` for all of the above |
+
+### Timezone display
+
+All DB datetime columns are **naive UTC** (ingestors write `datetime.utcnow()`;
+`received_at`/`created_at` use `server_default=func.now()`). The dashboard
+never `strftime`s a wall-clock time straight into HTML — every displayed
+timestamp goes through `render.local_dt(dt, fmt)`, which emits
+`<time data-utc="…Z" data-fmt="…">UTC-fallback</time>`. A small script in the
+page footer (`_TZ_SCRIPT`) rewrites every such element into the **viewer's
+browser timezone** on load and after each HTMX swap, and a footer note shows
+the detected zone. The UTC text remains as a no-JS fallback and as the `title`
+tooltip. Relative displays ("N мин назад", freshness pills) are UTC−UTC deltas
+and are timezone-independent, so they are left as-is. Not covered: dates the
+LLM echoes inside a search `answer` (generated server-side from UTC context,
+no per-viewer zone available) and the fixed-UTC+7 month labels in
+`brain-search/reports.py`.
 
 ## Event lifecycle
 

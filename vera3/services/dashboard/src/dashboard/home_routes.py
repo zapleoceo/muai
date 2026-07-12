@@ -6,7 +6,14 @@ from datetime import datetime
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 
-from dashboard.render import _render, esc, format_eta, owner_or_redirect, row_list
+from dashboard.render import (
+    _render,
+    esc,
+    format_eta,
+    local_dt,
+    owner_or_redirect,
+    row_list,
+)
 from dashboard.stats import get_stats
 
 router = APIRouter()
@@ -36,7 +43,7 @@ async def home(request: Request):
     )
     eta_txt = format_eta(pending, triage_1h)
 
-    earliest_txt = earliest.strftime("%d %b %Y") if earliest else "—"
+    earliest_txt = local_dt(earliest, "date_human")
     history_days = (datetime.utcnow() - earliest).days if earliest else 0
 
     return HTMLResponse(_render(

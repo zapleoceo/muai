@@ -10,7 +10,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy import text
 from vera_shared.db.engine import get_session
 
-from dashboard.render import _render, esc, owner_or_redirect
+from dashboard.render import _render, esc, local_dt, owner_or_redirect
 
 router = APIRouter()
 
@@ -104,7 +104,7 @@ async def events_page(request: Request, limit: int = Query(100, ge=1, le=500),  
         tbody.append(
             f'<tr><td>{e["id"]}</td><td title="{status_title}">{emoji}</td><td>{imp}</td>'
             f'<td>{esc(e["source"])}</td><td>{esc(e["account"] or "—")}</td>'
-            f'<td class="mute">{e["occurred_at"].strftime("%Y-%m-%d %H:%M")}</td>'
+            f'<td class="mute">{local_dt(e["occurred_at"], "datetime")}</td>'
             f'<td class="preview">{preview}…</td>'
             f'<td class="mute">{req_cell}</td><td>{model}</td>'
             f'<td class="mute">{tokens}</td><td class="mute">{cost}</td></tr>'
