@@ -136,11 +136,14 @@ low precision), while `find_alias_collisions` groups entities sharing one
 lowercased `@username` — the high-precision "real duplicate" signal (a channel
 posting under its own handle spawns both a `channel` and a `person` entity for
 one handle). Each candidate is shown with its avatar, a `tg_link` back to
-Telegram, and a `get_entity_dossier` context block (dominant project, top
+Telegram, and a `get_entity_dossiers` context block (dominant project, top
 chats, recent message snippets) so the owner can tell WHO an entity is before
-merging. The dossier matches a person's messages by the numeric tg_id in
+merging. It matches a person's messages by the numeric tg_id in
 `events.metadata->>'sender_id'` — indexed by migration 015
-(`ix_events_tg_sender`, partial on `source='telegram'`).
+(`ix_events_tg_sender`, partial on `source='telegram'`) — and is **batched**
+(4 set-based queries for all candidates in one session; per-entity fanout of
+`get_entity_dossier` would exhaust the dashboard connection pool on a
+~200-candidate page).
 
 ### L2 — Patterns (reserved for future)
 

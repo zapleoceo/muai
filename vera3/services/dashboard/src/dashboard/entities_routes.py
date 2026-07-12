@@ -2,8 +2,6 @@
 avatar serving (`/entities/{id}/avatar`)."""
 from __future__ import annotations
 
-import asyncio
-
 from fastapi import APIRouter, Form, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from vera_shared.graph.avatars import get_avatar
@@ -11,7 +9,7 @@ from vera_shared.graph.dedup import (
     find_alias_collisions,
     find_duplicates_by_name,
     get_entity_context,
-    get_entity_dossier,
+    get_entity_dossiers,
     merge_entities,
 )
 
@@ -140,13 +138,13 @@ async def entity_duplicates_page(request: Request):
     groups = await find_duplicates_by_name(min_group=2)
     shown_groups = groups[:_NAME_GROUPS_SHOWN]
 
-    # Fetch every candidate's dossier once, concurrently (indexed lookups).
+    # Every candidate's dossier in one batched call (4 queries, one session) —
+    # per-entity fanout would exhaust the connection pool on ~200 candidates.
     need_ids: set[int] = {c["id"] for g in collisions for c in g["candidates"]}
     for g in shown_groups:
         for c in g["candidates"][:_CANDS_PER_GROUP]:
             need_ids.add(c["id"])
-    fetched = await asyncio.gather(*(get_entity_dossier(i) for i in need_ids))
-    dossiers = {d["entity_id"]: d for d in fetched}
+    dossiers = await get_entity_dossiers(list(need_ids))
 
     collision_html = _collision_section(collisions, dossiers)
 

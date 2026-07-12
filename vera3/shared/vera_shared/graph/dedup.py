@@ -25,7 +25,7 @@ import json
 import re
 import unicodedata
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from vera_shared.db.engine import get_session
 
@@ -126,63 +126,101 @@ def _msg_snippet(content_text: str | None) -> str:
     return " ".join(body.split())[:160]
 
 
-async def get_entity_dossier(entity_id: int) -> dict:
-    """Rich per-entity context for the dedup UI — who this actually is:
-    recent message samples, top chats, dominant project. Matches events by the
-    numeric tg_id in `metadata->>'sender_id'` (indexed, migration 015).
+def _empty_dossier(entity_id: int, name=None, type_=None, username=None,
+                   tg_id=None) -> dict:
+    return {"entity_id": entity_id, "name": name, "type": type_,
+            "username": username, "tg_id": tg_id, "samples": [],
+            "top_chats": [], "dom_project": None, "msg_count": 0}
+
+
+async def get_entity_dossiers(entity_ids: list[int]) -> dict[int, dict]:
+    """Batch rich context for MANY entities in 4 queries total (one session).
+
+    Matches a person's messages by the numeric tg_id in
+    `metadata->>'sender_id'` (indexed, migration 015). Per-entity fanout
+    (a session each) exhausts the connection pool on a page with ~200
+    candidates — this fetches samples/chats/projects set-based instead.
 
     NB: the old `get_entity_context.recent_30d_messages` matched alias
-    identifiers, which carry a `user:` prefix and so never `.isdigit()` — it
-    silently returned 0. This uses the raw tg_id and is the correct signal.
+    identifiers (a `user:` prefix, never `.isdigit()`) — it silently returned
+    0. tg_id is the correct signal.
     """
+    if not entity_ids:
+        return {}
     async with get_session() as s:
-        ent = (await s.execute(text(
-            "SELECT name, type, attributes FROM entities WHERE id = :eid"
-        ), {"eid": entity_id})).mappings().first()
-        if ent is None:
-            return {"entity_id": entity_id, "name": None, "type": None,
-                    "username": None, "tg_id": None, "samples": [],
-                    "top_chats": [], "dom_project": None, "msg_count": 0}
-        attrs = _as_dict(ent["attributes"])
-        tg_id = attrs.get("tg_id")
-        samples: list[str] = []
-        top_chats: list[tuple[str, int]] = []
-        dom_project = None
-        msg_count = 0
-        if tg_id is not None:
-            sid = str(tg_id)
-            samples = [
-                _msg_snippet(r[0]) for r in (await s.execute(text(
-                    "SELECT content_text FROM events "
-                    "WHERE source='telegram' AND metadata->>'sender_id' = :sid "
-                    "ORDER BY occurred_at DESC LIMIT 3"
-                ), {"sid": sid})).all()
-            ]
-            top_chats = [
-                (r[0] or "—", r[1]) for r in (await s.execute(text(
-                    "SELECT metadata->>'chat_title' AS ct, count(*) AS n "
-                    "FROM events WHERE source='telegram' "
-                    "AND metadata->>'sender_id' = :sid "
-                    "GROUP BY ct ORDER BY n DESC LIMIT 3"
-                ), {"sid": sid})).all()
-            ]
-            row = (await s.execute(text(
-                "SELECT project, count(*) AS n FROM events "
-                "WHERE source='telegram' AND metadata->>'sender_id' = :sid "
-                "AND project IS NOT NULL "
-                "GROUP BY project ORDER BY n DESC LIMIT 1"
-            ), {"sid": sid})).first()
-            dom_project = row[0] if row else None
-            msg_count = sum(n for _, n in top_chats)
+        ents = (await s.execute(
+            text("SELECT id, name, type, attributes FROM entities WHERE id IN :ids")
+            .bindparams(bindparam("ids", expanding=True)),
+            {"ids": entity_ids},
+        )).mappings().all()
 
-    return {
-        "entity_id": entity_id,
-        "name": ent["name"], "type": ent["type"],
-        "username": attrs.get("username"), "tg_id": tg_id,
-        "samples": [x for x in samples if x],
-        "top_chats": top_chats, "dom_project": dom_project,
-        "msg_count": msg_count,
-    }
+        by_id: dict[int, dict] = {}
+        tgid_to_eid: dict[str, int] = {}
+        for e in ents:
+            attrs = _as_dict(e["attributes"])
+            tg_id = attrs.get("tg_id")
+            by_id[e["id"]] = _empty_dossier(e["id"], e["name"], e["type"],
+                                            attrs.get("username"), tg_id)
+            if tg_id is not None:
+                tgid_to_eid[str(tg_id)] = e["id"]
+
+        for eid in entity_ids:
+            by_id.setdefault(eid, _empty_dossier(eid))
+
+        tgids = list(tgid_to_eid)
+        if not tgids:
+            return by_id
+
+        sample_rows = (await s.execute(text("""
+            SELECT sender_id, content_text FROM (
+              SELECT metadata->>'sender_id' AS sender_id, content_text,
+                     row_number() OVER (PARTITION BY metadata->>'sender_id'
+                                        ORDER BY occurred_at DESC) AS rn
+              FROM events
+              WHERE source='telegram' AND metadata->>'sender_id' IN :t
+            ) x WHERE rn <= 3
+        """).bindparams(bindparam("t", expanding=True)), {"t": tgids})).all()
+        for sid, content in sample_rows:
+            snip = _msg_snippet(content)
+            if snip:
+                by_id[tgid_to_eid[sid]]["samples"].append(snip)
+
+        chat_rows = (await s.execute(text("""
+            SELECT metadata->>'sender_id' AS sender_id,
+                   metadata->>'chat_title' AS chat_title, count(*) AS n
+            FROM events
+            WHERE source='telegram' AND metadata->>'sender_id' IN :t
+            GROUP BY sender_id, chat_title
+        """).bindparams(bindparam("t", expanding=True)), {"t": tgids})).all()
+        chats_by_sid: dict[str, list[tuple[str, int]]] = {}
+        for sid, chat, n in chat_rows:
+            chats_by_sid.setdefault(sid, []).append((chat or "—", n))
+        for sid, chats in chats_by_sid.items():
+            chats.sort(key=lambda c: -c[1])
+            d = by_id[tgid_to_eid[sid]]
+            d["top_chats"] = chats[:3]
+            d["msg_count"] = sum(n for _, n in chats)
+
+        proj_rows = (await s.execute(text("""
+            SELECT metadata->>'sender_id' AS sender_id, project, count(*) AS n
+            FROM events
+            WHERE source='telegram' AND metadata->>'sender_id' IN :t
+              AND project IS NOT NULL
+            GROUP BY sender_id, project
+        """).bindparams(bindparam("t", expanding=True)), {"t": tgids})).all()
+        best: dict[str, tuple[str, int]] = {}
+        for sid, proj, n in proj_rows:
+            if sid not in best or n > best[sid][1]:
+                best[sid] = (proj, n)
+        for sid, (proj, _) in best.items():
+            by_id[tgid_to_eid[sid]]["dom_project"] = proj
+
+    return by_id
+
+
+async def get_entity_dossier(entity_id: int) -> dict:
+    """Single-entity convenience wrapper over `get_entity_dossiers`."""
+    return (await get_entity_dossiers([entity_id]))[entity_id]
 
 
 async def get_entity_context(entity_id: int) -> dict:
