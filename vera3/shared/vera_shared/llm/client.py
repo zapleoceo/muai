@@ -73,10 +73,13 @@ async def chat_async(
     temperature: float = 0.7,
     workflow: str | None = None,
     event_id: int | None = None,
+    poll_deadline_s: float | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Same contract as chat(), submit+poll (/v1/jobs) instead of holding a
     connection open — a slow provider delays the poll loop, not the caller.
-    Additive: chat() keeps working unchanged. See docs/llm-broker.md."""
+    Additive: chat() keeps working unchanged. See docs/llm-broker.md.
+    `poll_deadline_s` — per-call ожидание очереди (фоновые задачи, напр.
+    ярлыки кластеров, могут ждать занятый free-пул дольше дефолтных 120с)."""
     _require_broker()
     try:
         return await chat_async_via_broker(
@@ -87,6 +90,7 @@ async def chat_async(
             temperature=temperature,
             workflow=workflow,
             event_id=event_id,
+            poll_deadline_s=poll_deadline_s,
         )
     except BrokerCallFailed as e:
         raise LLMCallFailed(f"broker async call failed: {e}") from e

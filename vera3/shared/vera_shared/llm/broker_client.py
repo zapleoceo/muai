@@ -145,10 +145,15 @@ async def chat_async_via_broker(
     workflow: str | None = None,
     event_id: int | None = None,
     model: str | None = None,
+    poll_deadline_s: float | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Submit+poll against /v1/jobs — same request/response contract as
     chat_via_broker, but never holds the connection open. A slow provider can
     only delay the poll loop, not 504 the caller. See docs/llm-broker.md.
+
+    `poll_deadline_s` — per-call ceiling override (default env
+    BROKER_JOB_DEADLINE_S): фоновые задачи (ярлыки кластеров) могут ждать
+    занятый free-пул дольше интерактивных.
     """
     payload: dict[str, Any] = {
         "messages": messages,
@@ -174,7 +179,8 @@ async def chat_async_via_broker(
     job = r.json()
     job_id = job["job_id"]
     poll_after_s = float(job.get("poll_after_s") or 2)
-    deadline = time.monotonic() + JOB_POLL_DEADLINE_S
+    ceiling = poll_deadline_s if poll_deadline_s else JOB_POLL_DEADLINE_S
+    deadline = time.monotonic() + ceiling
 
     while True:
         await asyncio.sleep(poll_after_s)
@@ -190,7 +196,7 @@ async def chat_async_via_broker(
         if status == "pending":
             if time.monotonic() > deadline:
                 raise BrokerCallFailed(
-                    f"job {job_id} still pending after {JOB_POLL_DEADLINE_S:.0f}s"
+                    f"job {job_id} still pending after {ceiling:.0f}s"
                 )
             poll_after_s = float(data.get("poll_after_s") or poll_after_s)
             continue

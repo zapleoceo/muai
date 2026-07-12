@@ -16,7 +16,7 @@ set -euo pipefail
 
 DEST=${DEST:-/var/backups/vera}
 KEEP_DAILY_DAYS=${KEEP_DAILY_DAYS:-5}
-KEEP_WEEKLY_DAYS=${KEEP_WEEKLY_DAYS:-28}
+KEEP_WEEKLY_DAYS=${KEEP_WEEKLY_DAYS:-14}
 FULL_DOW=${FULL_DOW:-7}                    # ISO day-of-week: 7 = воскресенье
 BACKUP_GROUP=${BACKUP_GROUP:-verabackup}   # NAS-пользователь читает через группу
 # Таблицы, чьи ДАННЫЕ не входят в ежедневный дамп (схема остаётся).

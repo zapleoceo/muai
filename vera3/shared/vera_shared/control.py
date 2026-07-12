@@ -92,6 +92,9 @@ MONITOR_THROTTLE_MIN = "monitor_throttle_min"
 TRIAGE_BACKLOG_WARN = "triage_backlog_warn"
 TRIAGE_BACKLOG_HUGE = "triage_backlog_huge"
 MONITOR_BACKLOG_ENABLED = "monitor_backlog_enabled"
+CLUSTER_LABEL_DEADLINE_S = "cluster_label_deadline_s"
+CLUSTER_LABEL_RETRIES = "cluster_label_retries"
+GRAPH_HUB_PERCENTILE = "graph_hub_percentile"
 
 
 class Setting:
@@ -124,6 +127,17 @@ SETTINGS: list[Setting] = [
     Setting(BACKFILL_MAX_PER_HOUR, "Лимит триажа (запросов/час)", "0", "req/ч",
             "Ровный темп триажа: 0 = без лимита (максимальная скорость). Ставь "
             "число, чтобы сгладить нагрузку на брокер (напр. 6000 = 100/мин)."),
+    Setting(CLUSTER_LABEL_DEADLINE_S, "Ожидание LLM-ярлыка кластера", "240", "с",
+            "Сколько ждать ответа брокера на подпись кластера графа. Free-пул "
+            "бывает занят — фоновой задаче можно ждать дольше интерактивных 120с."),
+    Setting(CLUSTER_LABEL_RETRIES, "Повторы LLM-ярлыка кластера", "2", "",
+            "Сколько раз повторить запрос ярлыка при таймауте/сбое, прежде чем "
+            "оставить заглушку «кластер N»."),
+    Setting(GRAPH_HUB_PERCENTILE, "Порог хабов графа (перцентиль)", "99", "%",
+            "Узлы со степенью выше этого перцентиля (напр. «Дима», связанный со "
+            "всеми) исключаются из разбиения на сообщества и приписываются к "
+            "сообществу большинства соседей — иначе весь граф слипается в один "
+            "кластер. 100 = не исключать никого."),
 ]
 
 

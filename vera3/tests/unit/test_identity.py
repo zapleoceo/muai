@@ -437,3 +437,41 @@ async def test_upsert_entity_upgrades_fallback_name(db):
         name2 = (await s.execute(_t(
             "SELECT name FROM entities WHERE id=:i"), {"i": eid})).scalar_one()
     assert name2 == "Дмитрий Корчевский"
+
+
+# ─── clusters: исключение сверх-хабов ───────────────────────────────────────
+
+
+def test_split_hubs_and_attach():
+    from vera_shared.graph.clusters import (
+        attach_hubs,
+        label_propagation,
+        split_hubs,
+    )
+    # два треугольника + хаб 99, связанный со ВСЕМИ (как узел владельца)
+    tri_a, tri_b, hub = [1, 2, 3], [10, 11, 12], 99
+    edges = [(1, 2), (2, 3), (1, 3), (10, 11), (11, 12), (10, 12)]
+    edges += [(hub, n) for n in tri_a + tri_b]
+    nodes = tri_a + tri_b + [hub]
+    # добиваем до MIN_NODES_FOR_HUB_SPLIT изолятами
+    nodes += list(range(100, 104))
+    degrees = {n: sum(1 for a, b in edges if n in (a, b)) for n in nodes}
+
+    hubs = split_hubs(degrees, percentile=90)
+    assert hubs == {hub}
+
+    core = [n for n in nodes if n not in hubs]
+    core_edges = [(a, b) for a, b in edges if a not in hubs and b not in hubs]
+    assign = attach_hubs(label_propagation(core, core_edges), hubs, edges)
+    # без хаба треугольники — два разных сообщества, хаб приписан к одному
+    assert assign[1] == assign[2] == assign[3]
+    assert assign[10] == assign[11] == assign[12]
+    assert assign[1] != assign[10]
+    assert assign[hub] in (assign[1], assign[10])
+
+
+def test_split_hubs_disabled_at_100_or_tiny_graph():
+    from vera_shared.graph.clusters import split_hubs
+    degrees = {i: i for i in range(20)}
+    assert split_hubs(degrees, percentile=100) == set()
+    assert split_hubs({1: 100, 2: 1}, percentile=90) == set()   # < 10 узлов

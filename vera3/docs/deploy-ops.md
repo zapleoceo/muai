@@ -134,6 +134,9 @@ Bash monitor script reads them directly via `psql` on each tick.
 | `monitor_backlog_enabled` | on | Whether to alert on triage backlog size at all (turn off during a known-large backfill) |
 | `triage_backlog_warn` / `_huge` | 5000 / 10000 | Pending-event thresholds for the two backlog alert levels |
 | `backfill_max_per_hour` | 0 (unlimited) | Even-tempo cap on triage+media LLM requests/hour, shared globally across all replicas — see `brain.md` |
+| `cluster_label_deadline_s` | 240 с | Сколько ждать free-пул на подпись кластера графа (фоновая задача может ждать дольше интерактивных 120с) |
+| `cluster_label_retries` | 2 | Повторы запроса ярлыка при таймауте, потом фолбэк «кластер N» |
+| `graph_hub_percentile` | 99 % | Узлы со степенью выше перцентиля исключаются из кластеризации как сверх-хабы (см. `identity.md`) |
 
 Deploy-time parameters (replicas, concurrency, batch size) are shown
 read-only on the same page for reference — they require a redeploy to
@@ -195,7 +198,7 @@ Server `.env` at `/var/www/vera3/infra/.env` (mode 600):
   и SHA256SUMS. Ротация `KEEP_DAILY_DAYS` (5).
 - `/var/backups/vera/weekly/YYYY-MM-DD/` — полный vera.dump с эмбеддингами
   раз в неделю (`FULL_DOW`, ISO-день, дефолт 7 = воскресенье). Ротация
-  `KEEP_WEEKLY_DAYS` (28). Потеря недели эмбеддингов восстановима
+  `KEEP_WEEKLY_DAYS` (14). Потеря недели эмбеддингов восстановима
   доэмбеддингом хвоста событий.
 
 Все параметры — env-переменные скрипта, не правки кода.

@@ -90,6 +90,11 @@ gmail received → адрес From, любые sent и «свои» источн
 
 - `label_propagation(node_ids, edges)` — детерминированное выделение
   сообществ по структуре связей (кто с кем тесно связан).
+- `split_hubs(degrees, percentile)` / `attach_hubs(assign, hubs, edges)` —
+  сверх-хабы (узел владельца связан со всеми и склеивает граф в одно
+  сообщество) исключаются из propagation по перцентилю степени (настройка
+  `graph_hub_percentile`, /settings) и потом приписываются к сообществу
+  большинства своих соседей.
 - `name_clusters_llm(assign, nodes)` — Вера подписывает крупные сообщества
   (`CLUSTER_LABEL_SCHEMA`, `chat:fast`): «Команда IT STEP», «Семья»…
   Сбой брокера → фолбэк «кластер N».
