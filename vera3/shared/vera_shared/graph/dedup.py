@@ -41,8 +41,7 @@ def normalize_name(s: str) -> str:
     s = "".join(ch for ch in s if not unicodedata.combining(ch))
     s = re.sub(r"\s+", " ", s).strip()
     # ё→е, й→и are different codepoints — fold to base letter for fuzzy match
-    s = s.replace("ё", "е").replace("й", "и")
-    return s
+    return s.replace("ё", "е").replace("й", "и")
 
 
 async def find_duplicates_by_name(min_group: int = 2) -> list[dict]:
@@ -71,9 +70,48 @@ async def find_duplicates_by_name(min_group: int = 2) -> list[dict]:
     return out
 
 
+async def find_alias_collisions(min_group: int = 2) -> list[dict]:
+    """Groups of DIFFERENT entities sharing one lowercased @username.
+
+    This is the high-precision "real duplicate" signal, distinct from
+    `find_duplicates_by_name` (which only catches same first-name namesakes,
+    almost always different people). A shared @username means the same
+    Telegram object surfaced twice — typically a channel that posts under its
+    own handle, creating both a `channel` and a `person` entity for one handle.
+    Grouped in Python (not SQL JSON operators) so it stays portable to the
+    SQLite test engine.
+    """
+    async with get_session() as s:
+        rows = list((await s.execute(text(
+            "SELECT id, name, type, attributes FROM entities"
+        ))).mappings().all())
+
+    groups: dict[str, list[dict]] = {}
+    for r in rows:
+        attrs = r["attributes"] or {}
+        uname = (attrs.get("username") or "").strip().lower()
+        if not uname:
+            continue
+        groups.setdefault(uname, []).append(
+            {"id": r["id"], "name": r["name"], "type": r["type"]}
+        )
+
+    out = [
+        {"username": uname, "candidates": members, "size": len(members)}
+        for uname, members in groups.items()
+        if len(members) >= min_group
+    ]
+    out.sort(key=lambda g: -g["size"])
+    return out
+
+
 async def get_entity_context(entity_id: int) -> dict:
     """Pull aliases, membership chats, and recent message count for review UI."""
     async with get_session() as s:
+        ent = (await s.execute(text(
+            "SELECT name, type, attributes FROM entities WHERE id = :eid"
+        ), {"eid": entity_id})).mappings().first()
+
         aliases = list((await s.execute(text(
             "SELECT source, identifier, display_name FROM entity_aliases "
             "WHERE entity_id = :eid"
@@ -96,8 +134,13 @@ async def get_entity_context(entity_id: int) -> dict:
             ), {"ids": identifiers})
             recent_count = r.scalar() or 0
 
+    attrs = (ent["attributes"] if ent else None) or {}
     return {
         "entity_id": entity_id,
+        "name": ent["name"] if ent else None,
+        "type": ent["type"] if ent else None,
+        "username": attrs.get("username"),
+        "tg_id": attrs.get("tg_id"),
         "aliases": [dict(a) for a in aliases],
         "memberships": [dict(m) for m in memberships],
         "recent_30d_messages": recent_count,

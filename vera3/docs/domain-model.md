@@ -121,6 +121,22 @@ Neo4j swap is a one-file change.
   (migration 013, added `NOT VALID` — enforces on new/changed rows without
   scanning/locking existing ones). Deleting an event no longer leaves a
   dangling reference in the graph.
+- `entity_avatars` (migration 014) — profile-photo blob side-table
+  (`EntityAvatarRow`: `entity_id` PK, `image` BYTEA, `mime`, `missing`,
+  `fetched_at`). Kept out of the hot `entities` table. Written lazily+throttled
+  by the ingestor-telegram avatar backfill; read by the dashboard
+  `/entities/{id}/avatar` route (`entity_avatar`), which falls back to an
+  `initials_avatar_svg` when no photo is stored. Read/write primitives live in
+  `vera_shared/graph/avatars.py` (`get_avatar`, `upsert_avatar`,
+  `list_entities_needing_avatar`).
+
+**Dedup review** (`/entities/duplicates`): `find_duplicates_by_name` groups
+same-normalized-name entities (mostly *different* people sharing a first name —
+low precision), while `find_alias_collisions` groups entities sharing one
+lowercased `@username` — the high-precision "real duplicate" signal (a channel
+posting under its own handle spawns both a `channel` and a `person` entity for
+one handle). Each entity is shown with its avatar and a `tg_link` back to
+Telegram.
 
 ### L2 — Patterns (reserved for future)
 

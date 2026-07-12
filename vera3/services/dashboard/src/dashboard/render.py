@@ -57,6 +57,41 @@ def local_dt(dt: datetime | None, fmt: str = "datetime", empty: str = "—") -> 
     return f'<time data-utc="{esc(iso)}" data-fmt="{esc(fmt)}">{dt.strftime(strf)}</time>'
 
 
+_AVATAR_COLORS = [
+    "#4dabf7", "#f783ac", "#69db7c", "#ffa94d", "#9775fa",
+    "#3bc9db", "#ffd43b", "#ff8787", "#63e6be", "#b197fc",
+]
+
+
+def initials_avatar_svg(name: str | None, seed: int = 0) -> str:
+    """Deterministic initials-on-color-disc SVG — фолбэк, когда реального
+    фото профиля нет. Цвет стабилен по seed (entity id), чтобы у одной
+    сущности он не прыгал между запросами."""
+    name = (name or "?").strip()
+    initials = "".join(w[0] for w in name.split()[:2] if w).upper() or "?"
+    color = _AVATAR_COLORS[seed % len(_AVATAR_COLORS)]
+    return (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">'
+        f'<circle cx="32" cy="32" r="32" fill="{color}"/>'
+        f'<text x="32" y="41" font-size="26" font-family="sans-serif" '
+        f'font-weight="600" fill="#0f1115" text-anchor="middle">{esc(initials)}</text>'
+        '</svg>'
+    )
+
+
+def tg_link(username: str | None, tg_id: int | str | None) -> str | None:
+    """Ссылка на телеграм-сущность «туда, откуда пришла».
+
+    @username → https://t.me/<username> (открывается и в вебе). Без username —
+    tg://user?id=<id> (только внутри приложения Telegram). None если нечем.
+    """
+    if username:
+        return f"https://t.me/{username.lstrip('@')}"
+    if tg_id:
+        return f"tg://user?id={tg_id}"
+    return None
+
+
 # ─── Auth-gate shortcuts ──────────────────────────────────────────────────
 # Every owner-only route repeats `try: require_owner(...) except HTTPException:
 # <some failure response>` — only the failure response shape differs. These

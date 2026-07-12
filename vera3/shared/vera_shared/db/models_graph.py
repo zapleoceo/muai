@@ -20,6 +20,7 @@ from sqlalchemy import (
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     String,
     Text,
     UniqueConstraint,
@@ -58,6 +59,25 @@ class EntityRow(Base):
         DateTime, nullable=False, server_default=func.now(),
     )
     last_seen_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(),
+    )
+
+
+class EntityAvatarRow(Base):
+    """Profile photo for an entity — filled lazily+throttled by the userbot.
+
+    Blob kept out of the hot `entities` table (see migration 014). `missing`
+    marks 'checked, no photo' so backfill won't re-hammer Telegram.
+    """
+    __tablename__ = "entity_avatars"
+
+    entity_id: Mapped[int] = mapped_column(
+        ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True,
+    )
+    image: Mapped[bytes | None] = mapped_column(LargeBinary, nullable=True)
+    mime: Mapped[str] = mapped_column(Text, nullable=False, default="image/jpeg")
+    missing: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    fetched_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(),
     )
 

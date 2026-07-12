@@ -178,6 +178,8 @@ async def graph_snapshot(
         node_rows = (await s.execute(
             text("""
                 SELECT e.id, e.name, e.type,
+                       e.attributes->>'username' AS username,
+                       e.attributes->>'tg_id'    AS tg_id,
                        (SELECT COUNT(*) FROM relationships r
                           WHERE r.subject_entity_id = e.id
                              OR r.object_entity_id = e.id) AS degree
@@ -200,7 +202,7 @@ async def graph_snapshot(
     return {
         "nodes": [
             {"id": r["id"], "name": r["name"], "type": r["type"],
-             "degree": r["degree"]}
+             "degree": r["degree"], "username": r["username"], "tg_id": r["tg_id"]}
             for r in node_rows
         ],
         "edges": [

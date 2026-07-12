@@ -92,6 +92,8 @@ const cy = cytoscape({
   style: [
     {selector:'node', style:{
       'background-color': ele => TYPE_COLOR[ele.data('type')] || '#8899aa',
+      'background-image': ele => '/entities/' + ele.data('raw') + '/avatar',
+      'background-fit':'cover', 'background-clip':'node',
       'label':'data(name)', 'color':'#cfd6e0', 'font-size':'9px',
       'text-wrap':'ellipsis', 'text-max-width':'90px',
       'width': ele => 8 + Math.min(40, Math.sqrt(ele.data('degree')||1)*4),
@@ -112,7 +114,8 @@ const count = document.getElementById('g-count');
 function render(data){
   const els = [];
   for (const n of data.nodes)
-    els.push({data:{id:'n'+n.id, name:n.name, type:n.type, degree:n.degree, raw:n.id}});
+    els.push({data:{id:'n'+n.id, name:n.name, type:n.type, degree:n.degree,
+                     raw:n.id, username:n.username, tg_id:n.tg_id}});
   const seen = new Set(data.nodes.map(n=>'n'+n.id));
   for (const e of data.edges){
     const s='n'+e.source, t='n'+e.target;
@@ -125,6 +128,17 @@ function render(data){
   cy.layout({name:'cose', animate:false, nodeRepulsion:8000,
              idealEdgeLength:60, nodeOverlap:8}).run();
   count.textContent = data.nodes.length + ' сущностей, ' + data.edges.length + ' связей';
+  if (data.focus_id){
+    const f = data.nodes.find(n => n.id === data.focus_id);
+    const link = f ? tgLink(f.username, f.tg_id) : null;
+    const linkHtml = link
+      ? ' · <a href="' + link + '"' + (link.indexOf('http')===0?' target="_blank" rel="noopener"':'') +
+        '>открыть в Telegram' + (f.username ? ' (@' + f.username + ')' : '') + '</a>'
+      : '';
+    info.innerHTML = 'Фокус на «' + (f?f.name:('#'+data.focus_id)) + '» и её соседях' +
+                     linkHtml + '. «↺ весь граф» — назад.';
+    return;
+  }
   info.textContent = data.focus_id
     ? 'Фокус на сущности #' + data.focus_id + ' и её соседях. «↺ весь граф» — назад.'
     : 'Ядро графа (самые связанные). Клик по узлу — раскрыть его окружение.';
@@ -143,10 +157,17 @@ function coreParams(){
           predicate: document.getElementById('g-pred').value, limit: 300};
 }
 
+function tgLink(u, id){
+  if (u) return 'https://t.me/' + String(u).replace(/^@/, '');
+  if (id) return 'tg://user?id=' + id;
+  return null;
+}
 cy.on('tap', 'node', ev => {
-  const id = ev.target.data('raw');
+  // Persistent link + focus info is rendered by render() once the ego network
+  // loads (it has the focus node's username/tg_id); here just instant feedback.
   info.textContent = 'Загружаю окружение «' + ev.target.data('name') + '»…';
-  load({focus: id, predicate: document.getElementById('g-pred').value, limit: 400});
+  load({focus: ev.target.data('raw'),
+        predicate: document.getElementById('g-pred').value, limit: 400});
 });
 document.getElementById('g-reset').onclick = () => load(coreParams());
 document.getElementById('g-mindeg').onchange = () => load(coreParams());
