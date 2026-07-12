@@ -15,7 +15,7 @@ from vera_shared.control import (
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_sources import GmailAccountRow
 
-from dashboard.render import esc, owner_or_blank_401
+from dashboard.render import esc, local_dt, owner_or_blank_401
 from dashboard.stats import get_stats
 
 router = APIRouter()
@@ -88,7 +88,7 @@ async def _build_progress_fragment() -> str:
 
     gmail_rows = []
     for g in gmail:
-        last = g.last_polled_at.strftime("%H:%M") if g.last_polled_at else "—"
+        last = local_dt(g.last_polled_at, "time")
         ago = ""
         if g.last_polled_at:
             mins = int((now - g.last_polled_at).total_seconds() / 60)

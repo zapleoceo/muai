@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import os
+from unittest.mock import AsyncMock, patch
 
 # dashboard.app reads secrets at import — CI-safe defaults BEFORE import.
 os.environ.setdefault("TOKEN_SECRET", base64.urlsafe_b64encode(b"0" * 32).decode())
@@ -10,20 +11,16 @@ os.environ.setdefault("TELEGRAM_BOT_TOKEN", "1:test")
 os.environ.setdefault("OWNER_TELEGRAM_ID", "169510539")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
-from unittest.mock import AsyncMock, patch  # noqa: E402
-
-from fastapi.testclient import TestClient  # noqa: E402
-
 from dashboard.app import app  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
 
 client = TestClient(app)
 
 
 def _owner_cookie():
-    from starlette.responses import Response
-
     from dashboard.auth import COOKIE_NAME
     from dashboard.auth_routes import _set_session_cookie
+    from starlette.responses import Response
     resp = Response()
     _set_session_cookie(resp)
     header = resp.headers.get("set-cookie", "")

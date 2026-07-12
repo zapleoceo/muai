@@ -9,8 +9,6 @@ drill into its ego network. DB access stays in vera_shared.graph.repo.
 """
 from __future__ import annotations
 
-import json
-
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse
 from vera_shared.graph.repo import find_entity_by_name, graph_snapshot

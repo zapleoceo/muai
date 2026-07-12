@@ -156,11 +156,11 @@ async def sources_page(request: Request):
         f'<tr><td>{t.id}</td><td>{esc(t.phone)}</td>'
         f'<td class="pill {"ok" if t.is_active else "err"}">'
         f'{"✓ active" if t.is_active else "✗ inactive"}</td>'
-        f'<td>{t.created_at.strftime("%Y-%m-%d") if t.created_at else "—"}</td></tr>'
+        f'<td>{local_dt(t.created_at, "date")}</td></tr>'
         for t in tg_sessions
     )
 
-    tg_last_txt = tg_last.strftime("%Y-%m-%d %H:%M:%S") if tg_last else "никогда"
+    tg_last_txt = local_dt(tg_last, "datetime_sec", "никогда")
     tg_freshness = freshness_pill(tg_last, now, live_within_min=5, warn_within_min=60)
 
     tg_types_html = row_list((esc(t or "—"), f"{cnt:,}") for t, cnt in tg_by_type)
