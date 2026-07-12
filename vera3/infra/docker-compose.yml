@@ -224,6 +224,9 @@ services:
       GMAIL_CLIENT_ID: ${GMAIL_CLIENT_ID}
       GMAIL_CLIENT_SECRET: ${GMAIL_CLIENT_SECRET}
       DASHBOARD_BASE_URL: https://dima.veranda.my
+      # identity-судья и ярлыки кластеров зовут LLM из процесса дашборда
+      BROKER_URL: ${BROKER_URL:-}
+      BROKER_PROJECT_KEY: ${BROKER_PROJECT_KEY:-}
     ports:
       - "127.0.0.1:8003:8000"
     restart: unless-stopped
