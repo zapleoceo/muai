@@ -86,6 +86,23 @@ gmail received → адрес From, любые sent и «свои» источн
 фолбэк-имя (username / tg_user_N) на настоящее, как только live-путь его
 видит; настоящее имя фолбэком не перетирается.
 
+## Лурκеры: roster sync проектных групп
+
+В граф обычно попадают только писавшие. Молчунов добавляет
+`ingestor-telegram/roster_sync.py` — ПО ЯВНОЙ КОМАНДЕ владельца (кнопка
+«👥 Подтянуть участников групп» на `/entities/duplicates` →
+`entities_roster_sync` → POST `/tools/sync_project_rosters` на
+tools-сервере юзербота, где `sync_project_rosters` стартует фон):
+
+- `project_chats()` — только группы/супергруппы из `project_membership`
+  (kind='chat'), сматченные на граф через alias — рабочие чаты, ~10-15 штук;
+- `sync_chat_roster(client, chat)` — get_participants → Entity+Membership
+  для каждого не-бота (`observed_via: roster_sync`);
+- `run_roster_sync(client)` — прогон с анти-бан троттлингом: пауза
+  `ROSTER_CHAT_DELAY_S` (20с) между чатами, потолок `ROSTER_MEMBER_CAP`
+  (500) на чат, backoff на FloodWait, чаты со скрытыми участниками
+  пропускаются. Один прогон за раз, кронов нет.
+
 ## Тематические кластеры графа (`vera_shared/graph/clusters.py`)
 
 - `label_propagation(node_ids, edges)` — детерминированное выделение

@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 
+import httpx
 from fastapi import APIRouter, Form, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from vera_shared.graph.avatars import get_avatar
@@ -25,6 +27,10 @@ log = logging.getLogger(__name__)
 
 # Один анализ за раз; состояние живёт в процессе дашборда (single-owner UI).
 _analysis: dict = {"running": False, "last": None}
+
+TELEGRAM_TOOLS_URL = os.environ.get("TELEGRAM_TOOLS_URL",
+                                    "http://ingestor-telegram:8000")
+INTERNAL_SECRET = os.environ.get("INTERNAL_SECRET", "")
 
 from dashboard.render import (
     _render,
@@ -151,7 +157,12 @@ def _vera_section(suggestions: list[dict], dossiers: dict[int, dict]) -> str:
                     f'different {last["different"]}).' if last else "")
         status = (
             f'<form method="post" action="/entities/analyze" style="display:inline">'
-            f'<button>🧠 Запустить анализ Веры</button></form>'
+            f'<button>🧠 Запустить анализ Веры</button></form> '
+            f'<form method="post" action="/entities/roster-sync" style="display:inline">'
+            f'<button style="background:#2f9e44" title="Юзербот медленно опросит '
+            f'участников проектных групп (project_membership) и добавит молчунов '
+            f'в граф. Анти-бан троттлинг, ~20с на чат.">👥 Подтянуть участников '
+            f'групп</button></form>'
             f'<span class="mute" style="font-size:12px">{last_txt}</span>'
         )
 
@@ -210,6 +221,24 @@ async def entities_analyze(request: Request):
     if not _analysis["running"]:
         _analysis["running"] = True
         asyncio.create_task(_run_analysis_bg())
+    return RedirectResponse("/entities/duplicates", status_code=303)
+
+
+@router.post("/entities/roster-sync")
+async def entities_roster_sync(request: Request):
+    """Молчуны проектных групп → граф: проксируем команду юзерботу
+    (tools-сервер, троттлинг и анти-бан — на его стороне)."""
+    if (resp := owner_or_auth_error(request)) is not None:
+        return resp
+    try:
+        async with httpx.AsyncClient(timeout=15) as c:
+            r = await c.post(
+                f"{TELEGRAM_TOOLS_URL}/tools/sync_project_rosters",
+                headers={"X-Internal-Secret": INTERNAL_SECRET},
+            )
+        log.info("roster sync trigger: %s %s", r.status_code, r.text[:200])
+    except httpx.HTTPError as e:
+        log.warning("roster sync trigger failed: %s", e)
     return RedirectResponse("/entities/duplicates", status_code=303)
 
 

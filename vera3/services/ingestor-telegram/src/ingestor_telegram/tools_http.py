@@ -14,6 +14,7 @@ Exposed (all POST, JSON body, X-Internal-Secret required):
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 from typing import Any
@@ -225,6 +226,21 @@ def build_app(client: TelegramClient) -> FastAPI:
             return {"b64": b64encode(data).decode("ascii"), "mime": mime, "size": size}
         except Exception as e:
             return {"error": f"{type(e).__name__}: {e}"}
+
+    @app.post("/tools/sync_project_rosters")
+    async def sync_project_rosters(
+        x_internal_secret: str | None = Header(None, alias="X-Internal-Secret"),
+    ) -> dict[str, Any]:
+        """Молчуны проектных групп → граф (см. roster_sync.py). Троттлится,
+        работает в фоне процесса юзербота; повторный вызов при живом прогоне
+        не стартует второй."""
+        _check_secret(x_internal_secret)
+        from ingestor_telegram.roster_sync import run_roster_sync, state
+        if state["running"]:
+            return {"started": False, "status": "already_running",
+                    "last": state["last"]}
+        asyncio.create_task(run_roster_sync(client))
+        return {"started": True, "last": state["last"]}
 
     return app
 

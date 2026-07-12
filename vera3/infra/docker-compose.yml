@@ -227,6 +227,8 @@ services:
       # identity-судья и ярлыки кластеров зовут LLM из процесса дашборда
       BROKER_URL: ${BROKER_URL:-}
       BROKER_PROJECT_KEY: ${BROKER_PROJECT_KEY:-}
+      # кнопка «подтянуть участников групп» → tools-сервер юзербота
+      TELEGRAM_TOOLS_URL: http://ingestor-telegram:8000
     ports:
       - "127.0.0.1:8003:8000"
     restart: unless-stopped
