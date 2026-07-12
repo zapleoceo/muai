@@ -185,10 +185,45 @@ Server `.env` at `/var/www/vera3/infra/.env` (mode 600):
 
 ## Backup
 
-Postgres volume is the only persistent state. Manual snapshot:
+Ночной cron `30 3 * * * /usr/local/bin/vera-backup.sh` (исходник —
+`vera3/scripts/vera-backup.sh`, ставится вручную). Схема:
+
+- `/var/backups/vera/daily/YYYY-MM-DD/` — дампы всех БД проекта; **vera —
+  без данных `event_embeddings`** (`VERA_DAILY_EXCLUDE`, дефолт): вектора —
+  80% объёма и производные данные, ежедневно их таскать незачем. Плюс
+  `secrets-env.tar.gz` (все .env — без TOKEN_SECRET дампы бесполезны)
+  и SHA256SUMS. Ротация `KEEP_DAILY_DAYS` (5).
+- `/var/backups/vera/weekly/YYYY-MM-DD/` — полный vera.dump с эмбеддингами
+  раз в неделю (`FULL_DOW`, ISO-день, дефолт 7 = воскресенье). Ротация
+  `KEEP_WEEKLY_DAYS` (28). Потеря недели эмбеддингов восстановима
+  доэмбеддингом хвоста событий.
+
+Все параметры — env-переменные скрипта, не правки кода.
+
+### Backups → Synology NAS (за NAT)
+
+NAS сам **забирает** дерево бэкапов с сервера (исходящее соединение — NAT
+не мешает, проброс портов не нужен). На сервере — пользователь
+`verabackup`: key-only, в `authorized_keys` зашита команда
+`/usr/bin/rrsync -ro /var/backups/vera` — ключ физически не может ничего,
+кроме read-only rsync этой папки. Группа `verabackup` имеет `g+rX` на
+дерево (скрипт поддерживает это на каждом прогоне).
+
+Приватный ключ: `/root/verabackup_nas_key` (отдать NAS, из чата не
+светить). На Synology: Task Scheduler → ежедневный root-скрипт:
 
 ```
-ssh hetzner-root "docker exec vera3-postgres pg_dump -U vera vera | gzip > /var/backups/vera3-$(date +%F).sql.gz"
+rsync -az --delete \
+  -e "ssh -p 9617 -i /volume1/backup/vera_key -o StrictHostKeyChecking=accept-new" \
+  verabackup@<server-ip>:/ /volume1/backup/vera/
+```
+
+(источник `:/` — rrsync уже прибил корень к /var/backups/vera).
+
+Ручной снапшот по-прежнему:
+
+```
+ssh hetzner-root "docker exec vera3-postgres pg_dump -U vera vera | gzip > /tmp/vera3-$(date +%F).sql.gz"
 ```
 
 ## Disaster recovery — Gmail token revoked
