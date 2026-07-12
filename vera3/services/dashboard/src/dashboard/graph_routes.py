@@ -25,8 +25,10 @@ router = APIRouter()
 _recluster: dict = {"running": False}
 
 # Stable predicate set (see vera_shared.graph.rel_extract.PREDICATES) — used
-# only to build the filter dropdown; the API accepts any string.
+# only to build the filter dropdown; the API accepts any string. member_of —
+# синтетический предикат membership-рёбер (кто в какой группе).
 _PREDICATES = [
+    "member_of",
     "coworker_of", "works_at", "friend_of", "client_of", "reports_to",
     "boss_of", "vendor_of", "spouse_of", "parent_of", "child_of",
     "co_founder_of", "lives_in",
@@ -159,6 +161,11 @@ const cy = cytoscape({
     {selector:'edge', style:{
       'width': ele => 0.6 + (ele.data('confidence')||0.5)*1.4,
       'line-color':'#3a3f4a', 'curve-style':'haystack', 'opacity':0.5}},
+    // Членство в группе — структурная связь, рисуем тоньше и пунктиром,
+    // чтобы LLM-факты (works_at и т.п.) выделялись на её фоне.
+    {selector:'edge[predicate = "member_of"]', style:{
+      'line-style':'dashed', 'width':0.5, 'line-color':'#2f3542', 'opacity':0.35,
+      'curve-style':'straight'}},
     {selector:'edge:selected', style:{'line-color':'#4dabf7','opacity':1,'width':2}},
   ],
 });

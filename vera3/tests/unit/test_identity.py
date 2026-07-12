@@ -366,3 +366,74 @@ async def test_extract_and_store_self_token_goes_to_author(db):
         ))).all()
     assert rows == [(sender, org)]        # НЕ imposter «Я»
     assert imposter != sender
+
+
+# ─── graph_snapshot: membership-рёбра (коллеги связаны через группу) ────────
+
+
+@pytest.mark.asyncio
+async def test_graph_snapshot_includes_membership_edges(db):
+    from vera_shared.graph import repo
+    daria = await _person("Daria", "user:1", tg_id=1)
+    marina = await _person("Marina", "user:2", tg_id=2)
+    chat = await repo.upsert_entity(type="group", name="Jakarta sales",
+                                    source="telegram", identifier="chat:-77")
+    await repo.upsert_membership(parent_entity_id=chat, child_entity_id=daria,
+                                 source="telegram", role="member")
+    await repo.upsert_membership(parent_entity_id=chat, child_entity_id=marina,
+                                 source="telegram", role="member")
+
+    snap = await repo.graph_snapshot(min_degree=1, limit=50)
+    assert {n["id"] for n in snap["nodes"]} == {daria, marina, chat}
+    member_edges = [e for e in snap["edges"] if e["predicate"] == "member_of"]
+    assert {(e["source"], e["target"]) for e in member_edges} == \
+           {(daria, chat), (marina, chat)}
+    # узел группы — хаб: degree учитывает membership
+    hub = next(n for n in snap["nodes"] if n["id"] == chat)
+    assert hub["degree"] == 2
+
+    # фильтр только-членства
+    only_m = await repo.graph_snapshot(min_degree=1, limit=50,
+                                       predicate="member_of")
+    assert all(e["predicate"] == "member_of" for e in only_m["edges"])
+    assert len(only_m["edges"]) == 2
+
+    # rel-фильтр членство исключает
+    only_rel = await repo.graph_snapshot(min_degree=1, limit=50,
+                                         predicate="works_at")
+    assert only_rel["edges"] == []
+
+    # эго-сеть человека включает его группу
+    ego = await repo.graph_snapshot(focus_id=daria, limit=50)
+    assert chat in {n["id"] for n in ego["nodes"]}
+
+
+@pytest.mark.asyncio
+async def test_upsert_entity_upgrades_fallback_name(db):
+    from vera_shared.graph import repo
+    eid = await repo.upsert_entity(
+        type="person", name="dkorchevskyi", source="telegram",
+        identifier="user:217", attributes={"tg_id": 217,
+                                           "username": "dkorchevskyi"})
+    # live-путь увидел настоящее имя → фолбэк обновился
+    same = await repo.upsert_entity(
+        type="person", name="Дмитрий Корчевский", source="telegram",
+        identifier="user:217", attributes={"tg_id": 217,
+                                           "username": "dkorchevskyi"})
+    assert same == eid
+    async with __import__("vera_shared.db.engine", fromlist=["get_session"]).get_session() as s:
+        from sqlalchemy import text as _t
+        name = (await s.execute(_t(
+            "SELECT name FROM entities WHERE id=:i"), {"i": eid})).scalar_one()
+    assert name == "Дмитрий Корчевский"
+
+    # обратно настоящее имя фолбэком НЕ перетирается
+    await repo.upsert_entity(
+        type="person", name="dkorchevskyi", source="telegram",
+        identifier="user:217", attributes={"tg_id": 217,
+                                           "username": "dkorchevskyi"})
+    async with __import__("vera_shared.db.engine", fromlist=["get_session"]).get_session() as s:
+        from sqlalchemy import text as _t
+        name2 = (await s.execute(_t(
+            "SELECT name FROM entities WHERE id=:i"), {"i": eid})).scalar_one()
+    assert name2 == "Дмитрий Корчевский"

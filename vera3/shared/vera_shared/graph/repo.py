@@ -57,11 +57,24 @@ async def upsert_entity(
                 update(EntityRow).where(EntityRow.id == alias.entity_id)
                 .values(last_seen_at=datetime.utcnow())
             )
-            if attributes:
+            if attributes or name:
                 ent = (await s.execute(
                     select(EntityRow).where(EntityRow.id == alias.entity_id)
                 )).scalar_one()
-                ent.attributes = {**(ent.attributes or {}), **attributes}
+                if attributes:
+                    ent.attributes = {**(ent.attributes or {}), **attributes}
+                # Бэкфил истории создаёт сущности с именем-фолбэком (username /
+                # tg_user_<id>) — как только live-путь видит настоящее имя,
+                # обновляем. Настоящее имя фолбэком НЕ перетираем.
+                old_attrs = ent.attributes or {}
+                fallbacks = {
+                    str(old_attrs.get("username") or "").lower(),
+                    f"tg_user_{old_attrs.get('tg_id')}",
+                }
+                if (name and name != ent.name
+                        and (ent.name or "").lower() in fallbacks
+                        and name.lower() not in fallbacks):
+                    ent.name = name
             return alias.entity_id
 
         ent = EntityRow(
@@ -140,26 +153,59 @@ async def graph_snapshot(
       top `limit` by degree (drops the long tail of once-mentioned names
       and, on its own, the ~6k entities with no relationships at all).
 
+    Edges are relationships (LLM-факты) ПЛЮС memberships как predicate
+    'member_of' — «кто в какой группе» и есть основная связность (люди
+    одного проекта соединяются через узел группы; без этого коллеги по
+    IT STEP выглядели несвязанными). predicate='member_of' фильтрует до
+    одних членств; любой другой predicate — до одних rel-фактов.
+
     Edges are only those whose BOTH endpoints are in the returned node set,
     so the client never references a missing node. `limit` is clamped to
     GRAPH_MAX_NODES to protect the browser."""
     limit = max(1, min(limit, GRAPH_MAX_NODES))
     min_degree = max(1, min_degree)
-    pred_clause = "AND r.predicate = :pred" if predicate else ""
+    want_rels = predicate != "member_of"
+    want_members = predicate in (None, "member_of")
+    pred_clause = "AND r.predicate = :pred" if (predicate and want_rels) else ""
     params: dict[str, Any] = {"lim": limit}
-    if predicate:
+    if predicate and want_rels:
         params["pred"] = predicate
+
+    rel_nb = f"""
+        SELECT object_entity_id AS nb FROM relationships r
+          WHERE r.subject_entity_id = :fid {pred_clause}
+        UNION
+        SELECT subject_entity_id AS nb FROM relationships r
+          WHERE r.object_entity_id = :fid {pred_clause}
+    """
+    mem_nb = """
+        SELECT parent_entity_id AS nb FROM memberships
+          WHERE child_entity_id = :fid AND is_current
+        UNION
+        SELECT child_entity_id AS nb FROM memberships
+          WHERE parent_entity_id = :fid AND is_current
+    """
+    rel_deg = f"""
+        SELECT r.subject_entity_id AS eid FROM relationships r
+          WHERE TRUE {pred_clause}
+        UNION ALL
+        SELECT r.object_entity_id AS eid FROM relationships r
+          WHERE TRUE {pred_clause}
+    """
+    mem_deg = """
+        SELECT parent_entity_id AS eid FROM memberships WHERE is_current
+        UNION ALL
+        SELECT child_entity_id AS eid FROM memberships WHERE is_current
+    """
+    nb_parts = ([rel_nb] if want_rels else []) + ([mem_nb] if want_members else [])
+    deg_parts = ([rel_deg] if want_rels else []) + ([mem_deg] if want_members else [])
 
     async with get_session() as s:
         if focus_id is not None:
             params["fid"] = focus_id
             ids = [focus_id] + list((await s.execute(text(f"""
                 SELECT DISTINCT nb FROM (
-                    SELECT object_entity_id AS nb FROM relationships r
-                      WHERE r.subject_entity_id = :fid {pred_clause}
-                    UNION
-                    SELECT subject_entity_id AS nb FROM relationships r
-                      WHERE r.object_entity_id = :fid {pred_clause}
+                    {" UNION ".join(nb_parts)}
                 ) x LIMIT :lim
             """), params)).scalars().all())
         else:
@@ -167,11 +213,7 @@ async def graph_snapshot(
             ids = list((await s.execute(text(f"""
                 WITH degree AS (
                     SELECT eid, COUNT(*) AS deg FROM (
-                        SELECT r.subject_entity_id AS eid FROM relationships r
-                          WHERE TRUE {pred_clause}
-                        UNION ALL
-                        SELECT r.object_entity_id AS eid FROM relationships r
-                          WHERE TRUE {pred_clause}
+                        {" UNION ALL ".join(deg_parts)}
                     ) u GROUP BY eid
                 )
                 SELECT eid FROM degree WHERE deg >= :mind
@@ -190,22 +232,40 @@ async def graph_snapshot(
                        e.attributes->>'tg_id'    AS tg_id,
                        (SELECT COUNT(*) FROM relationships r
                           WHERE r.subject_entity_id = e.id
-                             OR r.object_entity_id = e.id) AS degree
+                             OR r.object_entity_id = e.id)
+                     + (SELECT COUNT(*) FROM memberships m
+                          WHERE (m.parent_entity_id = e.id
+                                 OR m.child_entity_id = e.id)
+                            AND m.is_current) AS degree
                 FROM entities e WHERE e.id IN :ids
             """).bindparams(bindparam("ids", expanding=True)),
             {"ids": ids},
         )).mappings().all()
 
-        edge_rows = (await s.execute(
-            text(f"""
-                SELECT r.subject_entity_id AS source, r.object_entity_id AS target,
-                       r.predicate, r.confidence
-                FROM relationships r
-                WHERE r.subject_entity_id IN :ids
-                  AND r.object_entity_id IN :ids {pred_clause}
-            """).bindparams(bindparam("ids", expanding=True)),
-            {"ids": ids, **({"pred": predicate} if predicate else {})},
-        )).mappings().all()
+        edge_rows: list = []
+        if want_rels:
+            edge_rows += list((await s.execute(
+                text(f"""
+                    SELECT r.subject_entity_id AS source, r.object_entity_id AS target,
+                           r.predicate, r.confidence
+                    FROM relationships r
+                    WHERE r.subject_entity_id IN :ids
+                      AND r.object_entity_id IN :ids {pred_clause}
+                """).bindparams(bindparam("ids", expanding=True)),
+                {"ids": ids, **({"pred": predicate} if pred_clause else {})},
+            )).mappings().all())
+        if want_members:
+            edge_rows += list((await s.execute(
+                text("""
+                    SELECT m.child_entity_id AS source, m.parent_entity_id AS target,
+                           'member_of' AS predicate, 1.0 AS confidence
+                    FROM memberships m
+                    WHERE m.is_current
+                      AND m.child_entity_id IN :ids
+                      AND m.parent_entity_id IN :ids
+                """).bindparams(bindparam("ids", expanding=True)),
+                {"ids": ids},
+            )).mappings().all())
 
     return {
         "nodes": [
