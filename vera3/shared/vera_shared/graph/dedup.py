@@ -21,12 +21,24 @@ this module just provides the primitives.
 """
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 
 from sqlalchemy import text
 
 from vera_shared.db.engine import get_session
+
+
+def _as_dict(attrs) -> dict:
+    """attributes column → dict. JSONB (Postgres prod) comes back as dict;
+    JSON via raw text() on SQLite (tests) comes back as a str — parse it."""
+    if isinstance(attrs, str):
+        try:
+            return json.loads(attrs) or {}
+        except ValueError:
+            return {}
+    return attrs or {}
 
 
 def normalize_name(s: str) -> str:
@@ -88,7 +100,7 @@ async def find_alias_collisions(min_group: int = 2) -> list[dict]:
 
     groups: dict[str, list[dict]] = {}
     for r in rows:
-        attrs = r["attributes"] or {}
+        attrs = _as_dict(r["attributes"])
         uname = (attrs.get("username") or "").strip().lower()
         if not uname:
             continue
@@ -134,7 +146,7 @@ async def get_entity_context(entity_id: int) -> dict:
             ), {"ids": identifiers})
             recent_count = r.scalar() or 0
 
-    attrs = (ent["attributes"] if ent else None) or {}
+    attrs = _as_dict(ent["attributes"]) if ent else {}
     return {
         "entity_id": entity_id,
         "name": ent["name"] if ent else None,
