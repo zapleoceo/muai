@@ -264,8 +264,18 @@ _TZ_SCRIPT = """<script>
     });
     var tz=document.getElementById('tz-note');
     if(tz&&!tz.dataset.done){
-      try{tz.textContent='🕐 время показано в вашем часовом поясе ('+
-        Intl.DateTimeFormat().resolvedOptions().timeZone+')';tz.dataset.done='1';}catch(e){}
+      // Offset — единственное, что реально определяет показанное время.
+      // Название зоны (Asia/Bangkok и т.п.) берётся из настроек ОС/браузера
+      // и может отличаться от твоего города при том же offset — города UTC+7
+      // (Джакарта, Бангкок, Хошимин) показывают ОДНО И ТО ЖЕ время.
+      var off=-new Date().getTimezoneOffset();
+      var oh=Math.floor(Math.abs(off)/60),om=Math.abs(off)%60;
+      var offStr='UTC'+(off>=0?'+':'-')+oh+(om?':'+p(om):'');
+      var zone='';
+      try{zone=Intl.DateTimeFormat().resolvedOptions().timeZone;}catch(e){}
+      tz.textContent='🕐 время показано в вашем часовом поясе — '+offStr+
+        (zone?' (по данным браузера: '+zone+')':'');
+      tz.dataset.done='1';
     }
   }
   window.__localizeTimes=localize;
