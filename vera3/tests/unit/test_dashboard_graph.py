@@ -11,16 +11,18 @@ os.environ.setdefault("TELEGRAM_BOT_TOKEN", "1:test")
 os.environ.setdefault("OWNER_TELEGRAM_ID", "169510539")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
-from dashboard.app import app  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
+
+from dashboard.app import app  # noqa: E402
 
 client = TestClient(app)
 
 
 def _owner_cookie():
+    from starlette.responses import Response
+
     from dashboard.auth import COOKIE_NAME
     from dashboard.auth_routes import _set_session_cookie
-    from starlette.responses import Response
     resp = Response()
     _set_session_cookie(resp)
     header = resp.headers.get("set-cookie", "")
