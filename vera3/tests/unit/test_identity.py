@@ -170,3 +170,121 @@ def test_label_propagation_deterministic():
     a = label_propagation(nodes, edges)
     b = label_propagation(nodes, edges)
     assert a == b
+
+
+# ─── LLM paths (chat mocked at the broker-client boundary) ──────────────────
+
+
+@pytest.mark.asyncio
+async def test_judge_pair_parses_verdict(db):
+    import json
+    from unittest.mock import AsyncMock, patch
+
+    from vera_shared.graph.identity import judge_pair
+    a = await _person("Маша", "user:1", tg_id=1)
+    b = await _person("Masha", "m@x.com", source="gmail")
+    reply = json.dumps({"verdict": "same", "confidence": 0.87,
+                        "reason": "стиль и чаты совпадают"})
+    with patch("vera_shared.llm.client.chat",
+               AsyncMock(return_value=(reply, {"provider": "t"}))):
+        v = await judge_pair(a, b, "разные каналы (кросс-источник)")
+    assert v == {"verdict": "same", "confidence": 0.87,
+                 "reason": "стиль и чаты совпадают"}
+
+
+@pytest.mark.asyncio
+async def test_judge_pair_rejects_bad_verdict(db):
+    from unittest.mock import AsyncMock, patch
+
+    from vera_shared.graph.identity import judge_pair
+    a = await _person("Оля", "user:1", tg_id=1)
+    b = await _person("Olga", "o@x.com", source="gmail")
+    with patch("vera_shared.llm.client.chat",
+               AsyncMock(return_value=('{"verdict":"maybe"}', {}))), \
+         pytest.raises(ValueError):
+        await judge_pair(a, b, "сигнал")
+
+
+@pytest.mark.asyncio
+async def test_run_identity_analysis_stats_and_resilience(db):
+    from unittest.mock import patch
+
+    from vera_shared.graph import identity
+    from vera_shared.graph.identity import (
+        list_pending_suggestions,
+        run_identity_analysis,
+    )
+    await _person("Маша", "user:1", tg_id=1)
+    await _person("Masha", "m@x.com", source="gmail")
+    await _person("Оля", "user:2", tg_id=2)
+    await _person("Olga", "o@x.com", source="gmail")
+
+    verdicts = [
+        {"verdict": "same", "confidence": 0.9, "reason": "улики"},
+        RuntimeError("broker down"),          # second pair fails → skipped
+    ]
+
+    async def fake_judge(a, b, signal):
+        v = verdicts.pop(0)
+        if isinstance(v, Exception):
+            raise v
+        return v
+
+    with patch.object(identity, "judge_pair", side_effect=fake_judge):
+        stats = await run_identity_analysis(max_pairs=5)
+    assert stats["judged"] == 1 and stats["same"] == 1 and stats["failed"] == 1
+    assert len(await list_pending_suggestions()) == 1
+
+
+@pytest.mark.asyncio
+async def test_name_clusters_llm_labels_and_fallback(db):
+    from unittest.mock import AsyncMock, patch
+
+    from vera_shared.graph.clusters import MIN_LABELED_SIZE, name_clusters_llm
+    nodes = [{"id": i, "name": f"N{i}", "type": "person", "degree": 1}
+             for i in range(MIN_LABELED_SIZE * 2)]
+    assign = {n["id"]: (0 if n["id"] < MIN_LABELED_SIZE else 1) for n in nodes}
+
+    calls = [('{"label": "Команда IT STEP"}', {}), RuntimeError("boom")]
+
+    async def fake_chat(**kwargs):
+        v = calls.pop(0)
+        if isinstance(v, Exception):
+            raise v
+        return v
+
+    with patch("vera_shared.llm.client.chat", AsyncMock(side_effect=fake_chat)):
+        labels = await name_clusters_llm(assign, nodes)
+    assert labels[0] == "Команда IT STEP"
+    assert labels[1] == "кластер 2"          # broker failure → fallback
+
+
+@pytest.mark.asyncio
+async def test_recompute_and_get_clusters_roundtrip(db):
+    # set_control/get_control are Postgres-only glue (raw now() SQL) — fake
+    # the KV in-memory; the graph side (snapshot → communities) runs for real.
+    from unittest.mock import AsyncMock, patch
+
+    from vera_shared.graph import clusters as cl
+    from vera_shared.graph import repo
+    a = await _person("A", "user:1", tg_id=1)
+    b = await _person("B", "user:2", tg_id=2)
+    await repo.upsert_relationship(subject_entity_id=a, object_entity_id=b,
+                                   predicate="friend_of", confidence=0.9)
+
+    kv: dict[str, str] = {}
+
+    async def fake_set(key, value):
+        kv[key] = value
+
+    async def fake_get(key, default=""):
+        return kv.get(key, default)
+
+    with patch.object(cl, "set_control", fake_set), \
+         patch.object(cl, "get_control", fake_get), \
+         patch("vera_shared.llm.client.chat",
+               AsyncMock(return_value=('{"label": "Пара"}', {}))):
+        payload = await cl.recompute_clusters(limit=50)
+        cached = await cl.get_clusters()
+        assert cached is not None and cached["assign"] == payload["assign"]
+    assert payload["nodes"] == 2 and str(a) in payload["assign"]
