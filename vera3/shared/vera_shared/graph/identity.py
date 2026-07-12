@@ -203,15 +203,16 @@ def _dossier_block(d: dict) -> str:
 
 
 async def judge_pair(a_id: int, b_id: int, signal: str) -> dict[str, Any]:
-    """One LLM call → verdict dict. Raises on broker failure (caller decides)."""
-    from vera_shared.llm.client import chat
+    """One LLM call → verdict dict. Raises on broker failure (caller decides).
+    chat_async (submit+poll /v1/jobs) — брокер удалил синхронный /v1/chat."""
+    from vera_shared.llm.client import chat_async
     dossiers = await get_entity_dossiers([a_id, b_id])
     prompt = _JUDGE_PROMPT.format(
         a_id=a_id, a_block=_dossier_block(dossiers[a_id]),
         b_id=b_id, b_block=_dossier_block(dossiers[b_id]),
         signal=signal,
     )
-    answer, _meta = await chat(
+    answer, _meta = await chat_async(
         messages=[{"role": "user", "content": prompt}],
         capability="chat:smart", max_tokens=300, temperature=0.2,
         workflow="identity", response_format=IDENTITY_JSON_SCHEMA,

@@ -185,7 +185,7 @@ async def test_judge_pair_parses_verdict(db):
     b = await _person("Masha", "m@x.com", source="gmail")
     reply = json.dumps({"verdict": "same", "confidence": 0.87,
                         "reason": "стиль и чаты совпадают"})
-    with patch("vera_shared.llm.client.chat",
+    with patch("vera_shared.llm.client.chat_async",
                AsyncMock(return_value=(reply, {"provider": "t"}))):
         v = await judge_pair(a, b, "разные каналы (кросс-источник)")
     assert v == {"verdict": "same", "confidence": 0.87,
@@ -199,7 +199,7 @@ async def test_judge_pair_rejects_bad_verdict(db):
     from vera_shared.graph.identity import judge_pair
     a = await _person("Оля", "user:1", tg_id=1)
     b = await _person("Olga", "o@x.com", source="gmail")
-    with patch("vera_shared.llm.client.chat",
+    with patch("vera_shared.llm.client.chat_async",
                AsyncMock(return_value=('{"verdict":"maybe"}', {}))), \
          pytest.raises(ValueError):
         await judge_pair(a, b, "сигнал")
@@ -253,7 +253,7 @@ async def test_name_clusters_llm_labels_and_fallback(db):
             raise v
         return v
 
-    with patch("vera_shared.llm.client.chat", AsyncMock(side_effect=fake_chat)):
+    with patch("vera_shared.llm.client.chat_async", AsyncMock(side_effect=fake_chat)):
         labels = await name_clusters_llm(assign, nodes)
     assert labels[0] == "Команда IT STEP"
     assert labels[1] == "кластер 2"          # broker failure → fallback
@@ -282,7 +282,7 @@ async def test_recompute_and_get_clusters_roundtrip(db):
 
     with patch.object(cl, "set_control", fake_set), \
          patch.object(cl, "get_control", fake_get), \
-         patch("vera_shared.llm.client.chat",
+         patch("vera_shared.llm.client.chat_async",
                AsyncMock(return_value=('{"label": "Пара"}', {}))):
         payload = await cl.recompute_clusters(limit=50)
         cached = await cl.get_clusters()

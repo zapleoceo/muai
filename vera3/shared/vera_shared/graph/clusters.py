@@ -86,8 +86,9 @@ _LABEL_PROMPT = """Ты — Вера, память Димы. Вот одно с�
 async def name_clusters_llm(assign: dict[int, int],
                             nodes: list[dict[str, Any]]) -> dict[int, str]:
     """Vera names the biggest communities. Failures fall back to «кластер N»
-    so a broker hiccup never blocks the recompute."""
-    from vera_shared.llm.client import chat
+    so a broker hiccup never blocks the recompute. chat_async — брокер
+    удалил синхронный /v1/chat."""
+    from vera_shared.llm.client import chat_async
     by_comm: dict[int, list[dict]] = {}
     node_by_id = {n["id"]: n for n in nodes}
     for nid, c in assign.items():
@@ -101,7 +102,7 @@ async def name_clusters_llm(assign: dict[int, int],
         listing = "\n".join(
             f"- {m['name']} ({m['type']})" for m in members[:25])
         try:
-            answer, _ = await chat(
+            answer, _ = await chat_async(
                 messages=[{"role": "user",
                            "content": _LABEL_PROMPT.format(members=listing)}],
                 capability="chat:fast", max_tokens=60, temperature=0.3,
