@@ -252,6 +252,12 @@ async def main():
     tools_task = asyncio.create_task(server.serve())
     log.info("Tools HTTP server up on :8000 (/tools/*)")
 
+    # Slow, throttled profile-photo backfill for the graph/dedup UI. Anti-ban:
+    # ~1 photo / few seconds, pauses with the owner's backfill switch. See
+    # avatar_backfill.py.
+    from ingestor_telegram.avatar_backfill import run_avatar_backfill
+    avatar_task = asyncio.create_task(run_avatar_backfill(client))
+
     # NOTE: one-shot history backfill (→ 2025-06-01) completed 2026-06-29;
     # 6067 dialogs, ~323k messages. The backfill_jobs queue + worker were
     # retired afterwards — see migration 009. Live ingestion below covers
@@ -261,6 +267,7 @@ async def main():
         await client.run_until_disconnected()
     finally:
         server.should_exit = True
+        avatar_task.cancel()
         await tools_task
 
 
