@@ -5,7 +5,10 @@ from __future__ import annotations
 
 import pytest
 import pytest_asyncio
-from vera_shared.db import models_graph  # noqa: F401  — registers tables on Base
+from vera_shared.db import (
+    models,  # noqa: F401  — registers events table on Base
+    models_graph,  # noqa: F401  — registers graph tables
+)
 from vera_shared.db.engine import Base
 
 
@@ -101,3 +104,39 @@ async def test_get_entity_context_returns_identity_fields(db):
     assert ctx["type"] == "person"
     assert ctx["username"] == "devgruz"
     assert str(ctx["tg_id"]) == "424690620"
+
+
+def test_msg_snippet_strips_header():
+    from vera_shared.graph.dedup import _msg_snippet
+    raw = ("Author: @x [counterparty]\nFrom: X\nChat: Y\nDate: 2026\n"
+           "Direction: received\n---\nПривет,   как   дела?")
+    assert _msg_snippet(raw) == "Привет, как дела?"
+    assert _msg_snippet(None) == ""
+    assert _msg_snippet("no header text") == "no header text"
+
+
+@pytest.mark.asyncio
+async def test_get_entity_dossier_samples_chats_project(db):
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models import EventRow
+    from vera_shared.graph.dedup import get_entity_dossier
+    eid = await _seed_person("Маша", "user:7", "masha", 777)
+
+    async with get_session() as s:
+        for i, (chat, proj) in enumerate([("Семья", "family"), ("Семья", "family"),
+                                          ("IT STEP", "itstep")]):
+            s.add(EventRow(
+                source="telegram", source_event_id=f"m{i}",
+                content_text=f"Author: Маша\n---\nсообщение {i}",
+                occurred_at=__import__("datetime").datetime(2026, 7, i + 1),
+                triage_status="done", project=proj,
+                metadata_={"sender_id": "777", "chat_title": chat},
+            ))
+
+    d = await get_entity_dossier(eid)
+    assert d["name"] == "Маша"
+    assert d["msg_count"] == 3
+    assert d["dom_project"] == "family"          # 2 family vs 1 itstep
+    assert ("Семья", 2) in d["top_chats"]
+    assert len(d["samples"]) == 3
+    assert all("Author:" not in s for s in d["samples"])   # header stripped
