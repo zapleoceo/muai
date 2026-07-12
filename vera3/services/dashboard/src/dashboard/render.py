@@ -26,6 +26,37 @@ def esc(v) -> str:
     return _esc(str(v), quote=True)
 
 
+# ─── Local-timezone timestamps ─────────────────────────────────────────────
+# Дашборд рендерится на сервере (UTC), но смотрит его Дима из своего часового
+# пояса. Вместо strftime на сервере эмитим <time data-utc="...Z"> с UTC-меткой
+# и форматируем в браузере под его TZ (см. _TZ_SCRIPT в подвале). Фолбэк-текст
+# (UTC) виден если JS выключен. Относительные показы ("N мин назад") НЕ трогаем
+# — там разница двух UTC, она одинакова в любом поясе.
+_FMT_FALLBACK: dict[str, str] = {
+    "datetime": "%Y-%m-%d %H:%M",
+    "datetime_sec": "%Y-%m-%d %H:%M:%S",
+    "date": "%Y-%m-%d",
+    "date_human": "%d %b %Y",
+    "time": "%H:%M",
+}
+
+
+def local_dt(dt: datetime | None, fmt: str = "datetime", empty: str = "—") -> str:
+    """UTC-метку → `<time>`, который JS переведёт в часовой пояс браузера.
+
+    `fmt` — один из ключей `_FMT_FALLBACK`. `empty` — что показать для None.
+    """
+    if dt is None:
+        return empty
+    strf = _FMT_FALLBACK.get(fmt, _FMT_FALLBACK["datetime"])
+    iso = dt.isoformat()
+    # datetime-колонки в БД — наивный UTC (datetime.utcnow()). Помечаем 'Z',
+    # иначе new Date(iso) в браузере распарсит их как ЛОКАЛЬНОЕ время.
+    if dt.tzinfo is None:
+        iso += "Z"
+    return f'<time data-utc="{esc(iso)}" data-fmt="{esc(fmt)}">{dt.strftime(strf)}</time>'
+
+
 # ─── Auth-gate shortcuts ──────────────────────────────────────────────────
 # Every owner-only route repeats `try: require_owner(...) except HTTPException:
 # <some failure response>` — only the failure response shape differs. These
@@ -112,6 +143,7 @@ def _render(active: str, body: str) -> str:
     items = [("home", "/", "главная"),
              ("events", "/events", "log"), ("sources", "/sources", "источники"),
              ("entities", "/entities/duplicates", "сущности"),
+             ("graph", "/graph", "граф"),
              ("settings", "/settings", "настройки")]
     for key, href, label in items:
         cls = "active" if active == key else ""
@@ -121,7 +153,7 @@ def _render(active: str, body: str) -> str:
     return (_HTML_HEAD
             .replace("__FAVICON__", FAVICON_LINKS)
             .replace("__NAV__", "".join(nav))
-            + body + _HTML_FOOT)
+            + body + _TZ_FOOTER + _TZ_SCRIPT + _HTML_FOOT)
 
 
 # ─── Favicon (SVG, 32x32 viewBox, scales to 16x16 in tab strips) ────────────
@@ -201,6 +233,46 @@ button:hover { background: #3a9ce0; }
 .htmx-request.htmx-indicator { display: inline; }
 </style></head><body>
 <nav>__NAV__</nav>"""
+
+_TZ_FOOTER = (
+    '<div id="tz-note" class="mute" '
+    'style="margin-top:28px;font-size:11px;text-align:center"></div>'
+)
+
+# Переводит все <time data-utc> в часовой пояс браузера. Запускается сразу
+# (скрипт в конце body — DOM уже готов) и после каждого htmx-swap (live-прогресс
+# подменяется каждые 30с). window.__localizeTimes открыт для ручного вызова.
+_TZ_SCRIPT = """<script>
+(function(){
+  var M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  function p(n){return String(n).padStart(2,'0');}
+  function fmt(d,k){
+    var Y=d.getFullYear(),Mo=p(d.getMonth()+1),D=p(d.getDate());
+    var h=p(d.getHours()),m=p(d.getMinutes()),s=p(d.getSeconds());
+    if(k==='time')return h+':'+m;
+    if(k==='date')return Y+'-'+Mo+'-'+D;
+    if(k==='date_human')return d.getDate()+' '+M[d.getMonth()]+' '+Y;
+    if(k==='datetime_sec')return Y+'-'+Mo+'-'+D+' '+h+':'+m+':'+s;
+    return Y+'-'+Mo+'-'+D+' '+h+':'+m;
+  }
+  function localize(root){
+    (root||document).querySelectorAll('time[data-utc]').forEach(function(el){
+      var iso=el.getAttribute('data-utc'),d=new Date(iso);
+      if(isNaN(d.getTime()))return;
+      el.textContent=fmt(d,el.getAttribute('data-fmt')||'datetime');
+      el.title='UTC: '+iso;
+    });
+    var tz=document.getElementById('tz-note');
+    if(tz&&!tz.dataset.done){
+      try{tz.textContent='🕐 время показано в вашем часовом поясе ('+
+        Intl.DateTimeFormat().resolvedOptions().timeZone+')';tz.dataset.done='1';}catch(e){}
+    }
+  }
+  window.__localizeTimes=localize;
+  localize();
+  document.body.addEventListener('htmx:afterSwap',function(e){localize(e.target);});
+})();
+</script>"""
 
 _HTML_FOOT = "</body></html>"
 

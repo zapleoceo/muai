@@ -19,6 +19,7 @@ from dashboard.render import (
     data_table,
     esc,
     freshness_pill,
+    local_dt,
     owner_or_redirect,
     row_list,
 )
@@ -33,11 +34,11 @@ def _instagram_block(ig_sessions, ig_total, ig_1h, ig_24h, ig_last,
         f'<tr><td>{s.id}</td><td>@{esc(s.username)}</td>'
         f'<td class="pill {"ok" if s.is_active else "err"}">'
         f'{"✓ active" if s.is_active else "✗ inactive"}</td>'
-        f'<td>{s.last_polled_at.strftime("%Y-%m-%d %H:%M:%S") if s.last_polled_at else "никогда"}</td></tr>'
+        f'<td>{local_dt(s.last_polled_at, "datetime_sec", "никогда")}</td></tr>'
         for s in ig_sessions
     )
 
-    last_txt = ig_last.strftime("%Y-%m-%d %H:%M:%S") if ig_last else "никогда"
+    last_txt = local_dt(ig_last, "datetime_sec", "никогда")
     freshness = freshness_pill(ig_last, now, live_within_min=10, warn_within_min=120)
 
     dir_html = row_list((esc(d), f"{cnt:,}") for d, cnt in ig_by_direction)
@@ -122,7 +123,7 @@ async def sources_page(request: Request):
     gmail_html_rows = []
     for g in gmail_rows:
         ev_count = gmail_counts.get(g.email, 0)
-        last = g.last_polled_at.strftime("%Y-%m-%d %H:%M") if g.last_polled_at else "никогда"
+        last = local_dt(g.last_polled_at, "datetime", "никогда")
         # Честный статус: needs_reauth важнее is_active
         if getattr(g, "needs_reauth", False):
             state, state_cls = "✗ токен отозван", "err"

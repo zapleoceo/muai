@@ -16,6 +16,7 @@ from dashboard.auth_routes import router as auth_router
 from dashboard.entities_routes import router as entities_router
 from dashboard.events_routes import router as events_router
 from dashboard.gmail_oauth import router as gmail_oauth_router
+from dashboard.graph_routes import router as graph_router
 from dashboard.home_routes import router as home_router
 from dashboard.instagram_login import router as instagram_login_router
 from dashboard.progress_routes import router as progress_router
@@ -37,7 +38,7 @@ app = FastAPI(title="Vera 3.0 Dashboard", lifespan=lifespan)
 for router in (
     auth_router, home_router, progress_router, events_router,
     sources_router, search_router, settings_router, entities_router,
-    gmail_oauth_router, instagram_login_router,
+    graph_router, gmail_oauth_router, instagram_login_router,
 ):
     app.include_router(router)
 

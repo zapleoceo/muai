@@ -67,11 +67,35 @@ Returns `AnswerResponse` with `answer`, `results`, `provider`, `cost_usd`,
 | `/` | GET | owner cookie | Home — cards, live progress |
 | `/events` | GET | owner cookie | Event browser with filters. Nav label is "log" — per-event columns show the broker call that triaged it (`request_id`/model/tokens/cost, via `usage_log`); batch-triaged events show "в пачке ✓" instead of a blank (see `domain-model.md`) |
 | `/sources` | GET | owner cookie | Per-source health (telegram/gmail/instagram) |
+| `/graph` | GET | owner cookie | Knowledge-graph visualizer page (`graph_page`) — Cytoscape.js force layout of entities+relationships. See "Graph visualizer" below. |
+| `/api/graph` | GET | owner cookie | Node/edge JSON for the visualizer (`graph_data`). Params: `min_degree`, `limit` (≤800), `predicate`, `focus` (entity id), `q` (name→focus). |
 | `/api/instagram/start` | GET | owner cookie | Instagram login form (`instagram_start_form`) |
 | `/api/instagram/start` | POST | owner cookie | Submit username/password (`instagram_start`) — may return a 2FA/challenge code form |
 | `/api/instagram/verify` | POST | owner cookie | Submit 2FA/challenge code (`instagram_verify`) → saves encrypted session |
 | `/tokens` | GET | owner cookie | Now redirects to AIbroker — see `llm-broker.md` |
 | `/search-ui` | POST | owner cookie | "Ask Vera" form handler |
+
+### Graph visualizer (`dashboard/graph_routes.py`)
+
+`/graph` renders Vera's L1 substrate (entities + relationships) as an
+interactive force-directed graph via Cytoscape.js (CDN, same pattern as
+htmx). The full graph is ~8k entities / ~7k edges — a hairball if drawn at
+once, and ~6k of those entities have no relationships at all — so it never
+renders "everything":
+
+- Default = the **connected core**: `repo.graph_snapshot(min_degree, limit)`
+  returns the top-`limit` (≤`GRAPH_MAX_NODES`=800) entities by degree with
+  degree ≥ `min_degree`, plus every edge whose both endpoints are in that
+  set (so the client never references a missing node).
+- Tap a node (or search by name) → **ego network**: `graph_snapshot(focus_id)`
+  returns that entity + its 1-hop neighbours. Name search resolves via the
+  fuzzy `find_entity_by_name`.
+- `predicate` filter narrows to one relationship type. Node colour = entity
+  type (person / group / channel), size ∝ degree.
+
+All graph SQL lives in `vera_shared.graph.repo` (the repository layer);
+the route only shapes JSON / HTML. `IN` clauses use expanding bindparams
+so the queries run on both Postgres (prod) and SQLite (tests).
 
 ### Stats caching (`dashboard/stats.py`)
 

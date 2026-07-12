@@ -9,7 +9,7 @@ import logging
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, select, update
+from sqlalchemy import bindparam, func, select, text, update
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_graph import (
@@ -21,6 +21,11 @@ from vera_shared.db.models_graph import (
 )
 
 log = logging.getLogger(__name__)
+
+# Hard ceiling on nodes returned to the browser — 8k+ entities / 7k edges
+# would hairball any force layout. The /graph page never renders "all";
+# it shows the connected core (degree filter) or a focused ego network.
+GRAPH_MAX_NODES = 800
 
 
 # ─── Entities & Aliases (Identity Resolution) ────────────────────────────────
@@ -111,6 +116,99 @@ async def resolve_entity_exact(name: str) -> int | None:
             .where(func.lower(EntityAliasRow.display_name) == func.lower(n))
             .limit(1)
         )).scalar_one_or_none()
+
+
+# ─── Graph snapshot (visualization) ──────────────────────────────────────────
+
+
+async def graph_snapshot(
+    *, min_degree: int = 2, limit: int = 300,
+    predicate: str | None = None, focus_id: int | None = None,
+) -> dict[str, Any]:
+    """Node/edge slice for the /graph visualizer. Two modes:
+
+    - focus_id set → ego network: that entity + its 1-hop neighbours.
+    - else → the connected core: entities with degree ≥ min_degree, the
+      top `limit` by degree (drops the long tail of once-mentioned names
+      and, on its own, the ~6k entities with no relationships at all).
+
+    Edges are only those whose BOTH endpoints are in the returned node set,
+    so the client never references a missing node. `limit` is clamped to
+    GRAPH_MAX_NODES to protect the browser."""
+    limit = max(1, min(limit, GRAPH_MAX_NODES))
+    min_degree = max(1, min_degree)
+    pred_clause = "AND r.predicate = :pred" if predicate else ""
+    params: dict[str, Any] = {"lim": limit}
+    if predicate:
+        params["pred"] = predicate
+
+    async with get_session() as s:
+        if focus_id is not None:
+            params["fid"] = focus_id
+            ids = [focus_id] + list((await s.execute(text(f"""
+                SELECT DISTINCT nb FROM (
+                    SELECT object_entity_id AS nb FROM relationships r
+                      WHERE r.subject_entity_id = :fid {pred_clause}
+                    UNION
+                    SELECT subject_entity_id AS nb FROM relationships r
+                      WHERE r.object_entity_id = :fid {pred_clause}
+                ) x LIMIT :lim
+            """), params)).scalars().all())
+        else:
+            params["mind"] = min_degree
+            ids = list((await s.execute(text(f"""
+                WITH degree AS (
+                    SELECT eid, COUNT(*) AS deg FROM (
+                        SELECT r.subject_entity_id AS eid FROM relationships r
+                          WHERE TRUE {pred_clause}
+                        UNION ALL
+                        SELECT r.object_entity_id AS eid FROM relationships r
+                          WHERE TRUE {pred_clause}
+                    ) u GROUP BY eid
+                )
+                SELECT eid FROM degree WHERE deg >= :mind
+                ORDER BY deg DESC LIMIT :lim
+            """), params)).scalars().all())
+
+        if not ids:
+            return {"nodes": [], "edges": []}
+
+        # Expanding bindparam for IN — portable across Postgres (prod) and
+        # SQLite (tests); raw `= ANY(:ids)` is Postgres-only.
+        node_rows = (await s.execute(
+            text("""
+                SELECT e.id, e.name, e.type,
+                       (SELECT COUNT(*) FROM relationships r
+                          WHERE r.subject_entity_id = e.id
+                             OR r.object_entity_id = e.id) AS degree
+                FROM entities e WHERE e.id IN :ids
+            """).bindparams(bindparam("ids", expanding=True)),
+            {"ids": ids},
+        )).mappings().all()
+
+        edge_rows = (await s.execute(
+            text(f"""
+                SELECT r.subject_entity_id AS source, r.object_entity_id AS target,
+                       r.predicate, r.confidence
+                FROM relationships r
+                WHERE r.subject_entity_id IN :ids
+                  AND r.object_entity_id IN :ids {pred_clause}
+            """).bindparams(bindparam("ids", expanding=True)),
+            {"ids": ids, **({"pred": predicate} if predicate else {})},
+        )).mappings().all()
+
+    return {
+        "nodes": [
+            {"id": r["id"], "name": r["name"], "type": r["type"],
+             "degree": r["degree"]}
+            for r in node_rows
+        ],
+        "edges": [
+            {"source": r["source"], "target": r["target"],
+             "predicate": r["predicate"], "confidence": round(float(r["confidence"]), 2)}
+            for r in edge_rows
+        ],
+    }
 
 
 # ─── Memberships ─────────────────────────────────────────────────────────────
