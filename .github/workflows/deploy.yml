@@ -70,6 +70,7 @@ jobs:
           pip install -e ./services/dashboard
           pip install -e ./services/media-worker
           pip install -e ./services/ingestor-telegram
+          pip install -e ./services/ingestor-gmail
           pip install -e ./services/brain-search
       - name: Pytest
         # Coverage gate stair-step. 2026-06-24: 40 → 60 → 70 (246 passed, 74.17%)
@@ -82,7 +83,7 @@ jobs:
           # would retroactively fail on its pre-existing legacy coverage gap.
           # It IS collected/run (regressions still fail this job) and IS
           # covered by the quality job's diff-cover (new-lines-only, below).
-          PYTHONPATH=shared:services/gateway/src:services/dashboard/src:services/media-worker/src:services/ingestor-telegram/src:services/brain-search/src \
+          PYTHONPATH=shared:services/gateway/src:services/dashboard/src:services/media-worker/src:services/ingestor-telegram/src:services/ingestor-gmail/src:services/brain-search/src \
           pytest tests/ \
             --cov=vera_shared --cov=gateway \
             --cov-report=term-missing \
@@ -114,6 +115,7 @@ jobs:
           pip install -e ./vera3/services/dashboard
           pip install -e ./vera3/services/media-worker
           pip install -e ./vera3/services/ingestor-telegram
+          pip install -e ./vera3/services/ingestor-gmail
           pip install -e ./vera3/services/brain-search
           pip install vulture==2.13 diff-cover==9.2.0 ruff==0.7.4
 
@@ -186,7 +188,7 @@ jobs:
           fi
           cd vera3
           export TELEGRAM_API_ID=1 TELEGRAM_API_HASH=test TELEGRAM_PHONE=+10000000000
-          PYTHONPATH=shared:services/gateway/src:services/dashboard/src:services/media-worker/src:services/ingestor-telegram/src:services/brain-search/src \
+          PYTHONPATH=shared:services/gateway/src:services/dashboard/src:services/media-worker/src:services/ingestor-telegram/src:services/ingestor-gmail/src:services/brain-search/src \
             pytest tests/ -q --no-header \
               --cov=vera_shared --cov=gateway --cov=media_worker --cov=brain_search \
               --cov-report=xml:coverage.xml -p no:cacheprovider \

@@ -20,6 +20,7 @@ from vera_shared.crypto import decrypt
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import GmailAccountRow
+from vera_shared.graph.repo import upsert_entity
 
 log = logging.getLogger("gmail")
 
@@ -164,6 +165,40 @@ def _extract_text(payload: dict) -> str:
     return ""
 
 
+def correspondent_of(account_email: str, from_: str, to_: str) -> tuple[str, str] | None:
+    """(email, display_name) собеседника письма — то, что станет person-сущностью.
+
+    received → From; sent → первый адрес To. Свои ящики пропускаем (иначе
+    каждый свой аккаунт превратился бы в отдельного «человека»)."""
+    from email.utils import getaddresses, parseaddr
+    if account_email.lower() in from_.lower():
+        pairs = getaddresses([to_]) if to_ else []
+        name, addr = pairs[0] if pairs else ("", "")
+    else:
+        name, addr = parseaddr(from_)
+    addr = (addr or "").strip().lower()
+    if not addr or "@" not in addr or addr == account_email.lower():
+        return None
+    return addr, (name or "").strip() or addr.split("@")[0]
+
+
+async def sync_correspondent_entity(account_email: str, from_: str, to_: str) -> None:
+    """Кросс-канальная идентичность: собеседник письма → Entity + alias
+    (gmail, <email>). Никогда не роняет поллинг — сбой графа не должен
+    останавливать приём почты."""
+    who = correspondent_of(account_email, from_, to_)
+    if who is None:
+        return
+    addr, display = who
+    try:
+        await upsert_entity(
+            type="person", name=display, source="gmail", identifier=addr,
+            display_name=display, attributes={"email": addr},
+        )
+    except Exception as e:
+        log.warning("entity sync failed for %s: %s", addr, e)
+
+
 def _format_event(account_email: str, msg: dict) -> dict[str, Any]:
     headers = {h["name"].lower(): h["value"] for h in msg.get("payload", {}).get("headers", [])}
     from_ = headers.get("from", "")
@@ -278,6 +313,7 @@ async def poll_account(acc: GmailAccountRow) -> int:
 
     specs = [_format_event(acc.email, msg) for msg in messages]
     inserted = 0
+    fresh: list[dict[str, Any]] = []
     if specs:
         ids = [sp["source_event_id"] for sp in specs]
         async with get_session() as s:
@@ -291,7 +327,18 @@ async def poll_account(acc: GmailAccountRow) -> int:
                 if sp["source_event_id"] in existing:
                     continue
                 s.add(EventRow(triage_status="pending", **sp))
+                fresh.append(sp)
                 inserted += 1
+        # Identity graph: собеседник каждого нового письма → person entity с
+        # alias (gmail, email). Один upsert на адрес за прогон.
+        seen_addrs: set[str] = set()
+        for sp in fresh:
+            m = sp["metadata_"]
+            who = correspondent_of(acc.email, m.get("from", ""), m.get("to", ""))
+            if who is None or who[0] in seen_addrs:
+                continue
+            seen_addrs.add(who[0])
+            await sync_correspondent_entity(acc.email, m.get("from", ""), m.get("to", ""))
 
     now = datetime.utcnow()
     async with get_session() as s:

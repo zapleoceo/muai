@@ -22,6 +22,7 @@ from vera_shared.crypto import decrypt
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import InstagramSessionRow
+from vera_shared.graph.repo import upsert_entity
 
 log = logging.getLogger("ig")
 
@@ -154,6 +155,21 @@ async def poll_once(cl: Client, username: str) -> int:
                 saved += 1
             except Exception as e:
                 log.warning("post_event failed for %s: %s", sid, e)
+                continue
+
+            # Identity graph: собеседник DM → person entity с alias
+            # (instagram, user:<pk>). Свои исходящие не сущность.
+            if direction == "received" and sender_id is not None:
+                try:
+                    await upsert_entity(
+                        type="person", name=sender_username,
+                        source="instagram", identifier=f"user:{sender_id}",
+                        display_name=sender_username,
+                        attributes={"username": sender_username,
+                                    "ig_user_id": sender_id},
+                    )
+                except Exception as e:
+                    log.warning("entity sync failed for @%s: %s", sender_username, e)
     return saved
 
 

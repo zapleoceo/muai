@@ -2,6 +2,9 @@
 avatar serving (`/entities/{id}/avatar`)."""
 from __future__ import annotations
 
+import asyncio
+import logging
+
 from fastapi import APIRouter, Form, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from vera_shared.graph.avatars import get_avatar
@@ -12,6 +15,16 @@ from vera_shared.graph.dedup import (
     get_entity_dossiers,
     merge_entities,
 )
+from vera_shared.graph.identity import (
+    list_pending_suggestions,
+    run_identity_analysis,
+    set_suggestion_status,
+)
+
+log = logging.getLogger(__name__)
+
+# Один анализ за раз; состояние живёт в процессе дашборда (single-owner UI).
+_analysis: dict = {"running": False, "last": None}
 
 from dashboard.render import (
     _render,
@@ -125,6 +138,96 @@ def _collision_section(groups: list[dict], dossiers: dict[int, dict]) -> str:
     )
 
 
+def _vera_section(suggestions: list[dict], dossiers: dict[int, dict]) -> str:
+    """«Вера предлагает объединить» — LLM-вердикты same/unsure с уликами и
+    кнопками принять/отклонить."""
+    if _analysis["running"]:
+        status = ('<p class="pill warn" style="display:inline-block">'
+                  '⏳ Вера анализирует… обнови страницу через минуту</p>')
+    else:
+        last = _analysis["last"]
+        last_txt = (f' Последний прогон: {last["judged"]} пар '
+                    f'(same {last["same"]}, unsure {last["unsure"]}, '
+                    f'different {last["different"]}).' if last else "")
+        status = (
+            f'<form method="post" action="/entities/analyze" style="display:inline">'
+            f'<button>🧠 Запустить анализ Веры</button></form>'
+            f'<span class="mute" style="font-size:12px">{last_txt}</span>'
+        )
+
+    cards = []
+    for sg in suggestions:
+        a, b = dossiers.get(sg["entity_a"]), dossiers.get(sg["entity_b"])
+        if a is None or b is None:
+            continue
+        pct = int(sg["confidence"] * 100)
+        cards.append(
+            f'<div class="dup-group" style="border:1px solid #9775fa;'
+            f'padding:10px;margin:10px 0;border-radius:6px">'
+            f'<b>{"🟣 Один человек" if sg["verdict"] == "same" else "❔ Возможно один человек"}'
+            f' ({pct}%)</b>'
+            f'<div class="mute" style="font-size:12px;margin:4px 0">'
+            f'Вера: {esc(sg["reason"])}</div>'
+            f'{_candidate_card(a)}{_candidate_card(b)}'
+            f'<form method="post" action="/entities/suggestion" '
+            f'style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">'
+            f'<input type="hidden" name="suggestion_id" value="{sg["id"]}">'
+            f'<button name="action" value="accept_a">Объединить → оставить '
+            f'«{esc(a["name"] or "A")}»</button>'
+            f'<button name="action" value="accept_b">Объединить → оставить '
+            f'«{esc(b["name"] or "B")}»</button>'
+            f'<button name="action" value="reject" '
+            f'style="background:#4a1a1d">Разные люди</button>'
+            f'</form></div>'
+        )
+
+    body = "".join(cards) or ('<p class="mute">Пока нет ожидающих предложений — '
+                              'запусти анализ.</p>' if not _analysis["running"] else "")
+    return (
+        '<div class="section" style="border-left:3px solid #9775fa">'
+        '<h2>🧠 Вера предлагает объединить</h2>'
+        '<p class="mute">Вера сравнивает тёзок и похожие имена (Маша ↔ Maria,'
+        ' Оля ↔ Ольга) по чатам, стилю и проектам — включая пары из разных'
+        ' каналов (почта ↔ телеграм). Ничего не объединяется без твоего'
+        ' подтверждения.</p>'
+        f'<div style="margin-bottom:8px">{status}</div>{body}</div>'
+    )
+
+
+async def _run_analysis_bg() -> None:
+    try:
+        _analysis["last"] = await run_identity_analysis()
+    except Exception as e:
+        log.exception("identity analysis failed: %s", e)
+    finally:
+        _analysis["running"] = False
+
+
+@router.post("/entities/analyze")
+async def entities_analyze(request: Request):
+    if (resp := owner_or_auth_error(request)) is not None:
+        return resp
+    if not _analysis["running"]:
+        _analysis["running"] = True
+        asyncio.create_task(_run_analysis_bg())
+    return RedirectResponse("/entities/duplicates", status_code=303)
+
+
+@router.post("/entities/suggestion")
+async def entities_suggestion(request: Request,
+                              suggestion_id: int = Form(...),  # noqa: B008
+                              action: str = Form(...)):  # noqa: B008
+    if (resp := owner_or_auth_error(request)) is not None:
+        return resp
+    status = "rejected" if action == "reject" else "accepted"
+    row = await set_suggestion_status(suggestion_id, status)
+    if row and action in ("accept_a", "accept_b"):
+        keeper = row["entity_a"] if action == "accept_a" else row["entity_b"]
+        merged = row["entity_b"] if action == "accept_a" else row["entity_a"]
+        await merge_entities(keeper, merged)
+    return RedirectResponse("/entities/duplicates", status_code=303)
+
+
 _NAME_GROUPS_SHOWN = 25
 _CANDS_PER_GROUP = 6
 
@@ -137,15 +240,20 @@ async def entity_duplicates_page(request: Request):
     collisions = await find_alias_collisions(min_group=2)
     groups = await find_duplicates_by_name(min_group=2)
     shown_groups = groups[:_NAME_GROUPS_SHOWN]
+    suggestions = await list_pending_suggestions()
 
     # Every candidate's dossier in one batched call (4 queries, one session) —
     # per-entity fanout would exhaust the connection pool on ~200 candidates.
     need_ids: set[int] = {c["id"] for g in collisions for c in g["candidates"]}
+    for sg in suggestions:
+        need_ids.add(sg["entity_a"])
+        need_ids.add(sg["entity_b"])
     for g in shown_groups:
         for c in g["candidates"][:_CANDS_PER_GROUP]:
             need_ids.add(c["id"])
     dossiers = await get_entity_dossiers(list(need_ids))
 
+    vera_html = _vera_section(suggestions, dossiers)
     collision_html = _collision_section(collisions, dossiers)
 
     rows_html = []
@@ -176,6 +284,7 @@ async def entity_duplicates_page(request: Request):
         )
 
     return HTMLResponse(_render("entities", f"""
+      {vera_html}
       {collision_html}
       <h2>👥 Кандидаты на объединение по имени</h2>
       <p class="mute">Группы entity-строк с одинаковым нормализованным именем.
@@ -186,8 +295,8 @@ async def entity_duplicates_page(request: Request):
         <b>⚠️ Почти всегда это РАЗНЫЕ люди:</b> Каждая группа — N разных
         Telegram-аккаунтов с одинаковым first_name (напр. 21 «Дима» = 21 разный
         человек, свой @username и tg_id). Контекст ниже (чаты/сообщения) помогает
-        отличить; объединяй ТОЛЬКО настоящие дубли. Автоматические — зелёная
-        секция выше. Кросс-именной анализ Веры (Маша=Matia) — следующим шагом.
+        отличить; объединяй ТОЛЬКО настоящие дубли. Точные совпадения — зелёная
+        секция, умные догадки Веры (Маша=Matia) — фиолетовая выше.
       </div>
       <p class="mute">Найдено групп: <b>{len(groups)}</b> (показано {len(shown_groups)}).</p>
       {''.join(rows_html) or '<p class="mute">Чисто — дублей по имени нет.</p>'}

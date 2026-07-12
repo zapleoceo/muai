@@ -17,6 +17,9 @@ via `gateway /event/<source>` with `X-Internal-Secret`.
 
 - Container: `vera3-ingestor-gmail`
 - Mechanism: OAuth refresh + Gmail API polling every 5 min per account.
+- Identity graph: собеседник каждого нового письма становится person-сущностью
+  с alias `(gmail, email)` — см. `docs/identity.md`. Кросс-канальное слияние
+  с telegram-сущностями — через LLM-предложения Веры на `/entities/duplicates`.
 - Accounts: 3 (`demoniwwwe@gmail.com`, `zaporozec_d@itstep.org`, `zapleosoft@gmail.com`).
 - Critical caveat: tokens get revoked by Google if the OAuth app sits in
   "Testing" mode for >7 days idle. See `security.md` for re-auth flow.

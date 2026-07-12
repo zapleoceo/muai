@@ -82,6 +82,34 @@ class EntityAvatarRow(Base):
     )
 
 
+class MergeSuggestionRow(Base):
+    """Vera's LLM verdict on a candidate same-person pair (migration 016).
+
+    Owner accepts (→ merge_entities) or rejects on /entities/duplicates;
+    'different' verdicts are stored pre-rejected so a pair is never re-asked.
+    (entity_a, entity_b) is ordered a<b — unique either way round.
+    """
+    __tablename__ = "merge_suggestions"
+    __table_args__ = (
+        UniqueConstraint("entity_a", "entity_b", name="uq_merge_pair"),
+    )
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    entity_a: Mapped[int] = mapped_column(
+        ForeignKey("entities.id", ondelete="CASCADE"), nullable=False,
+    )
+    entity_b: Mapped[int] = mapped_column(
+        ForeignKey("entities.id", ondelete="CASCADE"), nullable=False,
+    )
+    verdict: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    reason: Mapped[str] = mapped_column(Text, nullable=False, default="")
+    status: Mapped[str] = mapped_column(Text, nullable=False, default="pending")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(),
+    )
+
+
 class EntityAliasRow(Base):
     """Identity resolution: each external identifier → one Entity.
 

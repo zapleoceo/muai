@@ -99,23 +99,31 @@ async def find_entity_by_alias(source: str, identifier: str) -> int | None:
 
 async def resolve_entity_exact(name: str) -> int | None:
     """Exact (case-insensitive) resolve by entity name, then alias
-    display_name. Distinct from find_entity_by_name's fuzzy `ILIKE %..%` —
-    rel-extract needs precision, not recall. Lives here so the repository
-    stays the only layer touching graph tables (was raw SQL in rel_extract)."""
+    display_name — but ONLY when the match is unambiguous.
+
+    With 21 разных «Дима» in the graph, the old `.limit(1)` (no ORDER BY)
+    attached rel-extract edges to an arbitrary namesake — non-deterministic
+    and, worse, it silently fused different people into one node. Ambiguous
+    names now resolve to None: rel_extract skips the edge rather than
+    polluting the graph. Distinct from find_entity_by_name's fuzzy ILIKE —
+    this path needs precision, not recall."""
     n = name.strip()
     async with get_session() as s:
-        eid = (await s.execute(
+        ids = list((await s.execute(
             select(EntityRow.id)
             .where(func.lower(EntityRow.name) == func.lower(n))
-            .limit(1)
-        )).scalar_one_or_none()
-        if eid:
-            return eid
-        return (await s.execute(
-            select(EntityAliasRow.entity_id)
+            .limit(2)
+        )).scalars().all())
+        if len(ids) == 1:
+            return ids[0]
+        if len(ids) > 1:
+            return None   # namesakes — ambiguous, refuse to guess
+        alias_ids = list((await s.execute(
+            select(EntityAliasRow.entity_id).distinct()
             .where(func.lower(EntityAliasRow.display_name) == func.lower(n))
-            .limit(1)
-        )).scalar_one_or_none()
+            .limit(2)
+        )).scalars().all())
+        return alias_ids[0] if len(alias_ids) == 1 else None
 
 
 # ─── Graph snapshot (visualization) ──────────────────────────────────────────
