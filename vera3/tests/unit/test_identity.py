@@ -19,11 +19,11 @@ def test_diminutive_and_translit_fold_to_same_first():
     assert canonical_name_parts("Маша")[0] == "мария"
     assert canonical_name_parts("Мария Иванова")[0] == "мария"
     assert canonical_name_parts("Masha")[0] == "мария"
-    assert canonical_name_parts("Оля")[0] == "ольга"
-    assert canonical_name_parts("Ольга Олеговая")[0] == "ольга"
-    assert canonical_name_parts("Olga")[0] == "ольга"
-    assert canonical_name_parts("Дима 🏝️")[0] == "дмитрий"
-    assert canonical_name_parts("Dima Zaporozhets")[0] == "дмитрий"
+    assert canonical_name_parts("Оля")[0] == "олга"
+    assert canonical_name_parts("Ольга Олеговая")[0] == "олга"
+    assert canonical_name_parts("Olga")[0] == "олга"
+    assert canonical_name_parts("Дима 🏝️")[0] == "дмитрии"
+    assert canonical_name_parts("Dima Zaporozhets")[0] == "дмитрии"
 
 
 def test_last_name_translit_fold():
@@ -475,3 +475,20 @@ def test_split_hubs_disabled_at_100_or_tiny_graph():
     degrees = {i: i for i in range(20)}
     assert split_hubs(degrees, percentile=100) == set()
     assert split_hubs({1: 100, 2: 1}, percentile=90) == set()   # < 10 узлов
+
+
+def test_canonical_soft_sign_translit_surname():
+    """«Aleksandr Maltsev» и «Александр Мальцев» — один канон (мягкий знак
+    не передаётся транслитом, фолдим его с обеих сторон)."""
+    from vera_shared.graph.identity import canonical_name_parts
+    lat = canonical_name_parts("Aleksandr Maltsev")
+    cyr = canonical_name_parts("Александр Мальцев")
+    assert lat == cyr
+    assert lat[0] == "александр"
+
+
+def test_canonical_diminutive_dict_folded_too():
+    from vera_shared.graph.identity import canonical_name_parts
+    # словарные формы с «ь» сходятся со свёрнутым входом
+    assert canonical_name_parts("Ольга")[0] == canonical_name_parts("Olga")[0]
+    assert canonical_name_parts("Наташа")[0] == canonical_name_parts("Natalya")[0]

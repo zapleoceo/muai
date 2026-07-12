@@ -88,17 +88,28 @@ def _fold_lat(token: str) -> str:
     return out
 
 
+def _fold_ru(token: str) -> str:
+    """Пост-фолд кириллицы: ё/й к базовым, мягкий/твёрдый знак — вон
+    (транслит их не передаёт: Maltsev → «малцев», а кириллица — «мальцев»;
+    без этого фолда фамилии не сходятся)."""
+    return (token.replace("ё", "е").replace("й", "и")
+            .replace("ь", "").replace("ъ", ""))
+
+
+# Ключи и значения словаря — через тот же фолд, что и входные имена, иначе
+# «ольга»/«наталья» из словаря никогда не совпадут со свёрнутым входом «олга».
+_DIMINUTIVES = {_fold_ru(k): _fold_ru(v) for k, v in _DIMINUTIVES.items()}
+
+
 def canonical_name_parts(name: str | None) -> tuple[str, str]:
     """(canonical_first, canonical_last) — lower, translit-folded to cyrillic,
     diminutives collapsed. Emoji/decorations stripped. '' when absent."""
     tokens = _WORD_RE.findall(name or "")
     if not tokens:
         return "", ""
-    first = _fold_lat(tokens[0].lower())
-    first = first.replace("ё", "е").replace("й", "и")
+    first = _fold_ru(_fold_lat(tokens[0].lower()))
     first = _DIMINUTIVES.get(first, first)
-    last = _fold_lat(tokens[1].lower()) if len(tokens) > 1 else ""
-    last = last.replace("ё", "е").replace("й", "и")
+    last = _fold_ru(_fold_lat(tokens[1].lower())) if len(tokens) > 1 else ""
     return first, last
 
 
