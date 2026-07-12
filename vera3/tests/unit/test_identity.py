@@ -288,3 +288,81 @@ async def test_recompute_and_get_clusters_roundtrip(db):
         cached = await cl.get_clusters()
         assert cached is not None and cached["assign"] == payload["assign"]
     assert payload["nodes"] == 2 and str(a) in payload["assign"]
+
+
+# ─── rel_extract: «я» → автор события, не сущность с именем «Я» ─────────────
+
+
+@pytest.mark.asyncio
+async def test_author_entity_of_event_maps_self_to_author(db):
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models import EventRow
+    from vera_shared.graph.rel_extract import author_entity_of_event
+    from vera_shared.projects.rules import OWNER_TG_ID
+
+    owner = await _person("Dima Z", f"user:{OWNER_TG_ID}", tg_id=OWNER_TG_ID)
+    sender = await _person("Vasya", "user:555", tg_id=555)
+
+    async with get_session() as s:
+        s.add(EventRow(id=1, source="telegram", source_event_id="e1",
+                       content_text="x", triage_status="done",
+                       occurred_at=__import__("datetime").datetime(2026, 7, 1),
+                       metadata_={"direction": "received", "sender_id": 555}))
+        s.add(EventRow(id=2, source="telegram", source_event_id="e2",
+                       content_text="x", triage_status="done",
+                       occurred_at=__import__("datetime").datetime(2026, 7, 1),
+                       metadata_={"direction": "sent",
+                                  "sender_id": OWNER_TG_ID}))
+        s.add(EventRow(id=3, source="gmail", source_event_id="e3",
+                       content_text="x", triage_status="done",
+                       occurred_at=__import__("datetime").datetime(2026, 7, 1),
+                       metadata_={"direction": "received",
+                                  "from": "Vasya <vasya@corp.com>"}))
+
+    assert await author_entity_of_event(1) == sender      # received → отправитель
+    assert await author_entity_of_event(2) == owner       # sent → владелец
+    assert await author_entity_of_event(999) is None      # нет события
+
+    from vera_shared.graph import repo
+    gmail_guy = await repo.upsert_entity(
+        type="person", name="Vasya", source="gmail",
+        identifier="vasya@corp.com", attributes={"email": "vasya@corp.com"})
+    assert await author_entity_of_event(3) == gmail_guy   # gmail received → From
+
+
+@pytest.mark.asyncio
+async def test_extract_and_store_self_token_goes_to_author(db):
+    import json
+    from unittest.mock import AsyncMock, patch
+
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models import EventRow
+    from vera_shared.graph import repo
+    from vera_shared.graph.rel_extract import extract_and_store
+
+    imposter = await _person("Я", "user:333", tg_id=333)      # чужой «Я»
+    sender = await _person("Vasya", "user:555", tg_id=555)
+    org = await repo.upsert_entity(type="person", name="Acme",
+                                   source="telegram", identifier="chat:-9")
+
+    async with get_session() as s:
+        s.add(EventRow(id=10, source="telegram", source_event_id="e10",
+                       content_text="x", triage_status="done",
+                       occurred_at=__import__("datetime").datetime(2026, 7, 1),
+                       metadata_={"direction": "received", "sender_id": 555}))
+
+    reply = json.dumps({"relationships": [
+        {"subject": "Я", "predicate": "works_at", "object": "Acme",
+         "fact": "я работаю в Acme", "confidence": 0.9}]})
+    with patch("vera_shared.graph.rel_extract.chat_async",
+               AsyncMock(return_value=(reply, {}))):
+        n = await extract_and_store(10, "я работаю в Acme уже три года, это моя основная работа")
+    assert n == 1
+
+    from sqlalchemy import text as _t
+    async with get_session() as s:
+        rows = (await s.execute(_t(
+            "SELECT subject_entity_id, object_entity_id FROM relationships"
+        ))).all()
+    assert rows == [(sender, org)]        # НЕ imposter «Я»
+    assert imposter != sender

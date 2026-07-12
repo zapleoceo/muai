@@ -15,11 +15,25 @@ from __future__ import annotations
 
 import json
 import logging
+from email.utils import parseaddr
 
-from vera_shared.graph.repo import resolve_entity_exact, upsert_relationship
+from sqlalchemy import text
+
+from vera_shared.db.engine import get_session
+from vera_shared.graph.repo import (
+    find_entity_by_alias,
+    resolve_entity_exact,
+    upsert_relationship,
+)
 from vera_shared.llm.client import LLMCallFailed, chat_async
 
 log = logging.getLogger(__name__)
+
+# Первое лицо в тексте («я работаю в X») — это АВТОР сообщения, не сущность
+# с именем «Я». Раньше «Я» резолвилось по имени и все такие связи падали на
+# случайный аккаунт, чей first_name = «Я» (найдено вживую: 221 ребро от 6+
+# разных авторов на одном чужом человеке).
+SELF_TOKENS = {"я", "i", "me", "myself"}
 
 PREDICATES = [
     "boss_of",          # X is boss of Y
@@ -43,7 +57,8 @@ PROMPT = """Извлеки факты-связи между сущностями
 
 Правила:
   - Только связи которые ЯВНО упомянуты в тексте, не выводи из контекста
-  - Если subject/object — это «я» (Дима), используй "Дима"
+  - Если subject/object — сам автор сообщения («я», «мне», от первого лица),
+    пиши РОВНО "Я" — система сама подставит автора
   - Если нет уверенных связей — верни {{"relationships": []}}
   - Максимум 3 связи на одно сообщение
 
@@ -99,6 +114,49 @@ REL_EXTRACT_JSON_SCHEMA = {
 }
 
 
+async def author_entity_of_event(event_id: int) -> int | None:
+    """Кто автор события — как entity_id. Это цель self-токенов («я»).
+
+    telegram: sent → владелец (alias user:OWNER_TG_ID), received → отправитель
+    (alias user:<sender_id>). gmail: sent → владелец, received → адрес From
+    (alias gmail). Прочие источники (manual/claude/vera_chat) — владелец.
+    None, если сущности-автора (ещё) нет в графе — тогда self-связь скипается,
+    а не вешается на кого попало.
+    """
+    from vera_shared.projects.rules import OWNER_TG_ID
+    async with get_session() as s:
+        row = (await s.execute(text(
+            "SELECT source, metadata FROM events WHERE id = :i"
+        ), {"i": event_id})).first()
+    if row is None:
+        return None
+    source, meta = row[0], row[1] or {}
+    if isinstance(meta, str):
+        try:
+            meta = json.loads(meta)
+        except ValueError:
+            meta = {}
+    direction = meta.get("direction")
+
+    if source == "telegram" and direction != "sent":
+        sender = meta.get("sender_id")
+        if sender is not None:
+            return await find_entity_by_alias("telegram", f"user:{sender}")
+        return None
+    if source == "gmail" and direction != "sent":
+        _, addr = parseaddr(meta.get("from", "") or "")
+        if addr:
+            return await find_entity_by_alias("gmail", addr.strip().lower())
+        return None
+    if source == "instagram" and direction != "sent":
+        sender = meta.get("sender_id")
+        if sender is not None:
+            return await find_entity_by_alias("instagram", f"user:{sender}")
+        return None
+    # sent-события любого источника и «свои» источники — владелец
+    return await find_entity_by_alias("telegram", f"user:{OWNER_TG_ID}")
+
+
 async def extract_and_store(event_id: int, body: str) -> int:
     """Returns number of relationships inserted."""
     if not body or len(body) < 30:
@@ -126,6 +184,16 @@ async def extract_and_store(event_id: int, body: str) -> int:
         return 0
 
     inserted = 0
+    author_id: int | None | bool = False   # False = ещё не искали (lazy, 1 запрос)
+
+    async def _resolve(name: str) -> int | None:
+        nonlocal author_id
+        if name.lower() in SELF_TOKENS:
+            if author_id is False:
+                author_id = await author_entity_of_event(event_id)
+            return author_id
+        return await resolve_entity_exact(name)
+
     for r in rels[:3]:
         if not isinstance(r, dict):
             continue
@@ -137,9 +205,9 @@ async def extract_and_store(event_id: int, body: str) -> int:
         if subj == obj:
             continue
 
-        subj_id = await resolve_entity_exact(subj)
-        obj_id = await resolve_entity_exact(obj)
-        if not subj_id or not obj_id:
+        subj_id = await _resolve(subj)
+        obj_id = await _resolve(obj)
+        if not subj_id or not obj_id or subj_id == obj_id:
             log.debug("rel_extract: skip — entity not found (%s | %s)", subj, obj)
             continue
 
