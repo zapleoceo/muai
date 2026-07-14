@@ -189,39 +189,50 @@ Server `.env` at `/var/www/vera3/infra/.env` (mode 600):
 ## Backup
 
 Ночной cron `30 3 * * * /usr/local/bin/vera-backup.sh` (исходник —
-`vera3/scripts/vera-backup.sh`, ставится вручную). Схема:
+`vera3/scripts/vera-backup.sh`, ставится вручную). Раскладка —
+**пер-проектная**, сервер держит только короткий буфер, длинная история
+живёт на Synology NAS:
 
-- `/var/backups/vera/daily/YYYY-MM-DD/` — дампы всех БД проекта; **vera —
-  без данных `event_embeddings`** (`VERA_DAILY_EXCLUDE`, дефолт): вектора —
-  80% объёма и производные данные, ежедневно их таскать незачем. Плюс
-  `secrets-env.tar.gz` (все .env — без TOKEN_SECRET дампы бесполезны)
-  и SHA256SUMS. Ротация `KEEP_DAILY_DAYS` (5).
-- `/var/backups/vera/weekly/YYYY-MM-DD/` — полный vera.dump с эмбеддингами
-  раз в неделю (`FULL_DOW`, ISO-день, дефолт 7 = воскресенье). Ротация
-  `KEEP_WEEKLY_DAYS` (14). Потеря недели эмбеддингов восстановима
-  доэмбеддингом хвоста событий.
+- `/var/backups/vera/<project>/daily/YYYY-MM-DD/` (project ∈ aibroker,
+  stepan, stepan2, vera) — дамп БД + `secrets.tar.gz` (`.env` проекта —
+  без TOKEN_SECRET дампы бесполезны) + SHA256SUMS. **vera — без данных
+  `event_embeddings`** (`VERA_DAILY_EXCLUDE`): вектора — 80% объёма и
+  производные данные. Ротация `KEEP_DAILY_DAYS` (**2** — буфер на случай
+  пропуска NAS-пула, не хранилище).
+- `/var/backups/vera/vera/weekly/YYYY-MM-DD/` — полный vera.dump с
+  эмбеддингами раз в неделю (`FULL_DOW`, 7 = воскресенье). Ротация
+  `KEEP_WEEKLY_DAYS` (7).
 
 Все параметры — env-переменные скрипта, не правки кода.
 
-### Backups → Synology NAS (за NAT)
+### Backups → Synology NAS (за NAT) — настроено 2026-07-14
 
-NAS сам **забирает** дерево бэкапов с сервера (исходящее соединение — NAT
-не мешает, проброс портов не нужен). На сервере — пользователь
-`verabackup`: key-only, в `authorized_keys` зашита команда
-`/usr/bin/rrsync -ro /var/backups/vera` — ключ физически не может ничего,
-кроме read-only rsync этой папки. Группа `verabackup` имеет `g+rX` на
-дерево (скрипт поддерживает это на каждом прогоне).
+NAS сам **забирает** дерево бэкапов (исходящее соединение — NAT не
+мешает; QuickConnect для rsync не годится). Ключевая пара сгенерирована
+НА NAS (задача «Zapleo keygen» в Task Scheduler, ключ
+`/root/.ssh/hetzner_backup`) — приватный ключ никогда не покидал NAS.
+На сервере — пользователь `verabackup`: key-only, в `authorized_keys`
+зашита команда `/usr/bin/rrsync -ro /var/backups/vera` — ключ физически
+не может ничего, кроме read-only rsync этой папки. Группа `verabackup`
+имеет `g+rX` на дерево (скрипт поддерживает это на каждом прогоне).
 
-Приватный ключ: `/root/verabackup_nas_key` (отдать NAS, из чата не
-светить). На Synology: Task Scheduler → ежедневный root-скрипт:
+На Synology — задача Task Scheduler «Zapleo backup pull» (root,
+ежедневно 05:00):
 
 ```
-rsync -az --delete \
-  -e "ssh -p 9617 -i /volume1/backup/vera_key -o StrictHostKeyChecking=accept-new" \
-  verabackup@<server-ip>:/ /volume1/backup/vera/
+KEY=/root/.ssh/hetzner_backup
+DEST=/volume1/Backup/Zapleo
+mkdir -p "$DEST"
+rsync -az -e "ssh -p 9617 -i $KEY -o StrictHostKeyChecking=accept-new" verabackup@195.201.31.49:/ "$DEST/"
+find "$DEST"/*/daily -maxdepth 1 -type d -name "20*" -mtime +60 -exec rm -rf {} \; 2>/dev/null
+find "$DEST"/*/weekly -maxdepth 1 -type d -name "20*" -mtime +180 -exec rm -rf {} \; 2>/dev/null
+exit 0
 ```
 
-(источник `:/` — rrsync уже прибил корень к /var/backups/vera).
+Без `--delete` — история накапливается на NAS и чистится своим
+retention (60 дней daily / 180 weekly). Источник `:/` — rrsync уже
+прибил корень к /var/backups/vera, дерево на NAS повторяет пер-проектную
+структуру (`Zapleo/vera/…`, `Zapleo/aibroker/…`).
 
 Ручной снапшот по-прежнему:
 
