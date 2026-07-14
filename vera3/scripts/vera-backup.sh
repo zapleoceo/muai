@@ -54,7 +54,6 @@ backup_project() {  # project container db user env_path [pg_dump extra...]
 
 echo "[$(date)] backup -> $DEST (per-project)"
 backup_project aibroker aibroker-postgres aibroker aibroker /var/www/aibroker/.env
-backup_project stepan   stepan-postgres   stepan   stepan   /var/www/stepan/infra/.env
 backup_project stepan2  stepan2-postgres  stepan2  stepan2  /var/www/stepan2/infra/.env
 # shellcheck disable=SC2046
 backup_project vera     vera3-postgres    vera     vera     /var/www/vera3/infra/.env \
@@ -72,7 +71,7 @@ fi
 chgrp -R "$BACKUP_GROUP" "$DEST" 2>/dev/null || true
 chmod -R g+rX,o-rwx "$DEST"
 
-for p in aibroker stepan stepan2 vera; do
+for p in aibroker stepan2 vera; do
   find "$DEST/$p/daily"  -maxdepth 1 -type d -name '20*' -mtime +"$KEEP_DAILY_DAYS"  -exec rm -rf {} \; 2>/dev/null || true
   find "$DEST/$p/weekly" -maxdepth 1 -type d -name '20*' -mtime +"$KEEP_WEEKLY_DAYS" -exec rm -rf {} \; 2>/dev/null || true
 done
