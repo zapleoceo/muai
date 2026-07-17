@@ -81,6 +81,34 @@ Vera bug) sailed straight through as `None` into `usage_log`'s `NOT NULL`
 columns and crashed the insert. Fixed via `meta.get(...) or fallback`,
 which catches both "missing" and "present but null/empty".
 
+## Circuit breaker (2026-07-17)
+
+Broker logs showed 75% of Vera's `chat:fast` jobs over 48h dying on
+«daily budget cap reached», each retried 8-9 times broker-side — thousands
+of doomed jobs clogging the queue and delaying live ones by 4-5 minutes.
+
+`vera_shared/llm/circuit.py` classifies fatal broker errors and stores a
+per-capability cooldown in `app_control` (key `llm_cooldown:<capability>`):
+
+- «daily budget cap reached» → cooldown until the next **00:00 UTC**
+  (`next_utc_midnight()` — the broker's own reset time).
+- «no provider available» → cooldown for `no_provider_cooldown_min`
+  minutes (Settings UI, default 30) — the pool may recover sooner.
+- anything else → no cooldown (transient, retry as before).
+
+`client.chat()/chat_async()/embed()` call `_circuit_precheck()` before
+submitting: an open circuit raises `LLMCoolingDown` **instantly, without
+creating a broker job**. `LLMCoolingDown` subclasses `LLMCallFailed`, so
+every existing `except LLMCallFailed` branch keeps working. On
+`BrokerCallFailed` the error is classified via `note_llm_failure()`
+(never masks the original exception); a successful call closes the
+circuit early via `reset_llm_cooldown()`.
+
+Workers additionally gate their claim loops so events aren't claimed
+into guaranteed failure: brain-triage `worker.py` checks
+`llm_cooldown_remaining_s("chat:fast")`, media-worker checks `"vision"`;
+both sleep in ≤60s slices and log «LLM circuit open».
+
 ## What got deleted
 
 - `vera_shared/llm/cost_guard.py` — broker now decides caps

@@ -310,7 +310,17 @@ async def main_loop() -> None:
     await init_engine()
     log.info("media-worker started, poll=%ss batch=%s", POLL_S, BATCH)
 
+    from vera_shared.llm.circuit import llm_cooldown_remaining_s
+
     while True:
+        # Circuit breaker: vision-пул мёртв / бюджет капнут — не клеймим медиа
+        # (иначе жжём retry-бюджет об заведомые «no provider available»).
+        cooldown = await llm_cooldown_remaining_s("vision")
+        if cooldown > 0:
+            log.info("LLM circuit open for vision (%.0f min left) — idle",
+                     cooldown / 60)
+            await asyncio.sleep(min(cooldown, 60))
+            continue
         limit = await _claim_limit()
         if limit <= 0:
             await asyncio.sleep(POLL_S)   # paused or rate budget spent
