@@ -27,15 +27,20 @@ class MaxBodySizeMiddleware(BaseHTTPMiddleware):
 
     async def dispatch(self, request: Request, call_next):
         cl = request.headers.get("content-length")
-        if cl is not None:
-            try:
-                if int(cl) > MAX_BODY_BYTES:
-                    return Response(
-                        f"payload too large (> {MAX_BODY_BYTES} bytes)",
-                        status_code=413,
-                    )
-            except ValueError:
-                pass
+        if cl is None:
+            # Chunked transfer обходит проверку размера — все легитимные
+            # клиенты (httpx json=) шлют Content-Length, отклоняем остальных.
+            if request.method in ("POST", "PUT", "PATCH"):
+                return Response("Content-Length required", status_code=411)
+            return await call_next(request)
+        try:
+            if int(cl) > MAX_BODY_BYTES:
+                return Response(
+                    f"payload too large (> {MAX_BODY_BYTES} bytes)",
+                    status_code=413,
+                )
+        except ValueError:
+            return Response("invalid Content-Length", status_code=400)
         return await call_next(request)
 
 

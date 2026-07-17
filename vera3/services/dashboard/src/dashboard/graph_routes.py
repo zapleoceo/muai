@@ -170,6 +170,12 @@ const cy = cytoscape({
   ],
 });
 
+// Имена сущностей и ярлыки кластеров приходят из внешних данных (Telegram,
+// Gmail, LLM) — экранируем всё, что попадает в innerHTML.
+function esc(s){
+  return String(s).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',
+    '"':'&quot;',"'":'&#39;'}[ch]));
+}
 const info = document.getElementById('g-info');
 const count = document.getElementById('g-count');
 const legend = document.getElementById('g-legend');
@@ -191,7 +197,7 @@ function renderLegend(data){
       '<span style="display:inline-flex;align-items:center;gap:5px;font-size:12px;'+
       'background:#1a1d24;border:1px solid #2a2d34;border-radius:999px;padding:3px 10px">'+
       '<span style="width:10px;height:10px;border-radius:50%;background:'+clusterColor(c)+'"></span>'+
-      labels[c]+'</span>');
+      esc(labels[c])+'</span>');
   }
 }
 
@@ -218,10 +224,10 @@ function render(data){
     const f = data.nodes.find(n => n.id === data.focus_id);
     const link = f ? tgLink(f.username, f.tg_id) : null;
     const linkHtml = link
-      ? ' · <a href="' + link + '"' + (link.indexOf('http')===0?' target="_blank" rel="noopener"':'') +
-        '>открыть в Telegram' + (f.username ? ' (@' + f.username + ')' : '') + '</a>'
+      ? ' · <a href="' + esc(link) + '"' + (link.indexOf('http')===0?' target="_blank" rel="noopener"':'') +
+        '>открыть в Telegram' + (f.username ? ' (@' + esc(f.username) + ')' : '') + '</a>'
       : '';
-    info.innerHTML = 'Фокус на «' + (f?f.name:('#'+data.focus_id)) + '» и её соседях' +
+    info.innerHTML = 'Фокус на «' + esc(f?f.name:('#'+data.focus_id)) + '» и её соседях' +
                      linkHtml + '. «↺ весь граф» — назад.';
     return;
   }

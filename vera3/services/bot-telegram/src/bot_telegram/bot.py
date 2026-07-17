@@ -65,7 +65,12 @@ dp = Dispatcher()
 
 
 def _owner_only(message: Message) -> bool:
-    return OWNER_ID == 0 or message.from_user.id == OWNER_ID
+    # Fail-closed: без OWNER_TELEGRAM_ID бот молчит для всех, а не отвечает всем
+    if OWNER_ID == 0:
+        log.error("OWNER_TELEGRAM_ID not set — ignoring message from %s",
+                  message.from_user.id if message.from_user else "?")
+        return False
+    return message.from_user is not None and message.from_user.id == OWNER_ID
 
 
 @dp.message(Command("start", "help"))
@@ -136,6 +141,7 @@ async def on_message(message: Message):
                     "limit": 15,
                     "conversation": {"chat_id": chat_id, "user_id": user_id},
                 },
+                headers={"X-Internal-Secret": INTERNAL_SECRET},
             )
         if r.status_code != 200:
             await placeholder.edit_text(f"⚠ Ошибка поиска: HTTP {r.status_code}")

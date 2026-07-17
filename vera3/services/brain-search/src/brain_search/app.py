@@ -9,7 +9,7 @@ import time
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text
 from vera_shared.db.engine import close_engine, get_session, init_engine
@@ -59,6 +59,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(title="Vera 3.0 Search", version="0.3.0", lifespan=lifespan)
+
+
+def check_internal_secret(provided: str | None) -> None:
+    """Fail-closed, как gateway.auth: нет настроенного секрета = нет доступа.
+    Порт 8002 опубликован на 127.0.0.1 хоста — /search не должен быть открыт
+    любому локальному процессу без секрета."""
+    import os
+    expected = os.environ.get("INTERNAL_SECRET", "")
+    if not expected or provided != expected:
+        raise HTTPException(401, "invalid internal secret")
 
 
 class ConversationCtx(BaseModel):
@@ -194,8 +204,12 @@ async def _self_context() -> str:
 
 
 @app.post("/search", response_model=AnswerResponse)
-async def search(query: SearchQuery) -> AnswerResponse:
+async def search(
+    query: SearchQuery,
+    x_internal_secret: str | None = Header(default=None),
+) -> AnswerResponse:
     """Гибридный поиск + LLM-синтез ответа."""
+    check_internal_secret(x_internal_secret)
     # 0. «Отчёт помесячно за <год>» по конкретному чату — точная SQL-агрегация
     # ВСЕХ сообщений периода, а не пересказ top-N LLM'ом (см. reports.py).
     # Без chat-match не перехватываем — обычный путь справится сам.
