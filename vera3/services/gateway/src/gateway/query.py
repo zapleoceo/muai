@@ -58,7 +58,8 @@ async def search_proxy(
     url = f"{get_settings().search_url}/search"
     try:
         async with httpx.AsyncClient(timeout=100.0) as c:
-            r = await c.post(url, json=body.model_dump())
+            r = await c.post(url, json=body.model_dump(),
+                             headers={"X-Internal-Secret": get_settings().internal_secret})
     except httpx.HTTPError as e:
         raise HTTPException(502, f"brain-search unreachable: {e}") from e
 

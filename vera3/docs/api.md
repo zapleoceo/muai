@@ -40,7 +40,17 @@ route.
 | Path | Method | Auth | Description |
 |---|---|---|---|
 | `/healthz` | GET | none | Liveness |
-| `/search` | POST | none (internal) | Hybrid retrieval + agent loop |
+| `/search` | POST | `X-Internal-Secret` | Hybrid retrieval + agent loop |
+
+`/search` requires the same `X-Internal-Secret` header as the gateway,
+checked by brain-search's own fail-closed `check_internal_secret()` (the
+port is published on the host's 127.0.0.1, so any local process could
+otherwise query the whole memory). Callers — bot-telegram, dashboard
+`/search-ui`, gateway `/v1/search` proxy — all send the header.
+
+The gateway's `MaxBodySizeMiddleware` also rejects POST/PUT/PATCH without
+a `Content-Length` header (HTTP 411): chunked transfer-encoding used to
+bypass the 2MB body cap entirely.
 
 `POST /search` body:
 

@@ -16,6 +16,7 @@ router = APIRouter()
 
 log = logging.getLogger(__name__)
 SEARCH_URL = os.environ.get("SEARCH_URL", "http://brain-search:8000")
+INTERNAL_SECRET = os.environ.get("INTERNAL_SECRET", "")
 
 
 @router.post("/search-ui", response_class=HTMLResponse)
@@ -26,7 +27,8 @@ async def search_ui(request: Request, q: str = Form(...)):  # noqa: B008
         return HTMLResponse('<div class="error">Auth required</div>', status_code=401)
     try:
         async with httpx.AsyncClient(timeout=90) as c:
-            r = await c.post(f"{SEARCH_URL}/search", json={"q": q, "limit": 15})
+            r = await c.post(f"{SEARCH_URL}/search", json={"q": q, "limit": 15},
+                             headers={"X-Internal-Secret": INTERNAL_SECRET})
     except httpx.HTTPError as e:
         log.warning("search proxy: brain-search недоступен: %s", e)
         return HTMLResponse(
