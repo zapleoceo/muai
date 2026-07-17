@@ -87,8 +87,9 @@ Broker logs showed 75% of Vera's `chat:fast` jobs over 48h dying on
 «daily budget cap reached», each retried 8-9 times broker-side — thousands
 of doomed jobs clogging the queue and delaying live ones by 4-5 minutes.
 
-`vera_shared/llm/circuit.py` classifies fatal broker errors and stores a
-per-capability cooldown in `app_control` (key `llm_cooldown:<capability>`):
+`vera_shared/llm/circuit.py` classifies fatal broker errors
+(`classify_broker_error()`) and stores a per-capability cooldown in
+`app_control` (key `llm_cooldown:<capability>`):
 
 - «daily budget cap reached» → cooldown until the next **00:00 UTC**
   (`next_utc_midnight()` — the broker's own reset time).
