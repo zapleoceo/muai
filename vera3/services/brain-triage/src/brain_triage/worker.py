@@ -25,7 +25,7 @@ import json
 import logging
 
 from sqlalchemy import text, update
-from vera_shared.control import backfill_minute_allowance, is_backfill_paused
+from vera_shared.control import is_backfill_paused, reserve_backfill_allowance
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 
@@ -37,6 +37,7 @@ from brain_triage.background_loops import (
 )
 from brain_triage.claim import _chunk_group_rows, _claim_batch, chat_kind
 from brain_triage.concurrency import (
+    BATCH_MISS_ERROR,
     _process_group_chunk_with_sem,
     _process_one_with_sem,
 )
@@ -58,11 +59,12 @@ async def process_pending() -> int:
     """Захватить batch, эмбедить parallel, триаж concurrent, UPDATE."""
     if await is_backfill_paused():
         return 0   # paused from dashboard — skip claiming, main loop sleeps
-    # Even-tempo rate limit: claim at most this minute's remaining budget.
-    allowance = await backfill_minute_allowance()
-    if allowance is not None and allowance <= 0:
+    # Even-tempo rate limit: атомарная резервация — реплики не могут вместе
+    # превысить минутный бюджет (старый read-then-claim гонялся).
+    granted = await reserve_backfill_allowance(BATCH_SIZE)
+    if granted is not None and granted <= 0:
         return 0   # rate reached — main loop sleeps, recheck next cycle
-    batch = BATCH_SIZE if allowance is None else min(BATCH_SIZE, allowance)
+    batch = BATCH_SIZE if granted is None else granted
     rows = await _claim_batch(batch)
     if not rows:
         return 0
@@ -85,8 +87,11 @@ async def process_pending() -> int:
     # TRIAGE_GROUP_BATCH_SIZE в один LLM-вызов — короткие тексты, экономия
     # call-budget под rate limiter. Каналы/личка/остальные источники — как
     # раньше, по одному, каждое сообщение разбирается отдельно.
+    # Событие, которое LLM уже опустила в групповом ответе (batch-miss),
+    # ретраим одиночно — иначе оно может выпадать из батча вечно.
     group_ids = {r.id for r in rows
-                 if r.source == "telegram" and chat_kind(r) == "group"}
+                 if r.source == "telegram" and chat_kind(r) == "group"
+                 and (r.triage_error or "") != BATCH_MISS_ERROR}
     group_rows = [r for r in rows if r.id in group_ids]
     single_rows = [r for r in rows if r.id not in group_ids]
 
@@ -98,27 +103,37 @@ async def process_pending() -> int:
     results = [item for sub in nested_results for item in sub]
 
     src_by_id = {r.id: r.source for r in rows}
+    # Fence: финальный UPDATE матчит только НАШ claim (triage_started_at из
+    # RETURNING). Если watchdog вернул событие в pending (и его уже забрала
+    # другая реплика) — обработка длилась > STUCK_AFTER_S — наш стейл-результат
+    # не затирает чужой; 0 строк = молча уступаем.
+    started_by_id = {r.id: r.triage_started_at for r in rows}
     processed = 0
     llm_exhausted = 0
+    fenced_out = 0
     emb_writes: list[tuple[int, list[float]]] = []  # → event_embeddings upsert
     rel_candidates: list[tuple[int, str]] = []       # → rel-extract после коммита триажа
     async with get_session() as s:
         for event_id, status, metadata, error in results:
+            fence = (EventRow.id == event_id,
+                     EventRow.triage_started_at == started_by_id[event_id])
             embedding = embeddings_by_id.get(event_id)
             if embedding is not None and status in ("done", "error"):
                 emb_writes.append((event_id, embedding))
             if status == "pending":
-                # LLM пул занят — вернём в pending, освобождаем triage_started_at
-                await s.execute(
-                    update(EventRow).where(EventRow.id == event_id).values(
+                # LLM пул занят / batch-miss — вернём в pending; ошибку пишем,
+                # чтобы batch-miss ретраился одиночно (см. group_ids выше)
+                res = await s.execute(
+                    update(EventRow).where(*fence).values(
                         triage_status="pending",
                         triage_started_at=None,
+                        triage_error=error,
                     )
                 )
                 llm_exhausted += 1
             elif status == "done":
-                await s.execute(
-                    update(EventRow).where(EventRow.id == event_id).values(
+                res = await s.execute(
+                    update(EventRow).where(*fence).values(
                         triage_status="done",
                         triage_metadata=metadata,
                         importance=metadata.get("importance") if metadata else None,
@@ -126,13 +141,15 @@ async def process_pending() -> int:
                         project=metadata.get("project") if metadata else None,
                         ready_subtype=metadata.get("ready_subtype") if metadata else None,
                         triage_started_at=None,
+                        triage_error=None,
                     )
                 )
                 processed += 1
                 # Собираем кандидатов на rel-extract — запускаем ПОСЛЕ коммита
                 # триажа (иначе фоновая задача читает событие до записи nature/
-                # project). Только для high-signal событий.
-                if metadata and metadata.get("importance", 0) >= 3:
+                # project). Только для high-signal событий и только если наш
+                # результат реально записался (не отфенсен).
+                if (res.rowcount or 0) > 0 and metadata and metadata.get("importance", 0) >= 3:
                     row = next((r for r in rows if r.id == event_id), None)
                     if row and row.content_text:
                         rel_candidates.append((event_id, row.content_text))
@@ -140,14 +157,19 @@ async def process_pending() -> int:
                 # nature детерминируема по source даже без LLM
                 err_nature = NATURE_BY_SOURCE.get(
                     src_by_id.get(event_id, ""), "world_event")
-                await s.execute(
-                    update(EventRow).where(EventRow.id == event_id).values(
+                res = await s.execute(
+                    update(EventRow).where(*fence).values(
                         triage_status="error",
                         triage_error=error,
                         nature=err_nature,
                         triage_started_at=None,
                     )
                 )
+            if (res.rowcount or 0) == 0:
+                fenced_out += 1
+    if fenced_out:
+        log.warning("[%s] %d stale results fenced out (watchdog re-pended mid-run)",
+                    WORKER_ID, fenced_out)
 
     # Эмбеддинги — ОТДЕЛЬНОЙ транзакцией после коммита статусов: одно битое
     # событие в event_embeddings не должно откатывать triage_status всего батча

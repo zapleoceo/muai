@@ -7,17 +7,14 @@ holds across deploys.
 """
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 from sqlalchemy import text
 
 from vera_shared.db.engine import get_session
 
 BACKFILL_PAUSED = "backfill_paused"
 BACKFILL_MAX_PER_HOUR = "backfill_max_per_hour"
-
-# usage_log.workflow values that count as backfill LLM requests for the
-# rate limit. Heavy calls only — embeds (voyage, cheap/batched) excluded.
-_RATE_WORKFLOWS = ("triage", "media_vision", "media_voice")
-
 
 async def get_control(key: str, default: str = "") -> str:
     async with get_session() as s:
@@ -56,31 +53,36 @@ async def set_backfill_max_per_hour(n: int) -> None:
     await set_control(BACKFILL_MAX_PER_HOUR, str(max(0, int(n))))
 
 
-async def _requests_last_minute() -> int:
-    """Heavy backfill requests (triage + media) in the trailing 60s, global
-    across all workers/replicas — usage_log is the shared source of truth."""
-    async with get_session() as s:
-        return (await s.execute(text(
-            "SELECT COUNT(*) FROM usage_log "
-            "WHERE workflow = ANY(:wf) AND created_at > now() - interval '60 seconds'"
-        ), {"wf": list(_RATE_WORKFLOWS)})).scalar() or 0
+async def reserve_backfill_allowance(want: int) -> int | None:
+    """Атомарная резервация минутного бюджета. None — капа нет; иначе 0..want.
 
-
-async def backfill_minute_allowance() -> int | None:
-    """How many more backfill requests may run THIS minute, for smooth even
-    pacing. None → unlimited (no cap set). 0 → rate reached, hold.
-
-    Even-tempo: the hourly cap is spread to a per-minute budget; workers claim
-    at most `allowance` items per cycle so the rate stays flat instead of
-    bursting. Live events share the same budget (they also write workflow=
-    'triage'), so the cap bounds total triage/media throughput, not just the
-    historical backfill."""
+    Старый путь (backfill_minute_allowance = read-then-claim) гонялся между
+    репликами: каждая читала одинаковый «остаток» и забирала его целиком —
+    N реплик × per_min burst вместо ровного темпа. Здесь атомарный инкремент
+    счётчика минуты в app_control (row-lock сериализует реплики). Счётчик
+    считает ЗАРЕЗЕРВИРОВАННЫЕ события — group-батчинг делает реальных
+    LLM-вызовов меньше, перерасхода не бывает."""
     cap = await get_backfill_max_per_hour()
     if cap <= 0:
         return None
     per_min = max(1, round(cap / 60))
-    used = await _requests_last_minute()
-    return max(0, per_min - used)
+    key = f"backfill_used:{datetime.now(UTC):%Y%m%d%H%M}"
+    async with get_session() as s:
+        await s.execute(text(
+            "INSERT INTO app_control (key, value, updated_at) "
+            "VALUES (:k, '0', CURRENT_TIMESTAMP) "
+            "ON CONFLICT (key) DO NOTHING"), {"k": key})
+        new_total = (await s.execute(text(
+            "UPDATE app_control "
+            "SET value = CAST(CAST(value AS INTEGER) + :w AS TEXT), "
+            "    updated_at = CURRENT_TIMESTAMP "
+            "WHERE key = :k "
+            "RETURNING CAST(value AS INTEGER)"), {"k": key, "w": want})).scalar()
+        await s.execute(text(
+            "DELETE FROM app_control "
+            "WHERE key LIKE 'backfill_used:%' AND key < :k"), {"k": key})
+    prev = int(new_total) - want
+    return max(0, min(want, per_min - prev))
 
 
 # ─── Runtime settings registry ──────────────────────────────────────────────

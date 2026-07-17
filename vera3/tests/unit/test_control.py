@@ -5,6 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
+import pytest_asyncio
 from vera_shared import control
 
 
@@ -108,40 +109,61 @@ async def test_set_max_per_hour_clamps_negative():
 
 
 @pytest.mark.asyncio
-async def test_allowance_none_when_unlimited():
+async def test_reserve_none_when_unlimited():
     with patch.object(control, "get_backfill_max_per_hour", AsyncMock(return_value=0)):
-        assert await control.backfill_minute_allowance() is None
+        assert await control.reserve_backfill_allowance(16) is None
+
+
+# ─── reserve_backfill_allowance на реальной SQLite (атомарный счётчик) ──────
+
+
+@pytest_asyncio.fixture
+async def db(tmp_path):
+    import vera_shared.db.engine as engine_mod
+    from vera_shared.db import models  # noqa: F401 — registers app_control
+    from vera_shared.db.engine import Base
+    engine_mod._engine = None
+    engine_mod.AsyncSessionLocal = None
+    from vera_shared.db.engine import init_engine
+    engine = await init_engine(f"sqlite+aiosqlite:///{tmp_path / 'c.db'}")
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+    await engine.dispose()
+    engine_mod._engine = None
+    engine_mod.AsyncSessionLocal = None
 
 
 @pytest.mark.asyncio
-async def test_allowance_remaining_under_budget():
-    # cap 600/h → 10/min; 4 used this minute → 6 left
-    with patch.object(control, "get_backfill_max_per_hour", AsyncMock(return_value=600)), \
-         patch.object(control, "_requests_last_minute", AsyncMock(return_value=4)):
-        assert await control.backfill_minute_allowance() == 6
+async def test_reserve_grants_then_exhausts_budget(db):
+    # cap 600/h → 10/min: 6+4 выдаются, дальше 0 — даже из «другой реплики»
+    with patch.object(control, "get_backfill_max_per_hour", AsyncMock(return_value=600)):
+        assert await control.reserve_backfill_allowance(6) == 6
+        assert await control.reserve_backfill_allowance(6) == 4
+        assert await control.reserve_backfill_allowance(6) == 0
 
 
 @pytest.mark.asyncio
-async def test_allowance_zero_when_budget_spent():
-    with patch.object(control, "get_backfill_max_per_hour", AsyncMock(return_value=600)), \
-         patch.object(control, "_requests_last_minute", AsyncMock(return_value=15)):
-        assert await control.backfill_minute_allowance() == 0
+async def test_reserve_floor_one_per_minute_for_small_cap(db):
+    # cap 30/h округляется к <1/мин, но floor=1 — бэкфилл не встаёт намертво
+    with patch.object(control, "get_backfill_max_per_hour", AsyncMock(return_value=30)):
+        assert await control.reserve_backfill_allowance(16) == 1
+        assert await control.reserve_backfill_allowance(16) == 0
 
 
 @pytest.mark.asyncio
-async def test_allowance_floor_one_per_minute_for_small_cap():
-    # cap 30/h rounds to <1/min but floors to 1 so backfill never fully stalls
-    with patch.object(control, "get_backfill_max_per_hour", AsyncMock(return_value=30)), \
-         patch.object(control, "_requests_last_minute", AsyncMock(return_value=0)):
-        assert await control.backfill_minute_allowance() == 1
-
-
-@pytest.mark.asyncio
-async def test_requests_last_minute_runs_count_query():
-    sess = _FakeSession(scalar=7)
-    with patch.object(control, "get_session", lambda: sess):
-        n = await control._requests_last_minute()
-    assert n == 7
-    sql, params = sess.calls[0]
-    assert "COUNT(*)" in sql and "usage_log" in sql
-    assert params["wf"] == list(control._RATE_WORKFLOWS)
+async def test_reserve_cleans_stale_minute_counters(db):
+    from sqlalchemy import text
+    from vera_shared.db.engine import get_session
+    async with get_session() as s:   # set_control пишет now() — Postgres-only
+        await s.execute(text(
+            "INSERT INTO app_control (key, value, updated_at) "
+            "VALUES ('backfill_used:200001010000', '99', CURRENT_TIMESTAMP)"))
+    with patch.object(control, "get_backfill_max_per_hour", AsyncMock(return_value=600)):
+        await control.reserve_backfill_allowance(1)
+    async with get_session() as s:
+        from sqlalchemy import text
+        stale = (await s.execute(text(
+            "SELECT COUNT(*) FROM app_control WHERE key = 'backfill_used:200001010000'"
+        ))).scalar()
+    assert stale == 0

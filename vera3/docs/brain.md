@@ -142,9 +142,28 @@ batch response, same shape as the single-event path.
 **Partial-response handling**: if the LLM returns fewer `results` than
 events sent (truncation, refusal on one item), the missing event_ids get
 `None` → `triage_group_batch()` returns `{event_id: None}` for them →
-the caller sets those back to `pending` for an individual retry on the
-next cycle. Nothing is silently dropped. A hallucinated `event_id` not
-in the request is ignored rather than corrupting an unrelated event.
+the caller sets those back to `pending` with
+`triage_error = BATCH_MISS_ERROR` (concurrency.py). On the next claim
+such events are **excluded from group batching** and retried singly —
+otherwise the batch path could omit the same event forever
+(pending → batched → omitted → pending …). Nothing is silently dropped.
+A hallucinated `event_id` not in the request is ignored rather than
+corrupting an unrelated event.
+
+**Retry backoff (two-phase, 2026-07-17)**: `_retry_failed_loop()` first
+*schedules* a fresh `error` event (`triage_next_retry_at = NOW() +
+BACKOFF_MINUTES[retry_count]`, or straight to `dead` after
+`MAX_RETRIES`), then *releases* ripened ones back to `pending` and bumps
+the counter. The old single-UPDATE re-pended the first failure instantly
+and indexed the array off by one (1m step unused, ladder shifted).
+
+**Stale-worker fencing (2026-07-17)**: `_claim_batch()` returns
+`triage_started_at` and every final UPDATE in `process_pending()`
+matches on it. If the watchdog re-pended an event mid-run (processing
+exceeded `STUCK_AFTER_S`) and another replica re-claimed it, the slow
+worker's stale result matches 0 rows and is discarded (logged as
+"fenced out") instead of overwriting the fresher state; its rel-extract
+is skipped too.
 
 `rel_extract` is **not** batched (fires per-event, fire-and-forget,
 unaffected either way).
@@ -160,14 +179,18 @@ hold across restarts/deploys:
   `is_backfill_paused()` at the top of each cycle and skip claiming while
   paused. Events stay `pending` / `media_pending` and resume in place.
 - **Лимит запросов/час** — `backfill_max_per_hour` (0 = unlimited).
-  Even-tempo throttle: the hourly cap is spread to a per-minute budget
-  (`backfill_minute_allowance()`), and each worker claims at most that
-  many items per cycle, so the request rate stays flat instead of
-  bursting and burning the providers' free-tier quota. The budget is
-  global across triage + media + replicas — measured from `usage_log`
-  (`workflow IN triage/media_vision/media_voice` in the trailing 60 s).
-  Live events share the same budget (they also write `workflow=triage`),
-  so the cap bounds total throughput, leaving headroom for new messages.
+  Even-tempo throttle: the hourly cap is spread to a per-minute budget and
+  workers *atomically reserve* their slice via
+  `reserve_backfill_allowance(want)` — an `app_control` counter row per
+  minute (`backfill_used:<YYYYMMDDHHMM>`, incremented under row-lock, old
+  minutes garbage-collected in the same transaction). The old
+  read-then-claim helper (removed 2026-07-17)
+  raced across replicas: each of the 5 triage replicas read the same
+  remaining budget and claimed all of it — up to 5× the intended rate.
+  The counter counts *reserved events*; group batching makes actual LLM
+  calls fewer, so the reservation is a safe upper bound. The budget is
+  global across triage + media + replicas. Live events share the same
+  budget, so the cap bounds total throughput.
 
 Live ingest (Telegram/Gmail/IG) is never throttled — only LLM-consuming
 processing is paused/paced.

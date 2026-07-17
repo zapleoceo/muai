@@ -18,6 +18,11 @@ from brain_triage.triage_calls import triage_group_batch, triage_one
 
 log = logging.getLogger(__name__)
 
+# Маркер «LLM не вернула событие в групповом ответе». Такое событие ретраится
+# ОДИНОЧНО (worker исключает его из групповых батчей по triage_error) — иначе
+# batch-путь мог опускать его вечно: pending → снова в батч → снова мимо.
+BATCH_MISS_ERROR = "missing from batch LLM response"
+
 
 async def _process_one_with_sem(
     sem: asyncio.Semaphore, row: EventRow,
@@ -55,8 +60,7 @@ async def _process_group_chunk_with_sem(
             for row in chunk:
                 metadata = by_id.get(row.id)
                 if metadata is None:
-                    out.append((row.id, "pending", None,
-                                "missing from batch LLM response"))
+                    out.append((row.id, "pending", None, BATCH_MISS_ERROR))
                 else:
                     out.append((row.id, "done", metadata, None))
             return out
