@@ -7,27 +7,17 @@ import pytest
 import pytest_asyncio
 from sqlalchemy import text
 from vera_shared.db import models, models_graph  # noqa: F401 — register tables
-from vera_shared.db.engine import Base
 from vera_shared.graph.dedup import merge_entities
 
 
 @pytest_asyncio.fixture
-async def db(tmp_path):
-    import vera_shared.db.engine as engine_mod
-    engine_mod._engine = None
-    engine_mod.AsyncSessionLocal = None
-    from vera_shared.db.engine import get_session, init_engine
-    engine = await init_engine(f"sqlite+aiosqlite:///{tmp_path / 'g.db'}")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-        # unique-индекс из миграции 017 — merge обязан работать при нём
-        await conn.execute(text(
+async def db(sqlite_db):
+    # unique-индекс из миграции 017 — merge обязан работать при нём
+    async with sqlite_db() as s:
+        await s.execute(text(
             "CREATE UNIQUE INDEX uq_relationships_spo ON relationships "
             "(subject_entity_id, predicate, object_entity_id)"))
-    yield get_session
-    await engine.dispose()
-    engine_mod._engine = None
-    engine_mod.AsyncSessionLocal = None
+    yield sqlite_db
 
 
 async def _seed_entities(get_session, n: int) -> list[int]:

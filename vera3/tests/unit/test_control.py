@@ -118,20 +118,8 @@ async def test_reserve_none_when_unlimited():
 
 
 @pytest_asyncio.fixture
-async def db(tmp_path):
-    import vera_shared.db.engine as engine_mod
-    from vera_shared.db import models  # noqa: F401 — registers app_control
-    from vera_shared.db.engine import Base
-    engine_mod._engine = None
-    engine_mod.AsyncSessionLocal = None
-    from vera_shared.db.engine import init_engine
-    engine = await init_engine(f"sqlite+aiosqlite:///{tmp_path / 'c.db'}")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield
-    await engine.dispose()
-    engine_mod._engine = None
-    engine_mod.AsyncSessionLocal = None
+async def db(sqlite_db):
+    yield sqlite_db
 
 
 @pytest.mark.asyncio

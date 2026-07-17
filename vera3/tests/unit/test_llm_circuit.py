@@ -10,7 +10,6 @@ from unittest.mock import AsyncMock, patch
 import pytest
 import pytest_asyncio
 from vera_shared.db import models  # noqa: F401 — registers app_control on Base
-from vera_shared.db.engine import Base
 from vera_shared.llm.circuit import (
     classify_broker_error,
     llm_cooldown_remaining_s,
@@ -46,14 +45,10 @@ def test_next_utc_midnight():
 
 
 @pytest_asyncio.fixture
-async def db(tmp_path):
-    db_url = f"sqlite+aiosqlite:///{tmp_path / 'circ.db'}"
+async def db(sqlite_db):
     import vera_shared.db.engine as engine_mod
-    engine_mod._engine = None
-    engine_mod.AsyncSessionLocal = None
     from sqlalchemy import event
-    from vera_shared.db.engine import init_engine
-    engine = await init_engine(db_url)
+    engine = engine_mod._engine
 
     # set_control пишет raw-SQL с now() (Postgres) — даём SQLite аналог
     @event.listens_for(engine.sync_engine, "connect")
@@ -61,12 +56,9 @@ async def db(tmp_path):
         dbapi_conn.create_function(
             "now", 0, lambda: datetime.now(timezone.utc).isoformat())
 
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield
+    # сбросить пул: соединение от create_all создано ДО регистрации listener'а
     await engine.dispose()
-    engine_mod._engine = None
-    engine_mod.AsyncSessionLocal = None
+    yield sqlite_db
 
 
 @pytest.mark.asyncio
