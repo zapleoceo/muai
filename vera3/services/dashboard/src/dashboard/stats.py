@@ -29,6 +29,9 @@ log = logging.getLogger(__name__)
 TTL_S = 60.0
 _cache: dict[str, Any] = {"value": None, "mono": 0.0}
 _stats_lock = asyncio.Lock()
+# Ссылки на фоновые refresh-задачи — без них GC может собрать задачу
+# на полпути и кэш молча перестанет обновляться.
+_refresh_tasks: set[asyncio.Task] = set()
 
 
 async def _bg_refresh(cache: dict, lock: asyncio.Lock, compute) -> None:
@@ -54,7 +57,9 @@ async def _serve_cached(cache: dict, lock: asyncio.Lock, compute, force: bool):
         return val
     if val is not None and not force:
         # Протухший есть — отдаём мгновенно, обновляемся в фоне.
-        asyncio.create_task(_bg_refresh(cache, lock, compute))
+        t = asyncio.create_task(_bg_refresh(cache, lock, compute))
+        _refresh_tasks.add(t)
+        t.add_done_callback(_refresh_tasks.discard)
         return val
 
     # Кэша нет (первый запрос после старта) или force — считаем синхронно,

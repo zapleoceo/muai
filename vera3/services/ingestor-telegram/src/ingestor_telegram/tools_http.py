@@ -24,6 +24,8 @@ from telethon import TelegramClient
 from telethon.errors import ChatAdminRequiredError
 from telethon.tl.types import Channel, Chat, User
 
+_bg_tasks: set[asyncio.Task] = set()   # ссылки — иначе GC может убить задачу
+
 log = logging.getLogger("tg.tools")
 INTERNAL_SECRET = os.environ.get("INTERNAL_SECRET", "")
 
@@ -239,7 +241,9 @@ def build_app(client: TelegramClient) -> FastAPI:
         if state["running"]:
             return {"started": False, "status": "already_running",
                     "last": state["last"]}
-        asyncio.create_task(run_roster_sync(client))
+        t = asyncio.create_task(run_roster_sync(client))
+        _bg_tasks.add(t)
+        t.add_done_callback(_bg_tasks.discard)
         return {"started": True, "last": state["last"]}
 
     return app

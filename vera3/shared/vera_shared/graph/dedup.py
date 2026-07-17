@@ -302,22 +302,19 @@ async def merge_entities(keeper_id: int, merged_id: int) -> dict:
         return {"error": "keeper_id == merged_id, refusing"}
 
     async with get_session() as s:
-        # ALIASES: move what fits, drop conflicts
+        # ALIASES: move what fits, drop conflicts (rowcount, не CTE —
+        # data-modifying CTE не работает в SQLite, на которой идут тесты)
         aliases_moved = (await s.execute(text("""
-            WITH moved AS (
-              UPDATE entity_aliases
-              SET entity_id = :keeper
-              WHERE entity_id = :merged
-                AND NOT EXISTS (
-                  SELECT 1 FROM entity_aliases ea2
-                  WHERE ea2.entity_id = :keeper
-                    AND ea2.source = entity_aliases.source
-                    AND ea2.identifier = entity_aliases.identifier
-                )
-              RETURNING id
-            )
-            SELECT COUNT(*) FROM moved
-        """), {"keeper": keeper_id, "merged": merged_id})).scalar() or 0
+            UPDATE entity_aliases
+            SET entity_id = :keeper
+            WHERE entity_id = :merged
+              AND NOT EXISTS (
+                SELECT 1 FROM entity_aliases ea2
+                WHERE ea2.entity_id = :keeper
+                  AND ea2.source = entity_aliases.source
+                  AND ea2.identifier = entity_aliases.identifier
+              )
+        """), {"keeper": keeper_id, "merged": merged_id})).rowcount or 0
 
         # Drop remaining (conflicting) aliases on merged
         aliases_dropped = (await s.execute(text(
@@ -350,15 +347,36 @@ async def merge_entities(keeper_id: int, merged_id: int) -> dict:
             "DELETE FROM memberships WHERE parent_entity_id = :merged"
         ), {"merged": merged_id})
 
-        # RELATIONSHIPS — both subject and object sides
+        # RELATIONSHIPS — обе стороны, с guard'ами (миграция 017 добавила
+        # UNIQUE (subject, predicate, object) — неохраняемый UPDATE ронял бы
+        # весь merge IntegrityError'ом). Связь merged↔keeper стала бы
+        # самопетлёй keeper→keeper — удаляем, а не переносим.
+        await s.execute(text(
+            "DELETE FROM relationships "
+            "WHERE (subject_entity_id = :merged AND object_entity_id = :keeper) "
+            "   OR (subject_entity_id = :keeper AND object_entity_id = :merged)"
+        ), {"keeper": keeper_id, "merged": merged_id})
         await s.execute(text(
             "UPDATE relationships SET subject_entity_id = :keeper "
-            "WHERE subject_entity_id = :merged"
+            "WHERE subject_entity_id = :merged "
+            "  AND NOT EXISTS (SELECT 1 FROM relationships r2 "
+            "                  WHERE r2.subject_entity_id = :keeper "
+            "                    AND r2.predicate = relationships.predicate "
+            "                    AND r2.object_entity_id = relationships.object_entity_id)"
         ), {"keeper": keeper_id, "merged": merged_id})
         await s.execute(text(
             "UPDATE relationships SET object_entity_id = :keeper "
-            "WHERE object_entity_id = :merged"
+            "WHERE object_entity_id = :merged "
+            "  AND NOT EXISTS (SELECT 1 FROM relationships r2 "
+            "                  WHERE r2.subject_entity_id = relationships.subject_entity_id "
+            "                    AND r2.predicate = relationships.predicate "
+            "                    AND r2.object_entity_id = :keeper)"
         ), {"keeper": keeper_id, "merged": merged_id})
+        # Остатки — дубли уже существующих у keeper'а связей
+        await s.execute(text(
+            "DELETE FROM relationships "
+            "WHERE subject_entity_id = :merged OR object_entity_id = :merged"
+        ), {"merged": merged_id})
 
         # Delete the merged entity row
         await s.execute(text(
