@@ -48,6 +48,15 @@ status pending|accepted|rejected, UNIQUE(entity_a, entity_b).
 `entities_suggestion` (POST `/entities/suggestion`): «оставить A» /
 «оставить B» (→ `merge_entities`) / «разные люди».
 
+### merge_entities — без самопетель и дублей связей (2026-07-17)
+
+`dedup.merge_entities()` переносит связи с guard'ами: связь merged↔keeper
+удаляется (иначе стала бы самопетлёй keeper→keeper), дубли уже
+существующих у keeper'а связей — отбрасываются, а не переносятся.
+Миграция `017_relationships_dedupe_unique.sql` чистит накопленные
+самопетли/дубли и ставит `UNIQUE (subject, predicate, object)`, чтобы они
+не появились снова (в т.ч. из rel-extract).
+
 ## @username-коллизии сливаются автоматически
 
 Username в Telegram уникален глобально, поэтому две сущности с одним

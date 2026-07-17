@@ -23,6 +23,7 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 _recluster: dict = {"running": False}
+_bg_tasks: set[asyncio.Task] = set()   # ссылки — иначе GC может убить задачу
 
 # Stable predicate set (see vera_shared.graph.rel_extract.PREDICATES) — used
 # only to build the filter dropdown; the API accepts any string. member_of —
@@ -84,7 +85,9 @@ async def graph_recluster(request: Request):
         return resp
     if not _recluster["running"]:
         _recluster["running"] = True
-        asyncio.create_task(_recluster_bg())
+        t = asyncio.create_task(_recluster_bg())
+        _bg_tasks.add(t)
+        t.add_done_callback(_bg_tasks.discard)
     return RedirectResponse("/graph", status_code=303)
 
 

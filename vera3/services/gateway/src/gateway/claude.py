@@ -18,6 +18,7 @@ this to Claude so it knows whether to mention 'already known' in chat.
 from __future__ import annotations
 
 import hashlib
+import json
 import logging
 from datetime import datetime, timedelta, timezone
 from typing import Any, Literal
@@ -73,17 +74,19 @@ class RememberResponse(BaseModel):
 
 async def _find_semantic_neighbour(
     text: str,
-) -> tuple[int, float] | None:
-    """Embed text, scan claude events for last 7d, return (id, sim) of best
-    match if similarity ≥ threshold. Returns None on broker failure or no hit.
-    """
+) -> tuple[list[float] | None, tuple[int, float] | None]:
+    """Embed text, scan claude events for last 7d. Returns (q_vec, match):
+    match = (id, sim) при similarity ≥ threshold, иначе None; q_vec отдаём
+    вызывающему — он пишет его в event_embeddings сразу (иначе «слепое
+    окно»: пока триаж не эмбеднул событие, его не видит следующий дедуп).
+    (None, None) — broker failure."""
     try:
         vectors = await embed(text)
     except LLMCallFailed as e:
         log.warning("semantic dedup skipped — embed failed: %s", e)
-        return None
+        return None, None
     if not vectors:
-        return None
+        return None, None
     q_vec = vectors[0]
 
     since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
@@ -109,8 +112,8 @@ async def _find_semantic_neighbour(
         if sim > best_sim:
             best_sim, best_id = sim, row[0]
     if best_id is not None and best_sim >= SEMANTIC_DEDUP_THRESHOLD:
-        return best_id, best_sim
-    return None
+        return q_vec, (best_id, best_sim)
+    return q_vec, None
 
 
 @router.post("/v1/claude/remember", response_model=RememberResponse)
@@ -166,7 +169,7 @@ async def remember(
     # exists, mark our brand-new row as 'superseded' so triage skips it.
     # Trade-off: one extra row per dup vs. doing the embed BEFORE insert
     # (which doubles latency on the common case of no dup).
-    neighbour = await _find_semantic_neighbour(text)
+    q_vec, neighbour = await _find_semantic_neighbour(text)
     if neighbour is not None:
         sim_id, sim = neighbour
         async with get_session() as s:
@@ -184,6 +187,17 @@ async def remember(
             deduped=True, dedup_reason="semantic",
             similar_event_id=sim_id, similarity=sim,
         )
+
+    # Эмбеддинг уже посчитан для дедупа — пишем сразу, закрывая слепое окно
+    # (следующий remember() с похожим текстом увидит это событие, не дожидаясь
+    # триажа). Триаж потом перезапишет тем же вектором — безвредно.
+    if q_vec is not None:
+        async with get_session() as s:
+            await s.execute(sa_text("""
+                INSERT INTO event_embeddings (event_id, embedding)
+                VALUES (:eid, CAST(:emb AS jsonb))
+                ON CONFLICT (event_id) DO UPDATE SET embedding = EXCLUDED.embedding
+            """), {"eid": event_id, "emb": json.dumps(q_vec)})
 
     log.info("remember: new event=%s kind=%s", event_id, body.kind)
     return RememberResponse(ok=True, event_id=event_id, deduped=False)

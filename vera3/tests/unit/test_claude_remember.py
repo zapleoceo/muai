@@ -143,14 +143,14 @@ async def test_find_semantic_neighbour_returns_none_on_embed_fail():
     with patch("gateway.claude.embed",
                AsyncMock(side_effect=LLMCallFailed("broker down"))):
         result = await _find_semantic_neighbour("hello")
-    assert result is None
+    assert result == (None, None)
 
 
 @pytest.mark.asyncio
 async def test_find_semantic_neighbour_returns_none_on_empty_vectors():
     with patch("gateway.claude.embed", AsyncMock(return_value=[])):
         result = await _find_semantic_neighbour("hello")
-    assert result is None
+    assert result == (None, None)
 
 
 class _FakeSessionCtx:
@@ -181,8 +181,9 @@ async def test_find_semantic_neighbour_picks_best_match_above_threshold():
     with patch("gateway.claude.embed", AsyncMock(return_value=[[1.0, 0.0]])), \
          patch("gateway.claude.get_session",
                MagicMock(return_value=_FakeSessionCtx(session))):
-        result = await _find_semantic_neighbour("hello")
-    assert result == (2, pytest.approx(1.0))
+        q_vec, match = await _find_semantic_neighbour("hello")
+    assert q_vec == [1.0, 0.0]                     # вектор отдаётся для записи
+    assert match == (2, pytest.approx(1.0))
 
 
 @pytest.mark.asyncio
@@ -192,8 +193,9 @@ async def test_find_semantic_neighbour_none_when_all_below_threshold():
     with patch("gateway.claude.embed", AsyncMock(return_value=[[1.0, 0.0]])), \
          patch("gateway.claude.get_session",
                MagicMock(return_value=_FakeSessionCtx(session))):
-        result = await _find_semantic_neighbour("hello")
-    assert result is None
+        q_vec, match = await _find_semantic_neighbour("hello")
+    assert q_vec == [1.0, 0.0]   # даже без матча вектор идёт в event_embeddings
+    assert match is None
 
 
 # ─── Constants ─────────────────────────────────────────────────────────────

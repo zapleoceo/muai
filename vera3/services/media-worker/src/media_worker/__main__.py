@@ -213,14 +213,18 @@ async def _claim_batch(limit: int = BATCH) -> list[dict]:
 
 
 async def _on_success(event_id: int, append: str) -> None:
+    # Guard triage_status: воркер, переживший 10-мин lease (другой инстанс уже
+    # обработал и перевёл в pending), не должен приклеить текст ВТОРОЙ раз.
     async with get_session() as s:
-        await s.execute(text("""
+        res = await s.execute(text("""
             UPDATE events
             SET content_text = content_text || :app,
                 triage_status = 'pending',
                 triage_error = NULL
-            WHERE id = :id
+            WHERE id = :id AND triage_status = 'media_pending'
         """), {"app": append, "id": event_id})
+    if (res.rowcount or 0) == 0:
+        log.warning("media %s: already finalized elsewhere — append skipped", event_id)
 
 
 def _plan_failure(meta: dict | None, err: str) -> dict:
@@ -266,7 +270,7 @@ async def _on_failure(event_id: int, meta: dict, err: str) -> str:
                       COALESCE(metadata, '{}'::jsonb),
                       '{media_recognition}', '"failed"'
                     )
-                WHERE id = :id
+                WHERE id = :id AND triage_status = 'media_pending'
             """), {"err": err[:300], "id": event_id})
         return plan["action"]
 
@@ -287,7 +291,7 @@ async def _on_failure(event_id: int, meta: dict, err: str) -> str:
                     (NOW() + make_interval(mins => CAST(:backoff AS integer)))::text
                   )
                 )
-            WHERE id = :id
+            WHERE id = :id AND triage_status = 'media_pending'
         """), {"err": err[:300], "cnt": plan["retry_count"],
                "backoff": plan["backoff_min"], "id": event_id})
     return plan["action"]

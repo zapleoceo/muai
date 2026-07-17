@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 
 # Один анализ за раз; состояние живёт в процессе дашборда (single-owner UI).
 _analysis: dict = {"running": False, "last": None}
+_bg_tasks: set[asyncio.Task] = set()   # ссылки — иначе GC может убить задачу
 
 TELEGRAM_TOOLS_URL = os.environ.get("TELEGRAM_TOOLS_URL",
                                     "http://ingestor-telegram:8000")
@@ -231,7 +232,9 @@ async def entities_analyze(request: Request):
         return resp
     if not _analysis["running"]:
         _analysis["running"] = True
-        asyncio.create_task(_run_analysis_bg())
+        t = asyncio.create_task(_run_analysis_bg())
+        _bg_tasks.add(t)
+        t.add_done_callback(_bg_tasks.discard)
     return RedirectResponse("/entities/duplicates", status_code=303)
 
 
