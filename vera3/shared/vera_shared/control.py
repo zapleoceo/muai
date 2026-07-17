@@ -95,6 +95,7 @@ MONITOR_BACKLOG_ENABLED = "monitor_backlog_enabled"
 CLUSTER_LABEL_DEADLINE_S = "cluster_label_deadline_s"
 CLUSTER_LABEL_RETRIES = "cluster_label_retries"
 GRAPH_HUB_PERCENTILE = "graph_hub_percentile"
+NO_PROVIDER_COOLDOWN_MIN = "no_provider_cooldown_min"
 
 
 class Setting:
@@ -133,6 +134,11 @@ SETTINGS: list[Setting] = [
     Setting(CLUSTER_LABEL_RETRIES, "Повторы LLM-ярлыка кластера", "2", "",
             "Сколько раз повторить запрос ярлыка при таймауте/сбое, прежде чем "
             "оставить заглушку «кластер N»."),
+    Setting(NO_PROVIDER_COOLDOWN_MIN, "Пауза LLM при «нет провайдера»", "30", "мин",
+            "Circuit breaker: если брокер отвечает «no provider available», Вера "
+            "не шлёт новые запросы этой capability столько минут (пул может ожить, "
+            "когда ключ выйдет из кулдауна). Кап дневного бюджета — всегда пауза "
+            "до 00:00 UTC, это не настройка."),
     Setting(GRAPH_HUB_PERCENTILE, "Порог хабов графа (перцентиль)", "99", "%",
             "Узлы со степенью выше этого перцентиля (напр. «Дима», связанный со "
             "всеми) исключаются из разбиения на сообщества и приписываются к "

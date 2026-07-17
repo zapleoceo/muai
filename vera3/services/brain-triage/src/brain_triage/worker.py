@@ -194,8 +194,19 @@ async def main_loop() -> None:
     asyncio.create_task(_watchdog_loop())
     asyncio.create_task(_retry_failed_loop())
 
+    from vera_shared.llm.circuit import llm_cooldown_remaining_s
+
     while True:
         try:
+            # Circuit breaker: бюджет chat:fast капнут / пул мёртв — не клеймим
+            # события вообще (иначе они уйдут в error об заведомый отказ и
+            # будут жечь retry-бюджет). Спим до конца кулдауна кусками ≤60с.
+            cooldown = await llm_cooldown_remaining_s("chat:fast")
+            if cooldown > 0:
+                log.info("[%s] LLM circuit open (%.0f min left) — triage idle",
+                         WORKER_ID, cooldown / 60)
+                await asyncio.sleep(min(cooldown, 60))
+                continue
             n = await process_pending()
             if n == 0:
                 await asyncio.sleep(POLL_INTERVAL_S)
