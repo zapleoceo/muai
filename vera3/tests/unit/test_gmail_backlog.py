@@ -19,7 +19,6 @@ os.environ.setdefault("GMAIL_CLIENT_ID", "test-cid")
 os.environ.setdefault("GMAIL_CLIENT_SECRET", "test-csec")
 
 from ingestor_gmail import poller  # noqa: E402
-from vera_shared.db.engine import Base  # noqa: E402
 from vera_shared.db.models import EventRow  # noqa: E402
 
 
@@ -72,18 +71,8 @@ async def test_fetch_message_ids_walks_pages_and_caps():
 
 
 @pytest_asyncio.fixture
-async def db(tmp_path):
-    import vera_shared.db.engine as engine_mod
-    engine_mod._engine = None
-    engine_mod.AsyncSessionLocal = None
-    from vera_shared.db.engine import get_session, init_engine
-    engine = await init_engine(f"sqlite+aiosqlite:///{tmp_path / 'g.db'}")
-    async with engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
-    yield get_session
-    await engine.dispose()
-    engine_mod._engine = None
-    engine_mod.AsyncSessionLocal = None
+async def db(sqlite_db):
+    yield sqlite_db
 
 
 async def _seed(get_session, ids: list[str]):
