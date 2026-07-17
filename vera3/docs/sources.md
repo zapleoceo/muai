@@ -23,11 +23,16 @@ via `gateway /event/<source>` with `X-Internal-Secret`.
 - Accounts: 3 (`demoniwwwe@gmail.com`, `zaporozec_d@itstep.org`, `zapleosoft@gmail.com`).
 - Critical caveat: tokens get revoked by Google if the OAuth app sits in
   "Testing" mode for >7 days idle. See `security.md` for re-auth flow.
-- `poller.fetch_messages()` walks Gmail's `nextPageToken` until exhausted
-  (was capped at the first 30-message page — any day with more mail than
-  that silently lost the rest, since the polling cursor still advanced
-  past it). `GMAIL_MAX_PER_RUN` (default 500) is now a safety ceiling, not
-  a per-page limit.
+- Backlog-safe polling (2026-07-17): `poller.fetch_message_ids()` lists
+  the whole backlog id-only (cheap, up to 10×`GMAIL_MAX_PER_RUN`),
+  `poller.filter_new_ids()` drops ids already in `events` BEFORE the
+  expensive per-message GET, then `poller.fetch_full_messages()` fetches
+  at most `GMAIL_MAX_PER_RUN` (default 500) new ones. If more new mail
+  remains, the run is *truncated*: `last_polled_at` is NOT advanced, so
+  the next run re-lists from the same date and picks up the tail. The old
+  code fetched the 500 NEWEST, jumped the cursor to today, and silently
+  lost the older tail forever (`after:` is date-granular).
+  `poller.fetch_messages()` remains as a thin list+get composition.
 
 ## instagram
 
