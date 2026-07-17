@@ -35,7 +35,8 @@ async def _claim_batch(limit: int = BATCH_SIZE) -> list[EventRow]:
               FOR UPDATE SKIP LOCKED
             )
             RETURNING id, source, source_event_id, account, category,
-                      content_text, occurred_at, importance, metadata
+                      content_text, occurred_at, importance, metadata,
+                      triage_started_at, triage_error
             """
         ), {"batch": limit})
         mappings = list(rs.mappings().all())
@@ -51,6 +52,9 @@ async def _claim_batch(limit: int = BATCH_SIZE) -> list[EventRow]:
             account=m["account"], category=m["category"],
             content_text=m["content_text"], occurred_at=m["occurred_at"],
             importance=m["importance"], metadata_=m["metadata"],
+            # для fence финальных UPDATE'ов и исключения batch-miss из групп
+            triage_started_at=m["triage_started_at"],
+            triage_error=m["triage_error"],
         )
         out.append(ev)
     return out

@@ -96,14 +96,14 @@ async def test_claim_limit_zero_when_paused():
 @pytest.mark.asyncio
 async def test_claim_limit_full_batch_when_unlimited():
     with patch.object(mw, "is_backfill_paused", AsyncMock(return_value=False)), \
-         patch.object(mw, "backfill_minute_allowance", AsyncMock(return_value=None)):
+         patch.object(mw, "reserve_backfill_allowance", AsyncMock(return_value=None)):
         assert await mw._claim_limit() == mw.BATCH
 
 
 @pytest.mark.asyncio
 async def test_claim_limit_capped_by_allowance():
     with patch.object(mw, "is_backfill_paused", AsyncMock(return_value=False)), \
-         patch.object(mw, "backfill_minute_allowance", AsyncMock(return_value=1)):
+         patch.object(mw, "reserve_backfill_allowance", AsyncMock(return_value=1)):
         assert await mw._claim_limit() == 1
 
 

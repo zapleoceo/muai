@@ -31,7 +31,7 @@ import os
 
 import httpx
 from sqlalchemy import text
-from vera_shared.control import backfill_minute_allowance, is_backfill_paused
+from vera_shared.control import is_backfill_paused, reserve_backfill_allowance
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.llm.client import LLMCallFailed, chat_async
 
@@ -298,10 +298,10 @@ async def _claim_limit() -> int:
     budget spent); else the batch size capped by the even-tempo allowance."""
     if await is_backfill_paused():
         return 0
-    allowance = await backfill_minute_allowance()
-    if allowance is None:
+    granted = await reserve_backfill_allowance(BATCH)
+    if granted is None:
         return BATCH
-    return min(BATCH, allowance)
+    return granted
 
 
 async def main_loop() -> None:

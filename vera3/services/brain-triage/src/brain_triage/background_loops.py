@@ -65,37 +65,53 @@ async def _retry_failed_loop() -> None:
     After MAX_RETRIES attempts, status='dead' — drops out of the loop and
     becomes visible in the dashboard as 'truly stuck, needs manual review'.
     """
+    # Two-phase, чтобы КАЖДАЯ попытка ждала свой backoff (старый одношаговый
+    # UPDATE ре-пендил первую ошибку мгновенно и брал [rc+2] — 1m не
+    # использовался, счёт съезжал на один).
+    # Phase 1 (schedule): свежий 'error' получает next_retry_at = NOW() +
+    #   BACKOFF[rc] (rc уже сделанных попыток; SQL-массив 1-индексный → [rc+1]);
+    #   исчерпал MAX_RETRIES — сразу 'dead'.
+    # Phase 2 (release): дозревшие по next_retry_at → 'pending', rc+1.
+    schedule_sql = text("""
+        UPDATE events SET
+          triage_status = CASE
+            WHEN triage_retry_count >= :max_retries THEN 'dead'
+            ELSE triage_status
+          END,
+          triage_next_retry_at = CASE
+            WHEN triage_retry_count >= :max_retries THEN NULL
+            ELSE NOW() + (
+              (CAST(:backoff AS int[]))[triage_retry_count + 1]
+              || ' minutes'
+            )::interval
+          END
+        WHERE triage_status = 'error'
+          AND triage_next_retry_at IS NULL
+        RETURNING id, triage_status
+    """)
+    release_sql = text("""
+        UPDATE events SET
+          triage_status = 'pending',
+          triage_retry_count = triage_retry_count + 1,
+          triage_started_at = NULL,
+          triage_next_retry_at = NULL
+        WHERE triage_status = 'error'
+          AND triage_next_retry_at IS NOT NULL
+          AND triage_next_retry_at < NOW()
+        RETURNING id, triage_retry_count
+    """)
     while True:
         await asyncio.sleep(120)
         try:
             async with get_session() as s:
-                # Schedule retries: bump counter, push to pending, advance next_retry_at.
-                # CASE picks the right backoff for the *next* (retry_count+1) attempt.
-                bumped = await s.execute(text("""
-                    UPDATE events SET
-                      triage_status = CASE
-                        WHEN triage_retry_count + 1 >= :max_retries THEN 'dead'
-                        ELSE 'pending'
-                      END,
-                      triage_retry_count = triage_retry_count + 1,
-                      triage_started_at = NULL,
-                      triage_next_retry_at = CASE
-                        WHEN triage_retry_count + 1 >= :max_retries THEN NULL
-                        ELSE NOW() + (
-                          (CAST(:backoff AS int[]))[triage_retry_count + 2]
-                          || ' minutes'
-                        )::interval
-                      END
-                    WHERE triage_status = 'error'
-                      AND triage_retry_count < :max_retries
-                      AND (triage_next_retry_at IS NULL OR triage_next_retry_at < NOW())
-                    RETURNING id, triage_retry_count, triage_status
-                """), {"max_retries": MAX_RETRIES, "backoff": BACKOFF_MINUTES})
-                rows = list(bumped.mappings().all())
-            if rows:
-                live = [r for r in rows if r["triage_status"] == "pending"]
-                dead = [r for r in rows if r["triage_status"] == "dead"]
-                log.info("retry-loop: re-pended %d events (dead=%d)",
-                         len(live), len(dead))
+                scheduled = list((await s.execute(
+                    schedule_sql,
+                    {"max_retries": MAX_RETRIES, "backoff": BACKOFF_MINUTES},
+                )).mappings().all())
+                released = list((await s.execute(release_sql)).mappings().all())
+            dead = [r for r in scheduled if r["triage_status"] == "dead"]
+            if scheduled or released:
+                log.info("retry-loop: scheduled %d, re-pended %d, dead %d",
+                         len(scheduled) - len(dead), len(released), len(dead))
         except Exception as e:
             log.warning("retry-loop error: %s", e)
