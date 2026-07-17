@@ -57,19 +57,15 @@ async def refresh_access(refresh_token: str) -> dict:
     return r.json()
 
 
-async def fetch_messages(access_token: str, query: str, max_total: int = 500) -> list[dict]:
-    """List (со всеми страницами) + get полных messages по filter.
-
-    ВАЖНО: идём по nextPageToken до конца выборки. Раньше брали только
-    первую страницу (maxResults=30) — в активный день с >30 писем остаток
-    терялся навсегда, т.к. курсор last_polled_at всё равно прыгал на сегодня.
-    max_total — предохранитель от runaway на первом прогоне (newer_than:7d).
-    """
+async def fetch_message_ids(access_token: str, query: str, cap: int) -> list[str]:
+    """List по filter, все страницы nextPageToken до cap. Дёшево (id-only) —
+    cap намного выше MAX_PER_RUN, чтобы видеть весь бэклог и дедупить по БД
+    ДО дорогих per-message GET."""
     headers = {"Authorization": f"Bearer {access_token}"}
     ids: list[str] = []
     async with httpx.AsyncClient(timeout=30) as c:
         page_token: str | None = None
-        while len(ids) < max_total:
+        while len(ids) < cap:
             params: dict[str, str | int] = {"q": query, "maxResults": 100}
             if page_token:
                 params["pageToken"] = page_token
@@ -86,13 +82,16 @@ async def fetch_messages(access_token: str, query: str, max_total: int = 500) ->
             page_token = body.get("nextPageToken")
             if not page_token:
                 break
-        if len(ids) >= max_total:
-            log.warning("gmail: выборка достигла предохранителя max_total=%d — "
-                        "возможно, хвост писем не забран за этот прогон", max_total)
+    return ids[:cap]
 
+
+async def fetch_full_messages(access_token: str, ids: list[str]) -> list[dict]:
+    """GET format=full по каждому id (дорогая часть)."""
+    headers = {"Authorization": f"Bearer {access_token}"}
+    async with httpx.AsyncClient(timeout=30) as c:
         messages = []
         failed: list[str] = []
-        for mid in ids[:max_total]:
+        for mid in ids:
             # last_polled_at advances unconditionally after this run — a
             # message dropped here without a retry is lost for good (the
             # date-granular `after:` cursor won't re-fetch it later).
@@ -117,6 +116,29 @@ async def fetch_messages(access_token: str, query: str, max_total: int = 500) ->
             log.warning("gmail: %d message(s) dropped this run (fetch kept failing): %s",
                         len(failed), failed[:10])
     return messages
+
+
+async def filter_new_ids(all_ids: list[str], per_run: int) -> tuple[list[str], bool]:
+    """Отсечь уже забранные id по БД. truncated=True — новых больше per_run,
+    курсор last_polled_at в этот прогон двигать нельзя (хвост доберём потом)."""
+    if not all_ids:
+        return [], False
+    async with get_session() as s:
+        known = set((await s.execute(
+            select(EventRow.source_event_id).where(
+                EventRow.source == "gmail",
+                EventRow.source_event_id.in_(all_ids),
+            )
+        )).scalars().all())
+    new_ids = [i for i in all_ids if i not in known]
+    return new_ids, len(new_ids) > per_run
+
+
+async def fetch_messages(access_token: str, query: str, max_total: int = 500) -> list[dict]:
+    """List + get полных messages. Оставлен для совместимости (тесты статусов);
+    боевой путь в poll_account() дедупит id по БД между list и get."""
+    ids = await fetch_message_ids(access_token, query, cap=max_total)
+    return await fetch_full_messages(access_token, ids)
 
 
 _SCRIPT_STYLE_RE = re.compile(
@@ -290,7 +312,16 @@ async def poll_account(acc: GmailAccountRow) -> int:
         query = "newer_than:7d"
 
     try:
-        messages = await fetch_messages(access_token, query, max_total=MAX_PER_RUN)
+        # id-only list дёшев — смотрим весь бэклог (до 10×MAX_PER_RUN), дедупим
+        # по БД и full-GET'им только новые. Раньше при бэклоге >MAX_PER_RUN
+        # забирались 500 НОВЕЙШИХ, курсор прыгал на сегодня и старый хвост
+        # терялся навсегда (after: — date-granular).
+        all_ids = await fetch_message_ids(access_token, query, cap=MAX_PER_RUN * 10)
+        new_ids, truncated = await filter_new_ids(all_ids, MAX_PER_RUN)
+        if truncated:
+            log.warning("gmail/%s: backlog %d new — беру %d, курсор не двигаю",
+                        acc.email, len(new_ids), MAX_PER_RUN)
+        messages = await fetch_full_messages(access_token, new_ids[:MAX_PER_RUN])
     except ScopeInsufficient as e:
         log.warning("Scope INSUFFICIENT for %s — re-auth with Gmail access: %s",
                     acc.email, e)
@@ -342,11 +373,16 @@ async def poll_account(acc: GmailAccountRow) -> int:
 
     now = datetime.utcnow()
     async with get_session() as s:
+        # При truncated курсор НЕ двигаем: следующий прогон снова листит от
+        # старой даты, пропускает уже забранное по БД и добирает хвост.
+        values: dict[str, Any] = {"last_ok_at": now,
+                                  "needs_reauth": False, "last_error": None}
+        if not truncated:
+            values["last_polled_at"] = now
         await s.execute(
             update(GmailAccountRow)
             .where(GmailAccountRow.id == acc.id)
-            .values(last_polled_at=now, last_ok_at=now,
-                    needs_reauth=False, last_error=None)
+            .values(**values)
         )
 
     if inserted:
