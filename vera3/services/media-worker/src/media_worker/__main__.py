@@ -7,7 +7,7 @@ it up. Recognition is best-effort: failures degrade with the placeholder
 kept ([photo]/[voice: Ns]), media is never lost.
 
 Split per the ~200-line rule:
-  recognize.py   — download + vision (broker) + audio (asr-local → broker)
+  recognize.py   — download + vision + whisper (both via broker)
   repository.py  — claim/lease, success/failure bookkeeping, retry policy
 """
 from __future__ import annotations

@@ -10,7 +10,6 @@ in the commit message (for cosmetic refactors only).
 |---|---|
 | [architecture.md](./architecture.md) | Services, data flow, event lifecycle |
 | [llm-broker.md](./llm-broker.md) | How chat/embed route through AIbroker, fallback to local pool |
-| [asr-local.md](./asr-local.md) | Local faster-whisper service for voice transcription |
 | [media-worker.md](./media-worker.md) | Photo/voice recognition worker, retry/degrade policy |
 | [sources.md](./sources.md) | Each ingestor (telegram, gmail, instagram, vera_chat) — what it pulls, how, when |
 | [brain.md](./brain.md) | Triage worker, agent loop, search synthesis, memory |
