@@ -179,33 +179,6 @@ services:
       IG_POLL_INTERVAL_S: "90"
     restart: unless-stopped
 
-  # ─── Local ASR ──────────────────────────────────────────────────────────
-  # faster-whisper (small, int8, CPU) в отдельном контейнере. Голосовые
-  # распознаются локально и бесплатно; брокер остаётся фолбэком. Лимиты
-  # жёсткие: на хосте 2 ядра и живёт боевой Stepan2 — один поток, 1.5G.
-  # Модель запечена в образ и грузится один раз на старте (~30-60с),
-  # отсюда start_period у healthcheck.
-  asr-local:
-    build:
-      context: ..
-      dockerfile: services/asr-local/Dockerfile
-    container_name: vera3-asr-local
-    environment:
-      WHISPER_MODEL: ${WHISPER_MODEL:-small}
-      WHISPER_CPU_THREADS: ${WHISPER_CPU_THREADS:-1}
-      WHISPER_LANGUAGE: ${WHISPER_LANGUAGE:-ru}
-    cpus: 1.0
-    mem_limit: 1500m
-    expose:
-      - "8000"
-    healthcheck:
-      test: ["CMD", "python", "-c", "import urllib.request as u; u.urlopen('http://127.0.0.1:8000/healthz', timeout=5)"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 180s
-    restart: unless-stopped
-
   # ─── Media Worker ───────────────────────────────────────────────────────
   # Polls triage_status='media_pending', downloads photo/voice via
   # ingestor-telegram /media/download, runs vision/whisper, appends
@@ -220,16 +193,12 @@ services:
         condition: service_healthy
       ingestor-telegram:
         condition: service_started
-      asr-local:
-        condition: service_started
     environment:
       DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
       TOKEN_SECRET: ${TOKEN_SECRET}
       INTERNAL_SECRET: ${INTERNAL_SECRET:?INTERNAL_SECRET must be set}
       TELEGRAM_TOOLS_URL: http://ingestor-telegram:8000
-      # Голосовые: сначала локальный faster-whisper, брокер — фолбэк.
-      # Vision остаётся на брокере — no provider keys here.
-      ASR_LOCAL_URL: http://asr-local:8000
+      # Vision + whisper go through the broker — no provider keys here.
       BROKER_URL: ${BROKER_URL:-}
       BROKER_PROJECT_KEY: ${BROKER_PROJECT_KEY:-}
       MEDIA_POLL_S: "10"

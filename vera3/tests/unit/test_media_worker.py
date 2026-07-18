@@ -1,4 +1,4 @@
-"""media_worker — recognition (asr-local first, broker fallback) + queue.
+"""media_worker — recognition via broker + queue/retry policy.
 
 Env defaults set before import (media_worker reads them at module load).
 """
@@ -10,7 +10,6 @@ import os
 os.environ.setdefault("INTERNAL_SECRET", "test-internal-secret")
 os.environ.setdefault("BROKER_URL", "https://aib.zapleo.com")
 os.environ.setdefault("BROKER_PROJECT_KEY", "aib_prj_test")
-os.environ.setdefault("ASR_LOCAL_URL", "http://asr-local:8000")
 
 from unittest.mock import AsyncMock, patch  # noqa: E402
 
@@ -177,69 +176,7 @@ async def test_recognize_photo_raises_on_empty_text():
         await rec._recognize_photo("x", "image/png")
 
 
-# ─── _recognize_audio (local-first, broker fallback) ───────────────────────
-
-
-@pytest.mark.asyncio
-async def test_recognize_audio_prefers_local():
-    with patch.object(rec, "_transcribe_local",
-                      AsyncMock(return_value="привет это голосовое")) as loc, \
-         patch.object(rec, "_transcribe_broker", AsyncMock()) as brk:
-        txt, source = await rec._recognize_audio(b"oggbytes", "audio/ogg")
-    assert txt == "привет это голосовое"
-    assert source == "local"
-    loc.assert_awaited_once()
-    brk.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_recognize_audio_falls_back_to_broker():
-    with patch.object(rec, "_transcribe_local",
-                      AsyncMock(side_effect=RuntimeError("asr-local HTTP 503"))), \
-         patch.object(rec, "_transcribe_broker",
-                      AsyncMock(return_value="через брокер")):
-        txt, source = await rec._recognize_audio(b"oggbytes", "audio/ogg")
-    assert txt == "через брокер"
-    assert source == "broker"
-
-
-@pytest.mark.asyncio
-async def test_recognize_audio_raises_when_both_paths_fail():
-    with patch.object(rec, "_transcribe_local",
-                      AsyncMock(side_effect=RuntimeError("connect timeout"))), \
-         patch.object(rec, "_transcribe_broker",
-                      AsyncMock(side_effect=RuntimeError("broker whisper HTTP 503: no key"))), \
-            pytest.raises(RuntimeError, match="HTTP 503"):
-        await rec._recognize_audio(b"oggbytes", "audio/ogg")
-
-
-@pytest.mark.asyncio
-async def test_recognize_audio_skips_local_when_disabled(monkeypatch):
-    monkeypatch.setattr(rec, "ASR_LOCAL_URL", "")
-    with patch.object(rec, "_transcribe_local", AsyncMock()) as loc, \
-         patch.object(rec, "_transcribe_broker",
-                      AsyncMock(return_value="только брокер")):
-        txt, source = await rec._recognize_audio(b"ogg", "audio/ogg")
-    assert (txt, source) == ("только брокер", "broker")
-    loc.assert_not_awaited()
-
-
-@pytest.mark.asyncio
-async def test_recognize_audio_placeholder_on_silence():
-    with patch.object(rec, "_transcribe_local", AsyncMock(return_value="")):
-        txt, source = await rec._recognize_audio(b"ogg", "audio/ogg")
-    assert txt == rec._EMPTY_TRANSCRIPT
-    assert source == "local"
-
-
-@pytest.mark.asyncio
-async def test_recognize_audio_rejects_oversize():
-    big = b"x" * (rec._MAX_AUDIO_BYTES + 1)
-    with pytest.raises(RuntimeError, match="413"):
-        await rec._recognize_audio(big, "audio/ogg")
-
-
-# ─── _transcribe_local / _transcribe_broker (HTTP layer) ───────────────────
+# ─── _recognize_audio (broker whisper) ─────────────────────────────────────
 
 
 class _FakeResp:
@@ -253,41 +190,42 @@ class _FakeResp:
 
 
 @pytest.mark.asyncio
-async def test_transcribe_local_posts_raw_bytes():
-    captured = {}
-
-    async def fake_post(self, url, content=None, headers=None, **kw):
-        captured["url"] = url
-        captured["content"] = content
-        return _FakeResp(200, {"text": " локально "})
-
-    with patch("httpx.AsyncClient.post", fake_post):
-        txt = await rec._transcribe_local(b"oggbytes", "audio/ogg")
-    assert txt == "локально"
-    assert captured["url"].endswith("/transcribe")
-    assert captured["content"] == b"oggbytes"
-
-
-@pytest.mark.asyncio
-async def test_transcribe_local_raises_on_http_error():
-    async def fake_post(self, url, **kw):
-        return _FakeResp(500, {"detail": "boom"})
-
-    with patch("httpx.AsyncClient.post", fake_post), \
-            pytest.raises(RuntimeError, match="asr-local HTTP 500"):
-        await rec._transcribe_local(b"ogg", "audio/ogg")
-
-
-@pytest.mark.asyncio
-async def test_transcribe_broker_returns_text():
+async def test_recognize_audio_returns_text():
     async def fake_post(self, url, params=None, files=None, headers=None, **kw):
         assert "transcribe" in url
         assert files is not None
         return _FakeResp(200, {"text": "привет это голосовое"})
 
     with patch("httpx.AsyncClient.post", fake_post):
-        txt = await rec._transcribe_broker(b"oggbytes", "audio/ogg")
+        txt = await rec._recognize_audio(b"oggbytes", "audio/ogg")
     assert txt == "привет это голосовое"
+
+
+@pytest.mark.asyncio
+async def test_recognize_audio_placeholder_on_silence():
+    async def fake_post(self, url, params=None, files=None, headers=None, **kw):
+        return _FakeResp(200, {"text": ""})
+
+    with patch("httpx.AsyncClient.post", fake_post):
+        txt = await rec._recognize_audio(b"ogg", "audio/ogg")
+    assert txt == rec._EMPTY_TRANSCRIPT
+
+
+@pytest.mark.asyncio
+async def test_recognize_audio_raises_on_http_error():
+    async def fake_post(self, url, params=None, files=None, headers=None, **kw):
+        return _FakeResp(503, {"detail": "no key"})
+
+    with patch("httpx.AsyncClient.post", fake_post), \
+            pytest.raises(RuntimeError, match="broker whisper HTTP 503"):
+        await rec._recognize_audio(b"ogg", "audio/ogg")
+
+
+@pytest.mark.asyncio
+async def test_recognize_audio_rejects_oversize():
+    big = b"x" * (rec._MAX_AUDIO_BYTES + 1)
+    with pytest.raises(RuntimeError, match="413"):
+        await rec._recognize_audio(big, "audio/ogg")
 
 
 # ─── warm_entity_cache ─────────────────────────────────────────────────────
@@ -372,12 +310,12 @@ async def test_process_one_voice_marks_source():
     with patch.object(rec, "_download",
                       AsyncMock(return_value=(b"ogg", "audio/ogg", None))), \
          patch.object(rec, "_recognize_audio",
-                      AsyncMock(return_value=("привет", "local"))):
+                      AsyncMock(return_value="привет")):
         seg, extra, err = await rec._process_one(row)
     assert err is None
     assert "привет" in seg
     assert "voice transcription" in seg
-    assert extra == {"media_recognition": "ok_local"}
+    assert extra == {"media_recognition": "ok_broker"}
 
 
 @pytest.mark.asyncio

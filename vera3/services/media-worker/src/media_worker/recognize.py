@@ -1,10 +1,8 @@
 """Recognition side of media-worker: download, vision (broker), audio ASR.
 
-Vision goes through the BROKER (aib.zapleo.com) like every other LLM call.
-Audio is LOCAL-FIRST: asr-local (faster-whisper on the compose network)
-handles voices for free; broker /v1/transcribe is the fallback when
-asr-local is down or mid-redeploy. The broker's chronic 502/503
-("no transcription key available") is why local goes first.
+Vision and whisper both go through the BROKER (aib.zapleo.com) like every
+other LLM call — no provider keys live here. Whisper is hosted broker-side
+(2026-07-18); the local asr-local experiment was removed the same day.
 """
 from __future__ import annotations
 
@@ -22,10 +20,6 @@ TELEGRAM_TOOLS_URL = os.environ.get("TELEGRAM_TOOLS_URL", "http://ingestor-teleg
 INTERNAL_SECRET = os.environ["INTERNAL_SECRET"]
 BROKER_URL = os.environ.get("BROKER_URL", "").rstrip("/")
 BROKER_PROJECT_KEY = os.environ.get("BROKER_PROJECT_KEY", "")
-ASR_LOCAL_URL = os.environ.get("ASR_LOCAL_URL", "http://asr-local:8000").rstrip("/")
-# Локальный whisper на 1 CPU-потоке жуёт длинные аудио дольше реального
-# времени — ждём, не режем (см. политику таймаутов брокера).
-ASR_LOCAL_TIMEOUT_S = int(os.environ.get("ASR_LOCAL_TIMEOUT_S", "1800"))
 _MAX_AUDIO_BYTES = 25 * 1024 * 1024   # Whisper limit, mirror broker's guard
 _EMPTY_TRANSCRIPT = "(тишина/неразборчиво)"
 
@@ -114,19 +108,10 @@ async def _recognize_photo(image_b64: str, mime: str, event_id: int | None = Non
     return txt
 
 
-async def _transcribe_local(audio_bytes: bytes, mime: str) -> str:
-    async with httpx.AsyncClient(timeout=ASR_LOCAL_TIMEOUT_S) as c:
-        r = await c.post(
-            f"{ASR_LOCAL_URL}/transcribe",
-            content=audio_bytes,
-            headers={"Content-Type": mime or "audio/ogg"},
-        )
-    if r.status_code >= 400:
-        raise RuntimeError(f"asr-local HTTP {r.status_code}: {r.text[:200]}")
-    return (r.json().get("text") or "").strip()
-
-
-async def _transcribe_broker(audio_bytes: bytes, mime: str) -> str:
+async def _recognize_audio(audio_bytes: bytes, mime: str) -> str:
+    """Whisper via broker /v1/transcribe (multipart upload)."""
+    if len(audio_bytes) > _MAX_AUDIO_BYTES:
+        raise RuntimeError(f"http 413: audio > {_MAX_AUDIO_BYTES // (1024 * 1024)}MB")
     suffix = ".ogg" if "ogg" in (mime or "") else ".mp3"
     files = {"file": (f"audio{suffix}", audio_bytes, mime or "audio/ogg")}
     async with httpx.AsyncClient(timeout=120) as c:
@@ -136,22 +121,7 @@ async def _transcribe_broker(audio_bytes: bytes, mime: str) -> str:
         )
     if r.status_code >= 400:
         raise RuntimeError(f"broker whisper HTTP {r.status_code}: {r.text[:200]}")
-    return (r.json().get("text") or "").strip()
-
-
-async def _recognize_audio(audio_bytes: bytes, mime: str) -> tuple[str, str]:
-    """Returns (text, source). asr-local first; broker as fallback.
-    ASR_LOCAL_URL="" disables the local path entirely."""
-    if len(audio_bytes) > _MAX_AUDIO_BYTES:
-        raise RuntimeError(f"http 413: audio > {_MAX_AUDIO_BYTES // (1024 * 1024)}MB")
-    if ASR_LOCAL_URL:
-        try:
-            txt = await _transcribe_local(audio_bytes, mime)
-            return txt or _EMPTY_TRANSCRIPT, "local"
-        except Exception as e:
-            log.warning("asr-local failed (%s) — falling back to broker", e)
-    txt = await _transcribe_broker(audio_bytes, mime)
-    return txt or _EMPTY_TRANSCRIPT, "broker"
+    return (r.json().get("text") or "").strip() or _EMPTY_TRANSCRIPT
 
 
 async def _process_one(row: dict) -> tuple[str, dict, str | None]:
@@ -178,10 +148,10 @@ async def _process_one(row: dict) -> tuple[str, dict, str | None]:
 
     if kind in {"voice", "audio"}:
         try:
-            txt, source = await _recognize_audio(raw, mime or "audio/ogg")
+            txt = await _recognize_audio(raw, mime or "audio/ogg")
         except Exception as e:
             return "", {}, f"whisper: {e}"
         label = "voice transcription" if kind == "voice" else "audio transcription"
-        return f"\n--- {label} ---\n{txt}", {"media_recognition": f"ok_{source}"}, None
+        return f"\n--- {label} ---\n{txt}", {"media_recognition": "ok_broker"}, None
 
     return "", {}, f"unsupported media_kind: {kind}"

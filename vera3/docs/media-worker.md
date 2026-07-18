@@ -1,11 +1,11 @@
 # media-worker
 
-Recognizes photo (vision) and voice/audio (ASR) for events with
+Recognizes photo (vision) and voice/audio (whisper) for events with
 `triage_status='media_pending'`.
 
 Code layout (one responsibility per file):
-- `recognize.py` — download, vision via broker, audio via asr-local →
-  broker fallback, entity-cache warm-up (`warm_entity_cache`)
+- `recognize.py` — download, vision + whisper via broker, entity-cache
+  warm-up (`warm_entity_cache`)
 - `repository.py` — claim/lease, success/failure bookkeeping, retry policy
 - `__main__.py` — the poll loop gluing the two
 
@@ -33,17 +33,19 @@ Code layout (one responsibility per file):
    OCR/caption prompt (Russian, 1-3 sentences + verbatim text under
    `Текст:` if readable). The broker picks a vision key (gemini →
    anthropic → openai) — no provider keys live in media-worker.
-6. Voice/audio → **LOCAL-FIRST**: `POST /transcribe` on
-   [asr-local](./asr-local.md) (faster-whisper small int8, free, no keys).
-   Only if asr-local is unreachable / errors does the worker fall back to
-   **broker `POST /v1/transcribe`**. The broker's chronic 502/503
-   ("no transcription key available") is exactly why local goes first.
-   Empty transcription (silence) becomes `(тишина/неразборчиво)`.
+6. Voice/audio → **broker `POST /v1/transcribe`** (multipart upload).
+   Whisper is hosted broker-side since 2026-07-18 (the local `asr-local`
+   experiment was removed the same day — the backlog of ~3.3k failed
+   voices had been cleared by a one-off local faster-whisper run,
+   `media_recognition=ok_local`). Empty transcription (silence) becomes
+   `(тишина/неразборчиво)`.
 7. On success: append `\n--- recognized photo ---\n<text>` (or
    `voice transcription` / `audio transcription`) to `content_text`,
    set `triage_status='pending'` so normal triage takes over. For
    voice/audio the source is recorded in
-   `metadata.media_recognition` = `ok_local` | `ok_broker`.
+   `metadata.media_recognition='ok_broker'`. Finalize SQL guards on
+   `triage_status='media_pending'` so a worker that outlived its lease
+   can't append the text a second time.
 
 ## Retry + degrade (no more queue stalls)
 
@@ -64,9 +66,6 @@ Outcomes:
 | Permanent (4xx scope/bad-req, 413 oversize, empty text) | **degrade now** |
 | After 3 transient tries | **degrade** |
 
-An asr-local failure alone never degrades an event — the broker fallback
-runs first, and only the final error enters the retry/degrade policy.
-
 **Degrade** = keep the placeholder (`[photo]`/`[voice: Ns]`), set
 `triage_status='pending'` + `metadata.media_recognition='failed'`. The
 event still enters the brain — recognition is best-effort, media is never
@@ -76,24 +75,19 @@ lost. When keys are added later, re-seed degraded events if desired.
 
 - `INTERNAL_SECRET` — required, used to call ingestor-telegram
 - `TELEGRAM_TOOLS_URL` — default `http://ingestor-telegram:8000`
-- `ASR_LOCAL_URL` — default `http://asr-local:8000`; set empty to
-  disable the local path (broker-only)
-- `ASR_LOCAL_TIMEOUT_S` — default 1800; local whisper on 1 CPU thread is
-  slower than real-time on long audio, we wait rather than cut
 - `BROKER_URL` — broker base, e.g. `https://aib.zapleo.com`
 - `BROKER_PROJECT_KEY` — `aib_prj_…`; project must hold `llm:vision` +
   `llm:audio` scopes (set on the `vera` project)
 - `MEDIA_POLL_S` (default 10), `MEDIA_BATCH` (default 3)
 
-No provider keys here — vision/whisper keys live in the broker. Audio is
-capped at 25 MB (mirrors the broker's and asr-local's limit); larger
-files degrade.
+No provider keys here — vision/whisper keys live in the broker. Whisper
+audio is capped at 25 MB (mirrors the broker's limit); larger files degrade.
 
 ## Cost
 
-- Voice/audio: **$0** in the normal case (asr-local). Broker fallback:
-  groq whisper-large-v3-turbo free → openai whisper-1.
-- Vision: broker free-first chain gemini free → anthropic → openai.
+Goes through the broker's free-first chains:
+- Vision: gemini free → anthropic → openai
+- Whisper: broker-hosted whisper → provider fallback (см. конфиг брокера)
 
 ## Media kinds
 
@@ -102,7 +96,7 @@ files degrade.
 | photo | ✅ | vision |
 | sticker (static `image/webp`) | ✅ | vision (`recognized sticker`) |
 | sticker (animated `.tgs` / video `.webm`) | ⬇ placeholder | emoji alt-text only — not an image |
-| voice / audio | ✅ | asr-local → broker whisper |
+| voice / audio | ✅ | broker whisper |
 | video / video_note | ❌ | not processed |
 | document | ❌ | not processed |
 
