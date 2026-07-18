@@ -80,10 +80,10 @@ async def test_merge_moves_unique_relationships_both_sides(db):
 def test_on_success_sql_guards_status():
     import inspect
 
-    import media_worker.__main__ as mw
-    src = inspect.getsource(mw._on_success)
+    import media_worker.repository as repo
+    src = inspect.getsource(repo._on_success)
     assert "triage_status = 'media_pending'" in src
-    src_fail = inspect.getsource(mw._on_failure)
+    src_fail = inspect.getsource(repo._on_failure)
     assert src_fail.count("triage_status = 'media_pending'") == 2
 
 

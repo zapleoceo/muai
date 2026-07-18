@@ -41,6 +41,12 @@ jobs:
         # test_userbot_chat_kind imports the ingestor_telegram package.
         run: pip install -e ./services/ingestor-telegram
 
+      - name: Install bot-telegram
+        # test_security_pack.py imports bot_telegram.bot, which imports aiogram
+        # (a real pip dependency, not on PYTHONPATH-only like the in-repo
+        # packages below) — without this the whole test job fails to collect.
+        run: pip install -e ./services/bot-telegram
+
       - name: Install brain-search
         # Not in --cov below: repo-wide fail-under would retroactively fail
         # on its pre-existing legacy coverage gap. Tests still collect/run —
@@ -48,12 +54,15 @@ jobs:
         run: pip install -e ./services/brain-search
 
       - name: Run all tests with coverage
+        # asr-local не ставится через pip (тянет faster-whisper ~0.5GB);
+        # тестам хватает PYTHONPATH — модель в тестах замокана.
         run: |
-          PYTHONPATH=shared:services/gateway/src:services/dashboard/src:services/media-worker/src:services/ingestor-telegram/src:services/ingestor-gmail/src:services/brain-search/src:services/brain-triage/src:services/bot-telegram/src:services/ingestor-instagram/src \
+          PYTHONPATH=shared:services/gateway/src:services/dashboard/src:services/media-worker/src:services/ingestor-telegram/src:services/ingestor-gmail/src:services/brain-search/src:services/brain-triage/src:services/bot-telegram/src:services/ingestor-instagram/src:services/asr-local/src \
           pytest tests/ \
             --cov=vera_shared \
             --cov=gateway \
             --cov=media_worker \
+            --cov=asr_local \
             --cov-report=term-missing \
             --cov-report=xml \
             --cov-fail-under=40

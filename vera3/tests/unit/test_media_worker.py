@@ -1,4 +1,4 @@
-"""media_worker — recognition via broker + failure classification.
+"""media_worker — recognition (asr-local first, broker fallback) + queue.
 
 Env defaults set before import (media_worker reads them at module load).
 """
@@ -10,12 +10,21 @@ import os
 os.environ.setdefault("INTERNAL_SECRET", "test-internal-secret")
 os.environ.setdefault("BROKER_URL", "https://aib.zapleo.com")
 os.environ.setdefault("BROKER_PROJECT_KEY", "aib_prj_test")
+os.environ.setdefault("ASR_LOCAL_URL", "http://asr-local:8000")
 
 from unittest.mock import AsyncMock, patch  # noqa: E402
 
 import pytest  # noqa: E402
 
 import media_worker.__main__ as mw  # noqa: E402
+import media_worker.recognize as rec  # noqa: E402
+import media_worker.repository as repo  # noqa: E402
+
+
+def test_main_module_wires_up():
+    # smoke: the glue module imports cleanly and carries the loop config
+    assert mw.POLL_S >= 1
+    assert mw.main_loop is not None
 
 
 # ─── _is_permanent ─────────────────────────────────────────────────────────
@@ -24,7 +33,7 @@ import media_worker.__main__ as mw  # noqa: E402
 def test_permanent_on_client_4xx():
     for e in ("broker vision HTTP 400: bad", "HTTP 401 unauth",
               "http 403 scope", "broker whisper HTTP 413: too big"):
-        assert mw._is_permanent(e) is True
+        assert repo._is_permanent(e) is True
 
 
 def test_transient_on_rate_limit_and_5xx():
@@ -32,19 +41,19 @@ def test_transient_on_rate_limit_and_5xx():
               "broker whisper HTTP 503: no key",
               "broker vision HTTP 502: bad gateway",
               "download: connection reset"):
-        assert mw._is_permanent(e) is False
+        assert repo._is_permanent(e) is False
 
 
 def test_permanent_on_misconfig_and_empty():
-    assert mw._is_permanent("BROKER_URL/BROKER_PROJECT_KEY not set") is True
-    assert mw._is_permanent("broker vision returned empty text") is True
+    assert repo._is_permanent("BROKER_URL/BROKER_PROJECT_KEY not set") is True
+    assert repo._is_permanent("broker vision returned empty text") is True
 
 
 def test_no_provider_503_is_transient():
     # 503 "no provider available" = all gemini keys momentarily cooled
     # (free-tier churn). They recover in minutes, so this MUST be transient —
     # the backoff retry catches a live key. Degrading would lose the image.
-    assert mw._is_permanent(
+    assert repo._is_permanent(
         "broker vision HTTP 503: no provider available for capability=vision"
     ) is False
 
@@ -53,34 +62,34 @@ def test_no_provider_503_is_transient():
 
 
 def test_plan_failure_first_transient_schedules_retry():
-    plan = mw._plan_failure({}, "broker vision HTTP 503: no provider")
+    plan = repo._plan_failure({}, "broker vision HTTP 503: no provider")
     assert plan["degrade"] is False
     assert plan["retry_count"] == 1
-    assert plan["backoff_min"] == mw.BACKOFF_MIN[0]
+    assert plan["backoff_min"] == repo.BACKOFF_MIN[0]
     assert "retry#1" in plan["action"]
 
 
 def test_plan_failure_escalates_backoff():
-    p2 = mw._plan_failure({"media_retry_count": 1}, "HTTP 429")
+    p2 = repo._plan_failure({"media_retry_count": 1}, "HTTP 429")
     assert p2["retry_count"] == 2
-    assert p2["backoff_min"] == mw.BACKOFF_MIN[1]
+    assert p2["backoff_min"] == repo.BACKOFF_MIN[1]
 
 
 def test_plan_failure_degrades_after_max_retries():
-    plan = mw._plan_failure({"media_retry_count": mw.MAX_MEDIA_RETRIES - 1},
-                            "HTTP 503")
+    plan = repo._plan_failure({"media_retry_count": repo.MAX_MEDIA_RETRIES - 1},
+                              "HTTP 503")
     assert plan["degrade"] is True
     assert plan["action"] == "degraded"
 
 
 def test_plan_failure_degrades_immediately_on_permanent():
-    plan = mw._plan_failure({}, "broker vision HTTP 403: scope")
+    plan = repo._plan_failure({}, "broker vision HTTP 403: scope")
     assert plan["degrade"] is True
     assert plan["action"] == "degraded(permanent)"
 
 
 def test_plan_failure_handles_none_meta():
-    plan = mw._plan_failure(None, "HTTP 503")
+    plan = repo._plan_failure(None, "HTTP 503")
     assert plan["retry_count"] == 1
 
 
@@ -89,42 +98,42 @@ def test_plan_failure_handles_none_meta():
 
 @pytest.mark.asyncio
 async def test_claim_limit_zero_when_paused():
-    with patch.object(mw, "is_backfill_paused", AsyncMock(return_value=True)):
-        assert await mw._claim_limit() == 0
+    with patch.object(repo, "is_backfill_paused", AsyncMock(return_value=True)):
+        assert await repo._claim_limit() == 0
 
 
 @pytest.mark.asyncio
 async def test_claim_limit_full_batch_when_unlimited():
-    with patch.object(mw, "is_backfill_paused", AsyncMock(return_value=False)), \
-         patch.object(mw, "reserve_backfill_allowance", AsyncMock(return_value=None)):
-        assert await mw._claim_limit() == mw.BATCH
+    with patch.object(repo, "is_backfill_paused", AsyncMock(return_value=False)), \
+         patch.object(repo, "reserve_backfill_allowance", AsyncMock(return_value=None)):
+        assert await repo._claim_limit() == repo.BATCH
 
 
 @pytest.mark.asyncio
 async def test_claim_limit_capped_by_allowance():
-    with patch.object(mw, "is_backfill_paused", AsyncMock(return_value=False)), \
-         patch.object(mw, "reserve_backfill_allowance", AsyncMock(return_value=1)):
-        assert await mw._claim_limit() == 1
+    with patch.object(repo, "is_backfill_paused", AsyncMock(return_value=False)), \
+         patch.object(repo, "reserve_backfill_allowance", AsyncMock(return_value=1)):
+        assert await repo._claim_limit() == 1
 
 
 @pytest.mark.asyncio
 async def test_claim_batch_returns_empty_on_zero_limit():
     # limit<=0 short-circuits before touching the DB
-    assert await mw._claim_batch(0) == []
+    assert await repo._claim_batch(0) == []
 
 
 # ─── _broker_headers ───────────────────────────────────────────────────────
 
 
 def test_broker_headers_carries_project_key():
-    h = mw._broker_headers()
+    h = rec._broker_headers()
     assert h["X-Project-Key"] == "aib_prj_test"
 
 
 def test_broker_headers_raises_when_unconfigured(monkeypatch):
-    monkeypatch.setattr(mw, "BROKER_URL", "")
+    monkeypatch.setattr(rec, "BROKER_URL", "")
     with pytest.raises(RuntimeError, match="BROKER_URL"):
-        mw._broker_headers()
+        rec._broker_headers()
 
 
 # ─── _recognize_photo (broker vision) ──────────────────────────────────────
@@ -140,8 +149,8 @@ async def test_recognize_photo_sends_multimodal_and_returns_text():
         captured["event_id"] = event_id
         return "на фото кот", {"provider": "gemini"}
 
-    with patch.object(mw, "chat_async", AsyncMock(side_effect=fake_chat_async)):
-        txt = await mw._recognize_photo("BASE64DATA", "image/jpeg", event_id=42)
+    with patch.object(rec, "chat_async", AsyncMock(side_effect=fake_chat_async)):
+        txt = await rec._recognize_photo("BASE64DATA", "image/jpeg", event_id=42)
 
     assert txt == "на фото кот"
     assert captured["capability"] == "vision"
@@ -154,45 +163,154 @@ async def test_recognize_photo_sends_multimodal_and_returns_text():
 
 @pytest.mark.asyncio
 async def test_recognize_photo_raises_on_broker_error():
-    with patch.object(mw, "chat_async",
-                       AsyncMock(side_effect=mw.LLMCallFailed("no provider"))), \
+    with patch.object(rec, "chat_async",
+                      AsyncMock(side_effect=rec.LLMCallFailed("no provider"))), \
             pytest.raises(RuntimeError, match="no provider"):
-        await mw._recognize_photo("x", "image/png")
+        await rec._recognize_photo("x", "image/png")
 
 
 @pytest.mark.asyncio
 async def test_recognize_photo_raises_on_empty_text():
-    with patch.object(mw, "chat_async",
-                       AsyncMock(return_value=("   ", {"provider": "gemini"}))), \
+    with patch.object(rec, "chat_async",
+                      AsyncMock(return_value=("   ", {"provider": "gemini"}))), \
             pytest.raises(RuntimeError, match="empty text"):
-        await mw._recognize_photo("x", "image/png")
+        await rec._recognize_photo("x", "image/png")
 
 
-# ─── _recognize_audio (broker whisper) ─────────────────────────────────────
+# ─── _recognize_audio (local-first, broker fallback) ───────────────────────
 
 
 @pytest.mark.asyncio
-async def test_recognize_audio_returns_text():
-    class FakeResp:
-        status_code = 200
-        def json(self):
-            return {"text": "привет это голосовое"}
-
-    async def fake_post(self, url, params=None, files=None, headers=None, **kw):
-        assert "transcribe" in url
-        assert files is not None
-        return FakeResp()
-
-    with patch("httpx.AsyncClient.post", fake_post):
-        txt = await mw._recognize_audio(b"oggbytes", "audio/ogg")
+async def test_recognize_audio_prefers_local():
+    with patch.object(rec, "_transcribe_local",
+                      AsyncMock(return_value="привет это голосовое")) as loc, \
+         patch.object(rec, "_transcribe_broker", AsyncMock()) as brk:
+        txt, source = await rec._recognize_audio(b"oggbytes", "audio/ogg")
     assert txt == "привет это голосовое"
+    assert source == "local"
+    loc.assert_awaited_once()
+    brk.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recognize_audio_falls_back_to_broker():
+    with patch.object(rec, "_transcribe_local",
+                      AsyncMock(side_effect=RuntimeError("asr-local HTTP 503"))), \
+         patch.object(rec, "_transcribe_broker",
+                      AsyncMock(return_value="через брокер")):
+        txt, source = await rec._recognize_audio(b"oggbytes", "audio/ogg")
+    assert txt == "через брокер"
+    assert source == "broker"
+
+
+@pytest.mark.asyncio
+async def test_recognize_audio_raises_when_both_paths_fail():
+    with patch.object(rec, "_transcribe_local",
+                      AsyncMock(side_effect=RuntimeError("connect timeout"))), \
+         patch.object(rec, "_transcribe_broker",
+                      AsyncMock(side_effect=RuntimeError("broker whisper HTTP 503: no key"))), \
+            pytest.raises(RuntimeError, match="HTTP 503"):
+        await rec._recognize_audio(b"oggbytes", "audio/ogg")
+
+
+@pytest.mark.asyncio
+async def test_recognize_audio_skips_local_when_disabled(monkeypatch):
+    monkeypatch.setattr(rec, "ASR_LOCAL_URL", "")
+    with patch.object(rec, "_transcribe_local", AsyncMock()) as loc, \
+         patch.object(rec, "_transcribe_broker",
+                      AsyncMock(return_value="только брокер")):
+        txt, source = await rec._recognize_audio(b"ogg", "audio/ogg")
+    assert (txt, source) == ("только брокер", "broker")
+    loc.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recognize_audio_placeholder_on_silence():
+    with patch.object(rec, "_transcribe_local", AsyncMock(return_value="")):
+        txt, source = await rec._recognize_audio(b"ogg", "audio/ogg")
+    assert txt == rec._EMPTY_TRANSCRIPT
+    assert source == "local"
 
 
 @pytest.mark.asyncio
 async def test_recognize_audio_rejects_oversize():
-    big = b"x" * (mw._MAX_AUDIO_BYTES + 1)
+    big = b"x" * (rec._MAX_AUDIO_BYTES + 1)
     with pytest.raises(RuntimeError, match="413"):
-        await mw._recognize_audio(big, "audio/ogg")
+        await rec._recognize_audio(big, "audio/ogg")
+
+
+# ─── _transcribe_local / _transcribe_broker (HTTP layer) ───────────────────
+
+
+class _FakeResp:
+    def __init__(self, status_code: int, payload: dict | None = None):
+        self.status_code = status_code
+        self._payload = payload or {}
+        self.text = str(payload)
+
+    def json(self):
+        return self._payload
+
+
+@pytest.mark.asyncio
+async def test_transcribe_local_posts_raw_bytes():
+    captured = {}
+
+    async def fake_post(self, url, content=None, headers=None, **kw):
+        captured["url"] = url
+        captured["content"] = content
+        return _FakeResp(200, {"text": " локально "})
+
+    with patch("httpx.AsyncClient.post", fake_post):
+        txt = await rec._transcribe_local(b"oggbytes", "audio/ogg")
+    assert txt == "локально"
+    assert captured["url"].endswith("/transcribe")
+    assert captured["content"] == b"oggbytes"
+
+
+@pytest.mark.asyncio
+async def test_transcribe_local_raises_on_http_error():
+    async def fake_post(self, url, **kw):
+        return _FakeResp(500, {"detail": "boom"})
+
+    with patch("httpx.AsyncClient.post", fake_post), \
+            pytest.raises(RuntimeError, match="asr-local HTTP 500"):
+        await rec._transcribe_local(b"ogg", "audio/ogg")
+
+
+@pytest.mark.asyncio
+async def test_transcribe_broker_returns_text():
+    async def fake_post(self, url, params=None, files=None, headers=None, **kw):
+        assert "transcribe" in url
+        assert files is not None
+        return _FakeResp(200, {"text": "привет это голосовое"})
+
+    with patch("httpx.AsyncClient.post", fake_post):
+        txt = await rec._transcribe_broker(b"oggbytes", "audio/ogg")
+    assert txt == "привет это голосовое"
+
+
+# ─── warm_entity_cache ─────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_warm_entity_cache_ok_first_try():
+    async def fake_post(self, url, json=None, headers=None, **kw):
+        assert url.endswith("/tools/list_dialogs")
+        assert headers["X-Internal-Secret"] == "test-internal-secret"
+        return _FakeResp(200, {"dialogs": [], "count": 42})
+
+    with patch("httpx.AsyncClient.post", fake_post):
+        assert await rec.warm_entity_cache(attempts=1) is True
+
+
+@pytest.mark.asyncio
+async def test_warm_entity_cache_gives_up_but_does_not_raise():
+    async def fake_post(self, url, **kw):
+        return _FakeResp(503, {})
+
+    with patch("httpx.AsyncClient.post", fake_post):
+        assert await rec.warm_entity_cache(attempts=2, delay_s=0) is False
 
 
 # ─── _process_one routing ──────────────────────────────────────────────────
@@ -200,8 +318,10 @@ async def test_recognize_audio_rejects_oversize():
 
 @pytest.mark.asyncio
 async def test_process_one_missing_metadata():
-    seg, err = await mw._process_one({"id": 1, "content_text": "", "metadata": {}})
+    seg, extra, err = await rec._process_one(
+        {"id": 1, "content_text": "", "metadata": {}})
     assert seg == ""
+    assert extra == {}
     assert "missing" in err
 
 
@@ -209,12 +329,13 @@ async def test_process_one_missing_metadata():
 async def test_process_one_photo_happy():
     row = {"id": 1, "content_text": "[photo]",
            "metadata": {"chat_id": 1, "msg_id": 2, "media_kind": "photo"}}
-    with patch.object(mw, "_download",
+    with patch.object(rec, "_download",
                       AsyncMock(return_value=(b"img", "image/jpeg", None))), \
-         patch.object(mw, "_recognize_photo",
+         patch.object(rec, "_recognize_photo",
                       AsyncMock(return_value="кот на диване")):
-        seg, err = await mw._process_one(row)
+        seg, extra, err = await rec._process_one(row)
     assert err is None
+    assert extra == {}
     assert "кот на диване" in seg
 
 
@@ -222,9 +343,9 @@ async def test_process_one_photo_happy():
 async def test_process_one_download_fail_returns_err():
     row = {"id": 1, "content_text": "[photo]",
            "metadata": {"chat_id": 1, "msg_id": 2, "media_kind": "photo"}}
-    with patch.object(mw, "_download",
+    with patch.object(rec, "_download",
                       AsyncMock(return_value=(None, None, "deleted"))):
-        seg, err = await mw._process_one(row)
+        seg, extra, err = await rec._process_one(row)
     assert seg == ""
     assert "download" in err
 
@@ -234,23 +355,57 @@ async def test_process_one_sticker_goes_through_vision():
     """Stickers (static webp) are recognized via vision, labelled distinctly."""
     row = {"id": 1, "content_text": "[sticker: 😂]",
            "metadata": {"chat_id": 1, "msg_id": 2, "media_kind": "sticker"}}
-    with patch.object(mw, "_download",
+    with patch.object(rec, "_download",
                       AsyncMock(return_value=(b"webp", "image/webp", None))), \
-         patch.object(mw, "_recognize_photo",
+         patch.object(rec, "_recognize_photo",
                       AsyncMock(return_value="смеющийся персонаж")):
-        seg, err = await mw._process_one(row)
+        seg, extra, err = await rec._process_one(row)
     assert err is None
     assert "смеющийся персонаж" in seg
     assert "recognized sticker" in seg
 
 
-# ─── _on_failure (applies the plan; DB mocked) ─────────────────────────────
+@pytest.mark.asyncio
+async def test_process_one_voice_marks_source():
+    row = {"id": 1, "content_text": "[voice: 5s]",
+           "metadata": {"chat_id": 1, "msg_id": 2, "media_kind": "voice"}}
+    with patch.object(rec, "_download",
+                      AsyncMock(return_value=(b"ogg", "audio/ogg", None))), \
+         patch.object(rec, "_recognize_audio",
+                      AsyncMock(return_value=("привет", "local"))):
+        seg, extra, err = await rec._process_one(row)
+    assert err is None
+    assert "привет" in seg
+    assert "voice transcription" in seg
+    assert extra == {"media_recognition": "ok_local"}
+
+
+@pytest.mark.asyncio
+async def test_process_one_voice_fail_returns_err():
+    row = {"id": 1, "content_text": "[voice: 5s]",
+           "metadata": {"chat_id": 1, "msg_id": 2, "media_kind": "voice"}}
+    with patch.object(rec, "_download",
+                      AsyncMock(return_value=(b"ogg", "audio/ogg", None))), \
+         patch.object(rec, "_recognize_audio",
+                      AsyncMock(side_effect=RuntimeError("broker whisper HTTP 503"))):
+        seg, extra, err = await rec._process_one(row)
+    assert seg == ""
+    assert "whisper" in err
+
+
+# ─── _on_success / _on_failure (DB mocked) ─────────────────────────────────
+
+
+class _FakeResult:
+    def __init__(self, rowcount: int):
+        self.rowcount = rowcount
 
 
 class _FakeSession:
     """Async-ctx session whose execute() just records calls — no real DB."""
-    def __init__(self):
+    def __init__(self, rowcount: int = 1):
         self.calls = []
+        self.rowcount = rowcount
 
     async def __aenter__(self):
         return self
@@ -260,13 +415,46 @@ class _FakeSession:
 
     async def execute(self, stmt, params=None):
         self.calls.append((str(stmt), params))
+        return _FakeResult(self.rowcount)
+
+
+@pytest.mark.asyncio
+async def test_on_success_merges_extra_meta():
+    sess = _FakeSession()
+    with patch.object(repo, "get_session", lambda: sess):
+        await repo._on_success(9, "\n--- voice transcription ---\nтекст",
+                               {"media_recognition": "ok_local"})
+    sql, params = sess.calls[0]
+    assert "content_text" in sql
+    assert params["id"] == 9
+    assert params["extra"] == '{"media_recognition": "ok_local"}'
+
+
+@pytest.mark.asyncio
+async def test_on_success_without_extra_meta_merges_empty():
+    sess = _FakeSession()
+    with patch.object(repo, "get_session", lambda: sess):
+        await repo._on_success(9, "text", {})
+    _sql, params = sess.calls[0]
+    assert params["extra"] == "{}"
+
+
+@pytest.mark.asyncio
+async def test_on_success_guards_double_append():
+    # rowcount=0 = кто-то уже финализировал (пережитый lease) — не падаем,
+    # SQL держит guard по triage_status='media_pending'
+    sess = _FakeSession(rowcount=0)
+    with patch.object(repo, "get_session", lambda: sess):
+        await repo._on_success(9, "text", {})
+    sql, _params = sess.calls[0]
+    assert "triage_status = 'media_pending'" in sql
 
 
 @pytest.mark.asyncio
 async def test_on_failure_degrade_branch_runs_sql():
     sess = _FakeSession()
-    with patch.object(mw, "get_session", lambda: sess):
-        action = await mw._on_failure(42, {}, "broker vision HTTP 403: scope")
+    with patch.object(repo, "get_session", lambda: sess):
+        action = await repo._on_failure(42, {}, "broker vision HTTP 403: scope")
     assert action == "degraded(permanent)"
     sql, params = sess.calls[0]
     assert "media_recognition" in sql
@@ -276,26 +464,12 @@ async def test_on_failure_degrade_branch_runs_sql():
 @pytest.mark.asyncio
 async def test_on_failure_retry_branch_runs_sql():
     sess = _FakeSession()
-    with patch.object(mw, "get_session", lambda: sess):
-        action = await mw._on_failure(7, {}, "broker vision HTTP 503: busy")
+    with patch.object(repo, "get_session", lambda: sess):
+        action = await repo._on_failure(7, {}, "broker vision HTTP 503: busy")
     assert "retry#1" in action
     sql, params = sess.calls[0]
     assert "media_next_retry_at" in sql
     assert "make_interval" in sql
     assert params["cnt"] == 1
-    assert params["backoff"] == mw.BACKOFF_MIN[0]
+    assert params["backoff"] == repo.BACKOFF_MIN[0]
     assert params["id"] == 7
-
-
-@pytest.mark.asyncio
-async def test_process_one_voice_happy():
-    row = {"id": 1, "content_text": "[voice: 5s]",
-           "metadata": {"chat_id": 1, "msg_id": 2, "media_kind": "voice"}}
-    with patch.object(mw, "_download",
-                      AsyncMock(return_value=(b"ogg", "audio/ogg", None))), \
-         patch.object(mw, "_recognize_audio",
-                      AsyncMock(return_value="привет")):
-        seg, err = await mw._process_one(row)
-    assert err is None
-    assert "привет" in seg
-    assert "voice transcription" in seg
