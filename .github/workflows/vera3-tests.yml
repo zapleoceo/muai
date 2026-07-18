@@ -41,6 +41,12 @@ jobs:
         # test_userbot_chat_kind imports the ingestor_telegram package.
         run: pip install -e ./services/ingestor-telegram
 
+      - name: Install bot-telegram
+        # test_security_pack.py imports bot_telegram.bot, which imports aiogram
+        # (a real pip dependency, not on PYTHONPATH-only like the in-repo
+        # packages below) — without this the whole test job fails to collect.
+        run: pip install -e ./services/bot-telegram
+
       - name: Install brain-search
         # Not in --cov below: repo-wide fail-under would retroactively fail
         # on its pre-existing legacy coverage gap. Tests still collect/run —
