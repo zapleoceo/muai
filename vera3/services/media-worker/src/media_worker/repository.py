@@ -67,7 +67,10 @@ async def _claim_batch(limit: int = BATCH) -> list[dict]:
                     metadata->>'media_next_retry_at' IS NULL
                     OR (metadata->>'media_next_retry_at')::timestamp < NOW()
                   )
-                ORDER BY id
+                -- newest-first: живые новые медиа (высший id) всегда впереди
+                -- переобрабатываемого бэклога (низкий id), поэтому массовый
+                -- requeue старых провалов не морозит распознавание свежих.
+                ORDER BY id DESC
                 FOR UPDATE SKIP LOCKED
                 LIMIT :lim
             )
