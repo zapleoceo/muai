@@ -67,10 +67,12 @@ async def _claim_batch(limit: int = BATCH) -> list[dict]:
                     metadata->>'media_next_retry_at' IS NULL
                     OR (metadata->>'media_next_retry_at')::timestamp < NOW()
                   )
-                -- newest-first: живые новые медиа (высший id) всегда впереди
-                -- переобрабатываемого бэклога (низкий id), поэтому массовый
-                -- requeue старых провалов не морозит распознавание свежих.
-                ORDER BY id DESC
+                -- voice/audio вперёд фото: whisper-пул быстрый и дешёвый, а
+                -- речь — самый ценный контент; vision медленный (free-tier
+                -- ~130/сутки) и не должен морозить транскрипцию голосовых.
+                -- Внутри каждого класса — newest-first (живые впереди бэклога),
+                -- поэтому массовый requeue старых провалов не тормозит свежие.
+                ORDER BY (metadata->>'media_kind' IN ('voice','audio')) DESC, id DESC
                 FOR UPDATE SKIP LOCKED
                 LIMIT :lim
             )

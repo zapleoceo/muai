@@ -19,11 +19,14 @@ Code layout (one responsibility per file):
    resolves rare peers only after seeing them once — without the warm-up,
    `/media/download` on such peers fails with "Could not find the input
    entity". Best-effort: the worker starts either way.
-3. media-worker polls pending events (batch of 3, every 10s), **newest
-   first** (`ORDER BY id DESC`). Live media (highest id) is therefore always
-   claimed ahead of re-processed backlog (lower id), so a bulk requeue of
-   old recognition failures can't starve recognition of fresh incoming
-   messages — see "Re-recognising the backlog" below. `_claim_batch`
+3. media-worker polls pending events (batch of 3, every 10s), **voice/audio
+   first, then newest** (`ORDER BY (media_kind IN ('voice','audio')) DESC,
+   id DESC`). Speech goes through the fast, cheap whisper pool and is the
+   most valuable content, so it is never stuck behind slow free-tier vision;
+   within each class, live media (highest id) is claimed ahead of re-processed
+   backlog (lower id), so a bulk requeue of old recognition failures can't
+   starve fresh incoming messages — see "Re-recognising the backlog" below.
+   `_claim_batch`
    does the claim as ONE atomic `UPDATE ... FOR UPDATE SKIP LOCKED ...
    RETURNING` that stamps a 10-minute `media_next_retry_at` lease on the
    selected rows — a plain `SELECT ... FOR UPDATE` in its own transaction
@@ -152,8 +155,10 @@ WHERE e.metadata->>'media_recognition'='failed' AND e.triage_status='done'
 
 The bottleneck is **vision-pool capacity** — free-tier vision clears only
 ~130 photos/day, so the 72k photo tail drains over months. This is safe and
-non-disruptive because of the newest-first claim order (step 3): live media
-always jumps the queue, the backlog chips away on spare capacity, the circuit
-breaker paces it under the daily budget cap, and every download is size-capped
-(no OOM). Voice/audio (~5.3k) go through the separate whisper pool and clear
-in days.
+non-disruptive because of the claim order (step 3): voice/audio drain first
+through the fast whisper pool (~5.3k clear in days), live media always jumps
+the queue within its class, the photo backlog chips away on spare vision
+capacity, the circuit breaker paces it under the daily budget cap, and every
+download is size-capped (no OOM). A host cron `vera-media-requeue.sh` (every
+3 h) tops the queue up to ~800 from the recoverable backlog so it drains
+steadily without a giant permanent `media_pending`.
