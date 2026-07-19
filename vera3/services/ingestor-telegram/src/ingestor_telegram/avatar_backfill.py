@@ -27,6 +27,9 @@ log = logging.getLogger("tg.avatars")
 ENABLED = os.environ.get("AVATAR_BACKFILL_ENABLED", "true").lower() == "true"
 BATCH = int(os.environ.get("AVATAR_BATCH", "20"))
 FETCH_INTERVAL_S = float(os.environ.get("AVATAR_FETCH_INTERVAL_S", "4"))
+# Профильные превью крошечные (download_big=False), но зависшая закачка не
+# должна вешать весь backfill-цикл и держать память — жёсткий потолок.
+FETCH_TIMEOUT_S = float(os.environ.get("AVATAR_FETCH_TIMEOUT_S", "30"))
 IDLE_SLEEP_S = float(os.environ.get("AVATAR_IDLE_SLEEP_S", "600"))
 PAUSED_SLEEP_S = float(os.environ.get("AVATAR_PAUSED_SLEEP_S", "120"))
 
@@ -41,9 +44,16 @@ async def _fetch_one(client, ent: dict) -> None:
         if peer is None:
             await upsert_avatar(eid, image=None, missing=True)
             return
-        data = await client.download_profile_photo(peer, file=bytes, download_big=False)
+        data = await asyncio.wait_for(
+            client.download_profile_photo(peer, file=bytes, download_big=False),
+            FETCH_TIMEOUT_S,
+        )
     except FloodWaitError:
         raise
+    except TimeoutError:
+        log.debug("avatar fetch timed out entity=%s — marking missing", eid)
+        await upsert_avatar(eid, image=None, missing=True)
+        return
     except Exception as e:
         # Unresolvable from cache / privacy-hidden / deleted — mark missing so
         # we don't retry it every pass. Logged at DEBUG (expected, high volume).

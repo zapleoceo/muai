@@ -195,9 +195,16 @@ def build_app(client: TelegramClient) -> FastAPI:
         """Download media bytes for (chat_id, msg_id). Returns base64+mime.
 
         Used by media-worker to grab photo/voice/audio for vision/whisper.
-        Returns up to 25 MB; larger files refused (Whisper hard limit).
+        Size-capped BEFORE download (msg.file.size) and time-bounded — see
+        media_download.py for why (2026-07-19 OOM).
         """
         from base64 import b64encode
+
+        from ingestor_telegram.media_download import (
+            MediaDownloadTimeout,
+            MediaTooLarge,
+            download_capped,
+        )
 
         _check_secret(x_internal_secret)
         chat_id = int(body["chat_id"])
@@ -208,12 +215,15 @@ def build_app(client: TelegramClient) -> FastAPI:
                 return {"error": "message not found"}
             if not getattr(msg, "media", None):
                 return {"error": "no media on this message"}
-            data = await msg.download_media(file=bytes)
+            try:
+                data = await download_capped(msg)
+            except MediaTooLarge as e:
+                return {"error": str(e)}
+            except MediaDownloadTimeout as e:
+                return {"error": str(e)}
             if data is None:
                 return {"error": "download returned None (deleted?)"}
             size = len(data)
-            if size > 25 * 1024 * 1024:
-                return {"error": f"too large: {size} bytes (>25MB)"}
             mime = None
             if getattr(msg, "voice", None):
                 mime = "audio/ogg"

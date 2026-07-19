@@ -28,6 +28,18 @@ Code layout (one responsibility per file):
    tick, if finalize crashed) could re-claim and double-process the same
    event.
 4. For each: POST to ingestor-telegram `/media/download` → bytes + mime.
+   That endpoint downloads through `ingestor_telegram.media_download.
+   download_capped()`, which enforces the 25 MB cap **before** any bytes
+   move (via `msg.file.size` from message metadata, raising `MediaTooLarge`)
+   and bounds the transfer with a 55 s timeout (`MediaDownloadTimeout`).
+   Before this (2026-07-19) the file was buffered whole into RAM and the
+   size checked afterward — a large Telegram audio (podcasts run to
+   hundreds of MB, the format allows up to 2 GB) OOM-killed the ingestor,
+   and because media-worker gives up after 60 s the server-side download
+   was left orphaned, buffering into memory nothing was reading. Oversize
+   / timeout now come back as errors classified **permanent** by
+   `_is_permanent`, so the event degrades immediately instead of burning
+   three pointless retries.
 5. Photo → **broker `POST /v1/chat?capability=vision`** with OpenAI-style
    multimodal content (`text` block + `image_url` data-URI) and an
    OCR/caption prompt (Russian, 1-3 sentences + verbatim text under

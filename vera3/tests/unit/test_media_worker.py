@@ -48,6 +48,13 @@ def test_permanent_on_misconfig_and_empty():
     assert repo._is_permanent("broker vision returned empty text") is True
 
 
+def test_permanent_on_oversize_and_timeout():
+    # oversize файл не влезет никогда, зависший — зависнет снова: degrade сразу,
+    # не жечь 3 ретрая (2m/15m/60m)
+    assert repo._is_permanent("download: too large: 900000000 bytes (>26214400 limit)") is True
+    assert repo._is_permanent("download: download timed out after 55s") is True
+
+
 def test_no_provider_503_is_transient():
     # 503 "no provider available" = all gemini keys momentarily cooled
     # (free-tier churn). They recover in minutes, so this MUST be transient —

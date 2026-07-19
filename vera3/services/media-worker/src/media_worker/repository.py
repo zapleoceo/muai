@@ -24,6 +24,8 @@ def _is_permanent(err: str) -> bool:
         return True
     if "empty text" in e:                        # vision safety-block / blank
         return True
+    if "too large" in e or "timed out" in e:     # oversize never fits; a file
+        return True                              # that hangs will hang again
     # NOTE: 503 "no provider available" is TRANSIENT, not permanent — it
     # happens when all gemini keys are momentarily in cooldown (free-tier
     # rate-limit churn). They recover within minutes, so the backoff retry
