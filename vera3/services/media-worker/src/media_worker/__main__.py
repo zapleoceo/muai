@@ -41,27 +41,25 @@ async def main_loop() -> None:  # pragma: no cover — glue, pieces unit-tested
     from vera_shared.llm.circuit import llm_cooldown_remaining_s
 
     while True:
-        # Circuit breaker: vision-пул мёртв / бюджет капнут — не клеймим медиа
-        # (иначе жжём retry-бюджет об заведомые «no provider available»).
-        cooldown = await llm_cooldown_remaining_s("vision")
-        if cooldown > 0:
-            log.info("LLM circuit open for vision (%.0f min left) — idle",
-                     cooldown / 60)
-            await asyncio.sleep(min(cooldown, 60))
-            continue
+        # Circuit breaker: если vision-пул капнут — НЕ клеймим фото (жгли бы
+        # retry-бюджет об заведомые «no provider»), но голосовые/аудио идут
+        # через отдельный whisper-пул, который не капнут — их продолжаем брать.
+        vision_cd = await llm_cooldown_remaining_s("vision")
         limit = await _claim_limit()
         if limit <= 0:
             await asyncio.sleep(POLL_S)   # paused or rate budget spent
             continue
         try:
-            rows = await _claim_batch(limit)
+            rows = await _claim_batch(limit, voice_only=vision_cd > 0)
         except Exception as e:
             log.exception("claim failed: %s", e)
             await asyncio.sleep(POLL_S)
             continue
 
         if not rows:
-            await asyncio.sleep(POLL_S)
+            # Vision капнут и голосовых в очереди нет — ждём конца кулдауна
+            # (кусками ≤60с), иначе обычный poll.
+            await asyncio.sleep(min(vision_cd, 60) if vision_cd > 0 else POLL_S)
             continue
 
         for r in rows:
