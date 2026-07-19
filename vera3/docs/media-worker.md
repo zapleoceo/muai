@@ -19,7 +19,11 @@ Code layout (one responsibility per file):
    resolves rare peers only after seeing them once — without the warm-up,
    `/media/download` on such peers fails with "Could not find the input
    entity". Best-effort: the worker starts either way.
-3. media-worker polls pending events (batch of 3, every 10s). `_claim_batch`
+3. media-worker polls pending events (batch of 3, every 10s), **newest
+   first** (`ORDER BY id DESC`). Live media (highest id) is therefore always
+   claimed ahead of re-processed backlog (lower id), so a bulk requeue of
+   old recognition failures can't starve recognition of fresh incoming
+   messages — see "Re-recognising the backlog" below. `_claim_batch`
    does the claim as ONE atomic `UPDATE ... FOR UPDATE SKIP LOCKED ...
    RETURNING` that stamps a 10-minute `media_next_retry_at` lease on the
    selected rows — a plain `SELECT ... FOR UPDATE` in its own transaction
@@ -116,3 +120,40 @@ Stickers were enabled 2026-06-29 (user wanted all images + stickers).
 The ingestor sets `needs_recognition=True` only for `image/webp` stickers;
 animated/video stickers keep their `[sticker: <emoji>]` placeholder since
 they aren't single images.
+
+## Re-recognising the backlog
+
+When recognition fails, the event **still lands in the brain** — `_on_failure`
+degrades it to `triage_status='pending'` keeping the placeholder
+(`[photo]`/`[voice: Ns]`) + metadata, and normal triage embeds/entity-extracts
+it. Only the *recognised text* is missing; the message is never lost.
+
+History left a large pile of such degradations (audited 2026-07-19): ~87.7k
+events with `metadata.media_recognition='failed'`, ~79.5k of them recoverable
+— they failed on transient capacity errors (`vision 503 no provider`,
+`whisper 503`, `GEMINI_API_KEY not set`, transient 502s), which are now fixed
+by the LLM circuit breaker + broker-hosted whisper. The unrecoverable tail
+(~8.1k) is `Could not find the input entity` (peer not in session cache),
+`message not found` (deleted), and `too large`.
+
+To re-recognise, reset recoverable failures back to `media_pending` and let
+the hardened pipeline reprocess them:
+
+```sql
+UPDATE events e SET
+  triage_status='media_pending', triage_error=NULL,
+  metadata = (e.metadata - 'media_recognition' - 'media_retry_count' - 'media_next_retry_at')
+WHERE e.metadata->>'media_recognition'='failed' AND e.triage_status='done'
+  AND COALESCE(e.triage_error,'') NOT LIKE '%Could not find the input entity%'
+  AND COALESCE(e.triage_error,'') NOT LIKE '%message not found%'
+  AND COALESCE(e.triage_error,'') NOT LIKE '%too large%'
+  AND COALESCE(e.triage_error,'') NOT LIKE '%413%';
+```
+
+The bottleneck is **vision-pool capacity** — free-tier vision clears only
+~130 photos/day, so the 72k photo tail drains over months. This is safe and
+non-disruptive because of the newest-first claim order (step 3): live media
+always jumps the queue, the backlog chips away on spare capacity, the circuit
+breaker paces it under the daily budget cap, and every download is size-capped
+(no OOM). Voice/audio (~5.3k) go through the separate whisper pool and clear
+in days.

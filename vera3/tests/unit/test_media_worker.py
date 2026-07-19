@@ -128,6 +128,13 @@ async def test_claim_batch_returns_empty_on_zero_limit():
     assert await repo._claim_batch(0) == []
 
 
+def test_claim_batch_prioritises_newest():
+    # live media (высший id) должно клеймиться раньше requeue-бэклога (низкий id)
+    import inspect
+    src = inspect.getsource(repo._claim_batch)
+    assert "ORDER BY id DESC" in src
+
+
 # ─── _broker_headers ───────────────────────────────────────────────────────
 
 
