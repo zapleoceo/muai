@@ -138,6 +138,38 @@ def test_claim_batch_voice_only_filters_kind():
     assert "AND metadata->>'media_kind' IN ('voice','audio')" in src
 
 
+class _FakeClaimSession:
+    """Мок-сессия: ловит выполненный SQL, возвращает пустой набор строк."""
+    def __init__(self):
+        self.sql = ""
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *a):
+        return False
+
+    async def execute(self, stmt, params=None):
+        self.sql = str(stmt)
+        from unittest.mock import MagicMock
+        res = MagicMock()
+        res.mappings.return_value.all.return_value = []
+        return res
+
+
+@pytest.mark.asyncio
+async def test_claim_batch_builds_kind_filter_only_when_voice_only():
+    sess = _FakeClaimSession()
+    with patch.object(repo, "get_session", lambda: sess):
+        assert await repo._claim_batch(5) == []
+        assert "media_kind' IN ('voice','audio')" not in sess.sql.split("ORDER BY")[0]
+    sess2 = _FakeClaimSession()
+    with patch.object(repo, "get_session", lambda: sess2):
+        assert await repo._claim_batch(5, voice_only=True) == []
+        # фильтр в WHERE (до ORDER BY), не только в ORDER BY
+        assert "media_kind' IN ('voice','audio')" in sess2.sql.split("ORDER BY")[0]
+
+
 def test_claim_batch_prioritises_voice_then_newest():
     # voice/audio (быстрый whisper) вперёд фото (медленный vision); внутри
     # класса — newest-first (живые впереди requeue-бэклога)
