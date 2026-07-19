@@ -26,7 +26,10 @@ Code layout (one responsibility per file):
    within each class, live media (highest id) is claimed ahead of re-processed
    backlog (lower id), so a bulk requeue of old recognition failures can't
    starve fresh incoming messages — see "Re-recognising the backlog" below.
-   `_claim_batch`
+   While the **vision** circuit is open (budget cap / no provider), the loop
+   claims `voice_only=True` — photos wait for vision to recover, but voice/audio
+   keep transcribing through the separate whisper pool (which isn't capped), so
+   a vision cap no longer stalls speech. `_claim_batch`
    does the claim as ONE atomic `UPDATE ... FOR UPDATE SKIP LOCKED ...
    RETURNING` that stamps a 10-minute `media_next_retry_at` lease on the
    selected rows — a plain `SELECT ... FOR UPDATE` in its own transaction

@@ -124,8 +124,18 @@ async def test_claim_limit_capped_by_allowance():
 
 @pytest.mark.asyncio
 async def test_claim_batch_returns_empty_on_zero_limit():
-    # limit<=0 short-circuits before touching the DB
+    # limit<=0 short-circuits before touching the DB (both modes)
     assert await repo._claim_batch(0) == []
+    assert await repo._claim_batch(0, voice_only=True) == []
+
+
+def test_claim_batch_voice_only_filters_kind():
+    # voice_only=True добавляет фильтр по kind, чтобы при капе vision
+    # разбирать только whisper-события; без него — весь media_pending
+    import inspect
+    src = inspect.getsource(repo._claim_batch)
+    assert "voice_only" in inspect.signature(repo._claim_batch).parameters
+    assert "AND metadata->>'media_kind' IN ('voice','audio')" in src
 
 
 def test_claim_batch_prioritises_voice_then_newest():

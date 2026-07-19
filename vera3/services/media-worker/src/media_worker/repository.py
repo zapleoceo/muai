@@ -37,16 +37,26 @@ def _is_permanent(err: str) -> bool:
     ))
 
 
-async def _claim_batch(limit: int = BATCH) -> list[dict]:
+# Kinds recognised via the vision pool (chat_async capability="vision") vs the
+# separate whisper pool. When vision is circuit-broken we can still drain voice.
+_VOICE_KINDS = ("voice", "audio")
+
+
+async def _claim_batch(limit: int = BATCH, *, voice_only: bool = False) -> list[dict]:
     """Claim media_pending whose retry window is due.
 
     media_next_retry_at lives in metadata (jsonb) — NULL means never tried.
     Filtering by it means a failed event with a future retry time is SKIPPED,
     so the queue advances instead of looping on the first N forever.
-    `limit` is trimmed by the backfill rate limiter.
+    `limit` is trimmed by the backfill rate limiter. `voice_only` claims only
+    voice/audio (whisper pool) — used while the vision circuit is open so a
+    vision budget-cap doesn't also stall speech transcription.
     """
     if limit <= 0:
         return []
+    kind_filter = (
+        "AND metadata->>'media_kind' IN ('voice','audio')" if voice_only else ""
+    )
     # Атомарный lease-claim: одним UPDATE проставляем media_next_retry_at на
     # 10 мин вперёд у выбранных строк и их же возвращаем. Это (а) не даёт
     # второму инстансу/следующему поллу забрать те же события (claim атомарен
@@ -54,10 +64,10 @@ async def _claim_batch(limit: int = BATCH) -> list[dict]:
     # давал), (б) если finalize упадёт — строка не зациклится, лиз оттолкнёт
     # следующую попытку на 10 мин.
     async with get_session() as s:
-        rs = (await s.execute(text("""
+        rs = (await s.execute(text(f"""
             UPDATE events SET metadata = jsonb_set(
-                COALESCE(metadata, '{}'::jsonb),
-                '{media_next_retry_at}',
+                COALESCE(metadata, '{{}}'::jsonb),
+                '{{media_next_retry_at}}',
                 to_jsonb((NOW() + interval '10 minutes')::text)
             )
             WHERE id IN (
@@ -67,6 +77,7 @@ async def _claim_batch(limit: int = BATCH) -> list[dict]:
                     metadata->>'media_next_retry_at' IS NULL
                     OR (metadata->>'media_next_retry_at')::timestamp < NOW()
                   )
+                  {kind_filter}
                 -- voice/audio вперёд фото: whisper-пул быстрый и дешёвый, а
                 -- речь — самый ценный контент; vision медленный (free-tier
                 -- ~130/сутки) и не должен морозить транскрипцию голосовых.
