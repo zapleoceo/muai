@@ -18,6 +18,7 @@ from vera_shared.crypto import decrypt
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import TelegramSessionRow
+from vera_shared.media_policy import should_recognize_media
 
 from ingestor_telegram.entity_sync import sync_message_entities
 from ingestor_telegram.tools_http import build_app
@@ -88,14 +89,11 @@ async def save_message(client: TelegramClient, msg) -> None:
     # распознает (vision/whisper), допишет content_text.
     media_kind: str | None = None
     media_meta: dict[str, Any] = {}
-    needs_recognition = False
     if getattr(msg, "photo", None):
         media_kind = "photo"
-        needs_recognition = True
     elif getattr(msg, "voice", None):
         media_kind = "voice"
         media_meta["duration_s"] = getattr(msg.voice, "duration", None)
-        needs_recognition = True
     elif getattr(msg, "video_note", None):
         media_kind = "video_note"
         media_meta["duration_s"] = getattr(msg.video_note, "duration", None)
@@ -105,17 +103,10 @@ async def save_message(client: TelegramClient, msg) -> None:
     elif getattr(msg, "audio", None):
         media_kind = "audio"
         media_meta["duration_s"] = getattr(msg.audio, "duration", None)
-        needs_recognition = True  # music/podcast also goes through whisper
     elif getattr(msg, "sticker", None):
         media_kind = "sticker"
         media_meta["emoji"] = getattr(msg.sticker, "alt", None) or ""
-        _mime = getattr(msg.sticker, "mime_type", "") or ""
-        media_meta["mime"] = _mime
-        # Static webp stickers are images → vision describes them. Animated
-        # (.tgs lottie) and video (.webm) stickers aren't images; the emoji
-        # alt-text already in the placeholder is the best signal.
-        if _mime == "image/webp":
-            needs_recognition = True
+        media_meta["mime"] = getattr(msg.sticker, "mime_type", "") or ""
     elif getattr(msg, "document", None):
         media_kind = "document"
         media_meta["mime"] = getattr(msg.document, "mime_type", None)
@@ -157,6 +148,13 @@ async def save_message(client: TelegramClient, msg) -> None:
         f"---\n{text}"
     )
 
+    chat_kind = classify_chat_kind(chat_type, getattr(chat, "megagroup", False))
+    # Единая политика распознавания: голос/аудио всегда, фото кроме вещательных
+    # каналов, стикеры никогда (Дима 2026-07-20 — жгли vision-бюджет впустую).
+    # Событие всё равно сохраняется с плейсхолдером — теряется только текст
+    # распознавания.
+    needs_recognition = should_recognize_media(media_kind, chat_kind)
+
     source_event_id = f"tg:{chat.id}:{msg.id}"
 
     async with get_session() as s:
@@ -187,9 +185,7 @@ async def save_message(client: TelegramClient, msg) -> None:
                 "msg_id": msg.id,
                 # chat_kind — единственное поле для различения приватный/группа/
                 # канал, см. classify_chat_kind().
-                "chat_kind": classify_chat_kind(
-                    chat_type, getattr(chat, "megagroup", False),
-                ),
+                "chat_kind": chat_kind,
                 # Оставлены для обратной совместимости — НЕ используй is_channel
                 # для «это вещательный канал», используй chat_kind=="channel".
                 "is_channel": chat_type in {"channel"},
