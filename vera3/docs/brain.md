@@ -7,7 +7,7 @@ The "intelligence layer" — three sub-services that turn events into useful ans
 `services/brain-triage/src/brain_triage/worker.py`
 
 - Loop: every 5s claim a batch of `pending` events via `UPDATE … FOR UPDATE SKIP LOCKED RETURNING`.
-- For each event: build a structured prompt → call AIbroker `chat:fast` with `response_format=TRIAGE_JSON_SCHEMA` (json_schema, strict=True — see below) → parse → write to `events.triage_metadata` (importance, topics, people, signals, needs_action).
+- For each event: build a structured prompt → call AIbroker via `resolve_triage_capability()` (prefers `chat:fast`; falls back to `chat:smart` when `chat:fast`'s free daily pool is budget-capped — a same-cost free tier, so the queue drains 24/7 instead of stalling ~5h/day until the 00:00 UTC reset) with `response_format=TRIAGE_JSON_SCHEMA` (json_schema, strict=True — see below) → parse → write to `events.triage_metadata` (importance, topics, people, signals, needs_action). The worker only idles when **both** capabilities are capped.
 - Voyage embedding in the same loop, batched (one call per N events).
 - Concurrency: `TRIAGE_CONCURRENCY=10` events in parallel per worker
   (was 5; bumped 2026-07-01 for backfill drainage — Mistral latency

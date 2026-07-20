@@ -218,16 +218,24 @@ async def main_loop() -> None:
 
     from vera_shared.llm.circuit import llm_cooldown_remaining_s
 
+    from brain_triage.triage_calls import (
+        TRIAGE_CAPABILITIES,
+        resolve_triage_capability,
+    )
+
     while True:
         try:
-            # Circuit breaker: бюджет chat:fast капнут / пул мёртв — не клеймим
-            # события вообще (иначе они уйдут в error об заведомый отказ и
-            # будут жечь retry-бюджет). Спим до конца кулдауна кусками ≤60с.
-            cooldown = await llm_cooldown_remaining_s("chat:fast")
-            if cooldown > 0:
-                log.info("[%s] LLM circuit open (%.0f min left) — triage idle",
-                         WORKER_ID, cooldown / 60)
-                await asyncio.sleep(min(cooldown, 60))
+            # Circuit breaker: не клеймим события, только если капнуты ОБЕ
+            # triage-ёмкости (chat:fast и бесплатный фолбэк chat:smart) —
+            # иначе события ушли бы в error об заведомый отказ и жгли retry.
+            # Пока жива хоть одна — работаем на ней. Спим до ближайшего
+            # восстановления кусками ≤60с.
+            if await resolve_triage_capability() is None:
+                cds = [await llm_cooldown_remaining_s(c) for c in TRIAGE_CAPABILITIES]
+                soonest = min(cds)
+                log.info("[%s] LLM circuit open (all triage caps; %.0f min left) "
+                         "— triage idle", WORKER_ID, soonest / 60)
+                await asyncio.sleep(min(soonest, 60))
                 continue
             n = await process_pending()
             if n == 0:

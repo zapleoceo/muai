@@ -26,6 +26,15 @@ from brain_triage.triage_calls import triage_group_batch  # noqa: E402
 from vera_shared.db.models import EventRow  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _stub_capability():
+    # resolve_triage_capability() reads circuit state from the control DB,
+    # which isn't wired in unit tests — pin it so triage calls run offline.
+    with patch("brain_triage.triage_calls.resolve_triage_capability",
+               AsyncMock(return_value="chat:fast")):
+        yield
+
+
 def _row(id_=1, content="привет", metadata=None, source="telegram") -> EventRow:
     return EventRow(
         id=id_, source=source, source_event_id=f"tg:{id_}",

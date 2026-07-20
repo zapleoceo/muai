@@ -25,6 +25,15 @@ from brain_triage.schemas import TRIAGE_JSON_SCHEMA  # noqa: E402
 from brain_triage.triage_calls import triage_one  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def _stub_capability():
+    # resolve_triage_capability() reads circuit state from the control DB,
+    # which isn't wired in unit tests — pin it so triage_one runs offline.
+    with patch("brain_triage.triage_calls.resolve_triage_capability",
+               AsyncMock(return_value="chat:fast")):
+        yield
+
+
 class _FakeEvent:
     id = 1
     source = "telegram"
