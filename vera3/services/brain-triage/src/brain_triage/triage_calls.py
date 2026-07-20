@@ -13,6 +13,7 @@ from datetime import datetime
 from typing import Any
 
 from vera_shared.db.models import EventRow
+from vera_shared.llm.circuit import llm_cooldown_remaining_s
 from vera_shared.llm.client import chat_async, embed
 
 from brain_triage.postprocess import postprocess_triage
@@ -20,6 +21,20 @@ from brain_triage.prompts import TRIAGE_PROMPT_TEMPLATE, build_batch_prompt
 from brain_triage.schemas import TRIAGE_BATCH_JSON_SCHEMA, TRIAGE_JSON_SCHEMA
 
 log = logging.getLogger(__name__)
+
+# chat:fast — дешёвый дефолт; chat:smart — бесплатный фолбэк того же класса
+# (замер 2026-07-20: sambanova/DeepSeek-V3.2, $0). Раньше триаж стоял на
+# chat:fast и полностью замирал на ~5ч/сутки, когда бесплатный дневной лимит
+# chat:fast исчерпывался. Теперь при капе он переключается на chat:smart.
+TRIAGE_CAPABILITIES = ("chat:fast", "chat:smart")
+
+
+async def resolve_triage_capability() -> str | None:
+    """Первая triage-ёмкость с закрытым circuit'ом, иначе None (обе капнуты)."""
+    for cap in TRIAGE_CAPABILITIES:
+        if await llm_cooldown_remaining_s(cap) <= 0:
+            return cap
+    return None
 
 
 def _strip_markdown_fence(text: str) -> str:
@@ -54,7 +69,7 @@ async def triage_one(event_row: EventRow) -> dict[str, Any] | None:
 
     response_text, meta = await chat_async(
         messages=[{"role": "user", "content": prompt}],
-        capability="chat:fast",
+        capability=await resolve_triage_capability() or "chat:fast",
         response_format=TRIAGE_JSON_SCHEMA,
         max_tokens=1500,
         temperature=0.3,
@@ -91,7 +106,7 @@ async def triage_group_batch(rows: list[EventRow]) -> dict[int, dict[str, Any] |
 
     response_text, meta = await chat_async(
         messages=[{"role": "user", "content": prompt}],
-        capability="chat:fast",
+        capability=await resolve_triage_capability() or "chat:fast",
         response_format=TRIAGE_BATCH_JSON_SCHEMA,
         max_tokens=350 * len(rows) + 500,
         temperature=0.3,
