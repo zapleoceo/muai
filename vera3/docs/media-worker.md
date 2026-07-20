@@ -115,17 +115,25 @@ Goes through the broker's free-first chains:
 
 | Kind | Recognized? | How |
 |---|---|---|
-| photo | ✅ | vision |
-| sticker (static `image/webp`) | ✅ | vision (`recognized sticker`) |
-| sticker (animated `.tgs` / video `.webm`) | ⬇ placeholder | emoji alt-text only — not an image |
+| photo / image (private / group) | ✅ | vision |
+| photo / image (broadcast channel) | ❌ | placeholder `[photo]` kept, no vision |
+| sticker | ❌ | placeholder `[sticker: <emoji>]` only |
 | voice / audio | ✅ | broker whisper |
 | video / video_note | ❌ | not processed |
 | document | ❌ | not processed |
 
-Stickers were enabled 2026-06-29 (user wanted all images + stickers).
-The ingestor sets `needs_recognition=True` only for `image/webp` stickers;
-animated/video stickers keep their `[sticker: <emoji>]` placeholder since
-they aren't single images.
+The recognition gate is one pure policy — `vera_shared.media_policy.
+should_recognize_media(media_kind, chat_kind)` — so every ingest path decides
+identically and it's unit-tested. Set 2026-07-20 (Dima): the free vision pool
+kept getting exhausted by news-channel graphics and stickers — content with
+~zero value for searching Dima's own memory. So channel images and all
+stickers now skip vision entirely; the event still lands in the brain with its
+`[photo]`/`[sticker]` placeholder, only the recognised text is dropped.
+Voice/audio go through the separate (uncapped) whisper pool and are recognised
+everywhere, including channels.
+
+Earlier (2026-06-29 → 2026-07-20) static `image/webp` stickers were sent to
+vision and channel photos were recognised; both were rolled back here.
 
 ## Re-recognising the backlog
 
