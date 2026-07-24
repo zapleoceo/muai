@@ -13,9 +13,10 @@ services:
     image: pgvector/pgvector:pg16
     container_name: vera3-postgres
     # Docker даёт /dev/shm всего 64 МБ — параллельным воркерам Postgres этого
-    # не хватает на таблицах такого размера: VACUUM падал с «could not resize
-    # shared memory segment … No space left on device», из-за чего мёртвые
-    # строки в events копились неделями (63k к 2026-07-24) и таблица пухла.
+    # не хватает на таблицах такого размера: `VACUUM events` падал с «could not
+    # resize shared memory segment … No space left on device» (2026-07-24).
+    # Автовакуум это НЕ затрагивает (он всегда однопоточный), но ручной VACUUM
+    # и параллельные seq-scan'ы в brain-search — да.
     shm_size: 256mb
     environment:
       POSTGRES_USER: vera

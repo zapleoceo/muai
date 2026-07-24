@@ -132,11 +132,15 @@ throttle 30 min (or `monitor_throttle_min` setting — see below).
   `vera3-monitor`, `vera3-sync-projects`): `infra/logrotate/vera` →
   `/etc/logrotate.d/vera`, weekly ×4 + compress, `su root adm`
   (без него logrotate отказывается: `/var/log` принадлежит `root:syslog`).
-- **`shm_size: 256mb`** у postgres — без него параллельный `VACUUM` падает
-  с «could not resize shared memory segment», мёртвые строки копятся
-  неделями и таблица `events` пухнет (инцидент 2026-07-24: 63k dead tuples,
-  автовакуум не проходил с 07-22). Разовая чистка при 64 МБ shm:
-  `VACUUM (PARALLEL 0, ANALYZE) events`.
+- **`shm_size: 256mb`** у postgres — Docker даёт `/dev/shm` 64 МБ, из-за чего
+  `VACUUM events` падал с «could not resize shared memory segment»
+  (2026-07-24). Автовакуум этим НЕ затронут — он всегда однопоточный;
+  страдают ручной `VACUUM` и параллельные seq-scan'ы brain-search. Обход без
+  перезапуска контейнера: `VACUUM (PARALLEL 0, ANALYZE) events`.
+- Мёртвые строки в `events` (63k на 2026-07-24 после массовых UPDATE) — это
+  НЕ поломка: порог автовакуума `50 + 0.2×live` ≈ 80k ещё не был достигнут.
+  После разовых массовых правок статуса имеет смысл прогнать `VACUUM ANALYZE`
+  руками, не дожидаясь порога.
 - Разовые выгрузки (`*.csv`, `kb_*.sql`) в `/var/backups/vera/` — не часть
   схемы ротации, удалять вручную; для бэкапов есть per-project дерево.
 Recovery messages on flip back to healthy.
