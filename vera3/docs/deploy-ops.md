@@ -119,6 +119,26 @@ Checks 11 dimensions:
 
 Alerts to `@Dimondra_Ai_Bot` DM to `OWNER_TELEGRAM_ID`. State-file
 throttle 30 min (or `monitor_throttle_min` setting — see below).
+
+### Disk hygiene
+
+Бокс 38 ГБ делится с aibroker/stepan2, поэтому Vera держит свой след
+ограниченным:
+
+- **Docker-логи**: демон-дефолт (`/etc/docker/daemon.json`) — 50m×3 на
+  контейнер, т.е. до ~2 ГБ на одну Vera. Compose переопределяет его
+  явным якорем `x-logging` (10m×3) для всех сервисов vera3.
+- **Логи cron-скриптов** (`vera-backup`, `vera-media-requeue`,
+  `vera3-monitor`, `vera3-sync-projects`): `infra/logrotate/vera` →
+  `/etc/logrotate.d/vera`, weekly ×4 + compress, `su root adm`
+  (без него logrotate отказывается: `/var/log` принадлежит `root:syslog`).
+- **`shm_size: 256mb`** у postgres — без него параллельный `VACUUM` падает
+  с «could not resize shared memory segment», мёртвые строки копятся
+  неделями и таблица `events` пухнет (инцидент 2026-07-24: 63k dead tuples,
+  автовакуум не проходил с 07-22). Разовая чистка при 64 МБ shm:
+  `VACUUM (PARALLEL 0, ANALYZE) events`.
+- Разовые выгрузки (`*.csv`, `kb_*.sql`) в `/var/backups/vera/` — не часть
+  схемы ротации, удалять вручную; для бэкапов есть per-project дерево.
 Recovery messages on flip back to healthy.
 
 ## Runtime settings (`/settings` dashboard page)

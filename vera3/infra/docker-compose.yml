@@ -1,10 +1,22 @@
 name: vera3
 
+# Потолок логов задаём явно: демон-дефолт (/etc/docker/daemon.json) — 50m×3 на
+# контейнер, т.е. до ~2 ГБ на одну Vera при 14 контейнерах, и он общий для всех
+# проектов бокса. 10m×3 хватает для разбора инцидента, но не съедает диск.
+x-logging: &default-logging
+  driver: json-file
+  options: {max-size: 10m, max-file: "3"}
+
 services:
   # ─── Storage ─────────────────────────────────────────────────────────────
   postgres:
     image: pgvector/pgvector:pg16
     container_name: vera3-postgres
+    # Docker даёт /dev/shm всего 64 МБ — параллельным воркерам Postgres этого
+    # не хватает на таблицах такого размера: VACUUM падал с «could not resize
+    # shared memory segment … No space left on device», из-за чего мёртвые
+    # строки в events копились неделями (63k к 2026-07-24) и таблица пухла.
+    shm_size: 256mb
     environment:
       POSTGRES_USER: vera
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vera}
@@ -19,6 +31,7 @@ services:
       timeout: 5s
       retries: 5
     restart: unless-stopped
+    logging: *default-logging
 
   # ─── Gateway ─────────────────────────────────────────────────────────────
   gateway:
@@ -43,6 +56,7 @@ services:
     ports:
       - "127.0.0.1:8001:8000"
     restart: unless-stopped
+    logging: *default-logging
 
   # ─── Brain: Triage Workers (scalable) ──────────────────────────────────
   # SELECT FOR UPDATE SKIP LOCKED исключает race condition между воркерами.
@@ -76,6 +90,7 @@ services:
       BROKER_URL: ${BROKER_URL:-}
       BROKER_PROJECT_KEY: ${BROKER_PROJECT_KEY:-}
     restart: unless-stopped
+    logging: *default-logging
 
   # ─── Brain: Search ──────────────────────────────────────────────────────
   brain-search:
@@ -98,6 +113,7 @@ services:
     ports:
       - "127.0.0.1:8002:8000"
     restart: unless-stopped
+    logging: *default-logging
 
   # ─── Telegram Bot ───────────────────────────────────────────────────────
   bot-telegram:
@@ -119,7 +135,7 @@ services:
       GATEWAY_URL: http://gateway:8000
       INTERNAL_SECRET: ${INTERNAL_SECRET:?INTERNAL_SECRET must be set}
     restart: unless-stopped
-    logging: {driver: json-file, options: {max-size: 10m, max-file: 3}}
+    logging: *default-logging
 
   # ─── Gmail Ingestor ─────────────────────────────────────────────────────
   ingestor-gmail:
@@ -137,6 +153,7 @@ services:
       GMAIL_CLIENT_SECRET: ${GMAIL_CLIENT_SECRET}
       GMAIL_POLL_S: 300
     restart: unless-stopped
+    logging: *default-logging
 
   # ─── Telegram Userbot ───────────────────────────────────────────────────
   ingestor-telegram:
@@ -160,6 +177,7 @@ services:
     expose:
       - "8000"
     restart: unless-stopped
+    logging: *default-logging
 
   ingestor-instagram:
     build:
@@ -178,6 +196,7 @@ services:
       INTERNAL_SECRET: ${INTERNAL_SECRET:?INTERNAL_SECRET must be set}
       IG_POLL_INTERVAL_S: "90"
     restart: unless-stopped
+    logging: *default-logging
 
   # ─── Media Worker ───────────────────────────────────────────────────────
   # Polls triage_status='media_pending', downloads photo/voice via
@@ -204,6 +223,7 @@ services:
       MEDIA_POLL_S: "10"
       MEDIA_BATCH: "3"
     restart: unless-stopped
+    logging: *default-logging
 
   # ─── Dashboard ──────────────────────────────────────────────────────────
   dashboard:
@@ -232,6 +252,7 @@ services:
     ports:
       - "127.0.0.1:8003:8000"
     restart: unless-stopped
+    logging: *default-logging
 
   # ─── Housekeeping ───────────────────────────────────────────────────────
   prune:
@@ -245,6 +266,7 @@ services:
         sleep 86400;
       done"
     restart: unless-stopped
+    logging: *default-logging
 
 volumes:
   vera3_pgdata:

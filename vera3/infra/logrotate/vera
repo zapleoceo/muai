@@ -1,0 +1,14 @@
+/var/log/vera-backup.log
+/var/log/vera-media-requeue.log
+/var/log/vera3-monitor.log
+/var/log/vera3-sync-projects.log
+{
+    su root adm
+    weekly
+    rotate 4
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
