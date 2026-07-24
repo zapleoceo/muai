@@ -194,15 +194,20 @@ Server `.env` at `/var/www/vera3/infra/.env` (mode 600):
 **пер-проектная**, сервер держит только короткий буфер, длинная история
 живёт на Synology NAS:
 
+Бэкапим только НЕвоспроизводимое: код приходит из git, а `event_embeddings`
+(3.6 ГБ, 66% БД) пересчитываются из `events` через брокер — их данные
+исключаются из **всех** vera-дампов (`VERA_EXCLUDE`, дефолт
+`event_embeddings`). Схема таблицы в дампе остаётся, на restore пустая
+таблица дозаполняется реэмбеддингом. Дамп vera: **129 МБ** вместо 1.8 ГБ.
+`events`, граф, `usage_log`, `.env` — воссоздать нельзя, бэкапим.
+
 - `/var/backups/vera/<project>/daily/YYYY-MM-DD/` (project ∈ aibroker,
-  stepan, stepan2, vera) — дамп БД + `secrets.tar.gz` (`.env` проекта —
-  без TOKEN_SECRET дампы бесполезны) + SHA256SUMS. **vera — без данных
-  `event_embeddings`** (`VERA_DAILY_EXCLUDE`): вектора — 80% объёма и
-  производные данные. Ротация `KEEP_DAILY_DAYS` (**2** — буфер на случай
-  пропуска NAS-пула, не хранилище).
-- `/var/backups/vera/vera/weekly/YYYY-MM-DD/` — полный vera.dump с
-  эмбеддингами раз в неделю (`FULL_DOW`, 7 = воскресенье). Ротация
-  `KEEP_WEEKLY_DAYS` (7).
+  stepan2, vera) — дамп БД + `secrets.tar.gz` (`.env` проекта — без
+  TOKEN_SECRET дампы бесполезны) + SHA256SUMS. Ротация `KEEP_DAILY_DAYS`
+  (**2** — буфер на случай пропуска NAS-пула, не хранилище).
+- `/var/backups/vera/vera/weekly/YYYY-MM-DD/` — тот же лёгкий vera.dump
+  (тоже без `event_embeddings`), но дольше живёт: чекпоинт с бóльшим
+  окном восстановления (`FULL_DOW`, 7 = воскресенье; `KEEP_WEEKLY_DAYS` 7).
 
 Все параметры — env-переменные скрипта, не правки кода.
 

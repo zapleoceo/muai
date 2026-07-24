@@ -2,13 +2,17 @@
 # Nightly backup of all project DBs + their .env secrets — per-project layout:
 #
 #   $DEST/<project>/daily/YYYY-MM-DD/<db>.dump + secrets.tar.gz + SHA256SUMS
-#   $DEST/vera/weekly/YYYY-MM-DD/vera.dump   (полный, с эмбеддингами, FULL_DOW)
+#   $DEST/vera/weekly/YYYY-MM-DD/vera.dump   (longer-retention checkpoint, FULL_DOW)
 #
 # Сервер — только КОРОТКИЙ буфер (KEEP_DAILY_DAYS=2): длинную историю хранит
 # Synology NAS, который каждую ночь забирает всё дерево read-only rrsync-юзером
-# `verabackup` (см. docs/deploy-ops.md «Backups → Synology NAS»). Дневной дамп
-# vera идёт без event_embeddings (80% объёма, производные данные) — полный
-# срез раз в неделю.
+# `verabackup` (см. docs/deploy-ops.md «Backups → Synology NAS»).
+#
+# Бэкапим только НЕвоспроизводимое: код приходит из git, а event_embeddings
+# (3.6 ГБ, 66% БД) пересчитываются из events через брокер — их данные
+# исключаем ИЗ ОБОИХ дампов (VERA_EXCLUDE), схема таблицы остаётся, на
+# restore она дозаполняется реэмбеддингом. Всё прочее (events, граф, .env,
+# usage_log) воссоздать нельзя — бэкапим.
 #
 # Restore DB : docker exec -i <container> pg_restore -c -U <user> -d <db> < file.dump
 # Restore env: tar xzf secrets.tar.gz -C /
@@ -19,7 +23,8 @@ KEEP_DAILY_DAYS=${KEEP_DAILY_DAYS:-2}
 KEEP_WEEKLY_DAYS=${KEEP_WEEKLY_DAYS:-7}
 FULL_DOW=${FULL_DOW:-7}                    # ISO day-of-week: 7 = воскресенье
 BACKUP_GROUP=${BACKUP_GROUP:-verabackup}   # NAS-пользователь читает через группу
-VERA_DAILY_EXCLUDE=${VERA_DAILY_EXCLUDE:-event_embeddings}
+# Таблицы, ДАННЫЕ которых не бэкапим (воспроизводимы) — схема остаётся.
+VERA_EXCLUDE=${VERA_EXCLUDE:-${VERA_DAILY_EXCLUDE:-event_embeddings}}
 
 TODAY=$(date +%F)
 
@@ -57,13 +62,14 @@ backup_project aibroker aibroker-postgres aibroker aibroker /var/www/aibroker/.e
 backup_project stepan2  stepan2-postgres  stepan2  stepan2  /var/www/stepan2/infra/.env
 # shellcheck disable=SC2046
 backup_project vera     vera3-postgres    vera     vera     /var/www/vera3/infra/.env \
-  $(exclude_args "$VERA_DAILY_EXCLUDE")
+  $(exclude_args "$VERA_EXCLUDE")
 
 if [ "$(date +%u)" = "$FULL_DOW" ]; then
   WEEKLY="$DEST/vera/weekly/$TODAY"
   mkdir -p "$WEEKLY"
-  echo "[$(date)] weekly FULL vera dump -> $WEEKLY"
-  dump vera3-postgres vera vera "$WEEKLY"
+  echo "[$(date)] weekly vera dump -> $WEEKLY"
+  # shellcheck disable=SC2046
+  dump vera3-postgres vera vera "$WEEKLY" $(exclude_args "$VERA_EXCLUDE")
   ( cd "$WEEKLY" && sha256sum ./*.dump > SHA256SUMS )
 fi
 
