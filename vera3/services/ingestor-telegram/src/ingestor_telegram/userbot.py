@@ -150,10 +150,10 @@ async def save_message(client: TelegramClient, msg) -> None:
 
     chat_kind = classify_chat_kind(chat_type, getattr(chat, "megagroup", False))
     # Единая политика распознавания: голос/аудио всегда, фото кроме вещательных
-    # каналов, стикеры никогда (Дима 2026-07-20 — жгли vision-бюджет впустую).
-    # Событие всё равно сохраняется с плейсхолдером — теряется только текст
-    # распознавания.
-    needs_recognition = should_recognize_media(media_kind, chat_kind)
+    # каналов и шумных пабликов, стикеры никогда (Дима 2026-07-20 и 07-29 —
+    # жгли vision-бюджет впустую). Событие всё равно сохраняется с
+    # плейсхолдером — теряется только текст распознавания.
+    needs_recognition = should_recognize_media(media_kind, chat_kind, chat_title)
 
     source_event_id = f"tg:{chat.id}:{msg.id}"
 
