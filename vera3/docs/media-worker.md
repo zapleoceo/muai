@@ -117,6 +117,7 @@ Goes through the broker's free-first chains:
 |---|---|---|
 | photo / image (private / group) | ✅ | vision |
 | photo / image (broadcast channel) | ❌ | placeholder `[photo]` kept, no vision |
+| photo / image (noisy public group) | ❌ | placeholder kept — see denylist below |
 | sticker | ❌ | placeholder `[sticker: <emoji>]` only |
 | voice / audio | ✅ | broker whisper |
 | video / video_note | ❌ | not processed |
@@ -131,6 +132,18 @@ stickers now skip vision entirely; the event still lands in the brain with its
 `[photo]`/`[sticker]` placeholder, only the recognised text is dropped.
 Voice/audio go through the separate (uncapped) whisper pool and are recognised
 everywhere, including channels.
+
+**Noisy-group denylist (2026-07-29).** The channel rule above only covers
+broadcast channels, but an audit of the live inflow showed the biggest photo
+sources were large public *groups* — expat communities and channel discussion
+chats — which the rule let through (~39 photos/day, ~71% of the photo
+backlog). `media_policy.is_noise_chat(chat_title)` now also skips vision for
+chats whose title starts with `nexta live`, `українці`, `хдніпро`,
+`велигамность`, `квизда`, `ии - боты`, `chatgpt`, `канал лучкова`, or
+contains `badcomedian` (Dima's approved list: «это все в топку»). Keep it in
+sync with `NOISE_CHATS` in `scripts/vera-media-requeue.sh`, which applies the
+same filter when refilling the queue from the backlog. Voice/audio from these
+chats is still transcribed — whisper is a separate, cheap pool.
 
 Earlier (2026-06-29 → 2026-07-20) static `image/webp` stickers were sent to
 vision and channel photos were recognised; both were rolled back here.
