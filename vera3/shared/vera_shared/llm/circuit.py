@@ -10,10 +10,22 @@ chat_async() отказывают МГНОВЕННО (LLMCoolingDown), не со
 Воркеры (триаж, media) проверяют кулдаун перед claim'ом и спят — очередь
 брокера остаётся чистой для тех, у кого бюджет есть.
 
-- «daily budget cap reached» → кулдаун до следующего 00:00 UTC (брокер сам
-  говорит, когда retry).
+- «daily budget cap reached» → короткий кулдаун-проба BUDGET_CAP_COOLDOWN_MIN
+  (настройка /settings, дефолт 30 мин), но не дальше следующего 00:00 UTC,
+  когда брокер сбрасывает дневной кап.
 - «no provider available» → кулдаун NO_PROVIDER_COOLDOWN_MIN (настройка
   /settings, дефолт 30 мин) — пул может ожить (ключ выйдет из cooldown).
+
+ПОЧЕМУ кап тоже короткий (инцидент 2026-07-31): раньше budget_cap ставил
+блокировку до полуночи UTC. Ошибка прилетела в 00:25 — и vision встал на
+23.5 часа, хотя это был разовый отказ одной минуты (свободные gemini-ключи
+были в минутном кулдауне, платный резерв упёрся в свой кап, openrouter
+отдал RateLimitError). Через несколько минут пул ожил, но Вера уже не
+слала запросов и очередь стояла полсуток при простаивающем брокере.
+Сообщение брокера «retry after 00:00 UTC» относится к КОНКРЕТНОМУ ключу,
+а не ко всей capability, поэтому доверять ему как сроку блокировки нельзя.
+Проба раз в 30 мин — это ~48 лишних джоб в сутки в худшем случае (против
+тысяч, ради чего брейкер и делался), зато потолок простоя 30 мин, а не 24ч.
 """
 from __future__ import annotations
 
@@ -21,6 +33,7 @@ import logging
 from datetime import UTC, datetime, timedelta
 
 from vera_shared.control import (
+    BUDGET_CAP_COOLDOWN_MIN,
     NO_PROVIDER_COOLDOWN_MIN,
     get_control,
     get_int_setting,
@@ -53,7 +66,10 @@ async def note_llm_failure(capability: str, error_message: str) -> str:
     kind = classify_broker_error(error_message)
     now = datetime.now(UTC)
     if kind == "budget_cap":
-        until = next_utc_midnight(now)
+        # Короткая проба, но не дальше сброса капа в 00:00 UTC (если полночь
+        # ближе, чем интервал пробы — ждём ровно до неё).
+        minutes = await get_int_setting(BUDGET_CAP_COOLDOWN_MIN, 30)
+        until = min(next_utc_midnight(now), now + timedelta(minutes=minutes))
     elif kind == "no_provider":
         minutes = await get_int_setting(NO_PROVIDER_COOLDOWN_MIN, 30)
         until = now + timedelta(minutes=minutes)

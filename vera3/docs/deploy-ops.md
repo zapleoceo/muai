@@ -160,7 +160,8 @@ Bash monitor script reads them directly via `psql` on each tick.
 | `backfill_max_per_hour` | 0 (unlimited) | Even-tempo cap on triage+media LLM requests/hour, shared globally across all replicas — see `brain.md` |
 | `cluster_label_deadline_s` | 240 с | Сколько ждать free-пул на подпись кластера графа (фоновая задача может ждать дольше интерактивных 120с) |
 | `cluster_label_retries` | 2 | Повторы запроса ярлыка при таймауте, потом фолбэк «кластер N» |
-| `no_provider_cooldown_min` | 30 мин | Кулдаун circuit breaker'а после «no provider available» от брокера (кап бюджета всегда до 00:00 UTC — не настраивается, см. `llm-broker.md`) |
+| `no_provider_cooldown_min` | 30 мин | Кулдаун circuit breaker'а после «no provider available» от брокера (см. `llm-broker.md`) |
+| `budget_cap_cooldown_min` | 30 мин | То же после «daily budget cap reached». Пауза-проба, не дальше ближайшей 00:00 UTC — блокировка «до полуночи» останавливала vision на 23ч при живом пуле (инцидент 31.07) |
 | `graph_hub_percentile` | 99 % | Узлы со степенью выше перцентиля исключаются из кластеризации как сверх-хабы (см. `identity.md`) |
 
 Deploy-time parameters (replicas, concurrency, batch size) are shown
