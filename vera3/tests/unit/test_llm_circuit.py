@@ -62,13 +62,34 @@ async def db(sqlite_db):
 
 
 @pytest.mark.asyncio
-async def test_budget_cap_opens_until_utc_midnight(db):
+async def test_budget_cap_opens_short_probe_not_until_midnight(db):
+    """Регресс инцидента 2026-07-31: кап в 00:25 глушил vision на 23.5 часа.
+    Брокер сообщает о капе КОНКРЕТНОГО ключа — блокировать capability до
+    полуночи нельзя, ждём короткую пробу."""
     kind = await note_llm_failure("chat:fast", "daily budget cap reached — retry after 00:00 UTC")
     assert kind == "budget_cap"
     remaining = await llm_cooldown_remaining_s("chat:fast")
-    assert 0 < remaining <= 24 * 3600
+    assert 25 * 60 < remaining <= 30 * 60          # проба 30 мин, НЕ до полуночи
     # другая capability не затронута
     assert await llm_cooldown_remaining_s("vision") == 0
+
+
+@pytest.mark.asyncio
+async def test_budget_cap_never_overshoots_utc_midnight(db):
+    """Если полночь ближе интервала пробы — ждём ровно до сброса капа."""
+    import vera_shared.llm.circuit as circ
+    fake_now = datetime(2026, 7, 31, 23, 50, tzinfo=timezone.utc)   # до полуночи 10 мин
+
+    class _FakeDT(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fake_now
+
+    with patch.object(circ, "datetime", _FakeDT):
+        await note_llm_failure("vision", "daily budget cap reached")
+    raw = await circ.get_control("llm_cooldown:vision", "")
+    until = datetime.fromisoformat(raw)
+    assert until == datetime(2026, 8, 1, 0, 0, tzinfo=timezone.utc)  # ровно полночь
 
 
 @pytest.mark.asyncio

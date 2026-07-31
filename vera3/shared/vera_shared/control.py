@@ -98,6 +98,7 @@ CLUSTER_LABEL_DEADLINE_S = "cluster_label_deadline_s"
 CLUSTER_LABEL_RETRIES = "cluster_label_retries"
 GRAPH_HUB_PERCENTILE = "graph_hub_percentile"
 NO_PROVIDER_COOLDOWN_MIN = "no_provider_cooldown_min"
+BUDGET_CAP_COOLDOWN_MIN = "budget_cap_cooldown_min"
 
 
 class Setting:
@@ -139,8 +140,13 @@ SETTINGS: list[Setting] = [
     Setting(NO_PROVIDER_COOLDOWN_MIN, "Пауза LLM при «нет провайдера»", "30", "мин",
             "Circuit breaker: если брокер отвечает «no provider available», Вера "
             "не шлёт новые запросы этой capability столько минут (пул может ожить, "
-            "когда ключ выйдет из кулдауна). Кап дневного бюджета — всегда пауза "
-            "до 00:00 UTC, это не настройка."),
+            "когда ключ выйдет из кулдауна)."),
+    Setting(BUDGET_CAP_COOLDOWN_MIN, "Пауза LLM при «кап бюджета»", "30", "мин",
+            "То же для ответа «daily budget cap reached». Пауза-проба: брокер "
+            "сообщает о капе КОНКРЕТНОГО ключа, а не всей capability, поэтому "
+            "ждать до 00:00 UTC нельзя — 31.07 такая блокировка остановила "
+            "распознавание фото на 23 часа при живом пуле. Дальше ближайшей "
+            "полуночи UTC пауза всё равно не уходит."),
     Setting(GRAPH_HUB_PERCENTILE, "Порог хабов графа (перцентиль)", "99", "%",
             "Узлы со степенью выше этого перцентиля (напр. «Дима», связанный со "
             "всеми) исключаются из разбиения на сообщества и приписываются к "

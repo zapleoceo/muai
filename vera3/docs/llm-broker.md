@@ -91,8 +91,22 @@ of doomed jobs clogging the queue and delaying live ones by 4-5 minutes.
 (`classify_broker_error()`) and stores a per-capability cooldown in
 `app_control` (key `llm_cooldown:<capability>`):
 
-- «daily budget cap reached» → cooldown until the next **00:00 UTC**
-  (`next_utc_midnight()` — the broker's own reset time).
+- «daily budget cap reached» → short probe cooldown
+  `budget_cap_cooldown_min` (Settings UI, default 30 min), never later than
+  the next **00:00 UTC** (`next_utc_midnight()` — when the broker resets the
+  daily cap; if midnight is closer than the probe interval we wait exactly
+  until then).
+
+  **Incident 2026-07-31** — this used to block until the next UTC midnight
+  outright. A cap error at 00:25 froze vision for 23.5 h: the free gemini
+  keys were only in a minute-long cooldown, the paid fallback hit *its own*
+  cap and openrouter returned RateLimitError, so that single minute looked
+  fatal. Minutes later the pool recovered, but Vera had stopped sending and
+  the photo queue sat still for half a day against an idle broker. The
+  broker's «retry after 00:00 UTC» refers to *one key*, not the capability,
+  so it can't be trusted as a blackout window. Probing every 30 min costs at
+  most ~48 doomed jobs/day (versus the thousands the breaker was built to
+  stop) and caps the stall at 30 min instead of 24 h.
 - «no provider available» → cooldown for `no_provider_cooldown_min`
   minutes (Settings UI, default 30) — the pool may recover sooner.
 - anything else → no cooldown (transient, retry as before).
