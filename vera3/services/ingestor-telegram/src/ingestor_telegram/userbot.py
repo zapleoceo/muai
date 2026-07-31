@@ -18,6 +18,7 @@ from vera_shared.crypto import decrypt
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import TelegramSessionRow
+from vera_shared.ingest_policy import is_ignored_sender
 from vera_shared.media_policy import should_recognize_media
 
 from ingestor_telegram.entity_sync import sync_message_entities
@@ -78,6 +79,10 @@ async def save_message(client: TelegramClient, msg) -> None:
         sender_username = getattr(sender, "username", None)
         if sender_username:
             sender_name += f" (@{sender_username})"
+
+    # Служебные боты в мозг не пишутся вообще (см. ingest_policy).
+    if is_ignored_sender(sender_username):
+        return
 
     chat_title = (getattr(chat, "title", None) or
                   getattr(chat, "first_name", None) or "(private)")

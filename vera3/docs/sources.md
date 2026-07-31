@@ -75,6 +75,27 @@ via `gateway /event/<source>` with `X-Internal-Secret`.
 - `scripts/import_perplexity.py` — imports Perplexity MD exports as events.
 - Source name = `perplexity`. Run once when there's a new bundle.
 
+## Sender denylist (в мозг не пишем)
+
+`vera_shared.ingest_policy.is_ignored_sender(username)` — сообщения этих
+отправителей `userbot.save_message()` отбрасывает ДО записи события (в
+отличие от `media_policy`, где событие сохраняется, но не распознаётся
+картинка). Матчинг по username (стабилен, в отличие от имени), регистр и
+ведущий `@` не важны.
+
+Сейчас в списке: `verandamybot`. Добавлен 2026-07-31 (Дима: «@VerandamyBot
+исключи из мозга вообще») — служебный бот сыпал машинными уведомлениями в
+рабочие чаты: 6050 событий («Веранда сотрудники» 5132, «VerandaBot» 736,
+«Старшие и отчеты» 182). Для личной памяти это шум: раздувает базу, ломает
+поиск, жжёт бюджет триажа, а сами факты есть в системе-источнике. Историю
+вычистили (события + эмбеддинги каскадом + сущность #8604 с алиасами и
+членствами); 2 сообщения ДРУГИХ авторов, где бот лишь упомянут, сохранены.
+
+Чтобы добавить ещё бота: username в `_IGNORED_SENDER_USERNAMES` + разовая
+чистка `DELETE FROM events WHERE metadata->>'sender_username' ILIKE '<username>'`
+(`event_embeddings` уйдут по каскаду, `relationships.derived_from_event_id`
+обнулится).
+
 ## Authorship contract (telegram / gmail / instagram)
 
 Every event from a conversational source MUST encode author unambiguously:
