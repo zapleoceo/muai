@@ -18,7 +18,7 @@ from vera_shared.crypto import decrypt
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import TelegramSessionRow
-from vera_shared.ingest_policy import is_ignored_sender
+from vera_shared.ingest_policy import is_ignored_chat, is_ignored_sender
 from vera_shared.media_policy import should_recognize_media
 
 from ingestor_telegram.entity_sync import sync_message_entities
@@ -87,6 +87,11 @@ async def save_message(client: TelegramClient, msg) -> None:
     chat_title = (getattr(chat, "title", None) or
                   getattr(chat, "first_name", None) or "(private)")
     chat_type = type(chat).__name__.lower()
+
+    # Чаты из денай-листа не пишем целиком — включая исходящие (в переписке
+    # с ботом знакомств это 👎-свайпы, отправитель = сам Дима).
+    if is_ignored_chat(getattr(chat, "username", None), chat_title):
+        return
     text = (msg.message or msg.text or "")[:8000]
 
     # Media — было: пустой text → событие терялось. Стало: всегда плейсхолдер
