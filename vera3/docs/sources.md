@@ -75,13 +75,28 @@ via `gateway /event/<source>` with `X-Internal-Secret`.
 - `scripts/import_perplexity.py` — imports Perplexity MD exports as events.
 - Source name = `perplexity`. Run once when there's a new bundle.
 
-## Sender denylist (в мозг не пишем)
+## Ingest denylist (в мозг не пишем)
 
-`vera_shared.ingest_policy.is_ignored_sender(username)` — сообщения этих
-отправителей `userbot.save_message()` отбрасывает ДО записи события (в
-отличие от `media_policy`, где событие сохраняется, но не распознаётся
-картинка). Матчинг по username (стабилен, в отличие от имени), регистр и
-ведущий `@` не важны.
+`vera_shared.ingest_policy` — два уровня, оба применяются в
+`userbot.save_message()` ДО записи события (в отличие от `media_policy`,
+где событие сохраняется, но не распознаётся картинка):
+
+- `is_ignored_sender(username)` — по автору сообщения;
+- `is_ignored_chat(chat_username, chat_title)` — **весь чат целиком**, обе
+  стороны переписки.
+
+Матчинг по username (стабилен, в отличие от имени), регистр и ведущий `@`
+не важны; для чата дополнительно по началу названия — у ботов username
+есть не всегда.
+
+**Почему нужен уровень чата.** 2026-08-02 в очередь распознавания хлынул
+`@leomatchbot` (Дайвінчик, бот знакомств): ~800 анкетных фото в сутки, при
+том что vision столько не переваривает в принципе — очередь выросла до 1366.
+Чат приватный, поэтому ни правило про вещательные каналы, ни денай-лист
+шумных групп его не ловили. Фильтра по отправителю тоже мало: исходящие в
+таком чате — 👎-свайпы самого владельца, у них `sender_username` его
+собственный. Дима: «весь чат в игнор поставь». Вычищено 4037 событий
+(+3259 эмбеддингов каскадом), очередь 1366 → 561.
 
 Сейчас в списке: `verandamybot`. Добавлен 2026-07-31 (Дима: «@VerandamyBot
 исключи из мозга вообще») — служебный бот сыпал машинными уведомлениями в
@@ -91,10 +106,16 @@ via `gateway /event/<source>` with `X-Internal-Secret`.
 вычистили (события + эмбеддинги каскадом + сущность #8604 с алиасами и
 членствами); 2 сообщения ДРУГИХ авторов, где бот лишь упомянут, сохранены.
 
-Чтобы добавить ещё бота: username в `_IGNORED_SENDER_USERNAMES` + разовая
-чистка `DELETE FROM events WHERE metadata->>'sender_username' ILIKE '<username>'`
-(`event_embeddings` уйдут по каскаду, `relationships.derived_from_event_id`
-обнулится).
+Чтобы добавить ещё источник:
+
+- шумит только бот → username в `_IGNORED_SENDER_USERNAMES`, чистка
+  `DELETE FROM events WHERE metadata->>'sender_username' ILIKE '<username>'`;
+- мусорят обе стороны → `_IGNORED_CHAT_USERNAMES` (или
+  `_IGNORED_CHAT_TITLE_PREFIXES`), чистка
+  `DELETE FROM events WHERE metadata->>'chat_title' ILIKE '%<название>%'`.
+
+`event_embeddings` уйдут по каскаду, `relationships.derived_from_event_id`
+обнулится.
 
 ## Authorship contract (telegram / gmail / instagram)
 
