@@ -68,7 +68,7 @@ this project's own "~200 lines, one responsibility per file" convention):
 | `search_routes.py` | `/search-ui` — proxies to brain-search |
 | `settings_routes.py` | `/settings`, `/control/settings` — SETTINGS registry |
 | `entities_routes.py` | `/entities/duplicates`, `/entities/merge` |
-| `gmail_oauth.py`, `instagram_login.py` | Pre-existing OAuth/login flows — the pattern the above split follows |
+| `gmail_oauth.py`, `instagram_login.py`, `telegram_login.py` | OAuth/login flows — the pattern the above split follows. `telegram_login.py` (`/api/telegram/start`, `/api/telegram/verify`) re-auths the userbot StringSession by SMS code + optional 2FA when a revoked session crash-loops the ingestor |
 | `stats.py` | Cached (TTL 60s) DB aggregation feeding home/progress/sources |
 | `auth.py` | Telegram Login Widget verification + signed session cookies |
 | `app.py` | Just `FastAPI()` + `lifespan` + favicon routes + `include_router()` for all of the above |
