@@ -17,6 +17,7 @@ POST-запросе, нужен один раз чтобы довершить si
 """
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import secrets
@@ -45,10 +46,8 @@ async def _prune_flows() -> None:
         if now - f["ts"] > _FLOW_TTL_S:
             client = f.get("client")
             if client is not None:
-                try:
+                with contextlib.suppress(Exception):
                     await client.disconnect()
-                except Exception:
-                    pass
             _flows.pop(fid, None)
 
 
