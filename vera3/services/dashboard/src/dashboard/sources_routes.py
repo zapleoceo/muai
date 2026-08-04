@@ -182,6 +182,12 @@ async def sources_page(request: Request):
         <h2 style="margin-top:32px">✈️ Telegram userbot</h2>
         <div style="margin-bottom:12px">Статус потока: {tg_freshness}</div>
         {data_table(["id", "phone", "state", "created"], tg_session_rows, "нет сессий")}
+        <a href="/api/telegram/start" style="display:inline-block;margin:10px 0;
+           padding:10px 18px;background:#4dabf7;color:#fff;border-radius:8px;
+           font-weight:600">🔑 Переподключить Telegram</a>
+        <div class="mute" style="font-size:12px;margin-top:4px">Если сессия
+           отвалилась (userbot в рестарт-лупе, AuthKeyUnregistered) — жми и
+           пройди вход по коду из приложения.</div>
 
         <div class="cards" style="margin-top:14px">
           <div class="card"><div class="card-label">Всего сообщений</div>
