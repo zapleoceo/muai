@@ -120,6 +120,16 @@ Checks 11 dimensions:
 Alerts to `@Dimondra_Ai_Bot` DM to `OWNER_TELEGRAM_ID`. State-file
 throttle 30 min (or `monitor_throttle_min` setting — see below).
 
+**Anti-flapping (2026-08-06).** An alert now needs `monitor_fail_streak`
+(default 2) consecutive failed checks; `recover()` resets the streak.
+Before that a single bad check alerted immediately and the recovery wiped
+the state file, so the 30-min throttle never engaged across an
+alert→recover→alert cycle — the owner got pairs of «⚠️ no telegram events»
+/ «✅ recovered» all night. The telegram-silence window also went 1 h → 3 h
+(`monitor_tg_silence_h`): overnight traffic drops to 1-6 events/hour and a
+completely empty *hour* is normal (measured 2026-08-05: 22:00 UTC had 0,
+neighbours 2-5), while an empty three-hour stretch never occurred.
+
 ### Disk hygiene
 
 Бокс 38 ГБ делится с aibroker/stepan2, поэтому Vera держит свой след
@@ -155,6 +165,8 @@ Bash monitor script reads them directly via `psql` on each tick.
 | Setting | Default | What it does |
 |---|---|---|
 | `monitor_throttle_min` | 30 min | Repeat-alert cooldown per alert key |
+| `monitor_fail_streak` | 2 проверки | Сколько провалов ПОДРЯД до алерта (монитор раз в 5 мин → авария видна через ~10 мин, моргнувшая проверка молчит) |
+| `monitor_tg_silence_h` | 3 ч | Окно тишины telegram до алерта «userbot отвалился» |
 | `monitor_backlog_enabled` | on | Whether to alert on triage backlog size at all (turn off during a known-large backfill) |
 | `triage_backlog_warn` / `_huge` | 5000 / 10000 | Pending-event thresholds for the two backlog alert levels |
 | `backfill_max_per_hour` | 0 (unlimited) | Even-tempo cap on triage+media LLM requests/hour, shared globally across all replicas — see `brain.md` |
