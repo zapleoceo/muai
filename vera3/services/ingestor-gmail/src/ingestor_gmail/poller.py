@@ -20,6 +20,7 @@ from vera_shared.crypto import decrypt
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import GmailAccountRow
+from vera_shared.graph.identity import entity_kind_for_email
 from vera_shared.graph.repo import upsert_entity
 
 log = logging.getLogger("gmail")
@@ -213,8 +214,12 @@ async def sync_correspondent_entity(account_email: str, from_: str, to_: str) ->
         return
     addr, display = who
     try:
+        # Служебные ящики (no-reply@, invoice@, crm@) — организации, а не люди:
+        # иначе граф людей засоряется, а одна компания с нескольких адресов
+        # выглядит как несколько одноимённых «персон». См. identity.py.
         await upsert_entity(
-            type="person", name=display, source="gmail", identifier=addr,
+            type=entity_kind_for_email(addr), name=display,
+            source="gmail", identifier=addr,
             display_name=display, attributes={"email": addr},
         )
     except Exception as e:

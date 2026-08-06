@@ -50,6 +50,24 @@ def is_noise_chat(chat_title: str | None) -> bool:
             or any(s in t for s in _NOISE_CHAT_SUBSTRINGS))
 
 
+def should_extract_relations(metadata: dict | None) -> bool:
+    """Строить ли граф связей по этому событию.
+
+    Посты вещательных каналов — реклама и новости, личных фактов там нет, а
+    LLM всё равно «находит» их и привязывает к однофамильцам. Инцидент
+    2026-08-06: из рекламы ночного SUP-тура в канале «T2T | Афиша Нячанга»
+    родилось `Дима -[client_of]-> T2T`, хотя слова «Дима» в тексте нет — имя
+    подтянулось к случайному контакту. Такой же мусор: `NEXTA Live -[works_at]->
+    Telegram`, `Канал Лучкова -[works_at]-> Microsoft`, `Дніпро -[lives_in]->
+    ХДніпро`. Всего 11 рёбер из 10 постов — все выдуманные, удалены.
+    """
+    if not metadata:
+        return True
+    if metadata.get("chat_kind") == "channel":
+        return False
+    return not is_noise_chat(metadata.get("chat_title"))
+
+
 def should_recognize_media(
     media_kind: str | None,
     chat_kind: str | None,
