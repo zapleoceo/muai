@@ -28,6 +28,7 @@ from sqlalchemy import text, update
 from vera_shared.control import is_backfill_paused, reserve_backfill_allowance
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
+from vera_shared.media_policy import should_extract_relations
 
 from brain_triage.background_loops import (
     _bg_tasks,
@@ -151,7 +152,7 @@ async def process_pending() -> int:
                 # результат реально записался (не отфенсен).
                 if (res.rowcount or 0) > 0 and metadata and metadata.get("importance", 0) >= 3:
                     row = next((r for r in rows if r.id == event_id), None)
-                    if row and row.content_text:
+                    if row and row.content_text and should_extract_relations(row.metadata_):
                         rel_candidates.append((event_id, row.content_text))
             else:  # error
                 # nature детерминируема по source даже без LLM
