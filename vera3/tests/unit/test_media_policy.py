@@ -81,3 +81,35 @@ def test_voice_from_noise_chat_still_recognized():
 def test_default_chat_title_keeps_old_behaviour():
     # вызов без chat_title (легаси-путь) не должен ничего резать
     assert should_recognize_media("photo", "group") is True
+
+
+# ─── should_extract_relations: граф связей не строим по рекламе ─────────────
+
+
+def test_channel_posts_never_feed_the_graph():
+    # инцидент 2026-08-06: из рекламы SUP-тура в канале родилось
+    # `Дима -[client_of]-> T2T`, хотя имени в тексте не было вовсе
+    from vera_shared.media_policy import should_extract_relations
+    assert should_extract_relations({"chat_kind": "channel"}) is False
+    assert should_extract_relations(
+        {"chat_kind": "channel", "chat_title": "T2T | Афиша Нячанга"}) is False
+
+
+def test_noise_groups_never_feed_the_graph():
+    from vera_shared.media_policy import should_extract_relations
+    assert should_extract_relations(
+        {"chat_kind": "group", "chat_title": "ВЕЛИГАМНОСТЬ 🏄 ШРИ-ЛАНКА"}) is False
+    assert should_extract_relations(
+        {"chat_kind": "group", "chat_title": "NEXTA Live Chat"}) is False
+
+
+@pytest.mark.parametrize("meta", [
+    {"chat_kind": "group", "chat_title": "Veranda менеджмент"},
+    {"chat_kind": "private", "chat_title": "Олег Демченко"},
+    {"chat_kind": "supergroup", "chat_title": "Jakarta sales"},
+    {},          # метаданных нет — не наказываем, строим
+    None,
+])
+def test_real_conversations_still_feed_the_graph(meta):
+    from vera_shared.media_policy import should_extract_relations
+    assert should_extract_relations(meta) is True
