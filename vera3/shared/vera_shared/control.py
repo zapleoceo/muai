@@ -91,6 +91,8 @@ async def reserve_backfill_allowance(want: int) -> int | None:
 # ключи из app_control напрямую.
 
 MONITOR_THROTTLE_MIN = "monitor_throttle_min"
+MONITOR_FAIL_STREAK = "monitor_fail_streak"
+MONITOR_TG_SILENCE_H = "monitor_tg_silence_h"
 TRIAGE_BACKLOG_WARN = "triage_backlog_warn"
 TRIAGE_BACKLOG_HUGE = "triage_backlog_huge"
 MONITOR_BACKLOG_ENABLED = "monitor_backlog_enabled"
@@ -119,6 +121,15 @@ SETTINGS: list[Setting] = [
             "Как часто монитор повторяет ОДИН И ТОТ ЖЕ алерт (напр. «backlog "
             "HUGE»). Было захардкожено 30 мин — отсюда сообщение каждые полчаса. "
             "Поставь 180 = раз в 3 часа, 1440 = раз в сутки."),
+    Setting(MONITOR_FAIL_STREAK, "Провалов подряд до алерта", "2", "проверок",
+            "Сколько раз подряд проверка должна упасть, чтобы монитор написал. "
+            "Монитор крутится раз в 5 мин, поэтому 2 = авария видна через ~10 мин, "
+            "а разовая моргнувшая проверка молчит. 1 = старое поведение (шумное: "
+            "ночью шли пары «⚠️ нет событий» → «✅ восстановлено» по кругу)."),
+    Setting(MONITOR_TG_SILENCE_H, "Окно тишины Telegram", "3", "ч",
+            "За сколько часов должно не быть НИ ОДНОГО telegram-события, чтобы "
+            "считать юзербот отвалившимся. Ночью поток падает до 1-6 сообщений "
+            "в час и пустой час — норма, поэтому 1ч давал ложные тревоги."),
     Setting(MONITOR_BACKLOG_ENABLED, "Алерты про backlog триажа", "1", "",
             "Слать ли вообще алерты «Triage backlog большой». Во время разбора "
             "исторического бэкфила очередь заведомо большая — можно выключить (0), "

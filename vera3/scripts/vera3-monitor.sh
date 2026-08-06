@@ -43,15 +43,38 @@ setting() {
 # Глобальная частота повтора алертов — из настройки (дефолт 30 мин).
 THROTTLE_MIN=$(setting monitor_throttle_min 30)
 
-# ─── alert(key, message) ────────────────────────────────────────────────────
-# Тишина если последний alert по этому key был меньше THROTTLE_MIN минут назад.
-# Иначе — POST в Telegram + обновляет timestamp.
+# Сколько ПОДРЯД идущих неудачных проверок нужно, чтобы поднять алерт.
+# Монитор крутится раз в 5 мин, поэтому 2 = реальная авария заметна через
+# ~10 мин, а разовая моргнувшая проверка молчит. Без этого ночью шло по
+# паре сообщений в час: пустой час → alert, следующее сообщение → recover,
+# и так по кругу (recover стирает state-файл, поэтому throttle не спасал).
+FAIL_STREAK=$(setting monitor_fail_streak 2)
+
+# ─── streak-счётчики подряд идущих провалов ─────────────────────────────────
+bump_streak() {   # key → печатает новое значение
+    local f="$STATE_DIR/${1}.streak" n=0
+    [ -f "$f" ] && n=$(cat "$f" 2>/dev/null || echo 0)
+    n=$(( n + 1 ))
+    echo "$n" > "$f"
+    echo "$n"
+}
+clear_streak() { rm -f "$STATE_DIR/${1}.streak"; }
+
+# ─── alert(key, message, [throttle_min], [min_streak]) ──────────────────────
+# Молчит пока провалов подряд меньше min_streak, и пока с прошлого алерта по
+# этому key не прошло throttle минут.
 alert() {
     local key="$1"
     local msg="$2"
     local throttle="${3:-$THROTTLE_MIN}"   # опц. кастомный throttle в минутах
+    local min_streak="${4:-$FAIL_STREAK}"
     local state_file="$STATE_DIR/$key"
-    local now
+    local now streak
+    streak=$(bump_streak "$key")
+    if [ "$streak" -lt "$min_streak" ]; then
+        logger -t "$LOG_TAG" "ALERT held ($key, streak $streak/$min_streak): $msg"
+        return
+    fi
     now=$(date +%s)
     if [ -f "$state_file" ]; then
         local last
@@ -77,6 +100,7 @@ recover() {
     local key="$1"
     local msg="$2"
     local state_file="$STATE_DIR/$key"
+    clear_streak "$key"       # проверка прошла — серия провалов прервана
     if [ -f "$state_file" ]; then
         rm -f "$state_file"
         logger -t "$LOG_TAG" "RECOVER $key: $msg"
@@ -178,14 +202,19 @@ else
 fi
 
 # ─── 6. Telegram userbot — события льются ────────────────────────────────────
-# Если за час нет ни одного нового telegram-события — userbot заглох
+# Нет ни одного нового telegram-события за окно — userbot заглох.
+# Окно 3ч, а не 1ч: ночью поток падает до 1-6 сообщений в час, и полностью
+# пустой ЧАС — норма (замеряно 05.08: 22:00 UTC ровно 0 при 2-5 в соседних).
+# Пустых трёх часов подряд в измерениях не было ни разу, так что сигнал
+# остаётся честным, а ложные ночные срабатывания уходят.
+TG_SILENCE_H=$(setting monitor_tg_silence_h 3)
 tg_count=$(docker exec vera3-postgres psql -U vera -d vera -tAc \
-    "SELECT COUNT(*) FROM events WHERE source='telegram' AND received_at > now() - interval '1 hour'" \
+    "SELECT COUNT(*) FROM events WHERE source='telegram' AND received_at > now() - interval '${TG_SILENCE_H} hours'" \
     2>/dev/null || echo "0")
 if [ "${tg_count:-0}" -eq 0 ]; then
-    alert "telegram_silent" "No new telegram events in last 1h. Userbot possibly disconnected."
+    alert "telegram_silent" "No new telegram events in last ${TG_SILENCE_H}h. Userbot possibly disconnected."
 else
-    recover "telegram_silent" "Telegram events flowing ($tg_count in last 1h)."
+    recover "telegram_silent" "Telegram events flowing ($tg_count in last ${TG_SILENCE_H}h)."
 fi
 
 # ─── 7. Triage queue (пороги + частота настраиваются в дашборде) ─────────────
