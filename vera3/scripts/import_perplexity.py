@@ -26,7 +26,15 @@ import httpx
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://gateway:8000")
 INTERNAL_SECRET = os.environ.get("INTERNAL_SECRET", "")
 IMPORT_DIR = os.environ.get("IMPORT_DIR", "/imports/perplexity")
-ACCOUNT = "dima_perplexity"
+
+# Дефолты = исходное поведение (обычный research-экспорт Perplexity).
+# Переопределяются под другие корпуса того же формата: например медицинский
+# лог заливается как source=health, потому что perplexity в SKIP_EMBED_SOURCES
+# и его вектора не строятся — а по здоровью нужен именно смысловой поиск.
+SOURCE = os.environ.get("SOURCE", "perplexity")
+ACCOUNT = os.environ.get("ACCOUNT", "dima_perplexity")
+CATEGORY = os.environ.get("CATEGORY", "research")
+EID_PREFIX = os.environ.get("EID_PREFIX", "ppx:")
 
 CHUNK_CHAR_LIMIT = 6000
 
@@ -117,7 +125,7 @@ def chunk_body(heading: str, body: str) -> list[str]:
 async def post_event(client: httpx.AsyncClient, payload: dict) -> bool:
     try:
         r = await client.post(
-            f"{GATEWAY_URL}/event/perplexity",
+            f"{GATEWAY_URL}/event/{SOURCE}",
             json=payload,
             headers={"X-Internal-Secret": INTERNAL_SECRET},
         )
@@ -161,13 +169,13 @@ async def main():
                 chunks = chunk_body(heading, body)
                 for chunk_idx, chunk in enumerate(chunks):
                     sig = f"{path.name}|{heading}|{chunk_idx}|{chunk[:200]}"
-                    eid = "ppx:" + hashlib.sha1(sig.encode()).hexdigest()[:16]
+                    eid = EID_PREFIX + hashlib.sha1(sig.encode()).hexdigest()[:16]
 
                     payload = {
-                        "source": "perplexity",
+                        "source": SOURCE,
                         "source_event_id": eid,
                         "account": ACCOUNT,
-                        "category": "research",
+                        "category": CATEGORY,
                         "content_text": chunk[:8000],
                         "occurred_at": occurred.isoformat(),
                         "metadata": {
