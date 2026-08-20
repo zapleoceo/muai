@@ -13,10 +13,12 @@ stub kept for legacy tooling that expects a top-level `CLAUDE.md`.
 - Database: Postgres + pgvector — `docker exec vera3-postgres psql -U vera -d vera`
 - Owner Telegram ID: `169510539`
 
-Everything deployed lives under `vera3/`. The top-level `vera-core/`,
-`vera-gmail/`, `vera-telegram/`, `vera-coder/`, `dashboard/`, `shared/`
-directories and the root `docker-compose.yml` are **legacy v2 — not built,
-not deployed**. See [`VERA.md`](VERA.md) §3.
+Всё живое лежит под `vera3/` — больше в репозитории ничего и нет.
+Мёртвое дерево Vera 2 (`vera-core/`, `vera-gmail/`, `vera-telegram/`,
+`vera-coder/`, `dashboard/`, корневые `shared/`, `nginx/`, `cloudflare/`,
+`scripts/`, `docker-compose.yml`) удалено 2026-08-20 — 258 файлов, 55%
+репозитория, которые не собирались и не деплоились, но попадали в каждый
+греп и в каждый security-скан. Достать при нужде: `git show 60646413^:<путь>`.
 
 See [VERA.md](VERA.md) for architecture, deploy flow, access model, known
 gaps, and the migration log.
