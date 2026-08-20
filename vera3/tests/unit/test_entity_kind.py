@@ -50,3 +50,14 @@ def test_word_boundary_not_substring():
     assert entity_kind_for_email("informationsecurity@corp.com") == "person"
     assert entity_kind_for_email("supportive-care@clinic.com") == "person"
     assert entity_kind_for_email("info-eu@corp.com") == "organization"
+
+
+@pytest.mark.parametrize("addr", [
+    "feedback@midjourney.com",     # проскочил при аудите 2026-08-20
+    "digest@substack.com",
+    "notify@github.com",
+    "account-security@apple.com",
+    "help@stripe.com",
+])
+def test_more_service_mailboxes(addr):
+    assert entity_kind_for_email(addr) == "organization"

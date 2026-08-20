@@ -311,6 +311,8 @@ _SERVICE_LOCALPARTS = (
     "notifications", "support", "info", "billing", "invoice", "alert",
     "alerts", "news", "newsletter", "marketing", "team", "hello", "contact",
     "admin", "crm", "logbook", "welcome", "mailer", "bounce", "postmaster",
+    "feedback", "digest", "updates", "update", "reply", "noreply-app",
+    "account", "accounts", "service", "help", "notify",
 )
 _SERVICE_SUBDOMAINS = ("mail.", "email.", "alert.", "alerts.", "notification.",
                        "notifications.", "update.", "updates.", "reply.")
