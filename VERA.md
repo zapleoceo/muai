@@ -82,17 +82,20 @@ vera3/
 └── scripts/              # ops + import utilities
 ```
 
-**Legacy. Not built, not deployed, kept only for reference:**
+**Дерево Vera 2 удалено (2026-08-20).**
 
-`vera-core/`, `vera-gmail/`, `vera-telegram/`, `vera-coder/`,
-`dashboard/`, `shared/`, `nginx/`, `cloudflare/`, root
-`docker-compose.yml`, `scripts/deploy.sh`, the root `READY_SUBTYPES_*`
-dumps, and `docs/vera3-tz.md` (the original spec — historical intent, not
-current state).
+`vera-core/`, `vera-gmail/`, `vera-telegram/`, `vera-coder/`, `dashboard/`,
+корневые `shared/`, `nginx/`, `cloudflare/`, `scripts/`, `backups/`,
+`docker-compose.yml`, `.env.example`, `.scratch/` — 258 файлов, больше
+половины репозитория. Не собирались и не деплоились, но засоряли поиск по
+коду и всплывали в security-аудитах (`shared/vera_shared/tokens/`,
+`vera-gmail/app/credentials.py`) уже после того, как репозиторий стал
+публичным. История цела: `git show 60646413^:vera-core/app/main.py`.
 
-If you are changing behavior, you are changing something under `vera3/`.
-If you find yourself editing `vera-core/`, stop — you are in the wrong
-tree.
+Из исторических документов остались `docs/VERA-v2-historical.md` и
+`docs/vera3-tz.md` — оба с баннером «не руководство к действию».
+
+Если ты меняешь поведение — ты меняешь что-то под `vera3/`.
 
 ---
 
