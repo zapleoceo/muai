@@ -157,19 +157,26 @@ merging. It matches a person's messages by the numeric tg_id in
 
 ## Migrations
 
-`vera3/infra/migrations/*.sql` — raw SQL, applied by hand:
-`docker exec -i vera3-postgres psql -U vera -d vera < migration.sql`. There is
-no migration runner and no Alembic — the feature size has not justified the
-overhead. `vera_shared/db/migrations.py` does **not** exist; it was only ever
-an idea in this doc.
+`vera3/infra/migrations/*.sql` — raw SQL. Apply with
+`scripts/apply_migration.sh <file.sql>`: it refuses to run a version twice and
+records it. There is no Alembic — the feature size has not justified the
+overhead, and `vera_shared/db/migrations.py` does **not** exist (it was only
+ever an idea in this doc).
 
-The graph schema is bootstrapped from `infra/sql/graph_substrate.sql`, the
-only file under `infra/sql/`. An `init.sql` referenced here until 2026-08-06
-never existed.
+The graph schema is bootstrapped from `infra/sql/graph_substrate.sql`, the only
+file under `infra/sql/`. An `init.sql` referenced here until 2026-08-06 never
+existed.
 
-Numbering is advisory, not enforced: `014` is used twice
-(`014_entity_avatars.sql`, `014_events_pending_claim_index.sql`) and `018`/`019`
-were never issued. Since nothing records what ran, verify against the database
-before assuming a file was applied — e.g. `SELECT to_regclass('public.<object>')`
-for the object it creates.
+**What has run is recorded** in `schema_migrations` (migration 021, 2026-08-20,
+backfilled from schema evidence):
+
+```sql
+SELECT version, applied_at FROM schema_migrations ORDER BY version;
+```
+
+Numbering is advisory: `009` and `014` are each used twice, and `018`/`019` were
+never issued — the *filename* is the identity, not the number. Before the
+tracking table, applied state could only be guessed from the schema, and that
+misled this very review: migration `020` was called unapplied because the check
+looked for `canonical_messages`, while it actually creates `v_messages`.
 
