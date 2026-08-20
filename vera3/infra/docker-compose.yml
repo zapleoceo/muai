@@ -61,7 +61,7 @@ services:
 
   # ─── Brain: Triage Workers (scalable) ──────────────────────────────────
   # SELECT FOR UPDATE SKIP LOCKED исключает race condition между воркерами.
-  # deploy.replicas — чтобы обычный `docker compose up -d` поднимал 3 реплики,
+  # deploy.replicas — чтобы обычный `docker compose up -d` поднимал все реплики,
   # а не сбрасывал до 1 (раньше скейл жил только пока не сделаешь up без --scale).
   # Переопределить: BRAIN_TRIAGE_REPLICAS=N docker compose up -d
   brain-triage:

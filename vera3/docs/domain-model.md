@@ -157,9 +157,19 @@ merging. It matches a person's messages by the numeric tg_id in
 
 ## Migrations
 
-`vera3/infra/migrations/*.sql` are timestamped raw SQL files. Run manually
-via `docker exec vera3-postgres psql ... < migration.sql`. The init script
-in `infra/sql/init.sql` only runs on first Postgres boot.
+`vera3/infra/migrations/*.sql` — raw SQL, applied by hand:
+`docker exec -i vera3-postgres psql -U vera -d vera < migration.sql`. There is
+no migration runner and no Alembic — the feature size has not justified the
+overhead. `vera_shared/db/migrations.py` does **not** exist; it was only ever
+an idea in this doc.
 
-We don't have Alembic yet — feature size hasn't justified the overhead.
-When it does, plug in `vera_shared/db/migrations.py`.
+The graph schema is bootstrapped from `infra/sql/graph_substrate.sql`, the
+only file under `infra/sql/`. An `init.sql` referenced here until 2026-08-06
+never existed.
+
+Numbering is advisory, not enforced: `014` is used twice
+(`014_entity_avatars.sql`, `014_events_pending_claim_index.sql`) and `018`/`019`
+were never issued. Since nothing records what ran, verify against the database
+before assuming a file was applied — e.g. `SELECT to_regclass('public.<object>')`
+for the object it creates.
+

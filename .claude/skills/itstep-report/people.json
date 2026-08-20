@@ -1,0 +1,39 @@
+{
+  "_note": "Как имя из отчёта соответствует автору в базе. Линтер по этой карте проверяет, мог ли человек вообще что-то сказать в окне отчёта. Новое имя в отчёте без записи здесь — ошибка линтера, а не повод его игнорировать.",
+
+  "Лиза":        ["@LisaUK28", "Lisa", "Lisa Umi Kalsum", "Lisa Umi"],
+  "Майя":        ["@Novitamaya22", "Maya", "Mayasari Novita"],
+  "Ситра":       ["@citraasiha", "citra", "Citra"],
+  "Эксель":      ["@Excelmahardika23", "Excel", "Alfonsus Excel Mahardika"],
+  "Зи":          ["@xxzeezae", "Zee", "Jihan"],
+  "Фринсли":     ["Frinsly", "Frinsly McAllen"],
+  "Саффана":     ["Saffana", "Fauzi Saffana"],
+
+  "Марина":      ["@admarina", "Marina", "Iatsenko Marina", "Яценко Марина", "Maryna Iatsenko"],
+  "Мальцев":     ["@maltsev_a", "Александр", "Aleksandr Maltsev"],
+  "Сергей":      ["@Serhii_Shabaldas", "Sergey"],
+  "Дарья":       ["@daria_041288", "Дарья Степаненко"],
+  "Мардар":      ["Мардар Юлия"],
+  "Егоров":      ["Дмитрий Егоров", "Dmytro Yegorov"],
+  "Корчевский":  ["@dkorchevskyi", "Дмитрий Корчевский", "boss@itstep.org"],
+  "Вихерко":     ["Ирина Вихерко"],
+  "Гринь":       ["Юлія Гринь"],
+  "Ксения":      ["Ксенія"],
+  "Катерина":    ["@katarina988", "Katerina"],
+  "Мария":       ["@Maria_itstep"],
+  "Юлия":        ["@yulia_m18", "Юлия"],
+
+  "Алексей":     ["@mastermiks"],
+  "Виктор":      ["@Metizlin"],
+  "Бага":        ["@Baga_KZ_MY"],
+  "Олена":       ["@Olena_Sabado"],
+  "Мельник":     ["@oleksandr_mell"],
+
+  "_ambiguous_titles": {
+    "_note": "Названия, за которыми в базе больше одного человека. Фильтровать по ним без chat_id нельзя — проверяй v_chat_title_collisions.",
+    "Дарья": "Степаненко из ГО (@daria_041288) и Белікова с Aromika (@Dariia_Belikova) — разные чаты",
+    "Алексей": "5 разных chat_id, рабочий это @mastermiks #382669163",
+    "Дмитрий": "8 разных chat_id",
+    "Александр": "5 разных chat_id, Мальцев это @maltsev_a"
+  }
+}

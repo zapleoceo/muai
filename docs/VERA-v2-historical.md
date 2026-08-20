@@ -1,3 +1,9 @@
+> ⚠️ **АРХИВ — НЕ актуально. Не выполнять.**
+> Это спека эпохи Vera 2 (файл сохранён как есть, поэтому ниже он всё ещё
+> называет себя «Single Source of Truth» — это неправда). Она описывает
+> SQLite и Neo4j Aura: **в проде нет ни того, ни другого**. Актуальное:
+> [`/VERA.md`](../VERA.md) и [`vera3/docs/`](../vera3/docs/).
+
 # Vera v3 — Single Source of Truth
 
 > Canonical doc. CLAUDE.md and docs/ARCHITECTURE.md are stubs.
