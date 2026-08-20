@@ -35,6 +35,41 @@ log = logging.getLogger(__name__)
 # разных авторов на одном чужом человеке).
 SELF_TOKENS = {"я", "i", "me", "myself"}
 
+# Слова, которые НИКОГДА не обозначают конкретного человека — даже если в
+# графе есть аккаунт ровно с таким именем профиля.
+#
+# Инцидент 2026-08-20: у телеграм-аккаунта 942121006 имя профиля буквально
+# «он». LLM исправно доставала факты из фраз вроде «Нормально он написал»,
+# `resolve_entity_exact("он")` находила ровно одно совпадение — и факт
+# прилипал к постороннему человеку. Так набралось 55 связей вида
+# «Ли — coworker_of — он», «You never walk alone — reports_to — он».
+# Местоимение неразрешимо без кореференции, поэтому такие связи не строим
+# вовсе: пропустить факт дешевле, чем приписать его случайному человеку.
+_NON_REFERENTIAL = {
+    "он", "она", "оно", "они", "ты", "вы", "мы", "его", "её", "ее", "их",
+    "им", "ему", "ей", "них", "нас", "вас", "этот", "эта", "тот", "та",
+    "кто", "что", "все", "всё", "кое-кто", "некто",
+    "he", "she", "it", "they", "them", "him", "her", "you", "we", "us",
+    "this", "that", "who", "someone", "somebody", "everyone",
+}
+
+def is_referential_name(name: str | None) -> bool:
+    """Может ли строка вообще обозначать конкретного человека.
+
+    Отсекает местоимения и огрызки (одна буква, только знаки препинания) ДО
+    похода в базу — иначе они резолвятся в случайный аккаунт с таким же
+    именем профиля.
+    """
+    if not name:
+        return False
+    low = name.strip().lower()
+    if len(low) < 2:
+        return False
+    if low in _NON_REFERENTIAL:
+        return False
+    return any(ch.isalnum() for ch in low)
+
+
 PREDICATES = [
     "boss_of",          # X is boss of Y
     "reports_to",       # X reports to Y (inverse of boss_of, model picks one)
@@ -188,10 +223,14 @@ async def extract_and_store(event_id: int, body: str) -> int:
 
     async def _resolve(name: str) -> int | None:
         nonlocal author_id
-        if name.lower() in SELF_TOKENS:
+        low = name.lower().strip()
+        if low in SELF_TOKENS:
             if author_id is False:
                 author_id = await author_entity_of_event(event_id)
             return author_id
+        if not is_referential_name(name):
+            log.debug("rel_extract: skip non-referential name %r", name)
+            return None
         return await resolve_entity_exact(name)
 
     for r in rels[:3]:
