@@ -92,7 +92,7 @@ verbatim to LiteLLM (`routes/proxy.py` → `litellm_adapter.py`); it does
 no schema validation/transformation itself, so the schema Vera sends is
 exactly what reaches the provider.
 
-Constants: `brain_triage.worker.TRIAGE_JSON_SCHEMA`,
+Constants: `brain_triage.schemas.TRIAGE_JSON_SCHEMA`,
 `vera_shared.graph.rel_extract.REL_EXTRACT_JSON_SCHEMA`. Both are built
 from the same enum sources the code already validates against
 (`PROJECT_VOCAB`, `PREDICATES`) so the schema and the client-side

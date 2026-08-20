@@ -1,6 +1,8 @@
 # Vera self-extension — proposal (no code yet)
 
-> Discussion document. Implementation gated on Dima's explicit go-ahead.
+> Discussion document, v2 era (2026-05). **По состоянию на 2026-08-06 не
+> реализовано** — в `vera3/` нет ни одного модуля self-extension. Оставлено
+> как обоснование идеи; реализация по-прежнему требует явного «да» Димы.
 > Canonical project doc: [`/VERA.md`](../VERA.md)
 
 ## Goal
