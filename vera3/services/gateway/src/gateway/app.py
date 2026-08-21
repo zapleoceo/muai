@@ -14,6 +14,7 @@ from gateway.claude import router as claude_router
 from gateway.config import get_settings
 from gateway.events import router as events_router
 from gateway.query import router as query_router
+from gateway.voice import router as voice_router
 
 log = logging.getLogger(__name__)
 
@@ -70,6 +71,7 @@ def create_app() -> FastAPI:
     app.include_router(events_router)
     app.include_router(claude_router)
     app.include_router(query_router)
+    app.include_router(voice_router)
 
     @app.get("/healthz")
     async def healthz() -> dict:

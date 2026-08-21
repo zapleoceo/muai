@@ -8,6 +8,7 @@
 | `/event/{source}` | POST | `X-Internal-Secret` | Ingest endpoint — dedupes by `source_event_id` |
 | `/webhook/{source}` | POST | source-specific | Webhook receiver (Telegram, etc.) |
 | `/v1/claude/remember` | POST | `X-Internal-Secret` | Fact ingest from Claude conversations. Two-layer dedup: exact sha256 of text + semantic cosine ≥ 0.92 over last 7 days of claude-source events. Body: `{text, kind: "fact"\|"decision"\|"todo"\|"preference", context?, tags?}`. Returns `{ok, event_id, deduped, dedup_reason: "exact"\|"semantic"\|null, similar_event_id?, similarity?}`. The dedup embedding is written into `event_embeddings` immediately on accept (2026-07-17) — closes the blind window where two similar facts saved minutes apart both passed semantic dedup because triage hadn't embedded the first one yet. Called by the `vera-mcp` MCP server (see `mcp-claude.md`). |
+| `/v1/voice/session` | POST | `X-Internal-Secret` | Разговор с ноутбука: расшифровка одной сессии → выжимка в `events` (source=`voice`). **Дословный текст не сохраняется** — он нужен только для одного осмысления (`chat:smart`, strict json_schema) и остаётся на ноутбуке. Тело: `{started_at, ended_at, app, window_title, device_hint, utterances:[{at, stream: mic|system, text}]}`. Дедуп по `started_at+app+window_title`, поэтому ретрай из офлайн-очереди не двоит. Сбой брокера не теряет событие — сохраняется факт разговора с метаданными. Клиент: `vera-listener/` |
 
 The body of `/event/<source>` is an EventEnvelope:
 
@@ -136,4 +137,7 @@ X-Internal-Secret required on all `/tools/*`.
 
 Production URL: `https://dima.veranda.my`
 
-All routes here are dashboard routes — no other service is exposed.
+nginx проксирует наружу не только дашборд: `/` → dashboard:8003, а `/event/`,
+`/v1/` и `/webhook/` → gateway:8001. Именно поэтому ноутбук может слать
+события и голосовые сессии по HTTPS — под `X-Internal-Secret`, без VPN и
+туннелей. Всё остальное (brain-search, postgres) слушает только 127.0.0.1.
