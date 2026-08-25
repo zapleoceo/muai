@@ -1,0 +1,32 @@
+name: vera-listener tests
+
+on:
+  push:
+    paths:
+      - 'vera-listener/**'
+      - '.github/workflows/listener-tests.yml'
+  pull_request:
+    paths:
+      - 'vera-listener/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: vera-listener
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install test deps
+        # Пакет целиком не ставим: soundcard/pycaw — Windows-only, а покрыта
+        # тестами вся логика, которая от звука не зависит.
+        run: pip install pytest ruff
+      - name: Pytest
+        run: PYTHONPATH=src pytest tests -q
+      - name: Ruff
+        run: ruff check --select E,F,W,I,B,UP,SIM,C4,RET --ignore E501 src tests

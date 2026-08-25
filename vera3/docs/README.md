@@ -11,7 +11,8 @@ in the commit message (for cosmetic refactors only).
 | [architecture.md](./architecture.md) | Services, data flow, event lifecycle |
 | [llm-broker.md](./llm-broker.md) | How chat/embed route through AIbroker, fallback to local pool |
 | [media-worker.md](./media-worker.md) | Photo/voice recognition worker, retry/degrade policy |
-| [sources.md](./sources.md) | Each ingestor (telegram, gmail, instagram, vera_chat) — what it pulls, how, when |
+| [sources.md](./sources.md) | Each ingestor (telegram, gmail, instagram, trello, voice, vera_chat) — what it pulls, how, when |
+| [listener.md](./listener.md) | vera-listener — слушатель разговоров на ноутбуке: захват, отсев, очередь, автозапуск |
 | [brain.md](./brain.md) | Triage worker, agent loop, search synthesis, memory |
 | [api.md](./api.md) | Gateway endpoints, dashboard routes |
 | [deploy-ops.md](./deploy-ops.md) | rsync deploy, secrets, monitor, runbook |

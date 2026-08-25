@@ -109,6 +109,7 @@ vera3/
 | Tables, columns, invariants | [`vera3/docs/domain-model.md`](vera3/docs/domain-model.md) |
 | Identity / values / goals / style layer | [`vera3/docs/identity.md`](vera3/docs/identity.md) |
 | Source contract, adding a new source | [`vera3/docs/sources.md`](vera3/docs/sources.md) |
+| Слушатель разговоров на ноутбуке (`vera-listener/`) | [`vera3/docs/listener.md`](vera3/docs/listener.md) |
 | LLM routing, token tiers, cost caps | [`vera3/docs/llm-broker.md`](vera3/docs/llm-broker.md) |
 | Vision/OCR pipeline | [`vera3/docs/media-worker.md`](vera3/docs/media-worker.md) |
 | Entity dedup and merge | [`vera3/docs/graph-dedup.md`](vera3/docs/graph-dedup.md) |

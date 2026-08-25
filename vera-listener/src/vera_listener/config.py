@@ -1,0 +1,105 @@
+"""Конфиг слушателя: файл + переменные окружения, без лишних зависимостей.
+
+Секреты берём из ~/.vera/listener.env, а если его нет — из уже существующего
+~/.claude/vera_sync.env, который завёл claude_chat_sync. Два файла с одним и
+тем же INTERNAL_SECRET разъезжаются, поэтому второй читается как запасной.
+"""
+from __future__ import annotations
+
+import os
+from dataclasses import dataclass, field
+from pathlib import Path
+
+HOME = Path(os.path.expanduser("~"))
+ENV_FILE = HOME / ".vera" / "listener.env"
+LEGACY_ENV_FILE = HOME / ".claude" / "vera_sync.env"
+DEFAULT_ROOT = Path(os.environ.get("LOCALAPPDATA", str(HOME))) / "vera-listener"
+
+# Системный звук берём только из того, что похоже на разговор. Ютуб, музыка и
+# фильмы в мозг не идут: это шум, который жёг бы распознавание впустую.
+DEFAULT_ALLOW_APPS = (
+    "zoom.exe", "teams.exe", "ms-teams.exe", "telegram.exe", "discord.exe",
+    "slack.exe", "whatsapp.exe", "skype.exe", "webexmta.exe",
+)
+# Браузеры — условно: Meet и веб-мессенджеры неотличимы от ютуба
+# по имени процесса; решает gate.py по наличию речи в микрофоне.
+DEFAULT_BROWSER_APPS = (
+    "chrome.exe", "msedge.exe", "firefox.exe", "brave.exe", "arc.exe",
+    "opera.exe", "vivaldi.exe",
+)
+
+
+def _read_env_file(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    out: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        out[key.strip()] = value.strip()
+    return out
+
+
+def _split(value: str) -> tuple[str, ...]:
+    return tuple(x.strip().lower() for x in value.split(",") if x.strip())
+
+
+@dataclass(frozen=True)
+class Config:
+    gateway_url: str = "https://dima.veranda.my"
+    internal_secret: str = ""
+    root: Path = DEFAULT_ROOT
+    model_size: str = "small"
+    compute_type: str = "int8"
+    language: str = "ru"
+    cpu_threads: int = 2
+    silence_timeout_s: float = 60.0
+    max_session_s: float = 7200.0
+    min_speech_s: float = 25.0
+    monologue_speech_s: float = 45.0
+    chunk_speech_s: float = 60.0
+    transcript_ttl_days: int = 0
+    allow_apps: tuple[str, ...] = field(default=DEFAULT_ALLOW_APPS)
+    browser_apps: tuple[str, ...] = field(default=DEFAULT_BROWSER_APPS)
+    deny_apps: tuple[str, ...] = ()
+    send_interval_s: float = 30.0
+    send_backoff_max_s: float = 900.0
+
+    @property
+    def queue_dir(self) -> Path:
+        return self.root / "queue"
+
+    @property
+    def log_file(self) -> Path:
+        return self.root / "listener.log"
+
+
+def load_config() -> Config:
+    """Приоритет: переменные окружения > listener.env > vera_sync.env > дефолт."""
+    values = {**_read_env_file(LEGACY_ENV_FILE), **_read_env_file(ENV_FILE)}
+    values.update({k: v for k, v in os.environ.items() if k.startswith("VERA_")
+                   or k == "INTERNAL_SECRET"})
+
+    def get(key: str, default: str) -> str:
+        return values.get(key, default)
+
+    return Config(
+        gateway_url=get("VERA_GATEWAY_URL", Config.gateway_url).rstrip("/"),
+        internal_secret=get("INTERNAL_SECRET", ""),
+        root=Path(get("VERA_LISTENER_ROOT", str(DEFAULT_ROOT))),
+        model_size=get("VERA_MODEL_SIZE", Config.model_size),
+        compute_type=get("VERA_COMPUTE_TYPE", Config.compute_type),
+        language=get("VERA_LANGUAGE", Config.language),
+        cpu_threads=int(get("VERA_CPU_THREADS", str(Config.cpu_threads))),
+        silence_timeout_s=float(get("VERA_SILENCE_S", str(Config.silence_timeout_s))),
+        min_speech_s=float(get("VERA_MIN_SPEECH_S", str(Config.min_speech_s))),
+        monologue_speech_s=float(
+            get("VERA_MONOLOGUE_S", str(Config.monologue_speech_s))),
+        transcript_ttl_days=int(
+            get("VERA_TRANSCRIPT_TTL_DAYS", str(Config.transcript_ttl_days))),
+        allow_apps=_split(get("VERA_ALLOW_APPS", ",".join(DEFAULT_ALLOW_APPS))),
+        browser_apps=_split(get("VERA_BROWSER_APPS", ",".join(DEFAULT_BROWSER_APPS))),
+        deny_apps=_split(get("VERA_DENY_APPS", "")),
+    )

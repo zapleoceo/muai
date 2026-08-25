@@ -10,6 +10,8 @@ from typing import Any
 # сам по себе определяет природу. Для новых источников решает LLM-поле.
 NATURE_BY_SOURCE = {
     "vera_chat": "conversation_with_me",
+    # Разговор у ноутбука — всегда разговор со мной, гадать модели не о чем.
+    "voice": "conversation_with_me",
     "perplexity": "my_intent",
     "vera_memory": "derived_fact",
 }
