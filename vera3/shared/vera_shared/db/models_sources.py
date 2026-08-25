@@ -61,3 +61,22 @@ class InstagramSessionRow(Base):
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(),
     )
+
+
+class TrelloBoardRow(Base):
+    """Курсор опроса одной доски Trello.
+
+    Токен и ключ живут в env (личный аккаунт, один на всё), поэтому здесь
+    только состояние обхода: докуда дошли и что сломалось в прошлый раз.
+    """
+    __tablename__ = "trello_boards"
+
+    board_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    last_action_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    last_polled_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(),
+    )

@@ -199,6 +199,28 @@ services:
     restart: unless-stopped
     logging: *default-logging
 
+  # ─── Trello ─────────────────────────────────────────────────────────────
+  # Actions-фид всех досок владельца + суточный дайджест открытых сроков.
+  # Ключ и токен — личные, из .env; состояние обхода в таблице trello_boards.
+  ingestor-trello:
+    build:
+      context: ..
+      dockerfile: services/ingestor-trello/Dockerfile
+    container_name: vera3-ingestor-trello
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
+      # Без ключа контейнер не падает, а ждёт: обязательная переменная (:?)
+      # уронила бы весь `compose up`, то есть всю Веру, из-за одного источника.
+      TRELLO_API_KEY: ${TRELLO_API_KEY:-}
+      TRELLO_TOKEN: ${TRELLO_TOKEN:-}
+      TRELLO_POLL_S: "300"
+      TRELLO_BOOTSTRAP_DAYS: "7"
+    restart: unless-stopped
+    logging: *default-logging
+
   # ─── Media Worker ───────────────────────────────────────────────────────
   # Polls triage_status='media_pending', downloads photo/voice via
   # ingestor-telegram /media/download, runs vision/whisper, appends

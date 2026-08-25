@@ -55,7 +55,7 @@ jobs:
 
       - name: Run all tests with coverage
         run: |
-          PYTHONPATH=shared:services/gateway/src:services/dashboard/src:services/media-worker/src:services/ingestor-telegram/src:services/ingestor-gmail/src:services/brain-search/src:services/brain-triage/src:services/bot-telegram/src:services/ingestor-instagram/src \
+          PYTHONPATH=shared:services/gateway/src:services/dashboard/src:services/media-worker/src:services/ingestor-telegram/src:services/ingestor-gmail/src:services/ingestor-trello/src:services/brain-search/src:services/brain-triage/src:services/bot-telegram/src:services/ingestor-instagram/src \
           pytest tests/ \
             --cov=vera_shared \
             --cov=gateway \

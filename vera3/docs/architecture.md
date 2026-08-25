@@ -7,6 +7,7 @@
               │  ingestor-telegram (userbot+tools)  │
               │  ingestor-gmail    (OAuth polling)  │
               │  ingestor-instagram (instagrapi)    │
+              │  ingestor-trello   (REST polling)   │
               └────────────────┬────────────────────┘
                                │ POST /event/<source>
                                ▼
@@ -48,6 +49,7 @@
 | `vera3-ingestor-telegram` | Telethon userbot + FastAPI tools server on :8000 |
 | `vera3-ingestor-gmail` | OAuth refresh + Gmail API polling |
 | `vera3-ingestor-instagram` | instagrapi inbox polling |
+| `vera3-ingestor-trello` | Trello actions-фид всех досок + суточный дайджест сроков |
 | `vera3-dashboard` | HTMX UI on :8003 |
 | `vera3-prune` | docker system prune --filter='until=72h' daily |
 

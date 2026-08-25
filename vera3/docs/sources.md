@@ -61,6 +61,74 @@ via `gateway /event/<source>` with `X-Internal-Secret`.
   20-message window could miss messages in an active thread between polls.
 - Tool: `[shared post]` / `[reel]` / `[voice]` / `[media]` placeholders for non-text.
 
+## trello
+
+- Container: `vera3-ingestor-trello`
+- Mechanism: REST-опрос (`api.trello.com/1`), раз в `TRELLO_POLL_S` (по
+  умолчанию 300 с). Ключ и токен — личные, из `infra/.env`
+  (`TRELLO_API_KEY`, `TRELLO_TOKEN`); в БД секретов Trello нет.
+- Доски: **все открытые доски владельца**. Новая доска подхватывается сама
+  при ближайшем опросе, закрытая гаснет `is_active=false` — строка с курсором
+  остаётся, чтобы возвращение доски не начинало историю заново.
+- Курсор — `last_action_id`, **id действия, а не дата**. Trello отдаёт
+  действия от новых к старым, поэтому date-курсор терял бы хвост при
+  всплеске активности (та же грабля, что чинили у gmail с date-granular
+  `after:`). Первый прогон по доске берёт `TRELLO_BOOTSTRAP_DAYS` (7) назад.
+- Бэклог глубже одной страницы (1000 действий) разбирается пагинацией
+  `before=<самое старое с прошлой страницы>` в том же прогоне, до
+  `TRELLO_MAX_PAGES` (20). Если и этого не хватило — курсор **не двигается**,
+  прогон помечается неполным и добирается в следующий раз. Молча пропустить
+  середину нельзя.
+- Что становится событием: `createCard`, `updateCard` (переезд между
+  списками, срок, архив, переименование, описание), `deleteCard`,
+  `moveCardToBoard`, `commentCard`, `addMemberToCard`/`removeMemberFromCard`,
+  `updateCheckItemStateOnCard`, `addChecklistToCard`. Всё остальное — включая
+  `updateCard` с одной лишь сменой `pos` — не событие: это служебный шум
+  Trello, который раздул бы очередь триажа ни за чем.
+- `source_event_id` = id действия Trello (глобально уникален), поэтому дедуп
+  бесплатный и повторный обход безопасен.
+- Авторство: `idMemberCreator == members/me.id` → `author_role=self`, иначе
+  `counterparty` с `author_label` = полное имя участника.
+- Identity: участник Trello → person-сущность с alias `(trello, username)`.
+  Слияние с telegram/gmail-двойниками — существующим `/entities/duplicates`,
+  своего дедупа у источника нет.
+- Суточный дайджест: раз в сутки одно событие `digest:<дата>` — открытые
+  карточки со сроками, ближайшие первыми, просроченные помечены. Снапшот
+  карточек отдельными событиями сознательно не делается: правки и так
+  приходят через actions-фид, а снапшот перезаписывал бы память шумом.
+  Отметка «за сегодня собрано» живёт в `app_control` (`trello_digest_date`).
+
+### Модули ingestor-trello
+
+| Файл | Что делает |
+|---|---|
+| `client.py` | `TrelloClient` — только транспорт: ключи, пагинация, ретраи; `TrelloAuthError` на 401/403 (ретраить бессмысленно) |
+| `describe.py` | `describe()` — действие → человекочитаемая строка (и `None` для шума); `category()` — грубая категория события (card / comment / member / checklist) |
+| `mapper.py` | `action_to_event()` — упаковка в контракт `events` с авторством и хинтами; `parse_date()` — ISO Trello → наивный UTC |
+| `store.py` | Весь SQL источника: `upsert_boards()`, `save_cursor()`, `insert_events()` (дедуп до вставки), `sync_authors()` (участник → person-сущность) |
+| `digest.py` | `build_digest()` и `digest_event()` — текст и событие суточного дайджеста; `due_today()` / `mark_done()` — отметка «за сегодня собрано» в `app_control` |
+| `poller.py` | `fetch_new_actions()` — обход бэклога вглубь через `before`; `poll_board()` — прогон по одной доске и решение о курсоре; `run_digest()` — суточный дайджест; `main_loop()` — цикл опроса |
+
+Состояние обхода — `TrelloBoardRow` (`shared/vera_shared/db/models_sources.py`,
+таблица `trello_boards`, миграция 022).
+
+## voice (ноутбук)
+
+- Контейнера нет: приём в gateway — `POST /v1/voice/session` (см. `api.md`).
+  Клиент — `vera-listener/` на ноутбуке (подробно: [listener.md](./listener.md)),
+  слушает микрофон и системный вывод
+  (WASAPI loopback), распознаёт локально и шлёт одну сессию под
+  `X-Internal-Secret`.
+- В `events` уходит **выжимка** (кто, через что, о чём, решения,
+  договорённости, цифры, ключевые цитаты), а не дословная расшифровка.
+  Осмысление делается один раз на приёме (`chat:smart`, strict json_schema);
+  сырой текст на сервере не хранится и удаляется на ноутбуке после отправки.
+- Дедуп по `started_at+app+window_title`, поэтому повтор из офлайн-очереди
+  не двоит событие.
+- `nature` для источника задан детерминированно — `conversation_with_me`
+  (`brain_triage/postprocess.py`): разговор у ноутбука ничем другим быть
+  не может, гадать модели не о чем.
+
 ## vera_chat
 
 - Not an external source. Bot writes user prompts AND Vera's replies here.
@@ -117,7 +185,7 @@ via `gateway /event/<source>` with `X-Internal-Secret`.
 `event_embeddings` уйдут по каскаду, `relationships.derived_from_event_id`
 обнулится.
 
-## Authorship contract (telegram / gmail / instagram)
+## Authorship contract (telegram / gmail / instagram / trello / voice)
 
 Every event from a conversational source MUST encode author unambiguously:
 

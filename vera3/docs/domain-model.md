@@ -74,6 +74,7 @@ just not with its own billed row.
 | `gmail_accounts` | OAuth state per mailbox. `refresh_token_enc`, `last_polled_at`, `is_active`. |
 | `telegram_sessions` | Telethon MTProto session (StringSession), encrypted. |
 | `instagram_sessions` | instagrapi sessionid + device fingerprint, encrypted. |
+| `trello_boards` (migration 022) | Курсор обхода на доску: `last_action_id` (id действия, не дата), `is_active`, `last_error`. Ключ и токен Trello — в `infra/.env`, в БД их нет. |
 
 ### `project_membership` (migration 010)
 
