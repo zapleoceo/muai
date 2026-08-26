@@ -14,6 +14,7 @@ import os
 from datetime import datetime
 
 from sqlalchemy import select, update
+from sqlalchemy.exc import ProgrammingError
 from vera_shared.crypto import decrypt
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_sources import SlackAuthRow
@@ -23,16 +24,24 @@ log = logging.getLogger("slack")
 
 async def load_token() -> tuple[str, int | None]:
     """→ (токен, id строки slack_auth либо None если токен из окружения)."""
-    async with get_session() as s:
-        row = (await s.execute(
-            select(SlackAuthRow)
-            .where(SlackAuthRow.is_active.is_(True))
-            .order_by(SlackAuthRow.id.desc())
-        )).scalars().first()
-        if row is not None:
-            stored, row_id = row.token_enc, row.id
-        else:
-            stored, row_id = "", None
+    stored, row_id = "", None
+    try:
+        async with get_session() as s:
+            row = (await s.execute(
+                select(SlackAuthRow)
+                .where(SlackAuthRow.is_active.is_(True))
+                .order_by(SlackAuthRow.id.desc())
+            )).scalars().first()
+            if row is not None:
+                stored, row_id = row.token_enc, row.id
+    except ProgrammingError:
+        # Деплой привозит код раньше, чем накатывается миграция — окно между
+        # ними структурное, оно повторится с каждым новым источником. Внятная
+        # строка полезнее трейсбека, и она ничего не скрывает: сказано прямо,
+        # что таблицы нет.
+        log.error("slack: таблицы slack_auth нет — накати миграцию 025; "
+                  "пока беру токен из окружения")
+        return os.environ.get("SLACK_USER_TOKEN", ""), None
 
     if row_id is not None:
         try:

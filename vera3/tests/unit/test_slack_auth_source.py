@@ -111,3 +111,30 @@ class TestMarks:
         """Токен из окружения строки не имеет — гасить нечего и падать не на чем."""
         await auth.mark_ok(None)
         await auth.mark_dead(None, "нечего гасить")
+
+
+@pytest.mark.usefixtures("sqlite_db")
+class TestMissingTable:
+    """Деплой привозит код раньше миграции — окно между ними структурное и
+    повторится с каждым новым источником. Трейсбек тут ничего не объясняет."""
+
+    @pytest.mark.asyncio
+    async def test_absent_table_degrades_to_environment_with_a_clear_line(
+            self, monkeypatch, caplog):
+        from sqlalchemy.exc import ProgrammingError
+
+        monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-from-env")
+
+        class _Boom:
+            async def __aenter__(self):
+                raise ProgrammingError("SELECT …", {}, Exception("no such table"))
+
+            async def __aexit__(self, *exc):
+                return False
+
+        monkeypatch.setattr(auth, "get_session", lambda: _Boom())
+        with caplog.at_level("ERROR"):
+            token, row_id = await auth.load_token()
+
+        assert (token, row_id) == ("xoxp-from-env", None)
+        assert "миграцию 025" in caplog.text
