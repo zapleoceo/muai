@@ -60,18 +60,28 @@ _STYLE = """<style>
 </style>"""
 
 
+def ago(minutes: int) -> str:
+    """«12 мин» / «3 ч» / «78 дн». Минуты для двух месяцев молчания ничего не
+    сообщают — «112568 мин» приходилось делить в голове."""
+    if minutes < 90:
+        return f"{minutes} мин"
+    if minutes < 48 * 60:
+        return f"{minutes // 60} ч"
+    return f"{minutes // 1440} дн"
+
+
 def _freshness(last: datetime | None, now: datetime, src) -> str:
     """Свежесть потока. Источникам без опроса (внутренние) она не положена."""
     if src.live_min is None:
         return '<span class="mute">—</span>'
     if last is None:
         return '<span class="pill err">нет данных</span>'
-    mins = int((now - last).total_seconds() / 60)
+    mins = max(0, int((now - last).total_seconds() / 60))
     if mins < src.live_min:
-        return f'<span class="pill ok">живой · {mins} мин</span>'
+        return f'<span class="pill ok">живой · {ago(mins)}</span>'
     if mins < (src.warn_min or src.live_min * 4):
-        return f'<span class="pill warn">тихо · {mins} мин</span>'
-    return f'<span class="pill err">молчит · {mins} мин</span>'
+        return f'<span class="pill warn">тихо · {ago(mins)}</span>'
+    return f'<span class="pill err">молчит · {ago(mins)}</span>'
 
 
 def _sources_in_order(overview: dict) -> list:

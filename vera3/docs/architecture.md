@@ -76,7 +76,8 @@ this project's own "~200 lines, one responsibility per file" convention):
 Функции этого слоя, чтобы не искать глазами: каталог — `resolve_source()` и
 `unlisted()` (источник без записи в каталоге всё равно показывается строкой);
 подключение Slack — `verify()`, затем `save_token()`; страница одного источника
-— `source_page()`. На стороне ингестора токен достаёт `load_token()`, а
+— `source_page()`; «сколько молчит» форматирует `ago()` — минуты для двух
+месяцев тишины ничего не сообщают. На стороне ингестора токен достаёт `load_token()`, а
 `mark_ok()` / `mark_dead()` пишут в `SlackAuthRow`, живой он или отозван.
 | `search_routes.py` | `/search-ui` — proxies to brain-search |
 | `settings_routes.py` | `/settings`, `/control/settings` — SETTINGS registry |

@@ -216,3 +216,23 @@ class TestTableEscaping:
         assert isinstance(state_pill(False), Html)
         assert isinstance(dt(_dt(2026, 8, 26)), Html)
         assert "<time" in dt(_dt(2026, 8, 26))
+
+
+class TestAgo:
+    """«молчит · 112568 мин» — технически верно и бесполезно: 78 дней
+    приходилось делить в голове."""
+
+    @pytest.mark.parametrize("minutes,expect", [
+        (0, "0 мин"), (12, "12 мин"), (89, "89 мин"),
+        (90, "1 ч"), (200, "3 ч"), (2879, "47 ч"),
+        (2880, "2 дн"), (112568, "78 дн"),
+    ])
+    def test_units_switch_with_scale(self, minutes, expect):
+        from dashboard.sources_routes import ago
+        assert ago(minutes) == expect
+
+    def test_long_silence_is_reported_in_days_not_minutes(self):
+        src = source_registry.BY_KEY["instagram"]
+        out = _freshness(NOW - timedelta(days=78), NOW, src)
+        assert "78 дн" in out
+        assert "мин" not in out
