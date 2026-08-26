@@ -53,7 +53,7 @@ class _FakeClient:
         return self._replies.get((channel, thread_ts), ([], True))
 
     async def user_info(self, user_id):
-        return self._users.get(user_id, {"real_name": user_id})
+        return self._users.get(user_id, {"real_name": user_id, "profile": {}})
 
 
 def _msg(ts, text="сообщение", user="UKOL", **over):
@@ -103,7 +103,7 @@ async def _watched(cid="C1"):
 
 
 async def _run(client, row, names=None):
-    names = names or poller.Names(client)
+    names = names or poller.Profiles(client)
     return await poller.poll_conversation(client, row, ME, "acme/dima", names)
 
 

@@ -252,3 +252,116 @@ class TestResolveAuthor:
     def test_unresolvable_counterparty_is_none_never_owner(self, source, meta):
         """Пустая связь лучше связи, повешенной на владельца."""
         assert resolve_author(source, meta) is None
+
+
+@pytest.mark.usefixtures("sqlite_db")
+class TestLinkedEntities:
+    """Один человек в трёх каналах должен быть ОДНОЙ сущностью.
+
+    До 2026-08-26 upsert_entity заводил новую запись, если своего алиаса ещё
+    нет, поэтому на живых данных ни одна из 25 slack-сущностей не была связана
+    с gmail или telegram, а Yevhenii Pavlenko существовал тремя сразу.
+    """
+
+    async def _aliases(self, entity_id: int) -> set[tuple[str, str]]:
+        from vera_shared.db.engine import get_session
+        from vera_shared.db.models_graph import EntityAliasRow
+        async with get_session() as s:
+            rows = (await s.execute(
+                select(EntityAliasRow).where(EntityAliasRow.entity_id == entity_id)
+            )).scalars().all()
+        return {(r.source, r.identifier) for r in rows}
+
+    @pytest.mark.asyncio
+    async def test_links_to_an_existing_person_by_known_alias(self):
+        from vera_shared.graph.repo import upsert_entity, upsert_entity_linked
+
+        gmail_id = await upsert_entity(
+            type="person", name="Yevhenii Pavlenko",
+            source="gmail", identifier="yevhenii@sintegrum.com")
+
+        slack_id, how = await upsert_entity_linked(
+            type="person", name="Yevhenii Pavlenko",
+            source="slack", identifier="user:U123",
+            known_as=[("gmail", "yevhenii@sintegrum.com")])
+
+        assert (slack_id, how) == (gmail_id, "linked")
+        assert await self._aliases(gmail_id) == {
+            ("gmail", "yevhenii@sintegrum.com"), ("slack", "user:U123")}
+
+    @pytest.mark.asyncio
+    async def test_creates_one_person_carrying_both_aliases_when_nobody_known(self):
+        """Email из профиля Slack заводится алиасом gmail сразу: письмо от этого
+        человека прилетит на существующую сущность, без участия LLM."""
+        from vera_shared.graph.repo import upsert_entity_linked
+
+        entity_id, how = await upsert_entity_linked(
+            type="person", name="Igor Nerozya",
+            source="slack", identifier="user:U777",
+            known_as=[("gmail", "igor@sintegrum.com")])
+
+        assert how == "new"
+        assert await self._aliases(entity_id) == {
+            ("slack", "user:U777"), ("gmail", "igor@sintegrum.com")}
+
+    @pytest.mark.asyncio
+    async def test_own_alias_wins_and_does_not_relink(self):
+        from vera_shared.graph.repo import upsert_entity, upsert_entity_linked
+
+        slack_id = await upsert_entity(
+            type="person", name="Kolya", source="slack", identifier="user:U9")
+        other_id = await upsert_entity(
+            type="person", name="Кто-то ещё", source="gmail", identifier="k@x.com")
+
+        got, how = await upsert_entity_linked(
+            type="person", name="Kolya", source="slack", identifier="user:U9",
+            known_as=[("gmail", "k@x.com")])
+
+        assert (got, how) == (slack_id, "own")
+        assert got != other_id
+
+    @pytest.mark.asyncio
+    async def test_repeat_is_idempotent(self):
+        from vera_shared.graph.repo import upsert_entity_linked
+
+        first, _ = await upsert_entity_linked(
+            type="person", name="Ann", source="slack", identifier="user:U1",
+            known_as=[("gmail", "ann@x.com")])
+        second, how = await upsert_entity_linked(
+            type="person", name="Ann", source="slack", identifier="user:U1",
+            known_as=[("gmail", "ann@x.com")])
+        assert (second, how) == (first, "own")
+        assert len(await self._aliases(first)) == 2
+
+    @pytest.mark.asyncio
+    async def test_existing_attributes_are_not_overwritten(self):
+        """Профиль Slack — ещё один свидетель, а не истина в последней
+        инстанции: телефон, уже известный из другого канала, он не перетирает."""
+        from vera_shared.db.engine import get_session
+        from vera_shared.db.models_graph import EntityRow
+        from vera_shared.graph.repo import upsert_entity, upsert_entity_linked
+
+        gmail_id = await upsert_entity(
+            type="person", name="Petr", source="gmail", identifier="p@x.com",
+            attributes={"phone": "+380 111", "email": "p@x.com"})
+        await upsert_entity_linked(
+            type="person", name="Petr", source="slack", identifier="user:UP",
+            known_as=[("gmail", "p@x.com")],
+            attributes={"phone": "+380 999", "title": "CTO"})
+
+        async with get_session() as s:
+            attrs = (await s.execute(
+                select(EntityRow.attributes).where(EntityRow.id == gmail_id)
+            )).scalar_one()
+        assert attrs["phone"] == "+380 111"     # прежнее не перетёрто
+        assert attrs["title"] == "CTO"          # новое добавлено
+
+    @pytest.mark.asyncio
+    async def test_empty_known_as_behaves_like_a_plain_upsert(self):
+        from vera_shared.graph.repo import upsert_entity_linked
+
+        entity_id, how = await upsert_entity_linked(
+            type="person", name="Solo", source="slack", identifier="user:US",
+            known_as=[])
+        assert how == "new"
+        assert await self._aliases(entity_id) == {("slack", "user:US")}

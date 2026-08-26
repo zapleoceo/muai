@@ -23,7 +23,13 @@ import pytest  # noqa: E402
 from dashboard import source_registry  # noqa: E402
 from dashboard.app import app  # noqa: E402
 from dashboard.auth import COOKIE_NAME  # noqa: E402
-from dashboard.sources_routes import _freshness, _sources_in_order  # noqa: E402
+from dashboard.source_state import State  # noqa: E402
+from dashboard.sources_routes import (  # noqa: E402
+    _freshness,
+    _sources_in_order,
+    actions,
+    connection_pill,
+)
 from fastapi.testclient import TestClient  # noqa: E402
 
 client = TestClient(app)
@@ -37,6 +43,20 @@ def _owner_cookie() -> str:
     _set_session_cookie(resp)
     header = resp.headers.get("set-cookie", "")
     return header.split(";")[0].split("=", 1)[1] if "=" in header else ""
+
+
+_CONNECTED = State(connected=True, label="Sintegrum Team · dimondra",
+                   affects="опрос остановится")
+_OFFLINE = State(connected=False, label="токена нет")
+_NO_NOTION = State(connected=None)
+
+
+def _states(**over):
+    """По умолчанию всё подключено — тесты страницы про вёрстку, не про доступ."""
+    base = {s.key: (_CONNECTED if s.connect_url else _NO_NOTION)
+            for s in source_registry.CATALOG}
+    base.update(over)
+    return AsyncMock(side_effect=lambda key: base.get(key, _NO_NOTION))
 
 
 _OVERVIEW = {
@@ -102,6 +122,14 @@ class TestFreshness:
 
 
 class TestPages:
+    @pytest.fixture(autouse=True)
+    def _connected(self):
+        """Тесты этого класса — про вёрстку, а не про доступ: по умолчанию всё
+        подключено. Патч на класс, чтобы новый тест не забыл его и не полез в
+        настоящую базу."""
+        with patch("dashboard.sources_routes.state_of", _states()):
+            yield
+
     def test_index_requires_owner(self):
         r = client.get("/sources", follow_redirects=False)
         assert r.status_code == 303
@@ -120,22 +148,15 @@ class TestPages:
         # Источник без записи в каталоге тоже виден.
         assert "health" in r.text
 
-    def test_action_label_follows_state(self):
-        """Одна статичная подпись врала бы: «Подключить» на подключённом
-        источнике или «Переподключить» на пустом."""
-        from dashboard.sources_routes import action_label
-        slack = source_registry.BY_KEY["slack"]
-        assert action_label(slack, 0) == "Подключить"
-        assert action_label(slack, 768) == "Переподключить"
-        internal = source_registry.BY_KEY["vera_memory"]
-        assert action_label(internal, 0) == ""
-
-    def test_index_shows_totals_and_connect_action(self):
+    def test_index_shows_totals_and_the_action_that_matches_state(self):
         with patch("dashboard.sources_routes.get_sources_overview",
-                   AsyncMock(return_value=_OVERVIEW)):
+                   AsyncMock(return_value=_OVERVIEW)),              patch("dashboard.sources_routes.state_of",
+                   _states(slack=_OFFLINE, telegram=_CONNECTED)):
             r = client.get("/sources", cookies={COOKIE_NAME: _owner_cookie()})
         assert "414,955" in r.text
+        # Slack не подключён → ведём на подключение; telegram подключён → на отключение.
         assert "/api/slack/start" in r.text
+        assert "/api/sources/telegram/disconnect" in r.text
 
     def test_detail_renders_blocks_from_the_provider(self):
         blocks = [
@@ -152,7 +173,7 @@ class TestPages:
             r = client.get("/sources/slack", cookies={COOKIE_NAME: _owner_cookie()})
         assert r.status_code == 200
         for expected in ("Sintegrum Team", "По типу канала", "channel",
-                         "подсказка", "Подключить"):
+                         "подсказка", "Отключить"):
             assert expected in r.text
 
     def test_detail_of_source_without_provider_says_so(self):
@@ -191,6 +212,11 @@ class TestTableEscaping:
     человеку: любой может назвать чат <script>…</script>. Правило страницы —
     экранируем всё, кроме явно помеченного Html."""
 
+    @pytest.fixture(autouse=True)
+    def _connected(self):
+        with patch("dashboard.sources_routes.state_of", _states()):
+            yield
+
     def _detail(self, blocks):
         return patch("dashboard.sources_routes.get_source_detail",
                      AsyncMock(return_value=blocks))
@@ -201,7 +227,7 @@ class TestTableEscaping:
                    "headers": ["чат", "тип", "событий"],
                    "rows": [[evil, "user", "5"]], "hint": ""}]
         with patch("dashboard.sources_routes.get_sources_overview",
-                   AsyncMock(return_value=_OVERVIEW)), self._detail(blocks):
+                   AsyncMock(return_value=_OVERVIEW)),              self._detail(blocks):
             r = client.get("/sources/telegram", cookies={COOKIE_NAME: _owner_cookie()})
         assert evil not in r.text
         assert "onerror=alert(1)&gt;" in r.text or "&lt;img" in r.text
@@ -214,7 +240,7 @@ class TestTableEscaping:
                    "headers": ["кто", "состояние"],
                    "rows": [["dima", state_pill(True, "активна")]], "hint": ""}]
         with patch("dashboard.sources_routes.get_sources_overview",
-                   AsyncMock(return_value=_OVERVIEW)), self._detail(blocks):
+                   AsyncMock(return_value=_OVERVIEW)),              self._detail(blocks):
             r = client.get("/sources/slack", cookies={COOKIE_NAME: _owner_cookie()})
         assert '<span class="pill ok">активна</span>' in r.text
         assert isinstance(state_pill(True), Html)
@@ -246,3 +272,55 @@ class TestAgo:
         out = _freshness(NOW - timedelta(days=78), NOW, src)
         assert "78 дн" in out
         assert "мин" not in out
+
+
+class TestConnectionState:
+    """Подключение и свежесть — разные вещи, и раньше их путали: подпись кнопки
+    выбиралась по числу событий."""
+
+    def test_connected_shows_what_exactly(self):
+        out = connection_pill(_CONNECTED)
+        assert "pill ok" in out
+        assert "Sintegrum Team" in out
+
+    def test_not_connected_shows_the_reason(self):
+        out = connection_pill(_OFFLINE)
+        assert "pill err" in out
+        assert "токена нет" in out
+
+    def test_source_without_the_notion_shows_a_dash(self):
+        assert connection_pill(_NO_NOTION) == '<span class="mute">—</span>'
+
+    def test_state_label_is_escaped(self):
+        evil = State(connected=False, label="<script>alert(1)</script>")
+        assert "<script>" not in connection_pill(evil)
+
+
+class TestActions:
+    def test_connected_source_offers_disconnect(self):
+        out = actions(source_registry.BY_KEY["slack"], _CONNECTED)
+        assert "Отключить" in out
+        assert "/api/sources/slack/disconnect" in out
+
+    def test_disconnected_source_offers_connect(self):
+        out = actions(source_registry.BY_KEY["slack"], _OFFLINE)
+        assert "Подключить" in out
+        assert "Отключить" not in out
+        assert "/api/slack/start" in out
+
+    def test_source_with_events_but_dead_session_offers_connect(self):
+        """Instagram с 353 событиями и мёртвой сессией. Раньше подпись
+        выбиралась по числу событий и предлагала «Переподключить», как будто
+        всё в порядке."""
+        out = actions(source_registry.BY_KEY["instagram"],
+                      State(False, "сессия неактивна — нужен повторный вход"))
+        assert "Подключить" in out
+        assert "Отключить" not in out
+
+    def test_source_without_db_secret_cannot_be_disconnected(self):
+        """У Trello ключ в infra/.env — гасить из дашборда нечего."""
+        out = actions(source_registry.BY_KEY["trello"], State(True, "3 досок"))
+        assert "Отключить" not in out
+
+    def test_internal_source_has_no_buttons(self):
+        assert actions(source_registry.BY_KEY["vera_memory"], _NO_NOTION) == ""

@@ -19,6 +19,7 @@ from fastapi.responses import HTMLResponse
 from dashboard.render import _render, data_table, esc, local_dt, owner_or_redirect
 from dashboard.source_detail import Block, Html
 from dashboard.source_registry import CATALOG, resolve_source
+from dashboard.source_state import State, can_disconnect, state_of
 from dashboard.stats import get_source_detail, get_sources_overview
 
 router = APIRouter()
@@ -39,6 +40,10 @@ _STYLE = """<style>
 .act a { font-size:12px; padding:5px 11px; border:1px solid #2a2d34; border-radius:7px;
          color:#9aa4b2; }
 .act a:hover { border-color:#4dabf7; color:#4dabf7; }
+.act a.danger:hover, a.btn.danger:hover { border-color:#c94a4a; color:#ff9c9c; }
+a.btn { padding:8px 16px; border:1px solid #2a2d34; border-radius:8px;
+        color:#9aa4b2; font-size:13px; }
+a.btn:hover { border-color:#4dabf7; color:#4dabf7; }
 .idle td { opacity:.55; }
 .crumb { font-size:13px; color:#6b7280; margin:0 0 10px; }
 .head { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin:0 0 4px; }
@@ -92,23 +97,42 @@ def _sources_in_order(overview: dict) -> list:
     return known + [resolve_source(key) for key in extra]
 
 
-def action_label(src, total: int) -> str:
-    """Подключён — «Переподключить», пуст — «Подключить». Статичная подпись
-    врала бы в одном из состояний."""
-    return src.reconnect_label if total else (src.connect_label or "")
+def connection_pill(state: State) -> str:
+    """Подключение — не то же, что свежесть потока. Instagram с 353 событиями и
+    мёртвой сессией «живым» не является, а только что подключённый Slack ещё
+    ничего не принёс и всё равно подключён."""
+    if state.connected is None:
+        return '<span class="mute">—</span>'
+    cls = "ok" if state.connected else "err"
+    label = state.label or ("подключён" if state.connected else "не подключён")
+    return f'<span class="pill {cls}">{esc(label)}</span>'
 
 
-def _row(src, stat: dict, now: datetime) -> str:
+def actions(src, state: State) -> str:
+    """Подключён — «Отключить», нет — «Подключить». Кнопка обязана называть то,
+    что произойдёт: «Переподключить» на неподключённом источнике врало."""
+    if state.connected and can_disconnect(src.key):
+        return (f'<a class="danger" href="/api/sources/{esc(src.key)}/disconnect">'
+                f'Отключить</a>')
+    if state.connected and src.connect_url:
+        return f'<a href="{esc(src.connect_url)}">{esc(src.reconnect_label)}</a>'
+    if src.connect_url:
+        return (f'<a href="{esc(src.connect_url)}">'
+                f'{esc(src.connect_label or "Подключить")}</a>')
+    return ""
+
+
+def _row(src, stat: dict, state: State, now: datetime) -> str:
     total = stat.get("total", 0)
     cls = "" if total else "idle"
     detail = f'<a href="/sources/{esc(src.key)}">{esc(src.title)}</a>' \
         if (src.detail or total) else esc(src.title)
-    action = (f'<a href="{esc(src.connect_url)}">{esc(action_label(src, total))}</a>'
-              if src.connect_url else "")
+    action = actions(src, state)
     return (
         f'<tr class="{cls}">'
         f'<td><div class="src-name"><span class="ico">{src.icon}</span>'
         f'<span>{detail}<div class="src-how">{esc(src.how)}</div></span></div></td>'
+        f'<td>{connection_pill(state)}</td>'
         f'<td>{_freshness(stat.get("last"), now, src)}</td>'
         f'<td class="num">{total:,}</td>'
         f'<td class="num">{stat.get("c24h", 0):,}</td>'
@@ -126,9 +150,11 @@ async def sources_page(request: Request):
     now = datetime.utcnow()
     overview = await get_sources_overview()
     sources = _sources_in_order(overview)
-    rows = "".join(_row(s, overview.get(s.key, {}), now) for s in sources)
+    states = {s.key: await state_of(s.key) for s in sources}
+    rows = "".join(_row(s, overview.get(s.key, {}), states[s.key], now)
+                   for s in sources)
 
-    live = sum(1 for s in sources if s.live_min is not None and s.connect_url)
+    live = sum(1 for st in states.values() if st.connected)
     total_events = sum(v.get("total", 0) for v in overview.values())
     last_24h = sum(v.get("c24h", 0) for v in overview.values())
 
@@ -140,14 +166,14 @@ async def sources_page(request: Request):
 
       <div class="strip">
         <div><div class="k">Источников</div><div class="v">{len(sources)}</div></div>
-        <div><div class="k">Подключаемых</div><div class="v">{live}</div></div>
+        <div><div class="k">Подключено</div><div class="v">{live}</div></div>
         <div><div class="k">Событий всего</div><div class="v">{total_events:,}</div></div>
         <div><div class="k">За сутки</div><div class="v">+{last_24h:,}</div></div>
       </div>
 
       <table class="src-list">
         <thead><tr>
-          <th>источник</th><th>поток</th><th class="num">событий</th>
+          <th>источник</th><th>подключение</th><th>поток</th><th class="num">событий</th>
           <th class="num">за сутки</th><th>последнее</th><th></th>
         </tr></thead>
         <tbody>{rows}</tbody>
@@ -188,12 +214,20 @@ async def source_page(key: str, request: Request):
     now = datetime.utcnow()
     src = resolve_source(key)
     stat = (await get_sources_overview()).get(key, {})
+    state = await state_of(key)
     blocks = await get_source_detail(key)
 
-    action = (f'<a href="{esc(src.connect_url)}" '
-              f'style="padding:8px 16px;border:1px solid #4dabf7;border-radius:8px">'
-              f'{esc(action_label(src, stat.get("total", 0)))}</a>'
-              if src.connect_url else "")
+    # На странице источника доступны оба действия: переподключить (сменить
+    # секрет) и отключить. В списке — только основное, чтобы не рябило.
+    buttons = []
+    if src.connect_url:
+        buttons.append(
+            f'<a class="btn" href="{esc(src.connect_url)}">'
+            f'{esc(src.reconnect_label if state.connected else (src.connect_label or "Подключить"))}</a>')
+    if state.connected and can_disconnect(key):
+        buttons.append(f'<a class="btn danger" '
+                       f'href="/api/sources/{esc(key)}/disconnect">Отключить</a>')
+    action = " ".join(buttons)
     note = f'<p class="note">{esc(src.note)}</p>' if src.note else ""
     body = "".join(_render_block(b) for b in blocks) or \
         '<div class="blk"><div class="mute">Разбивок для этого источника нет — ' \
@@ -204,6 +238,7 @@ async def source_page(key: str, request: Request):
       <p class="crumb"><a href="/sources">← источники</a></p>
       <div class="head">
         <h1>{src.icon} {esc(src.title)}</h1>
+        {connection_pill(state)}
         {_freshness(stat.get("last"), now, src)}
         <span style="margin-left:auto">{action}</span>
       </div>

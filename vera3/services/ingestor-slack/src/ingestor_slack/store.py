@@ -126,23 +126,47 @@ async def save_thread_cursor(thread_id: int, last_reply_ts: str | None,
         )
 
 
-def _author_of(spec: dict[str, Any]) -> dict[str, Any] | None:
+def _author_of(spec: dict[str, Any], profiles: Any = None) -> dict[str, Any] | None:
+    """Автор события → сущность. С профилем — ещё и связка с другими каналами.
+
+    Рабочий email из профиля Slack — это же алиас gmail, поэтому человек
+    прицепляется к УЖЕ существующей сущности вместо новой. До этого 25
+    slack-сущностей были не связаны ни с чем, а Yevhenii Pavlenko лежал в графе
+    тремя записями: по одной на канал.
+    """
     meta = spec.get("metadata_") or {}
     if meta.get("author_role") == "self":
         return None
     sender = meta.get("sender_id")
     if not sender:
         return None
-    return {"identifier": f"user:{sender}",
-            "name": str(meta.get("author_label") or sender)}
+
+    entity: dict[str, Any] = {
+        "identifier": f"user:{sender}",
+        "name": str(meta.get("author_label") or sender),
+    }
+    profile = profiles.profile(str(sender)) if profiles is not None else {}
+    if not profile:
+        return entity
+
+    attributes = {k: v for k, v in profile.items() if k != "is_bot"}
+    attributes["slack_user_id"] = str(sender)
+    entity["attributes"] = attributes
+    email = (profile.get("email") or "").strip().lower()
+    if email:
+        entity["known_as"] = [("gmail", email)]
+    return entity
 
 
-async def save_events(specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+async def save_events(specs: list[dict[str, Any]],
+                      *, profiles: Any = None) -> list[dict[str, Any]]:
     """События + person-сущности их авторов. → реально вставленные события.
 
-    Слияние двойников с telegram/gmail — существующим /entities/duplicates,
-    своего дедупа сущностей у источника нет.
+    Слияние УЖЕ существующих двойников остаётся за /entities/duplicates: это
+    разрушительная операция, решать её должен владелец, а не ингестор.
     """
     fresh = await insert_events(specs)
-    await sync_author_entities(fresh, source="slack", author_of=_author_of)
+    await sync_author_entities(
+        fresh, source="slack",
+        author_of=lambda spec: _author_of(spec, profiles))
     return fresh

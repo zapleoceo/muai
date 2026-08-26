@@ -50,34 +50,60 @@ def newest_ts(messages: list[dict]) -> str | None:
     return max((str(m.get("ts") or "") for m in messages), default="") or None
 
 
-class Names:
-    """Кэш «id → человекочитаемое имя». Без него users.info звался бы на каждое
-    сообщение, а имена в воркспейсе меняются раз в год."""
+class Profiles:
+    """Кэш профилей: «id → имя и что известно о человеке».
+
+    Без кэша users.info звался бы на каждое сообщение, а профиль в воркспейсе
+    меняется раз в год. Кроме имени берём то, что связывает человека с другими
+    каналами: рабочий email — это же алиас gmail, и по нему сущность
+    прицепляется к уже существующей, без догадок LLM.
+    """
+
+    #: что вытаскиваем из профиля. Не всё подряд: телефон и должность полезны
+    #: как контекст, картинки и статус — шум.
+    FIELDS = ("email", "phone", "title", "real_name", "display_name")
 
     def __init__(self, client: SlackClient):
         self._client = client
-        self._cache: dict[str, str] = {}
+        self._names: dict[str, str] = {}
+        self._profiles: dict[str, dict[str, str]] = {}
 
     @property
     def known(self) -> dict[str, str]:
-        return self._cache
+        return self._names
+
+    def profile(self, user_id: str) -> dict[str, str]:
+        return self._profiles.get(user_id, {})
 
     async def resolve(self, user_ids: set[str]) -> dict[str, str]:
-        for uid in sorted(user_ids - self._cache.keys()):
+        for uid in sorted(user_ids - self._names.keys()):
             if not uid:
                 continue
             try:
                 info = await self._client.user_info(uid)
             except Exception as e:  # noqa: BLE001 — без имени событие всё равно нужно
-                log.debug("slack: имя %s не забрал: %s", uid, e)
-                self._cache[uid] = uid
+                log.debug("slack: профиль %s не забрал: %s", uid, e)
+                self._names[uid] = uid
                 continue
-            self._cache[uid] = str(info.get("real_name") or info.get("name") or uid)
-        return self._cache
+            profile = info.get("profile") or {}
+            fields = {}
+            for key in self.FIELDS:
+                value = str(profile.get(key) or "").strip()
+                if value:
+                    fields[key] = value
+            if info.get("tz"):
+                fields["tz"] = str(info["tz"])
+            if info.get("is_bot"):
+                fields["is_bot"] = "true"
+            self._profiles[uid] = fields
+            self._names[uid] = str(
+                info.get("real_name") or fields.get("real_name")
+                or info.get("name") or uid)
+        return self._names
 
 
 async def _events_from(messages: list[dict], row: SlackConversationRow,
-                       me_id: str, account: str, names: Names) -> list[dict]:
+                       me_id: str, account: str, names: Profiles) -> list[dict]:
     await names.resolve({str(m.get("user") or "") for m in messages})
     specs = []
     for message in messages:
@@ -92,7 +118,7 @@ async def _events_from(messages: list[dict], row: SlackConversationRow,
 
 
 async def poll_threads(client: SlackClient, row: SlackConversationRow,
-                       me_id: str, account: str, names: Names) -> int:
+                       me_id: str, account: str, names: Profiles) -> int:
     """Догнать ответы в наблюдаемых тредах канала."""
     saved = 0
     for thread in await store.due_threads(
@@ -111,7 +137,8 @@ async def poll_threads(client: SlackClient, row: SlackConversationRow,
         # Первый элемент ответа — корневое сообщение; оно уже пришло историей.
         replies = [m for m in messages if str(m.get("ts")) != thread.thread_ts]
         fresh = await store.save_events(
-            await _events_from(replies, row, me_id, account, names))
+            await _events_from(replies, row, me_id, account, names),
+            profiles=names)
         saved += len(fresh)
         cursor = newest_ts(replies) if complete else None
         await store.save_thread_cursor(
@@ -120,7 +147,7 @@ async def poll_threads(client: SlackClient, row: SlackConversationRow,
 
 
 async def poll_conversation(client: SlackClient, row: SlackConversationRow,
-                            me_id: str, account: str, names: Names) -> int:
+                            me_id: str, account: str, names: Profiles) -> int:
     try:
         messages, complete = await client.history(
             row.conversation_id, oldest=row.last_ts or bootstrap_ts(),
@@ -134,7 +161,8 @@ async def poll_conversation(client: SlackClient, row: SlackConversationRow,
         return 0
 
     saved = len(await store.save_events(
-        await _events_from(messages, row, me_id, account, names)))
+        await _events_from(messages, row, me_id, account, names),
+        profiles=names))
 
     # Корневые сообщения тредов — под наблюдение, ответы придут отдельно.
     for message in messages:
@@ -163,17 +191,17 @@ class _Session:
         self.client: SlackClient | None = None
         self.me_id = ""
         self.account = ""
-        self.names: Names | None = None
+        self.names: Profiles | None = None
         self.auth_row: int | None = None
 
-    async def connect(self) -> tuple[SlackClient, Names]:
+    async def connect(self) -> tuple[SlackClient, Profiles]:
         if self.client is None or self.names is None:
             token, self.auth_row = await auth.load_token()
             self.client = SlackClient(token)
             me = await self.client.whoami()
             self.me_id = str(me.get("user_id") or "")
             self.account = f"{me.get('team') or 'slack'}/{me.get('user') or 'me'}"
-            self.names = Names(self.client)
+            self.names = Profiles(self.client)
             await auth.mark_ok(self.auth_row)
             log.info("Slack: %s (%s), токен %s, опрос каждые %sс",
                      self.account, self.me_id,

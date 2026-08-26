@@ -229,7 +229,11 @@ Each source has its own container and writes to the same `events` table.
 - Авторство: `message.user == auth.test.user_id` → `author_role=self`, иначе
   `counterparty` с `author_label` = `real_name` (кэш имён в поллере, иначе
   `users.info` звался бы на каждое сообщение).
-- Identity: автор → person-сущность с alias `(slack, user:<U…>)`. `sender_id` в
+- Identity: автор → person-сущность с alias `(slack, user:<U…>)`, и — если в
+  профиле есть рабочий email — она **прицепляется к уже существующему человеку**
+  по алиасу gmail вместо новой записи (`upsert_entity_linked`, см.
+  [identity.md](./identity.md)). Оттуда же в атрибуты идут `phone`, `title`,
+  `tz`. `sender_id` в
   метаданных — общая с telegram/instagram форма, на неё смотрит
   `ingest.authorship`.
 - Денай-лист каналов: `ingest_policy.is_ignored_slack_channel()` — базовый
@@ -250,7 +254,7 @@ Each source has its own container and writes to the same `events` table.
 | `client.py` | `SlackClient` — только транспорт: токен, ретраи, 429 по `Retry-After`, пагинация. `SlackAuthError` на `invalid_auth`/`token_revoked`/`missing_scope` (ретраить бессмысленно), `SlackApiError` на остальное. Slack отвечает 200 даже на ошибку, поэтому разбирается тело, а не статус |
 | `mapper.py` | `message_to_event()` — упаковка в контракт `events`; `unwrap()` — разметка Slack → текст; `is_noise()` — служебное и ботовое; `parse_ts()` — `ts` → наивный UTC |
 | `store.py` | Состояние обхода: `upsert_conversations()`, `save_cursor()`, `watch_thread()`, `due_threads()`, `save_thread_cursor()`, `save_events()`; `kind_of()` — тип канала |
-| `poller.py` | `poll_conversation()` — прогон по каналу и решение о курсоре; `poll_threads()` — догон ответов в наблюдаемых тредах; `Names` — кэш имён; `bootstrap_ts()`, `newest_ts()`; `main_loop()` |
+| `poller.py` | `poll_conversation()` — прогон по каналу и решение о курсоре; `poll_threads()` — догон ответов в наблюдаемых тредах; `Profiles` — кэш профилей (имя плюс email/телефон/должность для связывания каналов); `bootstrap_ts()`, `newest_ts()`; `main_loop()` |
 
 Состояние обхода — `SlackConversationRow` и `SlackThreadRow`
 (`shared/vera_shared/db/models_sources.py`, таблицы `slack_conversations` и
@@ -404,6 +408,24 @@ Migration that backfills both fields + the content_text prefix:
 **Контракт события:** `author_role` + `author_label` в metadata и префикс
 `Author:` первой строкой `content_text` (см. «Authorship contract» выше);
 `source_event_id`, уникальный в пределах источника; `occurred_at` наивным UTC.
+
+### Дашборд: состояние и кнопки
+
+Подключён источник или нет — отвечает `dashboard/source_state.py`, читая его
+таблицу доступа (`gmail_accounts`, `telegram_sessions`, `instagram_sessions`,
+`slack_auth`, `trello_boards`). Раньше подпись кнопки выбиралась по числу
+событий, и это врало дважды: Instagram с 353 событиями и мёртвой сессией
+предлагал «Переподключить», как будто всё в порядке, а свежеподключённый Slack
+— «Подключить», как будто ещё нет. **Число событий говорит про историю, а не
+про доступ**, и на странице это теперь два разных столбца: «подключение» и
+«поток».
+
+Кнопка называет то, что произойдёт: подключён → **Отключить**, нет →
+**Подключить**. Отключение — общий маршрут `/api/sources/{key}/disconnect`
+(`dashboard/source_actions.py`) с обязательным подтверждением: GET показывает,
+что именно погаснет, POST гасит. Гасится **строка**, а не секрет и не события —
+поэтому шаг обратим, и на подтверждении это сказано прямо. У Trello секрета в
+БД нет (ключ в `infra/.env`), поэтому отключать из UI у него нечего.
 
 ### Дашборд: источник появляется сам
 
