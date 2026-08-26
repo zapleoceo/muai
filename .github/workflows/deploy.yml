@@ -198,7 +198,12 @@ jobs:
           fi
           echo "Scanning:"; echo "$CHANGED"
           # --min-confidence 80 is conservative; raises only when 4/5 sure.
-          echo "$CHANGED" | xargs vulture --min-confidence 80 \
+          # --ignore-names cls: vulture считает `cls` в @classmethod неиспользуемой
+          # переменной, хотя это обязательный параметр языка. Так выглядит каждый
+          # валидатор pydantic, и ловушка вылезает при ПЕРВОМ касании файла:
+          # events/schema.py жил с двумя такими валидаторами — ворота их не видели,
+          # потому что линтуются только изменённые файлы, — а на третьем деплой упал.
+          echo "$CHANGED" | xargs vulture --min-confidence 80 --ignore-names cls \
             --exclude '*/tests/*,*/__init__.py' || {
               echo "::warning::Vulture found suspected dead code — see above."
               exit 1
