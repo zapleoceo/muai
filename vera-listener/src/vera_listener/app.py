@@ -49,6 +49,10 @@ class Listener:
         self.session: Path | None = None
         self._session_wall: datetime | None = None
         self._session_zero: float = 0.0
+        # Продолжение той же встречи после разреза по длительности: (id, номер
+        # следующей части). None — следующая сессия начинает новую встречу.
+        self._continues: tuple[str, int] | None = None
+        self._meeting: tuple[str, int] | None = None
         self._stop = threading.Event()
 
     def run(self) -> None:
@@ -107,14 +111,21 @@ class Listener:
             return
         self._session_zero = session.started_at
         self._session_wall = self._wall(session.started_at)
+        session_id = self._session_wall.strftime("s-%Y%m%dT%H%M%S")
+        meeting_id, part = self._continues or (session_id, 1)
+        self._continues = None
+        self._meeting = (meeting_id, part)
         self.session = self.outbox.start(
-            self._session_wall.strftime("s-%Y%m%dT%H%M%S"),
-            self._session_wall.isoformat(),
+            session_id, self._session_wall.isoformat(),
             app=session.app, window_title=session.window_title,
             device_hint=self.capture.device_hint,
+            meeting_id=meeting_id, part=part,
         )
-        log.info("разговор начался (%s / %s)", session.app or "?",
-                 session.window_title or "?")
+        if part > 1:
+            log.info("разговор продолжается, часть %d (%s)", part, meeting_id)
+        else:
+            log.info("разговор начался (%s / %s)", session.app or "?",
+                     session.window_title or "?")
 
     def _record(self, frame: Frame, speech: bool) -> None:
         recorder = self.recorders[frame.track]
@@ -136,8 +147,16 @@ class Listener:
             self._queue_chunk(track)
         self.jobs.put(("close", self.session, closed, speech_s,
                        self._wall(closed.ended_at)))
+        # Разрез по предохранителю — не конец разговора: следующая сессия
+        # продолжает ту же встречу. Тишина и смена приложения — конец.
+        if closed.reason == "max_duration" and self._meeting is not None:
+            meeting_id, part = self._meeting
+            self._continues = (meeting_id, part + 1)
+        else:
+            self._continues = None
         self.session = None
         self._session_wall = None
+        self._meeting = None
 
     def _wall(self, monotonic_at: float) -> datetime:
         return datetime.now().astimezone() - timedelta(

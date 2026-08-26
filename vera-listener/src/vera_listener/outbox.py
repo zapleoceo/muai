@@ -27,11 +27,17 @@ class Outbox:
             path.mkdir(parents=True, exist_ok=True)
 
     def start(self, session_id: str, started_at: str, *, app: str | None,
-              window_title: str | None, device_hint: str | None) -> Path:
+              window_title: str | None, device_hint: str | None,
+              meeting_id: str | None = None, part: int = 1) -> Path:
         path = self.open_dir / f"{session_id}.jsonl"
         self._write_line(path, {
             "kind": "header", "started_at": started_at, "app": app,
             "window_title": window_title, "device_hint": device_hint,
+            # Части одной длинной встречи несут общий meeting_id: предохранитель
+            # по длительности режет разговор, а связь между половинами должна
+            # остаться — иначе в мозге это два независимых события. Первая часть
+            # называет встречу собой.
+            "meeting_id": meeting_id or session_id, "part": part,
         }, mode="w")
         return path
 
@@ -151,6 +157,10 @@ def read_payload(path: Path) -> dict[str, Any] | None:
         "app": header.get("app"),
         "window_title": header.get("window_title"),
         "device_hint": header.get("device_hint"),
+        # Файлы, записанные до появления meeting_id, ещё лежат в очереди —
+        # для них часть одна, а встреча совпадает с сессией.
+        "meeting_id": header.get("meeting_id") or path.stem,
+        "part": int(header.get("part") or 1),
         "utterances": utterances,
     }
 

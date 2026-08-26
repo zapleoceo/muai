@@ -56,11 +56,14 @@ class Config:
     language: str = "ru"
     cpu_threads: int = 2
     silence_timeout_s: float = 60.0
+    # Предохранитель по длительности. Встреча длиннее не теряется — она режется
+    # на части, но каждая часть осмысляется отдельно, поэтому крутить его руками
+    # приходится по-настоящему. Сервер считает свой порог свёртки от этого же
+    # значения, независимой константы там больше нет.
     max_session_s: float = 7200.0
     min_speech_s: float = 25.0
     monologue_speech_s: float = 45.0
     chunk_speech_s: float = 60.0
-    transcript_ttl_days: int = 0
     allow_apps: tuple[str, ...] = field(default=DEFAULT_ALLOW_APPS)
     browser_apps: tuple[str, ...] = field(default=DEFAULT_BROWSER_APPS)
     deny_apps: tuple[str, ...] = ()
@@ -94,11 +97,14 @@ def load_config() -> Config:
         language=get("VERA_LANGUAGE", Config.language),
         cpu_threads=int(get("VERA_CPU_THREADS", str(Config.cpu_threads))),
         silence_timeout_s=float(get("VERA_SILENCE_S", str(Config.silence_timeout_s))),
+        max_session_s=float(get("VERA_MAX_SESSION_S", str(Config.max_session_s))),
         min_speech_s=float(get("VERA_MIN_SPEECH_S", str(Config.min_speech_s))),
         monologue_speech_s=float(
             get("VERA_MONOLOGUE_S", str(Config.monologue_speech_s))),
-        transcript_ttl_days=int(
-            get("VERA_TRANSCRIPT_TTL_DAYS", str(Config.transcript_ttl_days))),
+        chunk_speech_s=float(get("VERA_CHUNK_SPEECH_S", str(Config.chunk_speech_s))),
+        send_interval_s=float(get("VERA_SEND_INTERVAL_S", str(Config.send_interval_s))),
+        send_backoff_max_s=float(
+            get("VERA_SEND_BACKOFF_MAX_S", str(Config.send_backoff_max_s))),
         allow_apps=_split(get("VERA_ALLOW_APPS", ",".join(DEFAULT_ALLOW_APPS))),
         browser_apps=_split(get("VERA_BROWSER_APPS", ",".join(DEFAULT_BROWSER_APPS))),
         deny_apps=_split(get("VERA_DENY_APPS", "")),

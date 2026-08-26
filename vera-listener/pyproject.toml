@@ -4,7 +4,12 @@ version = "0.1.0"
 description = "Ambient listener: микрофон + системный звук ноутбука → выжимка в мозг Веры"
 requires-python = ">=3.12"
 dependencies = [
-    "sounddevice>=0.5.1",
+    # soundcard, НЕ sounddevice: capture.py умеет WASAPI-loopback, а его даёт
+    # именно soundcard. До 2026-08-26 здесь стоял sounddevice, которого не
+    # импортирует никто — install.ps1 ставил пакет, и первый же запуск падал
+    # с ModuleNotFoundError: No module named 'soundcard'. CI это поймать не
+    # может: listener-tests.yml ставит только pytest и ruff.
+    "soundcard>=0.4.3",
     "numpy>=1.26",
     "pysilero-vad>=2.0",
     "faster-whisper>=1.0",

@@ -8,9 +8,12 @@
 | `/event/{source}` | POST | `X-Internal-Secret` | Ingest endpoint — dedupes by `source_event_id` |
 | `/webhook/{source}` | POST | source-specific | Webhook receiver (Telegram, etc.) |
 | `/v1/claude/remember` | POST | `X-Internal-Secret` | Fact ingest from Claude conversations. Two-layer dedup: exact sha256 of text + semantic cosine ≥ 0.92 over last 7 days of claude-source events. Body: `{text, kind: "fact"\|"decision"\|"todo"\|"preference", context?, tags?}`. Returns `{ok, event_id, deduped, dedup_reason: "exact"\|"semantic"\|null, similar_event_id?, similarity?}`. The dedup embedding is written into `event_embeddings` immediately on accept (2026-07-17) — closes the blind window where two similar facts saved minutes apart both passed semantic dedup because triage hadn't embedded the first one yet. Called by the `vera-mcp` MCP server (see `mcp-claude.md`). |
-| `/v1/voice/session` | POST | `X-Internal-Secret` | Разговор с ноутбука: расшифровка одной сессии → выжимка в `events` (source=`voice`). **Дословный текст не сохраняется** — он нужен только для одного осмысления (`chat:smart`, strict json_schema) и остаётся на ноутбуке. Тело: `{started_at, ended_at, app, window_title, device_hint, utterances:[{at, stream: mic|system, text}]}`. Дедуп по `started_at+app+window_title`, поэтому ретрай из офлайн-очереди не двоит. Сбой брокера не теряет событие — сохраняется факт разговора с метаданными. Клиент: `vera-listener/` |
+| `/v1/voice/session` | POST | `X-Internal-Secret` | Разговор с ноутбука: расшифровка одной сессии → выжимка в `events` (source=`voice`). **Дословный текст не сохраняется** — он нужен только для одного осмысления (`chat:smart`, strict json_schema) и остаётся на ноутбуке. Тело: `{started_at, ended_at, app, window_title, device_hint, meeting_id?, part?, utterances:[{at, stream: mic|system, text}]}`. Длинная расшифровка **сворачивается по окнам, а не обрезается** (`gateway/voice_distill.py`): каждое окно осмысляется отдельно, второй проход сливает частичные выжимки в одну. Дедуп по `started_at+app+window_title`, поэтому ретрай из офлайн-очереди не двоит. Сбой брокера не теряет событие — сохраняется факт разговора с метаданными. Клиент: `vera-listener/` |
 
-The body of `/event/<source>` is an EventEnvelope:
+The body of `/event/<source>` is a `RawEvent` (`shared/vera_shared/events/schema.py`).
+Note that the ingestors do NOT go through this endpoint — they write via
+`vera_shared.ingest.insert_events()`; see [sources.md](./sources.md). The
+endpoint serves webhooks and the bot's `vera_chat` writes.
 
 ```json
 {
