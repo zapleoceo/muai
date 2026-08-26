@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 
 from vera_shared.db.engine import init_engine
 from vera_shared.db.models_sources import TrelloBoardRow
+from vera_shared.ingest import poll_forever
 
 from ingestor_trello import digest, store
 from ingestor_trello.client import ACTIONS_PAGE, TrelloAuthError, TrelloClient
@@ -66,8 +67,7 @@ async def poll_board(
         if spec:
             specs.append(spec)
 
-    fresh = await store.insert_events(specs)
-    await store.sync_authors(fresh)
+    fresh = await store.save_events(specs)
 
     if not complete:
         log.warning("trello/%s: бэклог глубже %d страниц — курсор не двигаю",
@@ -95,7 +95,7 @@ async def run_digest(
     built = digest.build_digest(per_board, now)
     if built:
         text, total, overdue = built
-        await store.insert_events(
+        await store.save_events(
             [digest.digest_event(text, total, overdue, now, me_username)]
         )
         log.info("trello: дайджест — %d карточек со сроками, %d просрочено",
@@ -103,37 +103,49 @@ async def run_digest(
     await digest.mark_done(now)
 
 
+class _Session:
+    """Клиент и «кто я». Пересобирается после отказа в доступе — токен могли
+    отозвать или он ещё не появился в .env."""
+
+    def __init__(self) -> None:
+        self.client: TrelloClient | None = None
+        self.me_id = ""
+        self.me_username = ""
+
+    async def connect(self) -> TrelloClient:
+        if self.client is None:
+            self.client = TrelloClient()
+            me = await self.client.whoami()
+            self.me_id = str(me["id"])
+            self.me_username = str(me.get("username") or "me")
+            log.info("Trello: %s (%s), опрос каждые %sс",
+                     self.me_username, self.me_id, POLL_S)
+        return self.client
+
+    def reset(self) -> None:
+        self.client = None
+
+
 async def main_loop() -> None:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     await init_engine()
-    client: TrelloClient | None = None
-    me_id = me_username = ""
+    session = _Session()
 
-    while True:
+    async def poll_once() -> None:
         try:
-            if client is None:
-                client = TrelloClient()
-                me = await client.whoami()
-                me_id, me_username = str(me["id"]), str(me.get("username") or "me")
-                log.info("Trello: %s (%s), опрос каждые %sс",
-                         me_username, me_id, POLL_S)
+            client = await session.connect()
             boards = await store.upsert_boards(await client.list_boards())
             for row in boards:
-                await poll_board(client, row, me_id, me_username)
+                await poll_board(client, row, session.me_id, session.me_username)
                 await asyncio.sleep(1)
-            await run_digest(client, boards, me_username)
-        except TrelloAuthError as e:
-            # Ключа ещё нет в .env либо токен отозван. Падать нельзя: контейнер
-            # с restart:unless-stopped ушёл бы в crash-loop — как ingestor-instagram
-            # до фикса. Ждём и пробуем подключиться заново.
-            client = None
-            log.error("trello: нет доступа (%s) — жду ключ", e)
-            await asyncio.sleep(600)
-            continue
-        except Exception as e:
-            log.exception("trello: сбой цикла: %s", e)
-        await asyncio.sleep(POLL_S)
+            await run_digest(client, boards, session.me_username)
+        except TrelloAuthError:
+            session.reset()
+            raise
+
+    await poll_forever(name="trello", poll_once=poll_once, interval_s=POLL_S,
+                       auth_error=TrelloAuthError, log=log)
 
 
 if __name__ == "__main__":

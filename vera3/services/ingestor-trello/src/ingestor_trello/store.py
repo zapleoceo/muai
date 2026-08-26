@@ -1,4 +1,8 @@
-"""Запись в БД: доски, события, авторы. Весь SQL Trello-ингестора здесь."""
+"""Запись в БД: доски и авторы. Свой SQL источника — только про курсоры.
+
+Вставка событий и «автор → сущность» переехали в `vera_shared.ingest`: они
+одинаковы у всех источников, а копия дедупа здесь была check-then-insert.
+"""
 from __future__ import annotations
 
 import logging
@@ -7,9 +11,8 @@ from typing import Any
 
 from sqlalchemy import select, update
 from vera_shared.db.engine import get_session
-from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import TrelloBoardRow
-from vera_shared.graph.repo import upsert_entity
+from vera_shared.ingest import insert_events, sync_author_entities
 
 log = logging.getLogger("trello")
 
@@ -48,43 +51,21 @@ async def save_cursor(board_id: str, cursor: str | None, error: str | None) -> N
         )
 
 
-async def insert_events(specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Вставляет только те, которых ещё нет. Возвращает реально вставленные."""
-    if not specs:
-        return []
-    ids = [sp["source_event_id"] for sp in specs]
-    fresh: list[dict[str, Any]] = []
-    async with get_session() as s:
-        existing = set((await s.execute(
-            select(EventRow.source_event_id).where(
-                EventRow.source == "trello",
-                EventRow.source_event_id.in_(ids),
-            )
-        )).scalars().all())
-        for spec in specs:
-            if spec["source_event_id"] in existing:
-                continue
-            s.add(EventRow(triage_status="pending", **spec))
-            fresh.append(spec)
-    return fresh
+def _author_of(spec: dict[str, Any]) -> dict[str, Any] | None:
+    meta = spec.get("metadata_") or {}
+    username = meta.get("author_username")
+    if not username:
+        return None
+    return {"identifier": str(username),
+            "name": str(meta.get("author_label") or username)}
 
 
-async def sync_authors(specs: list[dict[str, Any]]) -> None:
-    """Участник Trello → person-сущность с alias (trello, username).
+async def save_events(specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """События + person-сущности их авторов. → реально вставленные события.
 
-    Слияние с телеграм/гмейл-двойниками — существующим /entities/duplicates,
-    здесь ничего своего про дедуп нет.
+    Слияние двойников с телеграм/гмейл — существующим /entities/duplicates,
+    своего дедупа сущностей у источника нет.
     """
-    seen: set[str] = set()
-    for spec in specs:
-        meta = spec.get("metadata_") or {}
-        username = meta.get("author_username")
-        if not username or username in seen:
-            continue
-        seen.add(username)
-        await upsert_entity(
-            type="person",
-            name=str(meta.get("author_label") or username),
-            source="trello",
-            identifier=str(username),
-        )
+    fresh = await insert_events(specs)
+    await sync_author_entities(fresh, source="trello", author_of=_author_of)
+    return fresh

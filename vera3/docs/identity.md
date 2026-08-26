@@ -11,8 +11,15 @@
 | Источник | Кто становится сущностью | Где в коде |
 |---|---|---|
 | telegram | отправитель каждого сообщения + чат + membership | `ingestor-telegram/entity_sync.py` |
-| gmail | собеседник письма: `correspondent_of()` выбирает From (received) / первый To (sent), свои ящики и self-notes пропускаются; `sync_correspondent_entity()` пишет entity+alias `(gmail, email)` | `ingestor-gmail/poller.py` |
+| gmail | собеседник письма: `correspondent_of()` выбирает From (received) / первый To (sent), свои ящики и self-notes пропускаются; служебные ящики заводятся организациями (`entity_kind_for_email`) | `ingestor-gmail/poller.py` |
 | instagram | собеседник DM (только received) → alias `(instagram, user:<pk>)` | `ingestor-instagram/__main__.py` |
+| trello | участник действия → alias `(trello, username)` | `ingestor-trello/store.py` |
+| slack | автор сообщения → alias `(slack, user:<U…>)` | `ingestor-slack/store.py` |
+
+Сам upsert для gmail, trello и slack делает общий
+`vera_shared.ingest.sync_author_entities()`: дедуп по identifier в пределах
+прогона и запрет ронять приём событий из-за сбоя графа одинаковы у всех, а
+различается только экстрактор — как достать сущность из метаданных источника.
 
 До 2026-07-19 сущности создавал только telegram — почта и IG шли в события,
 но не в граф идентичности.

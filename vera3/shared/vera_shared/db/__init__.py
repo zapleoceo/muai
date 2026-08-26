@@ -9,7 +9,6 @@ from vera_shared.db.engine import (
 from vera_shared.db.models import (
     EventRow,
     JobRow,
-    SourceRow,
     UsageLogRow,
 )
 from vera_shared.db.models_sources import GmailAccountRow, TelegramSessionRow
@@ -21,7 +20,6 @@ __all__ = [
     "get_session",
     "init_engine",
     "EventRow",
-    "SourceRow",
     "JobRow",
     "UsageLogRow",
     "GmailAccountRow",

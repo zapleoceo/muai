@@ -37,24 +37,13 @@ from vera_shared.db.engine import Base
 # NOTE: TokenRow / `tokens` table removed 2026-06-29. Vera holds no LLM
 # provider keys — every chat/embed/vision/transcribe call goes through the
 # broker (aib.zapleo.com), which owns all keys. See migration 008.
-
-
-class SourceRow(Base):
-    """Table sources — настроенные источники данных."""
-
-    __tablename__ = "sources"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
-    name: Mapped[str] = mapped_column(String(100), nullable=False, unique=True)
-    connector_type: Mapped[str] = mapped_column(String(50), nullable=False)
-    credentials_encrypted: Mapped[str | None] = mapped_column(Text, nullable=True)
-    enabled: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
-    config: Mapped[dict[str, Any]] = mapped_column(JsonType, nullable=False, default=dict)
-    last_fetched_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
-    last_event_cursor: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    created_at: Mapped[datetime] = mapped_column(
-        DateTime, nullable=False, server_default=func.now(),
-    )
+#
+# NOTE: SourceRow / `sources` table removed 2026-08-26. Ни один ингестор
+# никогда её не читал и не писал: состояние обхода живёт в per-source таблицах
+# (gmail_accounts, telegram_sessions, instagram_sessions, trello_boards,
+# slack_conversations), а секреты — в infra/.env либо в *_sessions под crypto.
+# Вместе с ней удалены две мёртвые ABC источника (vera_shared/sources,
+# vera_shared/connectors) — их тоже не реализовал никто. См. миграцию 023.
 
 
 class EventRow(Base):

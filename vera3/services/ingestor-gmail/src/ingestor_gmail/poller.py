@@ -21,7 +21,7 @@ from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import GmailAccountRow
 from vera_shared.graph.identity import entity_kind_for_email
-from vera_shared.graph.repo import upsert_entity
+from vera_shared.ingest import AuthorExtractor, insert_events, sync_author_entities
 
 log = logging.getLogger("gmail")
 
@@ -205,25 +205,28 @@ def correspondent_of(account_email: str, from_: str, to_: str) -> tuple[str, str
     return addr, (name or "").strip() or addr.split("@")[0]
 
 
-async def sync_correspondent_entity(account_email: str, from_: str, to_: str) -> None:
-    """Кросс-канальная идентичность: собеседник письма → Entity + alias
-    (gmail, <email>). Никогда не роняет поллинг — сбой графа не должен
-    останавливать приём почты."""
-    who = correspondent_of(account_email, from_, to_)
-    if who is None:
-        return
-    addr, display = who
-    try:
-        # Служебные ящики (no-reply@, invoice@, crm@) — организации, а не люди:
-        # иначе граф людей засоряется, а одна компания с нескольких адресов
-        # выглядит как несколько одноимённых «персон». См. identity.py.
-        await upsert_entity(
-            type=entity_kind_for_email(addr), name=display,
-            source="gmail", identifier=addr,
-            display_name=display, attributes={"email": addr},
-        )
-    except Exception as e:
-        log.warning("entity sync failed for %s: %s", addr, e)
+def _correspondent_entity_of(account_email: str) -> AuthorExtractor:
+    """Экстрактор для `ingest.sync_author_entities`: письмо → сущность автора.
+
+    Служебные ящики (no-reply@, invoice@, crm@) заводятся организациями, а не
+    людьми: иначе граф людей засоряется, а одна компания с нескольких адресов
+    выглядит как несколько одноимённых «персон». См. identity.py.
+    """
+    def extract(spec: dict[str, Any]) -> dict[str, Any] | None:
+        meta = spec.get("metadata_") or {}
+        who = correspondent_of(account_email, meta.get("from", ""), meta.get("to", ""))
+        if who is None:
+            return None
+        addr, display = who
+        return {
+            "type": entity_kind_for_email(addr),
+            "name": display,
+            "identifier": addr,
+            "display_name": display,
+            "attributes": {"email": addr},
+        }
+
+    return extract
 
 
 def _format_event(account_email: str, msg: dict) -> dict[str, Any]:
@@ -348,33 +351,14 @@ async def poll_account(acc: GmailAccountRow) -> int:
         return 0
 
     specs = [_format_event(acc.email, msg) for msg in messages]
-    inserted = 0
-    fresh: list[dict[str, Any]] = []
-    if specs:
-        ids = [sp["source_event_id"] for sp in specs]
-        async with get_session() as s:
-            existing = set((await s.execute(
-                select(EventRow.source_event_id).where(
-                    EventRow.source == "gmail",
-                    EventRow.source_event_id.in_(ids),
-                )
-            )).scalars().all())
-            for sp in specs:
-                if sp["source_event_id"] in existing:
-                    continue
-                s.add(EventRow(triage_status="pending", **sp))
-                fresh.append(sp)
-                inserted += 1
-        # Identity graph: собеседник каждого нового письма → person entity с
-        # alias (gmail, email). Один upsert на адрес за прогон.
-        seen_addrs: set[str] = set()
-        for sp in fresh:
-            m = sp["metadata_"]
-            who = correspondent_of(acc.email, m.get("from", ""), m.get("to", ""))
-            if who is None or who[0] in seen_addrs:
-                continue
-            seen_addrs.add(who[0])
-            await sync_correspondent_entity(acc.email, m.get("from", ""), m.get("to", ""))
+    # Вставка и дедуп — общим ядром (ON CONFLICT), а не местным
+    # SELECT-then-INSERT: gmail_backfill.py пишет тем же способом параллельно.
+    fresh = await insert_events(specs)
+    inserted = len(fresh)
+    # Identity graph: собеседник каждого нового письма → сущность с alias
+    # (gmail, email). Один upsert на адрес за прогон.
+    await sync_author_entities(fresh, source="gmail",
+                               author_of=_correspondent_entity_of(acc.email))
 
     now = datetime.utcnow()
     async with get_session() as s:

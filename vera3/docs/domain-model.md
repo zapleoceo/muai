@@ -24,6 +24,16 @@ Append-only signal log. Every observation enters here.
 | `importance` | 0-100 (denormalized from triage_metadata for fast filters) |
 | `metadata` | JSONB, source-specific (chat_id, sender_username, direction, …) |
 
+Поля `metadata`, о которых надо знать за пределами их источника:
+
+| Поле | Где | Смысл |
+|---|---|---|
+| `author_role` / `author_label` | все разговорные источники | контракт авторства, см. `sources.md`. Потребители обязаны смотреть сюда, а не на `chat_title` |
+| `sender_id` | telegram / instagram / slack | id автора для алиаса в графе; на него смотрит `ingest.authorship` |
+| `meeting_id` / `part` | voice | части одной длинной встречи, разрезанной предохранителем по длительности; у первой части `meeting_id` совпадает с `source_event_id` |
+| `transcript_chars` / `windows` / `truncated` / `distilled` / `merged` | voice | отчёт о свёртке расшифровки: сколько было символов, на сколько окон разбили, упёрлись ли в аварийный потолок, вышло ли осмыслить и как слили части (`llm` / `mechanical`) |
+| `thread_ts` / `in_thread` | slack | ответ в треде против сообщения в канале |
+
 Embedding is **not** a column on `events` (migration 011 moved it out —
 see `event_embeddings` below). Any ORM code doing `select(EventRow)` that
 still references `embedding_voyage_3` will crash with `UndefinedColumnError`
@@ -75,6 +85,12 @@ just not with its own billed row.
 | `telegram_sessions` | Telethon MTProto session (StringSession), encrypted. |
 | `instagram_sessions` | instagrapi sessionid + device fingerprint, encrypted. |
 | `trello_boards` (migration 022) | Курсор обхода на доску: `last_action_id` (id действия, не дата), `is_active`, `last_error`. Ключ и токен Trello — в `infra/.env`, в БД их нет. |
+| `slack_conversations` (migration 024) | Курсор обхода на канал/личку/группу: `last_ts` (`ts` сообщения — он же и время, и идентификатор), `kind`, `is_private`, `is_active`, `last_error`. Токен Slack — в `infra/.env`, в БД его нет. |
+| `slack_threads` (migration 024) | Треды под наблюдением: `thread_ts`, `last_reply_ts`, `last_activity_at`, `last_polled_at`. Нужна потому, что `conversations.history` не отдаёт ответы в тредах, а тред со старым корневым сообщением в истории не появляется вовсе. |
+
+Таблица `sources` и её ORM-модель удалены миграцией 023: их не читал и не
+писал ни один ингестор — состояние обхода живёт в перечисленных выше per-source
+таблицах, а секреты в `infra/.env` либо в `*_sessions` под `crypto`.
 
 ### `project_membership` (migration 010)
 

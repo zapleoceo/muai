@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import json
 import logging
-from email.utils import parseaddr
 
 from sqlalchemy import text
 
@@ -25,6 +24,7 @@ from vera_shared.graph.repo import (
     resolve_entity_exact,
     upsert_relationship,
 )
+from vera_shared.ingest.authorship import OWNER, resolve_author
 from vera_shared.llm.client import LLMCallFailed, chat_async
 
 log = logging.getLogger(__name__)
@@ -152,11 +152,12 @@ REL_EXTRACT_JSON_SCHEMA = {
 async def author_entity_of_event(event_id: int) -> int | None:
     """Кто автор события — как entity_id. Это цель self-токенов («я»).
 
-    telegram: sent → владелец (alias user:OWNER_TG_ID), received → отправитель
-    (alias user:<sender_id>). gmail: sent → владелец, received → адрес From
-    (alias gmail). Прочие источники (manual/claude/vera_chat) — владелец.
-    None, если сущности-автора (ещё) нет в графе — тогда self-связь скипается,
-    а не вешается на кого попало.
+    Решение «чей это текст» вынесено в таблицу `ingest.authorship`: раньше тут
+    была цепочка `if source == …`, и источник без ветки целиком приписывался
+    владельцу — тихая порча графа при каждом новом источнике.
+
+    None, если автор не определён или его сущности (ещё) нет в графе: тогда
+    self-связь скипается, а не вешается на кого попало.
     """
     from vera_shared.projects.rules import OWNER_TG_ID
     async with get_session() as s:
@@ -171,25 +172,13 @@ async def author_entity_of_event(event_id: int) -> int | None:
             meta = json.loads(meta)
         except ValueError:
             meta = {}
-    direction = meta.get("direction")
 
-    if source == "telegram" and direction != "sent":
-        sender = meta.get("sender_id")
-        if sender is not None:
-            return await find_entity_by_alias("telegram", f"user:{sender}")
+    author = resolve_author(source, meta)
+    if author is None:
         return None
-    if source == "gmail" and direction != "sent":
-        _, addr = parseaddr(meta.get("from", "") or "")
-        if addr:
-            return await find_entity_by_alias("gmail", addr.strip().lower())
-        return None
-    if source == "instagram" and direction != "sent":
-        sender = meta.get("sender_id")
-        if sender is not None:
-            return await find_entity_by_alias("instagram", f"user:{sender}")
-        return None
-    # sent-события любого источника и «свои» источники — владелец
-    return await find_entity_by_alias("telegram", f"user:{OWNER_TG_ID}")
+    if author is OWNER:
+        return await find_entity_by_alias("telegram", f"user:{OWNER_TG_ID}")
+    return await find_entity_by_alias(*author)
 
 
 async def extract_and_store(event_id: int, body: str) -> int:
