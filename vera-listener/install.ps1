@@ -1,8 +1,17 @@
-# Установка слушателя: venv, зависимости, задача планировщика, конфиг.
+﻿# Установка слушателя: venv, зависимости, задача планировщика, конфиг.
 # Запускать из СВОЕЙ сессии Windows (обычный PowerShell, без админа).
+#
+# ФАЙЛ ОБЯЗАН БЫТЬ В UTF-8 С BOM И С CRLF. Windows PowerShell 5.1 читает .ps1
+# без BOM как ANSI: кириллица в комментариях рассыпается, мусорная кавычка
+# съедает закрывающую скобку, и файл падает с "Missing closing '}'" на строке,
+# где всё в порядке. Именно поэтому установщик не запускался ни разу с момента
+# появления — слушатель так и не был установлен. .gitattributes держит CRLF.
 [CmdletBinding()]
 param(
-    [string]$Root = "$env:LOCALAPPDATA\vera-listener",
+    # НЕ AppData/Local: у упакованных (MSIX) приложений он виртуализирован,
+    # и задача планировщика снаружи контейнера не находит venv (0x80070002).
+    # Поймано вживую при первой установке — задача падала мгновенно.
+    [string]$Root = "$env:USERPROFILE\.vera\listener",
     [string]$TaskName = "VeraListener",
     [switch]$Uninstall
 )
@@ -41,8 +50,13 @@ Write-Host "Ставлю зависимости (это надолго: faster-w
 # процесс жив, и подхватывает его, если тот умер.
 $action = New-ScheduledTaskAction -Execute $venvPyw -Argument "-m vera_listener" -WorkingDirectory $Root
 $atLogon = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
+# RepetitionDuration: НЕ [TimeSpan]::MaxValue — планировщик отвергает такую
+# задачу целиком ("value which is incorrectly formatted or out of range",
+# P99999999DT23H59M59S). Год с запасом, а триггер входа перезаводит повтор
+# при каждом логоне, так что бесконечность и не нужна.
 $watchdog = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(2) `
-    -RepetitionInterval (New-TimeSpan -Minutes 15) -RepetitionDuration ([TimeSpan]::MaxValue)
+    -RepetitionInterval (New-TimeSpan -Minutes 15) `
+    -RepetitionDuration (New-TimeSpan -Days 365)
 $settings = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries `
     -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew `
     -RestartCount 99 -RestartInterval (New-TimeSpan -Minutes 1) -StartWhenAvailable
@@ -54,9 +68,17 @@ $principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" 
 Register-ScheduledTask -TaskName $TaskName -Action $action -Trigger @($atLogon, $watchdog) `
     -Settings $settings -Principal $principal -Force | Out-Null
 
+# Триггер входа сработает только при следующем логоне, а слушатель нужен
+# сейчас — поднимаем сразу. Повторный запуск безопасен: MultipleInstances
+# IgnoreNew не даст второй копии.
+Start-ScheduledTask -TaskName $TaskName
+Start-Sleep -Seconds 3
+$state = (Get-ScheduledTask -TaskName $TaskName).State
+
+Write-Host ""
+Write-Host "Задача $TaskName зарегистрирована и запущена, состояние: $state"
+Write-Host "В трее должен появиться кружок: серый - тишина, зелёный - идёт разговор."
 Write-Host ""
 Write-Host "Готово. Дальше:"
-Write-Host "  1. впиши INTERNAL_SECRET в $env:USERPROFILE\.vera\listener.env"
-Write-Host "  2. проверь захват:  $venvPy -m vera_listener --probe 15"
-Write-Host "  3. запусти задачу:  Start-ScheduledTask -TaskName $TaskName"
+Write-Host "  проверь захват:  $venvPy -m vera_listener --probe 15"
 Write-Host "  логи: $Root\listener.log   очередь: $Root\queue"

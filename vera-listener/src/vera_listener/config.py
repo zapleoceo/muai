@@ -13,7 +13,11 @@ from pathlib import Path
 HOME = Path(os.path.expanduser("~"))
 ENV_FILE = HOME / ".vera" / "listener.env"
 LEGACY_ENV_FILE = HOME / ".claude" / "vera_sync.env"
-DEFAULT_ROOT = Path(os.environ.get("LOCALAPPDATA", str(HOME))) / "vera-listener"
+# Корень НЕ в AppData\Local: у упакованных (MSIX) приложений он
+# виртуализирован — процесс внутри контейнера видит там свои файлы, а задача
+# планировщика снаружи их не находит и падает с 0x80070002. Поймано вживую при
+# первой установке. ~/.vera рядом с конфигом не редиректится ни у кого.
+DEFAULT_ROOT = HOME / ".vera" / "listener"
 
 # Системный звук берём только из того, что похоже на разговор. Ютуб, музыка и
 # фильмы в мозг не идут: это шум, который жёг бы распознавание впустую.

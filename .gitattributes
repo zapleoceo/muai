@@ -1,0 +1,5 @@
+# .ps1 — CRLF и UTF-8 с BOM. Windows PowerShell 5.1 читает .ps1 без BOM как
+# ANSI: кириллица в комментариях рассыпается, и файл перестаёт парситься с
+# "Missing closing '}'" на строке, где всё в порядке. BOM хранится в самом
+# файле, а eol=crlf не даёт нормализации в LF при checkout.
+*.ps1 text eol=crlf

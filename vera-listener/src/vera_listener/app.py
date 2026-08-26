@@ -23,6 +23,7 @@ from vera_listener.outbox import Outbox, read_payload
 from vera_listener.recorder import TrackRecorder
 from vera_listener.segmenter import Closed, Segmenter
 from vera_listener.sender import Sender
+from vera_listener.status import DEAF, IDLE, TALKING, Status
 from vera_listener.transcriber import Transcriber
 from vera_listener.vad import SpeechDetector
 from vera_listener.winctx import active_audio_app, foreground_window_title
@@ -30,11 +31,16 @@ from vera_listener.winctx import active_audio_app, foreground_window_title
 log = logging.getLogger("listener")
 
 CONTEXT_POLL_S = 2.0
+#: сколько секунд без кадров считаем глухотой, а не переоткрытием устройства
+DEAF_AFTER_TICKS = 3
 
 
 class Listener:
-    def __init__(self, config: Config):
+    def __init__(self, config: Config, status: Status | None = None):
         self.config = config
+        # Состояние для иконки в трее. Без трея это просто счётчики в памяти —
+        # слушателю они не мешают и ничего не стоят.
+        self.status = status or Status()
         self.frames: queue.Queue[Frame] = queue.Queue(maxsize=4000)
         self.jobs: queue.Queue[tuple] = queue.Queue()
         self.outbox = Outbox(config.queue_dir)
@@ -53,6 +59,7 @@ class Listener:
         # следующей части). None — следующая сессия начинает новую встречу.
         self._continues: tuple[str, int] | None = None
         self._meeting: tuple[str, int] | None = None
+        self._silent_ticks = 0
         self._stop = threading.Event()
 
     def run(self) -> None:
@@ -85,6 +92,10 @@ class Listener:
             except queue.Empty:
                 self._tick_idle()
                 continue
+            if self._silent_ticks:
+                self._silent_ticks = 0
+                if self.segmenter.current is None:
+                    self.status.set_state(IDLE)
 
             now = time.monotonic()
             if now - polled >= CONTEXT_POLL_S:
@@ -101,6 +112,12 @@ class Listener:
 
     def _tick_idle(self) -> None:
         """Кадров нет (устройство переоткрывается) — но тишина всё равно течёт."""
+        self._silent_ticks += 1
+        # Три пустых секунды подряд — это уже не «переоткрываю поток», а
+        # глухота: чужая сессия Windows либо выдернули устройство. В трее это
+        # красный, чтобы не выглядело работающим.
+        if self._silent_ticks >= DEAF_AFTER_TICKS and self.segmenter.current is None:
+            self.status.set_state(DEAF)
         closed = self.segmenter.feed(time.monotonic(), MIC, False)
         if closed:
             self._finish(closed)
@@ -121,6 +138,7 @@ class Listener:
             device_hint=self.capture.device_hint,
             meeting_id=meeting_id, part=part,
         )
+        self.status.set_state(TALKING)
         if part > 1:
             log.info("разговор продолжается, часть %d (%s)", part, meeting_id)
         else:
@@ -157,6 +175,7 @@ class Listener:
         self.session = None
         self._session_wall = None
         self._meeting = None
+        self.status.set_state(IDLE)
 
     def _wall(self, monotonic_at: float) -> datetime:
         return datetime.now().astimezone() - timedelta(
@@ -189,6 +208,7 @@ class Listener:
                         monologue_speech_s=self.config.monologue_speech_s)
         if not verdict.keep:
             log.info("разговор отброшен (%s, %s)", verdict.reason, closed.reason)
+            self.status.note_dropped()
             self.outbox.drop(path)
             return
         payload = read_payload(path)
@@ -203,7 +223,9 @@ class Listener:
     def _send(self) -> None:
         while not self._stop.is_set():
             try:
-                self.sender.flush()
+                sent, left = self.sender.flush()
+                self.status.note_sent(sent, left)
             except Exception as e:
                 log.exception("отправщик споткнулся: %s", e)
+                self.status.note_error(f"{type(e).__name__}: {e}")
             self._stop.wait(max(self.config.send_interval_s, self.sender.backoff_s))

@@ -12,11 +12,13 @@ import logging
 import logging.handlers
 import queue
 import sys
+import threading
 import time
 
 from vera_listener.app import Listener
 from vera_listener.capture import MIC, SYSTEM, Capture, Frame
 from vera_listener.config import ENV_FILE, load_config
+from vera_listener.status import Status
 from vera_listener.vad import FRAME_S, SpeechDetector
 from vera_listener.winctx import active_audio_app, foreground_window_title
 
@@ -98,6 +100,8 @@ def main() -> int:
     parser.add_argument("--probe", type=float, nargs="?", const=10.0, default=None,
                         metavar="СЕК", help="самопроверка захвата")
     parser.add_argument("--verbose", "-v", action="store_true")
+    parser.add_argument("--no-tray", action="store_true",
+                        help="не показывать иконку в трее")
     args = parser.parse_args()
 
     _setup_logging(args.verbose)
@@ -113,7 +117,24 @@ def main() -> int:
         print("INTERNAL_SECRET пуст. Запусти --setup и заполни конфиг.", file=sys.stderr)
         return 1
     config.root.mkdir(parents=True, exist_ok=True)
-    Listener(config).run()
+
+    status = Status()
+    listener = Listener(config, status)
+    if args.no_tray:
+        listener.run()
+        return 0
+
+    # Трей под Windows хочет свой цикл сообщений в ГЛАВНОМ потоке, поэтому
+    # слушатель уходит в фоновый. Если трея нет (нет pystray, нет оболочки) —
+    # ждём слушателя здесь же: иконка не важнее записи разговоров.
+    from vera_listener import tray
+
+    worker = threading.Thread(target=listener.run, name="listener", daemon=True)
+    worker.start()
+    shown = tray.run(status, log_file=config.log_file, queue_dir=config.queue_dir,
+                     on_quit=listener.stop)
+    if not shown:
+        worker.join()
     return 0
 
 
