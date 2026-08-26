@@ -19,7 +19,7 @@ import logging
 from dataclasses import dataclass
 from typing import Any
 
-from vera_shared.llm.client import LLMCallFailed, chat_async
+from vera_shared.llm.client import LLMCallFailed, LLMCoolingDown, chat_async
 
 log = logging.getLogger(__name__)
 
@@ -118,6 +118,12 @@ async def _one(prompt: str, spec: FoldSpec, *, max_tokens: int,
             poll_deadline_s=poll_deadline_s,
         )
         return json.loads(raw)
+    except LLMCoolingDown:
+        # Предохранитель открыт (бюджет/провайдер) — это «сейчас нельзя», а не
+        # «не вышло»: пробрасываем, чтобы вызывающий отложил работу, а не
+        # записал пустышку. Реальный случай: дневной бюджет брокера, и 21
+        # сессия бэкфилла «осмыслилась» заглушками за секунды.
+        raise
     except (LLMCallFailed, json.JSONDecodeError) as e:
         log.warning("%s: осмыслить не вышло (%s)", spec.name, e)
         return None

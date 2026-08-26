@@ -161,6 +161,19 @@ class TestIngest:
         assert sess.params["metadata"]["distilled"] is False
 
     @pytest.mark.asyncio
+    async def test_open_circuit_leaves_the_session_with_the_client(self):
+        """Бюджет брокера кончился — не пишем пустышку: 500 вернёт сессию в
+        офлайн-очередь слушателя, и звук не потеряется. LLMCallFailed — другое:
+        там сохраняем хотя бы факт (см. тест выше)."""
+        import gateway.voice as v
+        from vera_shared.llm.client import LLMCoolingDown
+
+        with patch.object(fold_mod, "chat_async",
+                          AsyncMock(side_effect=LLMCoolingDown("chat:smart", remaining_s=60))),              patch("gateway.voice.get_session", lambda: _Sess()),              patch("gateway.voice.check_internal_secret", lambda s: None):
+            with pytest.raises(LLMCoolingDown):
+                await v.ingest_voice_session(_session(), x_internal_secret="ok")
+
+    @pytest.mark.asyncio
     async def test_same_session_resent_is_deduped(self):
         import gateway.voice as v
 

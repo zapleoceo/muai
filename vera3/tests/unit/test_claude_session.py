@@ -254,7 +254,8 @@ class TestWorker:
              patch.object(w, "distill",
                           AsyncMock(return_value=(_FULL, {"transcript_chars": 120,
                                                           "windows": 1,
-                                                          "truncated": False}))), \
+                                                          "truncated": False,
+                                                          "distilled": True}))), \
              patch.object(w, "store_summary", AsyncMock(return_value=55)), \
              patch.object(w, "finish", finish):
             assert await w.process_one() is True
@@ -283,7 +284,8 @@ class TestWorker:
         import gateway.claude_session_worker as w
 
         distill = AsyncMock(return_value=(_FULL, {"transcript_chars": 1,
-                                                  "windows": 1, "truncated": False}))
+                                                  "windows": 1, "truncated": False,
+                                                  "distilled": True}))
         with patch.object(w, "claim", AsyncMock(return_value=_Row())), \
              patch.object(w, "distill", distill), \
              patch.object(w, "store_summary", AsyncMock(return_value=1)), \
@@ -403,3 +405,35 @@ class TestQueueOnSqlite:
         assert revived == 1
         assert (await self._row(sqlite_db)).status == "pending"
         assert (await self._row(sqlite_db, "s-2")).status == "processing"
+
+
+    @pytest.mark.asyncio
+    async def test_placeholder_is_a_failure_not_an_event(self):
+        """Пустышка в мозге хуже, чем попробовать позже: реплики-то в очереди."""
+        import gateway.claude_session_worker as w
+
+        fail = AsyncMock()
+        store = AsyncMock()
+        with patch.object(w, "claim", AsyncMock(return_value=_Row(attempts=1))),              patch.object(w, "distill",
+                          AsyncMock(return_value=({}, {"transcript_chars": 9,
+                                                       "windows": 1,
+                                                       "distilled": False}))),              patch.object(w, "store_summary", store),              patch.object(w, "fail", fail):
+            assert await w.process_one() is True
+
+        store.assert_not_called()
+        fail.assert_awaited_once()
+
+    @pytest.mark.asyncio
+    async def test_open_circuit_does_not_burn_attempts(self):
+        """Дневной бюджет брокера — виновата не сессия: попытки не считаем,
+        цикл уходит в сон вместо мгновенных отказов по всей очереди."""
+        from vera_shared.llm.client import LLMCoolingDown
+
+        import gateway.claude_session_worker as w
+
+        fail = AsyncMock()
+        with patch.object(w, "claim", AsyncMock(return_value=_Row(attempts=1))),              patch.object(w, "distill",
+                          AsyncMock(side_effect=LLMCoolingDown("budget cap", remaining_s=1260))),              patch.object(w, "fail", fail):
+            assert await w.process_one() is False
+
+        assert fail.await_args.kwargs["attempts"] == 0

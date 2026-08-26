@@ -19,6 +19,8 @@ from sqlalchemy import select, update
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import ClaudeSessionQueueRow
 
+from vera_shared.llm.client import LLMCoolingDown
+
 from gateway.claude_distill import distill
 from gateway.claude_session import store_summary
 
@@ -110,12 +112,24 @@ async def process_one() -> bool:
         if not report["transcript_chars"]:
             await finish(row.session_id, event_id=None, turns=row.turn_count)
             return True
+        if not report.get("distilled"):
+            # Голос в этой ситуации сохраняет хотя бы факт — его звук уже
+            # пропал. Здесь же сырые реплики лежат в очереди: пустышка в мозге
+            # хуже, чем попробовать позже.
+            await fail(row.session_id, "осмысление не удалось", row.attempts)
+            return True
         event_id = await store_summary(row, distilled, report)
         await finish(row.session_id, event_id=event_id, turns=row.turn_count)
         log.info("claude-worker: сессия %s → event=%s (%d реплик, %d симв., "
                  "окон %d%s)", row.session_id, event_id, row.turn_count,
                  report["transcript_chars"], report["windows"],
                  ", ХВОСТ ОБРЕЗАН" if report["truncated"] else "")
+    except LLMCoolingDown as e:
+        # Предохранитель открыт (дневной бюджет, нет провайдера) — попытки не
+        # жжём: виновата не сессия. False уводит цикл в сон, а не гонит его
+        # мгновенными отказами по всей очереди.
+        await fail(row.session_id, str(e), attempts=0)
+        return False
     except Exception as e:
         # Любая причина — сессия возвращается в очередь, а не теряется.
         await fail(row.session_id, f"{type(e).__name__}: {e}", row.attempts)

@@ -139,8 +139,12 @@ async def store_summary(row: ClaudeSessionQueueRow, distilled: dict[str, Any],
                 index_elements=["source", "source_event_id"],
                 set_=fresh,
                 # Реплик не прибавилось — не трогаем событие и его embedding.
-                where=func.coalesce(
-                    EventRow.metadata_["turns"].as_integer(), 0) < row.turn_count,
+                # Исключение — пустышка прошлого захода (distilled=false):
+                # настоящая выжимка обязана её перезаписать.
+                where=(func.coalesce(
+                    EventRow.metadata_["turns"].as_integer(), 0) < row.turn_count)
+                | (func.coalesce(
+                    EventRow.metadata_["distilled"].as_boolean(), False).is_(False)),
             )
             .returning(EventRow.id)
         )
