@@ -1,68 +1,130 @@
-# claude-ingestor
+# claude-ingestor — рабочие сессии Claude Code в мозг
 
-Syncs Claude Code transcripts (every project, every session) → Vera gateway.
+Синк на ноутбуке читает `~/.claude/projects/**/*.jsonl` и присылает КАЖДУЮ
+СЕССИЮ ЦЕЛИКОМ на `/v1/claude/session`; сервер её осмысляет и пишет одно
+событие-выжимку.
 
-## Why local
+## Выжимка, а не переписка
 
-The JSONL transcripts only exist on Dima's laptop under
-`~/.claude/projects/**/*.jsonl`. The server has no copy. Two choices:
+До 2026-08-26 скрипт лил каждую реплику отдельным событием. Замер по живым
+данным: 26 сессий, 4.75 млн символов — это было бы ~11 700 событий, набитых
+кодом, дампами `tool_result` и выводом команд. Искать по такому нечего, а объём
+вытесняет из мозга полезное. Владелец сформулировал прямо: «саммари по каждому
+чату, не прям вся переписка».
 
-- **Local sync (chosen)** — Python script runs in Windows Task Scheduler
-  every 60 min, reads new lines from each JSONL, POSTs to gateway over
-  HTTPS. Secrets stay in DB (encrypted volume); the raw transcript files
-  never leave the laptop.
-- Rsync — adds ~1h delay, leaves a full copy of the transcripts in
-  `/var/www/vera3/` (plain text on disk).
+Теперь одна сессия — одно событие. В теле не переписка, а смысл: над чем
+работали, что решили и почему, что фактически изменено, что сломалось и чем
+оказалась причина, что осталось незакрытым.
 
-## Setup (one-time)
+## Как устроено
 
-```powershell
-# On the laptop
-cd D:\Projects\myAI\vera3\scripts
-python claude_chat_sync.py --setup
-# Edit ~/.claude/vera_sync.env — paste INTERNAL_SECRET from
-# /var/www/vera3/infra/.env on hetzner-root
-
-# Test
-python claude_chat_sync.py --verbose
-
-# Schedule (Task Scheduler GUI):
-#   Trigger: Daily, repeat every 60 min for 24 hours
-#   Action:  python.exe D:\Projects\myAI\vera3\scripts\claude_chat_sync.py
-#   Settings: Run whether user logged on or not, no battery throttle
+```
+~/.claude/projects/<проект>/<session>.jsonl
+   │  scripts/claude_chat_sync.py  (Task Scheduler, раз в час)
+   │  read_session() — реплики, время, ветка; post_session() — HTTPS
+   ▼
+POST /v1/claude/session      gateway/claude_session.py
+   │  ingest_claude_session → distill (gateway/claude_distill.py)
+   │      render() — [Дима] / [Claude]
+   │      fold()   — свёртка по окнам, vera_shared/llm/fold.py
+   ▼
+events: source=claude_chat, category=session, source_event_id=session:<id>
+   │  body_text() — человекочитаемое тело, его и увидит поиск
+   ▼
+triage → embedding → мозг
 ```
 
-## State
+### Свёртка — общая с голосом
 
-- `~/.claude/vera_sync_state.json` — per-file byte offset, written
-  atomically after each pass. Delete to re-sync everything.
-- Gateway dedups by `source_event_id = "claude:{session_id}:{uuid}"`
-  so re-runs are safe.
+Механика в `vera_shared.llm.fold`: `windows()` режет текст на окна по границам
+реплик, `fold()` осмысляет каждое окно отдельно и вторым проходом сливает
+частичные выжимки в одну, `stitch()` — механическая склейка на случай, если
+слить моделью не удалось. Что именно сворачиваем, задаёт `FoldSpec`: поля,
+промпты, потолки. Ту же механику использует `voice_distill` для разговоров у
+ноутбука — раньше она жила там, и копия во втором месте разъехалась бы с
+первой при первой же правке.
 
-## What gets ingested
+Потолок окон для сессий поднят до 24 против 12 у голоса, и это замер, а не
+догадка: самая большая живая сессия — 681 тыс. символов, то есть 20 окон.
+С голосовым потолком у неё потерялся бы хвост — та часть, где работа
+заканчивалась выводом.
 
-| JSONL `type` | Sent to Vera | Notes |
+Поля выжимки (`claude_distill.FIELDS`): `summary`, `topics`, `outline`,
+`decisions`, `changes`, `problems`, `open_ends`, `numbers`.
+
+### Одна сессия — одно событие, даже если её дописали
+
+`source_event_id = session:<session_id>`, и `--continue` через день не заводит
+второе событие, а обновляет выжимку своего. Обновление идёт ТОЛЬКО когда реплик
+стало больше (`WHERE coalesce(metadata->>'turns', 0) < turns`): повторная
+присылка того же не гоняет модель и не пере-embedd-ит событие, шлюз отвечает
+`unchanged: true`.
+
+При обновлении `triage_status` сбрасывается в `pending` — иначе новый текст
+остался бы с прежним embedding и поиск находил бы старое. Embedding пишется
+через `ON CONFLICT (event_id) DO UPDATE`, так что повторный триаж заменяет
+вектор, а не плодит второй.
+
+Контракт запроса — `ClaudeSession` (`session_id`, `project_dir`, `started_at`,
+`ended_at`, `cwd`, `git_branch`, `turns`), реплика — `Turn` (`role`, `text`),
+ответ — `ClaudeSessionResult` (`ok`, `event_id`, `unchanged`, `summary`).
+
+## Что попадает в сессию
+
+| Запись JSONL | Идёт в выжимку | Почему |
 |---|---|---|
-| `user` | yes | `author_role=self`, label `Я` |
-| `assistant` | yes | `author_role=counterparty`, label `Claude` |
-| `tool_use` | inline within assistant turn | `[tool_use: <name> <params>]` |
-| `tool_result` | inline | `[tool_result] <first 1000 chars>` |
-| `custom-title`, `ai-title`, `mode`, `queue-operation`, `summary` | NO | UI/control plane |
+| `user` | да | `[Дима]` |
+| `assistant` | да | `[Claude]` |
+| `tool_use` | внутри реплики | `[инструмент: <имя> <параметры до 500 симв.>]` |
+| `tool_result` | внутри реплики | `[результат] <первые 1000 симв.>` |
+| `isSidechain: true` | НЕТ | внутренний диалог сабагентов: в разы длиннее основной ветки, а результат делегирования приходит в неё ответом агента |
+| `custom-title`, `ai-title`, `mode`, `queue-operation`, `summary` | НЕТ | служебное, смысла не несёт |
 
-Compact summaries (`isCompactSummary=true`) are kept — they're the only
-record of what happened before context reset.
+Реплика режется до 4000 символов: дампы вывода бывают в десятки тысяч и
+вытесняют смысл, а свёртка на сервере всё равно работает по окнам.
 
-## Failure modes
+## Когда осмысляется
 
-| Cause | Behavior |
-|---|---|
-| Gateway unreachable | logs error, offset NOT advanced for that file → retry next pass |
-| Bad JSON line | skipped, offset still advances (don't loop) |
-| Duplicate event | gateway returns 201 deduped — silent |
-| `INTERNAL_SECRET` missing | script exits 1 immediately |
+Сессия должна остыть — файл не менялся `QUIET_MINUTES` (120). Живой файл
+дописывается, и выжимка посреди работы устареет через минуту. Прогнать не
+дожидаясь: `--all`. Сессии короче `MIN_TURNS` (2 реплики) пропускаются.
 
-## Privacy note
+## Состояние и запуск
 
-Claude transcripts contain LLM keys, server commands, business data.
-They're persisted to Vera's `events` table same as any other source —
-encrypted volume, owner-only dashboard access via Telegram Login.
+- `~/.claude/vera_sync_state.json` — сколько реплик каждой сессии уже
+  осмыслено, `{"version": 2, "sessions": {...}}`. Версия 1 хранила по тем же
+  ключам БАЙТОВОЕ смещение, и прочитать её как число реплик нельзя: смещение
+  480 000 значило бы «осмыслено 480 000 реплик», и сессия не отправилась бы
+  никогда. Поэтому старое состояние не переносится, а сессии собираются заново
+  — дублей это не даёт, событие на сессию одно.
+- Курсор двигается ТОЛЬКО за успехом: 401 или обрыв сети не имеет права молча
+  съесть сессию навсегда.
+
+```powershell
+python scripts/claude_chat_sync.py --setup     # шаблон ~/.claude/vera_sync.env
+python scripts/claude_chat_sync.py --dry-run   # что отправил бы, ничего не меняя
+python scripts/claude_chat_sync.py             # один проход
+```
+
+`--dry-run` не сохраняет состояние. До 2026-08-26 сохранял, подменив отправку
+успехом: холостой прогон съедал всю историю навсегда.
+
+Автозапуск — задача планировщика `VeraClaudeSync`, раз в час, ставится
+`scripts/install-claude-sync.ps1`.
+
+## Грабли, все поймано вживую
+
+| Что | Симптом | Причина и лечение |
+|---|---|---|
+| User-Agent | 403, Cloudflare error 1010 | Cloudflare режет `Python-urllib/3.12` по подписи клиента. Своё имя (`vera-claude-sync/2.0`) проходит; `curl` работал и маскировал баг |
+| Секрет только из окружения | «85 errors, 0 posted», HTTP 401 | скрипт САМ создаёт `vera_sync.env` в `--setup` и не читал его. Теперь читает: окружение важнее файла |
+| Время со зоной | HTTP 500, asyncpg `DataError` | `events.occurred_at` — `timestamp WITHOUT time zone`. Нормализуем на обеих сторонах |
+| `f.tell()` по тексту | `telling position disabled by next() call` | у текстового файла при итерации `tell()` запрещён, а `len()` строки считает символы: на кириллице смещение уехало бы вдвое. Читаем байтами |
+| Ключ `"metadata"` в `set_` | `MetaData object has no attribute _bulk_update_tuples` | строка резолвится в `EventRow.metadata` — объект SQLAlchemy, а не колонку. Ключами идут сами атрибуты (`EventRow.metadata_`) |
+
+## Приватность
+
+Сессии содержат ключи, команды на серверах и бизнес-данные. В выжимку код не
+попадает по конструкции (имена файлов и функций — да, тела — нет), но выжимка
+пишется в `events` как любой источник: зашифрованный том, доступ к дашборду
+только владельцу через Telegram Login. Сырые JSONL с ноутбука не уезжают.

@@ -16,7 +16,9 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from gateway.voice import Utterance, VoiceSession, body_text
+from gateway.voice_distill import EMPTY as vd_EMPTY
 from gateway.voice_distill import distill, render, windows
+from vera_shared.llm import fold as fold_mod
 
 _T0 = datetime(2026, 8, 21, 9, 0, tzinfo=timezone.utc)
 
@@ -126,11 +128,10 @@ class TestIngest:
 
     @pytest.mark.asyncio
     async def test_verbatim_never_reaches_the_event(self):
-        import gateway.voice_distill as vd
 
         secret_phrase = "Ли, по разделу шесть — сорок пять?"
         sess = _Sess()
-        with patch.object(vd, "chat_async",
+        with patch.object(fold_mod, "chat_async",
                           AsyncMock(return_value=(json.dumps(_FULL), {}))), \
              patch("gateway.voice.get_session", lambda: sess), \
              patch("gateway.voice.check_internal_secret", lambda s: None):
@@ -146,11 +147,10 @@ class TestIngest:
     @pytest.mark.asyncio
     async def test_broker_failure_still_stores_the_fact(self):
         import gateway.voice as v
-        import gateway.voice_distill as vd
         from vera_shared.llm.client import LLMCallFailed
 
         sess = _Sess(event_id=5)
-        with patch.object(vd, "chat_async", AsyncMock(side_effect=LLMCallFailed("down"))), \
+        with patch.object(fold_mod, "chat_async", AsyncMock(side_effect=LLMCallFailed("down"))), \
              patch("gateway.voice.get_session", lambda: sess), \
              patch("gateway.voice.check_internal_secret", lambda s: None):
             res = await v.ingest_voice_session(_session(), x_internal_secret="ok")
@@ -163,11 +163,10 @@ class TestIngest:
     @pytest.mark.asyncio
     async def test_same_session_resent_is_deduped(self):
         import gateway.voice as v
-        import gateway.voice_distill as vd
 
         sess = _Sess(event_id=None)
-        with patch.object(vd, "chat_async",
-                          AsyncMock(return_value=(json.dumps(vd.EMPTY), {}))), \
+        with patch.object(fold_mod, "chat_async",
+                          AsyncMock(return_value=(json.dumps(vd_EMPTY), {}))), \
              patch("gateway.voice.get_session", lambda: sess), \
              patch("gateway.voice.check_internal_secret", lambda s: None):
             res = await v.ingest_voice_session(_session(), x_internal_secret="ok")
@@ -179,10 +178,9 @@ class TestIngest:
         """Молчаливая потеря недопустима: сколько было символов и сколько окон —
         видно в событии, а не только в логе."""
         import gateway.voice as v
-        import gateway.voice_distill as vd
 
         sess = _Sess()
-        with patch.object(vd, "chat_async",
+        with patch.object(fold_mod, "chat_async",
                           AsyncMock(return_value=(json.dumps(_FULL), {}))), \
              patch("gateway.voice.get_session", lambda: sess), \
              patch("gateway.voice.check_internal_secret", lambda s: None):
@@ -198,10 +196,9 @@ class TestIngest:
         """Предохранитель режет трёхчасовую встречу, но связь остаётся —
         иначе в мозге это два независимых события."""
         import gateway.voice as v
-        import gateway.voice_distill as vd
 
         sess = _Sess()
-        with patch.object(vd, "chat_async",
+        with patch.object(fold_mod, "chat_async",
                           AsyncMock(return_value=(json.dumps(_FULL), {}))), \
              patch("gateway.voice.get_session", lambda: sess), \
              patch("gateway.voice.check_internal_secret", lambda s: None):
@@ -223,7 +220,6 @@ class TestLongMeeting:
     async def test_long_transcript_is_folded_not_truncated(self):
         """Ключевой регресс. Раньше всё сверх 60k символов молча выбрасывалось;
         теперь каждое окно осмысляется, и последнее слово доходит до выжимки."""
-        import gateway.voice_distill as vd
 
         utterances = self._many(600)          # ≈ 130 тыс. символов
         prompts: list[str] = []
@@ -232,7 +228,7 @@ class TestLongMeeting:
             prompts.append(kwargs["messages"][0]["content"])
             return json.dumps({**_FULL, "summary": f"часть {len(prompts)}"}), {}
 
-        with patch.object(vd, "chat_async", AsyncMock(side_effect=fake_chat)):
+        with patch.object(fold_mod, "chat_async", AsyncMock(side_effect=fake_chat)):
             result, report = await distill(utterances, app="zoom.exe", title="Созвон")
 
         assert report["windows"] > 1
@@ -246,7 +242,6 @@ class TestLongMeeting:
     @pytest.mark.asyncio
     async def test_merge_failure_falls_back_to_mechanical_stitch(self):
         """Слить моделью не вышло — событие всё равно должно быть полным."""
-        import gateway.voice_distill as vd
         from vera_shared.llm.client import LLMCallFailed
 
         calls = {"n": 0}
@@ -257,7 +252,7 @@ class TestLongMeeting:
                 raise LLMCallFailed("merge down")
             return json.dumps({**_FULL, "topics": [f"тема{calls['n']}"]}), {}
 
-        with patch.object(vd, "chat_async", AsyncMock(side_effect=fake_chat)):
+        with patch.object(fold_mod, "chat_async", AsyncMock(side_effect=fake_chat)):
             result, report = await distill(self._many(600), app=None, title=None)
 
         assert report["merged"] == "mechanical"
@@ -265,7 +260,6 @@ class TestLongMeeting:
 
     @pytest.mark.asyncio
     async def test_one_dead_window_does_not_lose_the_others(self):
-        import gateway.voice_distill as vd
         from vera_shared.llm.client import LLMCallFailed
 
         calls = {"n": 0}
@@ -276,7 +270,7 @@ class TestLongMeeting:
                 raise LLMCallFailed("window down")
             return json.dumps(_FULL), {}
 
-        with patch.object(vd, "chat_async", AsyncMock(side_effect=fake_chat)):
+        with patch.object(fold_mod, "chat_async", AsyncMock(side_effect=fake_chat)):
             result, report = await distill(self._many(600), app=None, title=None)
 
         assert report["parts"] == report["windows"] - 1

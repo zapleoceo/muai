@@ -1,26 +1,25 @@
 #!/usr/bin/env python
-"""Sync Claude Code transcripts (all sessions, all projects) → Vera gateway.
+"""Sync Claude Code sessions (all projects) → Vera gateway, одной выжимкой.
 
-Runs locally on Dima's laptop (Windows Task Scheduler, every 60 min).
-Reads ~/.claude/projects/**/*.jsonl, POSTs new events to Vera gateway
-over HTTPS. State (last byte offset per file) kept in a small local
-JSON next to the script.
+Работает локально на ноутбуке (Windows Task Scheduler, раз в час). Читает
+`~/.claude/projects/**/*.jsonl`, собирает сессию целиком и отправляет её на
+`/v1/claude/session`; сервер осмысляет и пишет ОДНО событие на сессию.
 
-Why local: the JSONL files only exist on the laptop. Rsync would add
-~1h delay + leaks the raw transcripts to the server's filesystem. POSTing
-event-by-event keeps secrets only in DB (encrypted volume).
+До 2026-08-26 скрипт лил каждую реплику отдельным событием: одна рабочая
+сессия давала сотни событий, набитых кодом и выводом команд, и в мозге тонуло
+полезное. Нужна не переписка, а что делали, что решили и что осталось.
+
+Почему локально: JSONL существуют только на ноутбуке. Rsync добавил бы час
+задержки и выложил бы сырые расшифровки на файловую систему сервера.
 
 Setup:
-  $ python claude_chat_sync.py --setup    # writes config template
-  Then edit ~/.claude/vera_sync.env with VERA_GATEWAY_URL + INTERNAL_SECRET
-  Then add Task Scheduler trigger: every 60 min, run this script.
+  $ python claude_chat_sync.py --setup    # шаблон конфига
+  затем впиши INTERNAL_SECRET в ~/.claude/vera_sync.env
 
-Run manually:
-  $ python claude_chat_sync.py            # one sync pass, exits
-  $ python claude_chat_sync.py --verbose  # logs every file/event
-
-Idempotent: source_event_id = "claude:{session_id}:{message_uuid}".
-Gateway dedups; safe to re-run with state file deleted.
+Запуск:
+  $ python claude_chat_sync.py            # один проход, выход
+  $ python claude_chat_sync.py --dry-run  # что бы отправил, ничего не меняя
+  $ python claude_chat_sync.py --all      # не ждать, пока сессия остынет
 """
 from __future__ import annotations
 
@@ -32,7 +31,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 # ─── Config ──────────────────────────────────────────────────────────────
@@ -42,6 +41,17 @@ CLAUDE_ROOT = HOME / ".claude" / "projects"
 STATE_FILE = HOME / ".claude" / "vera_sync_state.json"
 ENV_FILE = HOME / ".claude" / "vera_sync.env"
 
+#: Сессию осмысляем, когда она остыла: живой файл дописывается, и выжимка
+#: посреди работы устареет через минуту. Дописанную позже сессию догоним —
+#: событие на сессию одно и обновляется.
+QUIET_MINUTES = 120
+#: Одна реплика без ответа — не сессия.
+MIN_TURNS = 2
+#: Потолок на реплику. Дампы `tool_result` бывают в десятки тысяч символов и
+#: вытесняют смысл; свёртка на сервере всё равно режет текст на окна.
+MAX_TURN_CHARS = 4000
+
+STATE_VERSION = 2
 
 
 def _read_env_file(path: Path) -> dict[str, str]:
@@ -65,21 +75,15 @@ _ENV = {**_read_env_file(ENV_FILE), **os.environ}
 VERA_GATEWAY_URL = _ENV.get("VERA_GATEWAY_URL", "https://dima.veranda.my").rstrip("/")
 INTERNAL_SECRET = _ENV.get("INTERNAL_SECRET", "")
 
-# Records to skip entirely (UI / control plane, no semantic value)
-SKIP_TYPES = {
-    "custom-title", "ai-title", "mode", "queue-operation",
-    "summary",   # autosummary record different from compact summary
-}
-
-# Hard cap per content text — keep events small
-MAX_CONTENT_LEN = 16000
+#: Служебные записи интерфейса — смысла не несут.
+SKIP_TYPES = {"custom-title", "ai-title", "mode", "queue-operation", "summary"}
 
 #: Cloudflare перед шлюзом режет запросы по подписи клиента: с
 #: User-Agent «Python-urllib/3.12» он отдаёт 403 error code 1010 («banned
 #: based on your browser signature»). Поймано вживую — синк не работал с
 #: самого начала именно из-за этого, а curl проходил, потому что у него
 #: другой UA. Своё имя честнее подделки под браузер и проходит.
-USER_AGENT = "vera-claude-sync/1.0 (+https://dima.veranda.my)"
+USER_AGENT = "vera-claude-sync/2.0 (+https://dima.veranda.my)"
 
 
 def _naive_utc(value: str | None) -> str | None:
@@ -101,123 +105,129 @@ def _naive_utc(value: str | None) -> str | None:
     return moment.isoformat()
 
 
-
-# ─── State (per-file byte offset) ────────────────────────────────────────
+# ─── Состояние: сколько реплик сессии уже осмыслено ──────────────────────
 
 
 def load_state() -> dict[str, int]:
+    """Версия 1 хранила БАЙТОВОЕ смещение по тем же ключам.
+
+    Прочитать её как число реплик нельзя: смещение 480000 значило бы «уже
+    осмыслено 480000 реплик», и сессия не отправилась бы никогда. Старое
+    состояние поэтому не переносим — сессии соберутся заново, а событие на
+    сессию одно, так что дубли исключены конструкцией.
+    """
     if not STATE_FILE.exists():
         return {}
     try:
-        return json.loads(STATE_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        logging.warning("state file corrupt, starting fresh")
+        raw = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        logging.warning("состояние битое, начинаю заново")
         return {}
+    if not isinstance(raw, dict) or raw.get("version") != STATE_VERSION:
+        logging.info("состояние старой версии — сессии соберутся заново")
+        return {}
+    return dict(raw.get("sessions") or {})
 
 
-def save_state(state: dict[str, int]) -> None:
+def save_state(sessions: dict[str, int]) -> None:
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     tmp = STATE_FILE.with_suffix(".tmp")
-    tmp.write_text(json.dumps(state, indent=2), encoding="utf-8")
+    tmp.write_text(json.dumps({"version": STATE_VERSION, "sessions": sessions},
+                              indent=2), encoding="utf-8")
     tmp.replace(STATE_FILE)
 
 
-# ─── JSONL parsing ───────────────────────────────────────────────────────
+# ─── Разбор JSONL ────────────────────────────────────────────────────────
 
 
-def _extract_text(content) -> str:
-    """Claude messages have content as str OR list[block]."""
+def _extract_text(content: object) -> str:
+    """Content у Claude — строка ИЛИ список блоков."""
     if isinstance(content, str):
         return content
-    if isinstance(content, list):
-        parts = []
-        for b in content:
-            if not isinstance(b, dict):
-                continue
-            t = b.get("type")
-            if t == "text":
-                parts.append(b.get("text", ""))
-            elif t == "tool_use":
-                name = b.get("name", "?")
-                params = json.dumps(b.get("input", {}), ensure_ascii=False)[:500]
-                parts.append(f"[tool_use: {name} {params}]")
-            elif t == "tool_result":
-                result = b.get("content", "")
-                if isinstance(result, list):
-                    result = " ".join(
-                        x.get("text", "") for x in result if isinstance(x, dict)
-                    )
-                parts.append(f"[tool_result] {str(result)[:1000]}")
-        return "\n".join(p for p in parts if p)
-    return ""
+    if not isinstance(content, list):
+        return ""
+    parts = []
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        kind = block.get("type")
+        if kind == "text":
+            parts.append(block.get("text", ""))
+        elif kind == "tool_use":
+            name = block.get("name", "?")
+            params = json.dumps(block.get("input", {}), ensure_ascii=False)[:500]
+            parts.append(f"[инструмент: {name} {params}]")
+        elif kind == "tool_result":
+            result = block.get("content", "")
+            if isinstance(result, list):
+                result = " ".join(x.get("text", "") for x in result
+                                  if isinstance(x, dict))
+            parts.append(f"[результат] {str(result)[:1000]}")
+    return "\n".join(p for p in parts if p)
 
 
-def parse_record(rec: dict, project_dir: str, session_id: str) -> dict | None:
-    """Convert one JSONL line → event payload, or None to skip."""
-    rec_type = rec.get("type")
-    if rec_type in SKIP_TYPES:
+def read_session(path: Path) -> dict | None:
+    """Файл сессии → payload для шлюза, либо None если отправлять нечего.
+
+    Сайдчейны (`isSidechain`) пропускаем: это внутренний диалог сабагентов, он
+    в разы длиннее основной ветки, а результат делегирования всё равно
+    приходит в основную ветку ответом агента.
+    """
+    turns: list[dict[str, str]] = []
+    first_ts: str | None = None
+    last_ts: str | None = None
+    cwd: str | None = None
+    branch: str | None = None
+
+    for raw in path.read_bytes().splitlines():
+        line = raw.decode("utf-8", errors="replace").strip()
+        if not line:
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError:
+            # Битая строка — ядовитое сообщение, а не сбой транспорта.
+            continue
+        if record.get("type") in SKIP_TYPES or record.get("isSidechain"):
+            continue
+        if record.get("type") not in {"user", "assistant"}:
+            continue
+        message = record.get("message") or {}
+        text = _extract_text(message.get("content", "")).strip()
+        if not text:
+            continue
+        role = message.get("role") or record.get("type")
+        turns.append({"role": "user" if role == "user" else "assistant",
+                      "text": text[:MAX_TURN_CHARS]})
+        stamp = _naive_utc(record.get("timestamp") or message.get("timestamp"))
+        if stamp:
+            first_ts = first_ts or stamp
+            last_ts = stamp
+        cwd = record.get("cwd") or cwd
+        branch = record.get("gitBranch") or branch
+
+    if len(turns) < MIN_TURNS:
         return None
-    if rec_type not in {"user", "assistant"}:
-        return None
-
-    msg = rec.get("message") or {}
-    role = msg.get("role") or rec_type
-    text = _extract_text(msg.get("content", ""))
-    if not text.strip():
-        return None
-
-    uuid = rec.get("uuid") or rec.get("id")
-    if not uuid:
-        return None
-    timestamp = _naive_utc(rec.get("timestamp") or msg.get("timestamp"))
-    cwd = rec.get("cwd", "")
-    git_branch = rec.get("gitBranch", "")
-    is_compact_summary = bool(rec.get("isCompactSummary"))
-
-    author_role = "self" if role == "user" else "counterparty"
-    author_label = "Я" if author_role == "self" else "Claude"
-
-    body = text[:MAX_CONTENT_LEN]
-    content_text = (
-        f"Author: {author_label} [{author_role}]\n"
-        f"Project: {project_dir}\n"
-        f"Session: {session_id}\n"
-        f"Role: {role}\n"
-        f"Date: {timestamp or ''}\n"
-        f"{'(compact summary)' if is_compact_summary else ''}\n"
-        f"---\n{body}"
-    )
-
+    fallback = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
+    fallback_iso = fallback.replace(tzinfo=None).isoformat()
     return {
-        "source": "claude_chat",
-        "source_event_id": f"claude:{session_id}:{uuid}",
-        "category": role,
-        "content_text": content_text,
-        "occurred_at": timestamp,
-        "metadata": {
-            "author_role": author_role,
-            "author_label": author_label,
-            "project_dir": project_dir,
-            "session_id": session_id,
-            "uuid": uuid,
-            "role": role,
-            "cwd": cwd,
-            "git_branch": git_branch,
-            "is_compact_summary": is_compact_summary,
-            "model": msg.get("model"),
-            "is_sidechain": rec.get("isSidechain"),
-            "entrypoint": rec.get("entrypoint"),
-        },
+        "session_id": path.stem,
+        "project_dir": path.parent.name,
+        "started_at": first_ts or fallback_iso,
+        "ended_at": last_ts or fallback_iso,
+        "cwd": cwd,
+        "git_branch": branch,
+        "turns": turns,
     }
 
 
-# ─── Gateway POST ────────────────────────────────────────────────────────
+# ─── Отправка ────────────────────────────────────────────────────────────
 
 
-def post_event(payload: dict) -> tuple[bool, str]:
-    url = f"{VERA_GATEWAY_URL}/event/claude_chat"
+def post_session(payload: dict) -> tuple[bool, str]:
+    url = f"{VERA_GATEWAY_URL}/v1/claude/session"
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-    req = urllib.request.Request(
+    request = urllib.request.Request(
         url, data=data, method="POST",
         headers={
             "Content-Type": "application/json",
@@ -226,90 +236,78 @@ def post_event(payload: dict) -> tuple[bool, str]:
         },
     )
     try:
-        with urllib.request.urlopen(req, timeout=30) as r:
-            return (200 <= r.status < 300, f"HTTP {r.status}")
+        # Осмысление длинной сессии — несколько вызовов модели подряд, поэтому
+        # ждём заметно дольше обычного запроса.
+        with urllib.request.urlopen(request, timeout=600) as response:
+            body = json.loads(response.read().decode("utf-8", errors="replace") or "{}")
+            note = str(body.get("summary") or "")[:120]
+            if body.get("unchanged"):
+                note = "без изменений"
+            return (200 <= response.status < 300, note)
     except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="ignore")[:200]
-        return (False, f"HTTP {e.code}: {body}")
-    except Exception as e:
+        detail = e.read().decode("utf-8", errors="ignore")[:200]
+        return (False, f"HTTP {e.code}: {detail}")
+    except (urllib.error.URLError, TimeoutError, OSError, json.JSONDecodeError) as e:
         return (False, f"{type(e).__name__}: {e}")
 
 
-# ─── Main scan ───────────────────────────────────────────────────────────
+def sync(state: dict[str, int], *, only_quiet: bool,
+         dry_run: bool) -> tuple[int, int, int, int]:
+    """Возвращает (сессий увидел, отправил, пропустил, ошибок)."""
+    seen = sent = skipped = errors = 0
+    quiet_before = datetime.now(timezone.utc) - timedelta(minutes=QUIET_MINUTES)
 
-
-def scan_project(project_dir: Path, state: dict[str, int],
-                 verbose: bool) -> tuple[int, int, int]:
-    """Returns (events_seen, events_posted, errors)."""
-    seen = posted = errors = 0
-    for jsonl in project_dir.rglob("*.jsonl"):
-        rel = str(jsonl.relative_to(CLAUDE_ROOT))
-        offset = state.get(rel, 0)
+    for path in sorted(CLAUDE_ROOT.rglob("*.jsonl")):
+        key = str(path.relative_to(CLAUDE_ROOT))
         try:
-            size = jsonl.stat().st_size
+            modified = datetime.fromtimestamp(path.stat().st_mtime, timezone.utc)
         except OSError:
             continue
-        if size <= offset:
-            continue   # nothing new
-
-        session_id = jsonl.stem
+        seen += 1
+        if only_quiet and modified > quiet_before:
+            skipped += 1
+            logging.debug("%s ещё пишется — позже", key)
+            continue
         try:
-            # Бинарно, а не текстом: у текстового файла f.tell() при итерации
-            # запрещён («telling position disabled by next() call»), а смещение
-            # нам нужно в БАЙТАХ — в тексте len(строки) считает символы, и на
-            # кириллице курсор уехал бы вдвое. Считаем сами, tell не нужен.
-            with jsonl.open("rb") as f:
-                f.seek(offset)
-                # Курсор двигается ТОЛЬКО за успешно отправленным. До 2026-08-26
-                # он прыгал на размер файла «даже если отдельные события
-                # упали» — и один 401 или обрыв сети молча съедал весь хвост
-                # навсегда. Та же грабля, что чинили у gmail с date-granular
-                # after: и у Trello: молча пропустить середину нельзя.
-                good = position = offset
-                for raw_bytes in f:
-                    seen += 1
-                    position += len(raw_bytes)
-                    line = raw_bytes.decode("utf-8", errors="replace").strip()
-                    if not line:
-                        good = position
-                        continue
-                    try:
-                        rec = json.loads(line)
-                    except json.JSONDecodeError:
-                        # Битая строка — это ядовитое сообщение, а не сбой
-                        # транспорта: её пропускаем и идём дальше, иначе
-                        # застрянем на ней навсегда.
-                        good = position
-                        continue
-                    payload = parse_record(rec, project_dir.name, session_id)
-                    if not payload:
-                        good = position
-                        continue
-                    ok, info = post_event(payload)
-                    if ok:
-                        posted += 1
-                        good = position
-                        continue
-                    errors += 1
-                    logging.warning("отправка %s не прошла (%s) — курсор "
-                                    "оставляю, хвост доберём в следующий раз",
-                                    payload["source_event_id"], info)
-                    break
-                state[rel] = good
-        except Exception as e:
-            logging.exception("scan %s failed: %s", rel, e)
+            payload = read_session(path)
+        except OSError as e:
+            logging.warning("%s не прочитался: %s", key, e)
             errors += 1
             continue
-    return seen, posted, errors
+        if payload is None:
+            skipped += 1
+            continue
+        turns = len(payload["turns"])
+        if state.get(key, 0) >= turns:
+            skipped += 1
+            continue
+        if dry_run:
+            logging.info("[dry-run] %s: реплик %d, проект %s",
+                         key, turns, payload["project_dir"])
+            sent += 1
+            continue
+        ok, info = post_session(payload)
+        if not ok:
+            errors += 1
+            # Курсор двигается ТОЛЬКО за успехом: 401 или обрыв сети не имеет
+            # права молча съесть сессию навсегда.
+            logging.warning("%s не отправился (%s) — повторим в следующий раз",
+                            key, info)
+            continue
+        sent += 1
+        state[key] = turns
+        logging.info("%s: реплик %d → %s", key, turns, info or "ок")
+    return seen, sent, skipped, errors
 
 
-def main():
+def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--setup", action="store_true",
-                        help="Write env template and exit")
+    parser.add_argument("--setup", action="store_true", help="шаблон конфига")
     parser.add_argument("--verbose", "-v", action="store_true")
     parser.add_argument("--dry-run", action="store_true",
-                        help="Parse and count, do NOT post")
+                        help="показать, что отправил бы; ничего не менять")
+    parser.add_argument("--all", action="store_true",
+                        help="не ждать, пока сессия остынет")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -321,67 +319,33 @@ def main():
         ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
         ENV_FILE.write_text(
             "VERA_GATEWAY_URL=https://dima.veranda.my\n"
-            "INTERNAL_SECRET=<paste-from-server-/var/www/vera3/infra/.env>\n",
+            "INTERNAL_SECRET=<взять из /var/www/vera3/infra/.env на hetzner-root>\n",
             encoding="utf-8",
         )
-        print(f"Wrote {ENV_FILE} — fill INTERNAL_SECRET then re-run without --setup")
+        print(f"Создал {ENV_FILE} — впиши INTERNAL_SECRET и запусти без --setup")
         return
 
-    # Load env from file (Windows Task Scheduler doesn't pass env nicely)
-    global VERA_GATEWAY_URL, INTERNAL_SECRET
-    if ENV_FILE.exists():
-        for line in ENV_FILE.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, v = line.split("=", 1)
-            if k == "VERA_GATEWAY_URL":
-                VERA_GATEWAY_URL = v.strip()
-            elif k == "INTERNAL_SECRET":
-                INTERNAL_SECRET = v.strip()
-
     if not INTERNAL_SECRET:
-        print("ERROR: INTERNAL_SECRET not set. Run --setup, then edit env file.",
+        print(f"INTERNAL_SECRET пуст. Запусти --setup и заполни {ENV_FILE}.",
               file=sys.stderr)
         sys.exit(1)
-
     if not CLAUDE_ROOT.exists():
-        print(f"ERROR: {CLAUDE_ROOT} not found", file=sys.stderr)
+        print(f"Нет {CLAUDE_ROOT}", file=sys.stderr)
         sys.exit(1)
-
-    if args.dry_run:
-        global post_event   # type: ignore
-        def _noop(p): return (True, "dry-run")  # noqa
-        post_event = _noop   # type: ignore
 
     state = load_state()
     started = time.time()
-    total_seen = total_posted = total_errors = 0
-
-    for project in sorted(CLAUDE_ROOT.iterdir()):
-        if not project.is_dir():
-            continue
-        seen, posted, errors = scan_project(project, state, args.verbose)
-        if posted or errors:
-            logging.info("project %s: seen=%d posted=%d errors=%d",
-                         project.name, seen, posted, errors)
-        total_seen += seen
-        total_posted += posted
-        total_errors += errors
-
-    # Сухой прогон НЕ трогает курсор. До 2026-08-26 он подменял отправку на
-    # успех и сохранял состояние — то есть «посмотреть, что будет» молча
-    # съедало весь бэклог: следующий настоящий прогон видел 216 строк вместо
-    # 25 069, а 11 627 событий были помечены отправленными, ни разу не уйдя.
+    seen, sent, skipped, errors = sync(state, only_quiet=not args.all,
+                                       dry_run=args.dry_run)
+    # Состояние сохраняем только после реальной отправки: до 2026-08-26
+    # --dry-run подменял отправку успехом И сохранял состояние, то есть
+    # «холостой» прогон съедал всю историю навсегда.
     if not args.dry_run:
         save_state(state)
-    else:
-        logging.info("dry-run: курсор не сдвинут")
-    logging.info(
-        "claude-sync done: %d files scanned, %d events seen, %d posted, %d errors, %.1fs",
-        len(state), total_seen, total_posted, total_errors,
-        time.time() - started,
-    )
+    logging.info("claude-sync: сессий %d, отправлено %d, пропущено %d, "
+                 "ошибок %d, %.1fс", seen, sent, skipped, errors,
+                 time.time() - started)
+    sys.exit(1 if errors and not sent else 0)
 
 
 if __name__ == "__main__":
