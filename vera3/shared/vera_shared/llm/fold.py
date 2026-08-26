@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from dataclasses import dataclass
@@ -44,6 +45,10 @@ class FoldSpec:
     window_chars: int = DEFAULT_WINDOW_CHARS
     max_windows: int = DEFAULT_MAX_WINDOWS
     part_tokens: int = 1200
+    #: Сколько окон осмыслять одновременно. Окна независимы, а ждём мы брокер,
+    #: поэтому параллель сокращает 20-оконную сессию с часов до минут. Больше
+    #: трёх не берём: пул брокера общий, и его занимают не только мы.
+    parallel: int = 1
 
     def __post_init__(self) -> None:
         if not self.fields or self.fields[0] != "summary":
@@ -103,12 +108,14 @@ def windows(lines: list[str], *, limit: int = DEFAULT_WINDOW_CHARS,
     return chunks, False
 
 
-async def _one(prompt: str, spec: FoldSpec, *, max_tokens: int) -> dict[str, Any] | None:
+async def _one(prompt: str, spec: FoldSpec, *, max_tokens: int,
+               poll_deadline_s: float | None = None) -> dict[str, Any] | None:
     try:
         raw, _meta = await chat_async(
             messages=[{"role": "user", "content": prompt}],
             capability="chat:smart", response_format=spec.json_schema,
             max_tokens=max_tokens, temperature=0.2, workflow=spec.name,
+            poll_deadline_s=poll_deadline_s,
         )
         return json.loads(raw)
     except (LLMCallFailed, json.JSONDecodeError) as e:
@@ -131,8 +138,25 @@ def stitch(parts: list[dict[str, Any]], spec: FoldSpec) -> dict[str, Any]:
     return merged
 
 
-async def fold(lines: list[str], spec: FoldSpec,
-               context: dict[str, str]) -> tuple[dict[str, Any], dict[str, Any]]:
+async def _map(chunks: list[str], spec: FoldSpec, context: dict[str, str],
+               poll_deadline_s: float | None) -> list[dict[str, Any]]:
+    """Окна → частичные выжимки, порядок сохранён. Упавшее окно выпадает."""
+    limit = asyncio.Semaphore(max(1, spec.parallel))
+
+    async def one(index: int, chunk: str) -> dict[str, Any] | None:
+        async with limit:
+            return await _one(
+                spec.part_prompt.format(scope=f"часть {index} из {len(chunks)}",
+                                        transcript=chunk, **context),
+                spec, max_tokens=spec.part_tokens, poll_deadline_s=poll_deadline_s)
+
+    done = await asyncio.gather(*(one(i, c) for i, c in enumerate(chunks, start=1)))
+    return [part for part in done if part is not None]
+
+
+async def fold(lines: list[str], spec: FoldSpec, context: dict[str, str],
+               *, poll_deadline_s: float | None = None,
+               ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Строки → (выжимка, отчёт о работе). Никогда не бросает.
 
     Отчёт идёт в metadata события, чтобы потеря или частичный провал были
@@ -152,26 +176,20 @@ async def fold(lines: list[str], spec: FoldSpec,
     if len(chunks) == 1:
         result = await _one(
             spec.part_prompt.format(scope="текст", transcript=chunks[0], **context),
-            spec, max_tokens=spec.part_tokens)
+            spec, max_tokens=spec.part_tokens, poll_deadline_s=poll_deadline_s)
         if result is None:
             return dict(spec.empty), {**report, "distilled": False}
         return result, report
 
-    parts: list[dict[str, Any]] = []
-    for index, chunk in enumerate(chunks, start=1):
-        got = await _one(
-            spec.part_prompt.format(scope=f"часть {index} из {len(chunks)}",
-                                    transcript=chunk, **context),
-            spec, max_tokens=spec.part_tokens)
-        if got is not None:
-            parts.append(got)
+    parts = await _map(chunks, spec, context, poll_deadline_s)
     if not parts:
         return dict(spec.empty), {**report, "distilled": False}
 
     merged = await _one(
         spec.merge_prompt.format(
             parts=json.dumps(parts, ensure_ascii=False, indent=1), **context),
-        spec, max_tokens=min(spec.part_tokens + 400 * len(parts), 4000))
+        spec, max_tokens=min(spec.part_tokens + 400 * len(parts), 4000),
+        poll_deadline_s=poll_deadline_s)
     if merged is None:
         # Слить моделью не вышло — событие всё равно должно быть полным.
         return stitch(parts, spec), {**report, "merged": "mechanical"}

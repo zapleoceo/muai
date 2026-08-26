@@ -21,10 +21,13 @@
 ```
 ~/.claude/projects/<проект>/<session>.jsonl
    │  scripts/claude_chat_sync.py  (Task Scheduler, раз в час)
-   │  read_session() — реплики, время, ветка; post_session() — HTTPS
+   │  read_session() — реплики, время, ветка; enqueue() — HTTPS
    ▼
-POST /v1/claude/session      gateway/claude_session.py
-   │  ingest_claude_session → distill (gateway/claude_distill.py)
+POST /v1/claude/session  →  202          gateway/claude_session.py
+   │  accept_claude_session → claude_session_queue (миграция 026)
+   ▼
+фоновый воркер в шлюзе                   gateway/claude_session_worker.py
+   │  claim() → distill() → store_summary() → finish()
    │      render() — [Дима] / [Claude]
    │      fold()   — свёртка по окнам, vera_shared/llm/fold.py
    ▼
@@ -32,7 +35,35 @@ events: source=claude_chat, category=session, source_event_id=session:<id>
    │  body_text() — человекочитаемое тело, его и увидит поиск
    ▼
 triage → embedding → мозг
+   ▲
+   │  GET /v1/claude/session/<id> — статус; клиент двигает курсор только
+   │  когда status=done и done_turns догнали присланное
 ```
+
+### Почему осмысление НЕ в запросе
+
+Измерено, а не предположено:
+
+- одно окно на 21 тыс. символов не уложилось в 120с ожидания брокера
+  (`job 407725 still pending after 120s`);
+- `location /v1/` в nginx без `proxy_read_timeout`, то есть дефолтные 60с —
+  синхронная версия получила 504 ровно на 60.8-й секунде;
+- большая сессия это до 20 окон, десятки минут: столько не держит ни прокси,
+  ни Cloudflare.
+
+Поэтому шлюз только принимает (202) и кладёт сессию в `claude_session_queue`
+(модель `ClaudeSessionQueueRow`), а осмысляет фоновый воркер с ожиданием брокера
+900с — сам брокер бросает задание только через ~20 минут. Воркер живёт внутри
+шлюза (`run_forever` стартует в lifespan, шаг очереди — `process_one`): работа
+сводится к ожиданию, состояние целиком в БД, а `processing` старше 45 минут
+(перезапуск контейнера) `revive_stale` возвращает в очередь. Статус отдаёт
+`claude_session_status`.
+
+Окна одной сессии осмысляются по три параллельно (`FoldSpec.parallel`): они
+независимы, а ждём мы брокер — без параллели 20-оконная сессия это часы.
+
+Приватность: `turns` в очереди — сырая переписка, и она лежит там ТОЛЬКО до
+осмысления. `finish()` очищает поле сразу после записи события.
 
 ### Свёртка — общая с голосом
 
@@ -67,7 +98,11 @@ triage → embedding → мозг
 
 Контракт запроса — `ClaudeSession` (`session_id`, `project_dir`, `started_at`,
 `ended_at`, `cwd`, `git_branch`, `turns`), реплика — `Turn` (`role`, `text`),
-ответ — `ClaudeSessionResult` (`ok`, `event_id`, `unchanged`, `summary`).
+ответ на приём — `ClaudeSessionAccepted` (`ok`, `status`, `turns`, `unchanged`),
+ответ статуса — `ClaudeSessionStatus` (`status`, `turns`, `done_turns`,
+`event_id`, `attempts`, `error`). Тело запроса — до 0.92 МБ на самой большой
+живой сессии, лимит шлюза 2 МБ (`GATEWAY_MAX_BODY_BYTES`), так что дробить
+не нужно.
 
 ## Что попадает в сессию
 
@@ -104,7 +139,12 @@ triage → embedding → мозг
 python scripts/claude_chat_sync.py --setup     # шаблон ~/.claude/vera_sync.env
 python scripts/claude_chat_sync.py --dry-run   # что отправил бы, ничего не меняя
 python scripts/claude_chat_sync.py             # один проход
+python scripts/claude_chat_sync.py --wait 0    # отдать в очередь и не ждать
 ```
+
+Проход отдаёт всё новое в очередь, потом ждёт (`--wait`, по умолчанию час),
+опрашивая статус раз в 20с, и двигает курсор по каждой осмысленной сессии.
+Не дождался — курсор не двинулся, доберёт следующий проход.
 
 `--dry-run` не сохраняет состояние. До 2026-08-26 сохранял, подменив отправку
 успехом: холостой прогон съедал всю историю навсегда.
@@ -121,6 +161,7 @@ python scripts/claude_chat_sync.py             # один проход
 | Время со зоной | HTTP 500, asyncpg `DataError` | `events.occurred_at` — `timestamp WITHOUT time zone`. Нормализуем на обеих сторонах |
 | `f.tell()` по тексту | `telling position disabled by next() call` | у текстового файла при итерации `tell()` запрещён, а `len()` строки считает символы: на кириллице смещение уехало бы вдвое. Читаем байтами |
 | Ключ `"metadata"` в `set_` | `MetaData object has no attribute _bulk_update_tuples` | строка резолвится в `EventRow.metadata` — объект SQLAlchemy, а не колонку. Ключами идут сами атрибуты (`EventRow.metadata_`) |
+| Осмысление внутри запроса | 504 на 60.8-й секунде | у nginx на `/v1/` дефолтный `proxy_read_timeout`, а у брокера 120с на задание. Приём и осмысление разнесены: 202 + очередь + воркер |
 
 ## Приватность
 

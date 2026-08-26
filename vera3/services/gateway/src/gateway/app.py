@@ -1,6 +1,8 @@
 """FastAPI приложение gateway. Минимальный API."""
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -53,8 +55,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     settings = get_settings()
     await init_engine(settings.database_url)
     log.info("Gateway started, DB connected")
-    yield
-    await close_engine()
+
+    # Осмысление сессий Claude Code — фоном: в запросе оно не укладывается
+    # ни в таймаут nginx, ни в ожидание брокера (см. claude_session_worker).
+    from gateway.claude_session_worker import run_forever
+    worker = asyncio.create_task(run_forever(), name="claude-session-worker")
+    try:
+        yield
+    finally:
+        worker.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await worker
+        await close_engine()
 
 
 def create_app() -> FastAPI:

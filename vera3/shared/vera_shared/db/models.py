@@ -218,3 +218,38 @@ class AppControlRow(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(),
     )
+
+
+class ClaudeSessionQueueRow(Base):
+    """Table claude_session_queue — сессия Claude Code ждёт осмысления.
+
+    Осмыслить её в самом запросе нельзя: одно окно не укладывается и в 120с
+    ожидания брокера, а большая сессия это до 20 окон. Шлюз принимает и
+    отвечает 202, фоновый воркер осмысляет. См. миграцию 026.
+    """
+
+    __tablename__ = "claude_session_queue"
+    __table_args__ = (Index("ix_claude_queue_status", "status", "created_at"),)
+
+    session_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    project_dir: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    cwd: Mapped[str | None] = mapped_column(Text, nullable=True)
+    git_branch: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    started_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    ended_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+    # Сырая переписка живёт здесь ТОЛЬКО до осмысления — воркер её очищает.
+    turns: Mapped[list[dict[str, Any]]] = mapped_column(
+        JsonType, nullable=False, default=list,
+    )
+    turn_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    status: Mapped[str] = mapped_column(String(16), nullable=False, default="pending")
+    attempts: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    event_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    done_turns: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(),
+    )
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(),
+    )

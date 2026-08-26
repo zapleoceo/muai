@@ -50,6 +50,10 @@ MIN_TURNS = 2
 #: Потолок на реплику. Дампы `tool_result` бывают в десятки тысяч символов и
 #: вытесняют смысл; свёртка на сервере всё равно режет текст на окна.
 MAX_TURN_CHARS = 4000
+#: Сколько ждать, пока воркер осмыслит принятые сессии. Не дождались — курсор
+#: не двинулся, доберём в следующий проход.
+DEFAULT_WAIT_S = 3600.0
+POLL_EVERY_S = 20.0
 
 STATE_VERSION = 2
 
@@ -224,11 +228,9 @@ def read_session(path: Path) -> dict | None:
 # ─── Отправка ────────────────────────────────────────────────────────────
 
 
-def post_session(payload: dict) -> tuple[bool, str]:
-    url = f"{VERA_GATEWAY_URL}/v1/claude/session"
-    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+def _call(url: str, *, data: bytes | None = None) -> tuple[bool, dict | str]:
     request = urllib.request.Request(
-        url, data=data, method="POST",
+        url, data=data, method="POST" if data else "GET",
         headers={
             "Content-Type": "application/json",
             "X-Internal-Secret": INTERNAL_SECRET,
@@ -236,14 +238,9 @@ def post_session(payload: dict) -> tuple[bool, str]:
         },
     )
     try:
-        # Осмысление длинной сессии — несколько вызовов модели подряд, поэтому
-        # ждём заметно дольше обычного запроса.
-        with urllib.request.urlopen(request, timeout=600) as response:
-            body = json.loads(response.read().decode("utf-8", errors="replace") or "{}")
-            note = str(body.get("summary") or "")[:120]
-            if body.get("unchanged"):
-                note = "без изменений"
-            return (200 <= response.status < 300, note)
+        with urllib.request.urlopen(request, timeout=120) as response:
+            body = response.read().decode("utf-8", errors="replace") or "{}"
+            return (200 <= response.status < 300, json.loads(body))
     except urllib.error.HTTPError as e:
         detail = e.read().decode("utf-8", errors="ignore")[:200]
         return (False, f"HTTP {e.code}: {detail}")
@@ -251,9 +248,33 @@ def post_session(payload: dict) -> tuple[bool, str]:
         return (False, f"{type(e).__name__}: {e}")
 
 
-def sync(state: dict[str, int], *, only_quiet: bool,
-         dry_run: bool) -> tuple[int, int, int, int]:
-    """Возвращает (сессий увидел, отправил, пропустил, ошибок)."""
+def enqueue(payload: dict) -> tuple[bool, str]:
+    """Отдать сессию шлюзу. Он только принимает — осмысляет фоновый воркер.
+
+    Осмыслить в самом запросе нельзя, и это измерено: одно окно на 21 тыс.
+    символов не уложилось в 120с ожидания брокера, а nginx обрывает `/v1/` по
+    дефолтным 60с — синхронная версия ловила 504 ровно на 60.8-й секунде.
+    """
+    ok, body = _call(f"{VERA_GATEWAY_URL}/v1/claude/session",
+                     data=json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+    if not ok:
+        return False, str(body)
+    return True, str(body.get("status") or "?") if isinstance(body, dict) else "?"
+
+
+def session_state(session_id: str) -> tuple[str, int, str]:
+    """(статус, осмыслено реплик, пояснение)."""
+    ok, body = _call(f"{VERA_GATEWAY_URL}/v1/claude/session/{session_id}")
+    if not ok or not isinstance(body, dict):
+        return "unknown", 0, str(body)
+    return (str(body.get("status") or "unknown"),
+            int(body.get("done_turns") or 0),
+            str(body.get("error") or ""))
+
+
+def sync(state: dict[str, int], pending: dict[str, tuple[str, int]], *,
+         only_quiet: bool, dry_run: bool) -> tuple[int, int, int, int]:
+    """Отдать шлюзу всё новое. (увидел, принято, пропущено, ошибок)."""
     seen = sent = skipped = errors = 0
     quiet_before = datetime.now(timezone.utc) - timedelta(minutes=QUIET_MINUTES)
 
@@ -286,18 +307,47 @@ def sync(state: dict[str, int], *, only_quiet: bool,
                          key, turns, payload["project_dir"])
             sent += 1
             continue
-        ok, info = post_session(payload)
+        ok, info = enqueue(payload)
         if not ok:
             errors += 1
-            # Курсор двигается ТОЛЬКО за успехом: 401 или обрыв сети не имеет
-            # права молча съесть сессию навсегда.
-            logging.warning("%s не отправился (%s) — повторим в следующий раз",
+            logging.warning("%s не принят (%s) — повторим в следующий раз",
                             key, info)
             continue
         sent += 1
-        state[key] = turns
-        logging.info("%s: реплик %d → %s", key, turns, info or "ок")
+        if info == "done":
+            # Шлюз ответил, что в этом объёме сессия уже осмыслена.
+            state[key] = turns
+        else:
+            pending[key] = (payload["session_id"], turns)
+        logging.info("%s: реплик %d, статус %s", key, turns, info)
     return seen, sent, skipped, errors
+
+
+def await_queue(state: dict[str, int], pending: dict[str, tuple[str, int]], *,
+                deadline_s: float) -> tuple[int, int]:
+    """Дождаться, пока воркер осмыслит принятое. (осмыслено, осталось).
+
+    Курсор двигается ТОЛЬКО за реально осмысленным: иначе обрыв или ядовитая
+    сессия молча выпадут навсегда — та же грабля, что чинили у gmail и trello.
+    """
+    done = 0
+    until = time.time() + deadline_s
+    while pending and time.time() < until:
+        time.sleep(POLL_EVERY_S)
+        for key in list(pending):
+            session_id, turns = pending[key]
+            status, done_turns, note = session_state(session_id)
+            if status == "done" and done_turns >= turns:
+                state[key] = turns
+                pending.pop(key)
+                done += 1
+                logging.info("%s осмыслена (реплик %d)", key, turns)
+            elif status in {"error", "unknown"}:
+                pending.pop(key)
+                logging.warning("%s не осмыслена (%s %s)", key, status, note)
+    for key in pending:
+        logging.info("%s ещё в очереди — курсор не двигаю", key)
+    return done, len(pending)
 
 
 def main() -> None:
@@ -308,6 +358,9 @@ def main() -> None:
                         help="показать, что отправил бы; ничего не менять")
     parser.add_argument("--all", action="store_true",
                         help="не ждать, пока сессия остынет")
+    parser.add_argument("--wait", type=float, default=DEFAULT_WAIT_S,
+                        metavar="СЕК",
+                        help="сколько ждать осмысления принятых сессий")
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -334,17 +387,23 @@ def main() -> None:
         sys.exit(1)
 
     state = load_state()
+    pending: dict[str, tuple[str, int]] = {}
     started = time.time()
-    seen, sent, skipped, errors = sync(state, only_quiet=not args.all,
+    seen, sent, skipped, errors = sync(state, pending, only_quiet=not args.all,
                                        dry_run=args.dry_run)
+    ready = 0
+    if pending:
+        logging.info("принято в очередь %d — ждём осмысления до %.0f мин",
+                     len(pending), args.wait / 60)
+        ready, _left = await_queue(state, pending, deadline_s=args.wait)
     # Состояние сохраняем только после реальной отправки: до 2026-08-26
     # --dry-run подменял отправку успехом И сохранял состояние, то есть
     # «холостой» прогон съедал всю историю навсегда.
     if not args.dry_run:
         save_state(state)
-    logging.info("claude-sync: сессий %d, отправлено %d, пропущено %d, "
-                 "ошибок %d, %.1fс", seen, sent, skipped, errors,
-                 time.time() - started)
+    logging.info("claude-sync: сессий %d, принято %d, осмыслено %d, "
+                 "пропущено %d, ошибок %d, %.1fс", seen, sent, ready, skipped,
+                 errors, time.time() - started)
     sys.exit(1 if errors and not sent else 0)
 
 

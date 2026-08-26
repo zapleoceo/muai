@@ -1,8 +1,9 @@
-"""Сессия Claude Code → одно событие-выжимка.
+"""Сессия Claude Code → одно событие-выжимка, осмысленное фоном.
 
-Главное, что проверяем: в мозг уходит смысл, а не переписка (кода в теле
-события быть не должно), одна сессия остаётся одним событием даже если её
-дописали, и повторная присылка того же не гоняет модель заново.
+Главное, что проверяем: приём быстрый (осмыслить в запросе нельзя — одно окно
+не укладывается и в 120с ожидания брокера), в мозг уходит смысл, а не переписка,
+одна сессия остаётся одним событием даже если её дописали, и курсор клиента
+двигается только за реально осмысленным.
 """
 from __future__ import annotations
 
@@ -46,11 +47,28 @@ def _session(**over):
     return ClaudeSession(**base)
 
 
-class _Sess:
-    """Сессия-заглушка: запоминает параметры INSERT и отдаёт заданный id."""
+class _Row:
+    """Строка очереди — то, что воркер получает из claim()."""
 
-    def __init__(self, event_id=101):
-        self._event_id = event_id
+    def __init__(self, **over):
+        self.session_id = "26014a1e-94fe"
+        self.project_dir = "D--Projects-myAI"
+        self.cwd = "D:/Projects/myAI"
+        self.git_branch = "master"
+        self.started_at = _T0.replace(tzinfo=None)
+        self.ended_at = (_T0 + timedelta(hours=2)).replace(tzinfo=None)
+        self.turns = [{"role": "user", "text": "собери слушателя"},
+                      {"role": "assistant", "text": "def secret_helper(): pass"}]
+        self.turn_count = 2
+        self.attempts = 1
+        self.__dict__.update(over)
+
+
+class _Sess:
+    """Сессия-заглушка: запоминает параметры запроса и отдаёт заданный результат."""
+
+    def __init__(self, value=101):
+        self._value = value
         self.params: dict = {}
 
     async def __aenter__(self):
@@ -65,7 +83,7 @@ class _Sess:
 
         class R:
             def scalar_one_or_none(self):
-                return outer._event_id
+                return outer._value
 
         return R()
 
@@ -89,8 +107,12 @@ class TestSpec:
         assert schema["properties"]["changes"]["type"] == "array"
 
     def test_window_cap_fits_the_longest_real_session(self):
-        """Замер 2026-08-26: самая большая сессия — 681 тыс. символов."""
+        """Замер 2026-08-26: самая большая живая сессия — 681 тыс. символов."""
         assert SPEC.max_windows * SPEC.window_chars >= 700_000
+
+    def test_windows_are_distilled_in_parallel(self):
+        """Окна независимы, а ждём мы брокер: без параллели 20 окон это часы."""
+        assert SPEC.parallel > 1
 
 
 class TestBodyText:
@@ -108,19 +130,69 @@ class TestBodyText:
         assert body.strip() == "коротко\n\nГде: проект".strip()
 
 
-class TestEndpoint:
+class TestAccept:
+    """Приём: только положить в очередь, никакой работы моделью."""
+
+    @pytest.mark.asyncio
+    async def test_session_goes_to_the_queue(self):
+        import gateway.claude_session as cs
+        from starlette.responses import Response
+
+        sess = _Sess(value="26014a1e-94fe")
+        with patch("gateway.claude_session.get_session", lambda: sess), \
+             patch("gateway.claude_session.check_internal_secret", lambda s: None):
+            res = await cs.accept_claude_session(_session(), Response(),
+                                                 x_internal_secret="ok")
+
+        assert res.ok and res.status == "pending" and res.turns == 2
+        assert sess.params["session_id"] == "26014a1e-94fe"
+        assert sess.params["turn_count"] == 2
+        assert sess.params["status"] == "pending"
+        # Время без зоны: колонки timestamp WITHOUT time zone.
+        assert sess.params["started_at"].tzinfo is None
+
+    @pytest.mark.asyncio
+    async def test_already_distilled_is_not_requeued(self):
+        """WHERE done_turns < turns отсекает повтор — модель зря не гоняем."""
+        import gateway.claude_session as cs
+        from starlette.responses import Response
+
+        sess = _Sess(value=None)
+        response = Response()
+        with patch("gateway.claude_session.get_session", lambda: sess), \
+             patch("gateway.claude_session.check_internal_secret", lambda s: None):
+            res = await cs.accept_claude_session(_session(), response,
+                                                 x_internal_secret="ok")
+
+        assert res.ok and res.unchanged and res.status == "done"
+        assert response.status_code == 200
+
+    @pytest.mark.asyncio
+    async def test_accept_never_calls_the_model(self):
+        """Осмысление в запросе давало 504 от nginx ровно на 60-й секунде."""
+        import gateway.claude_session as cs
+        from starlette.responses import Response
+
+        model = AsyncMock(return_value=(json.dumps(_FULL), {}))
+        with patch.object(fold_mod, "chat_async", model), \
+             patch("gateway.claude_session.get_session", lambda: _Sess(value="x")), \
+             patch("gateway.claude_session.check_internal_secret", lambda s: None):
+            await cs.accept_claude_session(_session(), Response(),
+                                           x_internal_secret="ok")
+
+        model.assert_not_called()
+
+
+class TestStoreSummary:
     @pytest.mark.asyncio
     async def test_code_never_reaches_the_event(self):
         import gateway.claude_session as cs
 
         sess = _Sess()
-        with patch.object(fold_mod, "chat_async",
-                          AsyncMock(return_value=(json.dumps(_FULL), {}))), \
-             patch("gateway.claude_session.get_session", lambda: sess), \
-             patch("gateway.claude_session.check_internal_secret", lambda s: None):
-            res = await cs.ingest_claude_session(_session(), x_internal_secret="ok")
+        with patch("gateway.claude_session.get_session", lambda: sess):
+            event_id = await cs.store_summary(_Row(), _FULL, {"windows": 1})
 
-        assert res.ok and res.event_id == 101
+        assert event_id == 101
         body = sess.params["content_text"]
         assert "Вынесли свёртку" in body
         assert "secret_helper" not in body          # переписка НЕ сохраняется
@@ -133,11 +205,8 @@ class TestEndpoint:
         import gateway.claude_session as cs
 
         sess = _Sess()
-        with patch.object(fold_mod, "chat_async",
-                          AsyncMock(return_value=(json.dumps(_FULL), {}))), \
-             patch("gateway.claude_session.get_session", lambda: sess), \
-             patch("gateway.claude_session.check_internal_secret", lambda s: None):
-            await cs.ingest_claude_session(_session(), x_internal_secret="ok")
+        with patch("gateway.claude_session.get_session", lambda: sess):
+            await cs.store_summary(_Row(), _FULL, {})
 
         assert sess.params["source_event_id"] == "session:26014a1e-94fe"
 
@@ -147,83 +216,102 @@ class TestEndpoint:
         import gateway.claude_session as cs
 
         sess = _Sess()
-        with patch.object(fold_mod, "chat_async",
-                          AsyncMock(return_value=(json.dumps(_FULL), {}))), \
-             patch("gateway.claude_session.get_session", lambda: sess), \
-             patch("gateway.claude_session.check_internal_secret", lambda s: None):
-            await cs.ingest_claude_session(_session(), x_internal_secret="ok")
+        with patch("gateway.claude_session.get_session", lambda: sess):
+            await cs.store_summary(_Row(), _FULL, {})
 
         assert sess.params["triage_status"] == "pending"
 
     @pytest.mark.asyncio
-    async def test_nothing_new_is_reported_as_unchanged(self):
-        """Реплик не прибавилось — WHERE отсекает UPDATE, событие не тронуто."""
+    async def test_report_is_recorded_in_metadata(self):
+        """Молчаливая потеря недопустима: сколько окон и был ли обрез — видно."""
         import gateway.claude_session as cs
 
-        sess = _Sess(event_id=None)
-        with patch.object(fold_mod, "chat_async",
-                          AsyncMock(return_value=(json.dumps(_FULL), {}))), \
-             patch("gateway.claude_session.get_session", lambda: sess), \
-             patch("gateway.claude_session.check_internal_secret", lambda s: None):
-            res = await cs.ingest_claude_session(_session(), x_internal_secret="ok")
+        sess = _Sess()
+        with patch("gateway.claude_session.get_session", lambda: sess):
+            await cs.store_summary(_Row(turn_count=9), _FULL,
+                                   {"windows": 3, "truncated": False})
 
-        assert res.ok and res.unchanged and res.event_id is None
+        meta = sess.params["metadata"]
+        assert meta["windows"] == 3 and meta["truncated"] is False
+        assert meta["turns"] == 9
+        assert meta["topics"] == ["слушатель", "упаковка"]
+
+
+class TestWorker:
+    @pytest.mark.asyncio
+    async def test_empty_queue_reports_idle(self):
+        import gateway.claude_session_worker as w
+
+        with patch.object(w, "claim", AsyncMock(return_value=None)):
+            assert await w.process_one() is False
 
     @pytest.mark.asyncio
-    async def test_broker_failure_still_stores_the_fact(self):
-        import gateway.claude_session as cs
-        from vera_shared.llm.client import LLMCallFailed
+    async def test_success_finishes_and_clears_the_transcript(self):
+        import gateway.claude_session_worker as w
 
-        sess = _Sess(event_id=7)
-        with patch.object(fold_mod, "chat_async",
-                          AsyncMock(side_effect=LLMCallFailed("down"))), \
-             patch("gateway.claude_session.get_session", lambda: sess), \
-             patch("gateway.claude_session.check_internal_secret", lambda s: None):
-            res = await cs.ingest_claude_session(_session(), x_internal_secret="ok")
+        finish = AsyncMock()
+        with patch.object(w, "claim", AsyncMock(return_value=_Row())), \
+             patch.object(w, "distill",
+                          AsyncMock(return_value=(_FULL, {"transcript_chars": 120,
+                                                          "windows": 1,
+                                                          "truncated": False}))), \
+             patch.object(w, "store_summary", AsyncMock(return_value=55)), \
+             patch.object(w, "finish", finish):
+            assert await w.process_one() is True
 
-        assert res.ok and res.event_id == 7
-        assert "не удалось осмыслить" in sess.params["content_text"]
-        assert sess.params["metadata"]["distilled"] is False
-        assert sess.params["metadata"]["turns"] == 2
+        finish.assert_awaited_once()
+        assert finish.await_args.kwargs == {"event_id": 55, "turns": 2}
 
+    @pytest.mark.asyncio
+    async def test_failure_returns_the_session_to_the_queue(self):
+        """Сессия не имеет права потеряться: клиент курсор ещё не двинул."""
+        import gateway.claude_session_worker as w
+
+        fail = AsyncMock()
+        with patch.object(w, "claim", AsyncMock(return_value=_Row(attempts=1))), \
+             patch.object(w, "distill", AsyncMock(side_effect=RuntimeError("брокер"))), \
+             patch.object(w, "fail", fail):
+            assert await w.process_one() is True
+
+        fail.assert_awaited_once()
+        assert "брокер" in fail.await_args.args[1]
+        assert fail.await_args.args[2] == 1
+
+    @pytest.mark.asyncio
+    async def test_broker_is_given_a_long_deadline(self):
+        """Дефолтные 120с мало: замер дал 126с на одно окно в 21 тыс. символов."""
+        import gateway.claude_session_worker as w
+
+        distill = AsyncMock(return_value=(_FULL, {"transcript_chars": 1,
+                                                  "windows": 1, "truncated": False}))
+        with patch.object(w, "claim", AsyncMock(return_value=_Row())), \
+             patch.object(w, "distill", distill), \
+             patch.object(w, "store_summary", AsyncMock(return_value=1)), \
+             patch.object(w, "finish", AsyncMock()):
+            await w.process_one()
+
+        assert distill.await_args.kwargs["poll_deadline_s"] >= 600
+
+
+class TestFold:
     @pytest.mark.asyncio
     async def test_long_session_is_folded_not_cut(self):
         """Хвост длинной сессии обязан попасть в выжимку — как у голоса."""
-        import gateway.claude_session as cs
+        from gateway.claude_distill import distill
 
-        turns = [Turn(role="user" if i % 2 == 0 else "assistant",
-                      text=f"шаг {i} " + "x" * 3000) for i in range(40)]
+        turns = [{"role": "user" if i % 2 == 0 else "assistant",
+                  "text": f"шаг {i} " + "x" * 3000} for i in range(40)]
         calls: list[str] = []
 
         async def fake_chat(**kw):
-            prompt = kw["messages"][0]["content"]
-            calls.append(prompt)
+            calls.append(kw["messages"][0]["content"])
             return json.dumps(_FULL), {}
 
-        sess = _Sess()
-        with patch.object(fold_mod, "chat_async", AsyncMock(side_effect=fake_chat)), \
-             patch("gateway.claude_session.get_session", lambda: sess), \
-             patch("gateway.claude_session.check_internal_secret", lambda s: None):
-            await cs.ingest_claude_session(_session(turns=turns),
-                                           x_internal_secret="ok")
+        with patch.object(fold_mod, "chat_async", AsyncMock(side_effect=fake_chat)):
+            got, report = await distill(turns, project="myAI", branch="master")
 
-        meta = sess.params["metadata"]
-        assert meta["windows"] > 1
-        assert meta["truncated"] is False
-        assert meta["merged"] == "llm"
+        assert report["windows"] > 1 and report["truncated"] is False
+        assert report["merged"] == "llm"
+        assert got["summary"] == _FULL["summary"]
         # Последняя реплика попала в один из промптов, а не была срезана.
         assert any("шаг 39" in prompt for prompt in calls)
-
-    @pytest.mark.asyncio
-    async def test_timezone_aware_stamp_is_stored_naive(self):
-        """occurred_at — timestamp WITHOUT time zone: со зоной asyncpg падает."""
-        import gateway.claude_session as cs
-
-        sess = _Sess()
-        with patch.object(fold_mod, "chat_async",
-                          AsyncMock(return_value=(json.dumps(_FULL), {}))), \
-             patch("gateway.claude_session.get_session", lambda: sess), \
-             patch("gateway.claude_session.check_internal_secret", lambda s: None):
-            await cs.ingest_claude_session(_session(), x_internal_secret="ok")
-
-        assert sess.params["occurred_at"].tzinfo is None

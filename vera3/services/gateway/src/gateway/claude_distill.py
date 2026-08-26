@@ -69,6 +69,9 @@ SPEC = FoldSpec(
     # 26 живых сессий, самая большая — 681 тыс. символов, это 20 окон.
     # Голосовые 12 окон здесь обрезали бы хвост самой длинной работы.
     max_windows=24,
+    # Окна независимы, а ждём мы брокер: тройная параллель сокращает
+    # 20-оконную сессию с часов до минут.
+    parallel=3,
 )
 
 EMPTY = SPEC.empty
@@ -86,8 +89,10 @@ def render(turns: list[Any]) -> list[str]:
     return lines
 
 
-async def distill(turns: list[Any], *, project: str | None,
-                  branch: str | None) -> tuple[dict[str, Any], dict[str, Any]]:
+async def distill(turns: list[Any], *, project: str | None, branch: str | None,
+                  poll_deadline_s: float | None = None,
+                  ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Переписка → (выжимка, отчёт о работе). Никогда не бросает."""
     return await fold(render(turns), SPEC,
-                      {"project": project or "неизвестно", "branch": branch or "нет"})
+                      {"project": project or "неизвестно", "branch": branch or "нет"},
+                      poll_deadline_s=poll_deadline_s)
