@@ -46,6 +46,13 @@ async def load_token() -> tuple[str, int | None]:
     if row_id is not None:
         try:
             return decrypt(stored), row_id
+        except ValueError as e:
+            # Ключа шифрования нет у КОНТЕЙНЕРА — это настройка, а не порча
+            # строки. Гасить подключение тут нельзя: дашборд показал бы
+            # «отозван», и токен вводили бы заново без толку. Поймано вживую:
+            # ingestor-slack поднялся без TOKEN_SECRET и погасил живую строку.
+            log.error("slack: нечем расшифровать токен (%s) — проверь TOKEN_SECRET "
+                      "у контейнера; строку не трогаю", e)
         except Exception as e:  # noqa: BLE001 — битый шифр не должен ронять контейнер
             log.error("slack: токен в БД не расшифровался (%s) — гашу строку", e)
             await mark_dead(row_id, f"не расшифровался: {e}")

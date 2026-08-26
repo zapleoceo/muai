@@ -72,8 +72,8 @@ class TestLoadToken:
 
     @pytest.mark.asyncio
     async def test_broken_cipher_kills_the_row_and_falls_back(self, monkeypatch):
-        """Расшифровать не вышло — строку гасим, иначе поллер бился бы в неё
-        каждые десять минут, а дашборд показывал бы «подключено»."""
+        """Строка испорчена — гасим, иначе поллер бился бы в неё каждые десять
+        минут, а дашборд показывал бы «подключено»."""
         monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-from-env")
         await _add(raw="это не шифр")
         token, row_id = await auth.load_token()
@@ -81,6 +81,31 @@ class TestLoadToken:
         row = await _row()
         assert row.is_active is False
         assert "не расшифровался" in (row.last_error or "")
+
+    @pytest.mark.asyncio
+    async def test_missing_encryption_key_does_not_kill_the_row(
+            self, monkeypatch, caplog):
+        """Ключа шифрования нет у КОНТЕЙНЕРА — это настройка, а не порча строки.
+
+        Поймано вживую: ingestor-slack поднялся без TOKEN_SECRET и погасил
+        только что подключённый Slack. Дашборд показал «отозван», и токен
+        вводили бы заново без толку.
+        """
+        monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-from-env")
+        await _add("xoxp-live")
+
+        def no_key(_stored):
+            raise ValueError("No TOKEN_SECRET available")
+
+        monkeypatch.setattr(auth, "decrypt", no_key)
+        with caplog.at_level("ERROR"):
+            token, row_id = await auth.load_token()
+
+        assert (token, row_id) == ("xoxp-from-env", None)
+        row = await _row()
+        assert row.is_active is True          # подключение НЕ погашено
+        assert row.last_error is None
+        assert "TOKEN_SECRET" in caplog.text
 
 
 @pytest.mark.usefixtures("sqlite_db")

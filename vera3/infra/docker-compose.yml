@@ -231,6 +231,11 @@ services:
         condition: service_healthy
     environment:
       DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
+      # Токен подключается из дашборда и лежит в slack_auth зашифрованным —
+      # без этого ключа контейнер его не расшифрует. Пропустил при вводе UI:
+      # строка в БД была, а поллер писал «No TOKEN_SECRET available».
+      TOKEN_SECRET: ${TOKEN_SECRET}
+      # Запасной путь: если строки в slack_auth нет, токен берётся отсюда.
       # Без токена контейнер не падает, а ждёт: обязательная переменная (:?)
       # уронила бы весь `compose up`, то есть всю Веру, из-за одного источника.
       # Токен ПОЛЬЗОВАТЕЛЬСКИЙ (xoxp-): Вера должна видеть то, что видит Дима,
