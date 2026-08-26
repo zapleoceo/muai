@@ -51,3 +51,26 @@ def test_swipes_from_owner_are_dropped_too():
     поэтому нужен игнор чата."""
     assert is_ignored_sender("zapleosoft") is False          # сам Дима — не бот
     assert is_ignored_chat("leomatchbot", "Дайвінчик") is True  # но чат режется
+
+
+class TestSlackChannels:
+    """Slack — самая ботовая среда из подключённых. Без денай-листа каналов
+    повторилась бы история с @leomatchbot, только объёмом больше."""
+
+    def test_noisy_service_channel_is_ignored(self):
+        from vera_shared.ingest_policy import is_ignored_slack_channel
+        assert is_ignored_slack_channel("deploys") is True
+        assert is_ignored_slack_channel("#alerts") is True
+        assert is_ignored_slack_channel("SENTRY") is True
+
+    def test_working_channel_is_kept(self):
+        from vera_shared.ingest_policy import is_ignored_slack_channel
+        assert is_ignored_slack_channel("veranda-general") is False
+        assert is_ignored_slack_channel("") is False
+        assert is_ignored_slack_channel(None) is False
+
+    def test_per_workspace_extra_is_honoured(self):
+        from vera_shared.ingest_policy import is_ignored_slack_channel
+        extra = frozenset({"itstep-bots"})
+        assert is_ignored_slack_channel("itstep-bots", extra) is True
+        assert is_ignored_slack_channel("itstep-bots") is False

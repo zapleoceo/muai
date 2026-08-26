@@ -8,6 +8,7 @@
               │  ingestor-gmail    (OAuth polling)  │
               │  ingestor-instagram (instagrapi)    │
               │  ingestor-trello   (REST polling)   │
+              │  ingestor-slack    (Web API poll)   │
               └────────────────┬────────────────────┘
                                │ POST /event/<source>
                                ▼
@@ -50,6 +51,7 @@
 | `vera3-ingestor-gmail` | OAuth refresh + Gmail API polling |
 | `vera3-ingestor-instagram` | instagrapi inbox polling |
 | `vera3-ingestor-trello` | Trello actions-фид всех досок + суточный дайджест сроков |
+| `vera3-ingestor-slack` | Slack: сообщения каналов, личек и тредов (треды опрашиваются отдельно — history их не отдаёт) |
 | `vera3-dashboard` | HTMX UI on :8003 |
 | `vera3-prune` | docker system prune --filter='until=72h' daily |
 

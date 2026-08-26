@@ -221,6 +221,32 @@ services:
     restart: unless-stopped
     logging: *default-logging
 
+  ingestor-slack:
+    build:
+      context: ..
+      dockerfile: services/ingestor-slack/Dockerfile
+    container_name: vera3-ingestor-slack
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
+      # Без токена контейнер не падает, а ждёт: обязательная переменная (:?)
+      # уронила бы весь `compose up`, то есть всю Веру, из-за одного источника.
+      # Токен ПОЛЬЗОВАТЕЛЬСКИЙ (xoxp-): Вера должна видеть то, что видит Дима,
+      # включая личку и приватные каналы, где бота нет.
+      SLACK_USER_TOKEN: ${SLACK_USER_TOKEN:-}
+      SLACK_POLL_S: "300"
+      SLACK_BOOTSTRAP_DAYS: "7"
+      # Тредов на канал за прогон и срок наблюдения. Потолки про расход
+      # вызовов, не про полноту: тред проверяется реже, а не выпадает.
+      SLACK_THREADS_PER_RUN: "20"
+      SLACK_THREAD_WATCH_DAYS: "21"
+      # Каналы, которые в мозг не идут вообще (через запятую, без #).
+      SLACK_DENY_CHANNELS: ${SLACK_DENY_CHANNELS:-}
+    restart: unless-stopped
+    logging: *default-logging
+
   # ─── Media Worker ───────────────────────────────────────────────────────
   # Polls triage_status='media_pending', downloads photo/voice via
   # ingestor-telegram /media/download, runs vision/whisper, appends

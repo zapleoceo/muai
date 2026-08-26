@@ -39,6 +39,19 @@ _IGNORED_CHAT_TITLE_PREFIXES = (
 )
 
 
+# Каналы Slack, которые в мозг не идут никогда. Slack — самая ботовая среда из
+# подключённых: CI, алерты, дежурные уведомления, Zapier. Фильтр по `bot_id`
+# (mapper.is_noise) снимает машинные сообщения, но в таких каналах и люди пишут
+# машинным — «раскатил», «откатил», «зелёное». Для личной памяти это шум, а
+# факты и так есть в системе-источнике. Ровно та же логика, что с уровнем чата
+# для @leomatchbot: мусорят обе стороны, фильтра по автору мало.
+_IGNORED_SLACK_CHANNELS = frozenset({
+    "alerts", "alarms", "ci", "cicd", "builds", "deploys", "deployments",
+    "monitoring", "sentry", "logs", "status", "uptime", "github", "gitlab",
+    "jira-feed", "zapier", "integrations", "notifications",
+})
+
+
 def is_ignored_sender(username: str | None) -> bool:
     """True — сообщения этого отправителя в мозг не пишем."""
     if not username:
@@ -52,3 +65,18 @@ def is_ignored_chat(chat_username: str | None, chat_title: str | None = None) ->
         return True
     return bool(chat_title
                 and chat_title.strip().lower().startswith(_IGNORED_CHAT_TITLE_PREFIXES))
+
+
+def is_ignored_slack_channel(name: str | None, extra: frozenset[str] | None = None) -> bool:
+    """True — канал Slack целиком в мозг не пишем.
+
+    `extra` — добавка из SLACK_DENY_CHANNELS: набор шумных каналов зависит от
+    воркспейса, а базовый список тут покрывает то, что называется одинаково
+    почти везде.
+    """
+    if not name:
+        return False
+    clean = name.strip().lstrip("#").lower()
+    if clean in _IGNORED_SLACK_CHANNELS:
+        return True
+    return bool(extra and clean in extra)

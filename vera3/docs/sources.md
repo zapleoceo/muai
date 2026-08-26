@@ -1,7 +1,45 @@
 # Sources (ingestors)
 
-Each source has its own container and writes to the same `events` table
-via `gateway /event/<source>` with `X-Internal-Secret`.
+Each source has its own container and writes to the same `events` table.
+
+## Ядро ингестора — `vera_shared.ingest`
+
+Источник приносит своё: транспорт к API, курсор, разбор полезной нагрузки в
+спецификацию события. Всё остальное берёт из общего ядра, а не переписывает.
+
+| Модуль | Что даёт |
+|---|---|
+| `writer` | `insert_events()` — запись событий с атомарным дедупом (`INSERT … ON CONFLICT (source, source_event_id) DO NOTHING`) и `valid_spec()` для отсева кривых спецификаций |
+| `authors` | `sync_author_entities()` — автор события → сущность в графе; дедуп по identifier за прогон, сбой графа не роняет приём |
+| `loop` | `poll_forever()` — цикл опроса, который не падает без ключа |
+| `authorship` | `resolve_author()` — таблица «источник → автор события» для графа |
+
+Появилось 2026-08-26 по итогам ревизии. До этого в репозитории лежали ТРИ
+контракта источника — две абстрактные базы (`shared/vera_shared/sources/base.py`
+и `shared/vera_shared/connectors/base.py`) и таблица `sources` — и ни одну из
+них не реализовывал ни один ингестор; этот же файл при этом велел новому
+источнику реализовать первую. Все три удалены (миграция 023).
+
+**Записывают событие через ядро, а не через шлюз.** `gateway /event/<source>`
+остаётся для вебхуков и записей бота (`vera_chat`); ингесторы пишут
+`insert_events()`. Раньше каждый носил свою копию дедупа — `SELECT … IN (:ids)`
+плюс `s.add()`, то есть check-then-insert. У gmail это была реальная гонка:
+`scripts/gmail_backfill.py` вставляет тем же способом и ходит параллельно
+поллеру, так что вместо безобидного дубля выходил `IntegrityError` и потеря
+всей пачки транзакции.
+
+### Таблица авторства (`ingest.authorship`)
+
+`resolve_author(source, metadata)` отвечает, чей это текст, и у ответа три
+состояния: алиас автора, `OWNER` (владелец), либо `None` — «источник знает про
+чужое авторство, но автора не достал», и тогда связь скипается.
+
+Раньше это была цепочка `if source == …` в `graph/rel_extract.py` с
+`return владелец` в конце: источник без ветки целиком приписывался Диме, тихо,
+без ошибки и без лога. Trello так и жил. **Новый источник обязан добавить строку
+в `AUTHOR_RESOLVERS`** — иначе весь его входящий поток повиснет на владельце.
+Источника нет в таблице = автор всегда владелец; так и должно быть для «своих»
+источников (`vera_chat`, `vera_memory`, `perplexity`, `voice`, `claude`).
 
 ## telegram
 
@@ -105,12 +143,98 @@ via `gateway /event/<source>` with `X-Internal-Secret`.
 | `client.py` | `TrelloClient` — только транспорт: ключи, пагинация, ретраи; `TrelloAuthError` на 401/403 (ретраить бессмысленно) |
 | `describe.py` | `describe()` — действие → человекочитаемая строка (и `None` для шума); `category()` — грубая категория события (card / comment / member / checklist) |
 | `mapper.py` | `action_to_event()` — упаковка в контракт `events` с авторством и хинтами; `parse_date()` — ISO Trello → наивный UTC |
-| `store.py` | Весь SQL источника: `upsert_boards()`, `save_cursor()`, `insert_events()` (дедуп до вставки), `sync_authors()` (участник → person-сущность) |
+| `store.py` | Весь SQL источника: `upsert_boards()`, `save_cursor()`, `save_events()` (событие + person-сущность автора через `vera_shared.ingest`) |
 | `digest.py` | `build_digest()` и `digest_event()` — текст и событие суточного дайджеста; `due_today()` / `mark_done()` — отметка «за сегодня собрано» в `app_control` |
 | `poller.py` | `fetch_new_actions()` — обход бэклога вглубь через `before`; `poll_board()` — прогон по одной доске и решение о курсоре; `run_digest()` — суточный дайджест; `main_loop()` — цикл опроса |
 
 Состояние обхода — `TrelloBoardRow` (`shared/vera_shared/db/models_sources.py`,
 таблица `trello_boards`, миграция 022).
+
+## slack
+
+- Container: `vera3-ingestor-slack`
+- Mechanism: опрос Web API (`slack.com/api`) раз в `SLACK_POLL_S` (300 с).
+  Токен **пользовательский** (`xoxp-`, `SLACK_USER_TOKEN` в `infra/.env`), не
+  бот: Вера должна видеть то, что видит Дима, включая личку и приватные
+  каналы, где бота нет. В БД секретов Slack нет.
+- **Лимиты — почему схема вообще жива.** С 29.05.2025 Slack срезал
+  `conversations.history` и `conversations.replies` до 1 запроса в минуту и
+  15 объектов за запрос — но только у приложений, распространяемых ВНЕ
+  Marketplace. Внутренние (custom) приложения своего же воркспейса под это не
+  попадают: им остаются 50+ req/min и `limit=1000`. Приложение внутреннее и
+  **не публикуется**; если это изменится, опросная схема станет негодной и
+  переходить придётся на экспорт.
+- Права user-токена: `channels:history`, `groups:history`, `im:history`,
+  `mpim:history`, `channels:read`, `groups:read`, `im:read`, `mpim:read`,
+  `users:read`, `users:read.email`, `reactions:read`, `files:read`.
+- Каналы: **все, где владелец состоит** (`users.conversations` —
+  public/private/im/mpim). Новый канал подхватывается сам, покинутый гаснет
+  `is_active=false`; строка с курсором остаётся, чтобы возвращение в канал не
+  начинало историю заново. У лички своего имени нет — берётся имя собеседника.
+- Курсор — `last_ts`, **`ts` последнего разобранного сообщения**: у Slack это
+  одновременно время и идентификатор сообщения в канале, поэтому хвост не
+  теряется при всплеске активности (та же грабля, что у gmail с date-granular
+  `after:`). Первый прогон берёт `SLACK_BOOTSTRAP_DAYS` (7) назад.
+- Бэклог глубже страницы разбирается пагинацией по `next_cursor` в том же
+  прогоне, до `SLACK_MAX_PAGES` (20). Не хватило — курсор **не двигается**,
+  прогон помечается неполным и добирается в следующий раз.
+
+### Треды — обязательная часть, а не тонкость
+
+`conversations.history` **не отдаёт ответы в тредах**: приходит только корневое
+сообщение с `reply_count` и `latest_reply`. Больше того — тред, чьё корневое
+сообщение старше курсора, в истории **не появится вовсе**, сколько бы новых
+ответов в нём ни было. Поллер, который читает только историю, не увидит ни
+одного обсуждения, а в Slack решения принимаются именно в тредах: в мозг попали
+бы заголовки без содержания.
+
+Поэтому корневые сообщения тредов берутся под наблюдение в `slack_threads`
+(миграция 024), и ветки опрашиваются отдельно через `conversations.replies` со
+своим курсором `last_reply_ts`. Два потолка, оба про расход вызовов, а не про
+полноту: `SLACK_THREADS_PER_RUN` (20 тредов на канал за прогон, первыми — те,
+что дольше всех не проверялись) и `SLACK_THREAD_WATCH_DAYS` (21 день с
+последней активности). Ответ в старом треде приходит с задержкой, а не теряется.
+
+### Что становится событием
+
+- `source_event_id` = `<channel_id>:<ts>` — глобально уникален, дедуп бесплатный.
+- Разметка Slack разворачивается в читаемый вид (`mapper.unwrap`): `<@U123>` →
+  `@Имя Фамилия`, `<#C1|general>` → `#general`, `<https://…|текст>` →
+  `текст (url)`. Без этого и выжимка, и поиск по мозгу работали бы по мусору.
+- Не событие: служебные записи канала (`channel_join`, `channel_topic`,
+  `pinned_item`, `huddle_thread` и прочие из `mapper.NOISE_SUBTYPES`) и всё, у
+  чего есть `bot_id` либо `subtype=bot_message`. Это тот же класс шума, что
+  `updateCard` с одной сменой `pos` у Trello.
+- Файлы попадают строкой `[файлы] имя, имя`; реакции — в `metadata.reactions`.
+- Авторство: `message.user == auth.test.user_id` → `author_role=self`, иначе
+  `counterparty` с `author_label` = `real_name` (кэш имён в поллере, иначе
+  `users.info` звался бы на каждое сообщение).
+- Identity: автор → person-сущность с alias `(slack, user:<U…>)`. `sender_id` в
+  метаданных — общая с telegram/instagram форма, на неё смотрит
+  `ingest.authorship`.
+- Денай-лист каналов: `ingest_policy.is_ignored_slack_channel()` — базовый
+  список служебных названий (`alerts`, `ci`, `deploys`, `sentry`, …) плюс
+  `SLACK_DENY_CHANNELS` под конкретный воркспейс. Личку денай-лист не касается.
+  Нужен с первого дня: Slack — самая ботовая среда из подключённых, и без
+  фильтра повторилась бы история с `@leomatchbot` (см. «Ingest denylist»),
+  только объёмом больше.
+- Хаддлы: аудио через API не отдаётся. Разговор в хаддле попадает в мозг
+  слушателем как голосовая сессия (`slack.exe` уже в `VERA_ALLOW_APPS`), то
+  есть текст Slack и голос Slack приходят двумя разными источниками и между
+  собой не связаны.
+
+### Модули ingestor-slack
+
+| Файл | Что делает |
+|---|---|
+| `client.py` | `SlackClient` — только транспорт: токен, ретраи, 429 по `Retry-After`, пагинация. `SlackAuthError` на `invalid_auth`/`token_revoked`/`missing_scope` (ретраить бессмысленно), `SlackApiError` на остальное. Slack отвечает 200 даже на ошибку, поэтому разбирается тело, а не статус |
+| `mapper.py` | `message_to_event()` — упаковка в контракт `events`; `unwrap()` — разметка Slack → текст; `is_noise()` — служебное и ботовое; `parse_ts()` — `ts` → наивный UTC |
+| `store.py` | Состояние обхода: `upsert_conversations()`, `save_cursor()`, `watch_thread()`, `due_threads()`, `save_thread_cursor()`, `save_events()`; `kind_of()` — тип канала |
+| `poller.py` | `poll_conversation()` — прогон по каналу и решение о курсоре; `poll_threads()` — догон ответов в наблюдаемых тредах; `Names` — кэш имён; `bootstrap_ts()`, `newest_ts()`; `main_loop()` |
+
+Состояние обхода — `SlackConversationRow` и `SlackThreadRow`
+(`shared/vera_shared/db/models_sources.py`, таблицы `slack_conversations` и
+`slack_threads`, миграция 024).
 
 ## voice (ноутбук)
 
@@ -119,10 +243,31 @@ via `gateway /event/<source>` with `X-Internal-Secret`.
   слушает микрофон и системный вывод
   (WASAPI loopback), распознаёт локально и шлёт одну сессию под
   `X-Internal-Secret`.
-- В `events` уходит **выжимка** (кто, через что, о чём, решения,
+- В `events` уходит **выжимка** (кто, через что, о чём, ход разговора, решения,
   договорённости, цифры, ключевые цитаты), а не дословная расшифровка.
-  Осмысление делается один раз на приёме (`chat:smart`, strict json_schema);
-  сырой текст на сервере не хранится и удаляется на ноутбуке после отправки.
+  Осмысление делается на приёме (`chat:smart`, strict json_schema); сырой текст
+  на сервере не хранится и удаляется на ноутбуке после отправки.
+- **Длинная расшифровка сворачивается, а не обрезается** (`gateway/voice_distill.py`).
+  До 2026-08-26 здесь стоял срез `[:60_000]` без лога и без отметки: по
+  арифметике ≈12.6 символа на секунду речи это ≈80 минут суммарной речи по обеим
+  дорожкам, тогда как предохранитель на ноутбуке отдаёт сессии до 120 минут.
+  Терялся ХВОСТ — та часть, где «значит, договорились так», сроки и суммы.
+  Теперь `windows()` режет расшифровку по границам реплик на окна по
+  `WINDOW_CHARS` (35 тыс.), `distill()` осмысляет каждое и вторым проходом
+  сливает частичные выжимки в одну. Не удалось слить моделью — склейка
+  механическая (`_stitch`), событие всё равно полное. Аварийный потолок
+  `MAX_WINDOWS` (12 окон ≈ 9 часов речи) ставит `truncated=true` в метаданные и
+  предупреждение в лог: молчаливой потери больше нет.
+- В метаданных видно работу осмысления: `transcript_chars`, `windows`,
+  `truncated`, `distilled`, `merged` (`llm` либо `mechanical`), `parts`.
+- Тело события собирает `voice.body_text()`: сводка, участники, темы, решения,
+  договорённости, числа, ход разговора (`outline`) и цитаты. Именно этот текст
+  и увидит поиск по мозгу.
+- **Части одной встречи связаны.** Предохранитель по длительности
+  (`VERA_MAX_SESSION_S`, 2 ч) режет трёхчасовую встречу, но следующая сессия
+  продолжает ту же встречу: `meeting_id` общий, `part` растёт. Разрез по тишине
+  или смене приложения — новая встреча. Без этого две половины лежали бы в
+  мозге как два независимых события.
 - Дедуп по `started_at+app+window_title`, поэтому повтор из офлайн-очереди
   не двоит событие.
 - `nature` для источника задан детерминированно — `conversation_with_me`
@@ -185,7 +330,7 @@ via `gateway /event/<source>` with `X-Internal-Secret`.
 `event_embeddings` уйдут по каскаду, `relationships.derived_from_event_id`
 обнулится.
 
-## Authorship contract (telegram / gmail / instagram / trello / voice)
+## Authorship contract (telegram / gmail / instagram / trello / slack / voice)
 
 Every event from a conversational source MUST encode author unambiguously:
 
@@ -204,9 +349,43 @@ Migration that backfills both fields + the content_text prefix:
 
 ## Adding a new source
 
-1. New service under `services/ingestor-<name>/`.
-2. Implement `vera_shared.sources.base.Source` ABC (poll + backfill).
-3. POST normalized events to `gateway /event/<name>` with internal secret.
-4. Write `author_role` + `author_label` into metadata and prepend `Author:` to content_text (see authorship contract above).
-5. Update [domain-model.md](./domain-model.md) if you add new metadata fields.
-6. Update this file with the source's quirks.
+Мера — последний добавленный источник: Trello (коммит `6a6bcf1e`) стоил 20
+файлов и 1098 строк, из них ~250 строк были копипастой. Ядро
+(`vera_shared.ingest`) эту часть забрало; ниже — то, что осталось.
+
+**Своё:**
+
+1. Новый сервис `services/ingestor-<name>/` по образцу `ingestor-trello` или
+   `ingestor-slack`: `client.py` (только транспорт: ключи, ретраи, пагинация,
+   свой `*AuthError` на отказ в доступе), `mapper.py` (чистая функция
+   «полезная нагрузка → спецификация события», без сети и БД), `store.py`
+   (только состояние обхода + тонкий `save_events()`), `poller.py` (курсор и
+   `poll_forever()`).
+2. Строка курсора в `shared/vera_shared/db/models_sources.py` + миграция.
+3. Тесты: маппер отдельно (чистая логика), обход — на `sqlite_db`.
+
+**Из ядра, не переписывать:** `insert_events()` вместо своего дедупа,
+`sync_author_entities()` вместо своего «автор → сущность», `poll_forever()`
+вместо своего `while True`.
+
+**Обязательные правки в общих файлах** (ничто о них не напомнит):
+
+4. `shared/vera_shared/ingest/authorship.py` — строка в `AUTHOR_RESOLVERS`.
+   **Пропустишь — весь входящий поток источника повиснет на владельце**, тихо.
+5. `infra/docker-compose.yml` — блок сервиса. Переменные объявлять со значением
+   по умолчанию (`${VAR:-}`), а не как обязательные: `${VAR:?}` уронил бы весь
+   `compose up`, то есть всю Веру, из-за одного отсутствующего ключа.
+6. `.github/workflows/deploy.yml` и `vera3-tests.yml` — `pip install -e` и
+   `PYTHONPATH`. Забудешь — тесты источника не запустятся, а гейт покрытия при
+   этом пройдёт.
+7. `docs/sources.md` (этот файл), `architecture.md`, `domain-model.md` —
+   иначе docs-гейт блокирует деплой.
+
+**Контракт события:** `author_role` + `author_label` в metadata и префикс
+`Author:` первой строкой `content_text` (см. «Authorship contract» выше);
+`source_event_id`, уникальный в пределах источника; `occurred_at` наивным UTC.
+
+**Известный пробел.** Страница `/sources` в дашборде набрана вручную, по блоку
+на источник, и новый источник виден там только строкой в общем списке «Все
+источники в БД». Trello и slack своих блоков не имеют. Перевод страницы на
+данные — отдельная задача, ревизия 2026-08-26 её зафиксировала.
