@@ -120,6 +120,16 @@ class TestPages:
         # Источник без записи в каталоге тоже виден.
         assert "health" in r.text
 
+    def test_action_label_follows_state(self):
+        """Одна статичная подпись врала бы: «Подключить» на подключённом
+        источнике или «Переподключить» на пустом."""
+        from dashboard.sources_routes import action_label
+        slack = source_registry.BY_KEY["slack"]
+        assert action_label(slack, 0) == "Подключить"
+        assert action_label(slack, 768) == "Переподключить"
+        internal = source_registry.BY_KEY["vera_memory"]
+        assert action_label(internal, 0) == ""
+
     def test_index_shows_totals_and_connect_action(self):
         with patch("dashboard.sources_routes.get_sources_overview",
                    AsyncMock(return_value=_OVERVIEW)):

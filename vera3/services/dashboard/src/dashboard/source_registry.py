@@ -29,7 +29,11 @@ class Source:
     live_min: int | None = None
     warn_min: int | None = None
     connect_url: str | None = None
+    #: подпись кнопки, когда событий ещё нет, и когда уже есть. Одна подпись на
+    #: оба состояния всегда врёт в одном из них: «Подключить» на подключённом
+    #: источнике или «Переподключить» на пустом.
     connect_label: str | None = None
+    reconnect_label: str = "Переподключить"
     detail: str | None = None      # ключ провайдера разбивок
     note: str = ""
 
@@ -39,14 +43,14 @@ CATALOG: tuple[Source, ...] = (
         key="telegram", title="Telegram", icon="✈️",
         how="userbot MTProto, поток в реальном времени",
         live_min=5, warn_min=60,
-        connect_url="/api/telegram/start", connect_label="Переподключить",
+        connect_url="/api/telegram/start", connect_label="Подключить",
         detail="telegram",
     ),
     Source(
         key="gmail", title="Gmail", icon="📧",
         how="OAuth + опрос API раз в 5 минут",
         live_min=15, warn_min=180,
-        connect_url="/api/gmail/start", connect_label="Переподключить",
+        connect_url="/api/gmail/start", connect_label="Подключить",
         detail="gmail",
     ),
     Source(

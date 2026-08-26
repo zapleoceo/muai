@@ -92,12 +92,18 @@ def _sources_in_order(overview: dict) -> list:
     return known + [resolve_source(key) for key in extra]
 
 
+def action_label(src, total: int) -> str:
+    """Подключён — «Переподключить», пуст — «Подключить». Статичная подпись
+    врала бы в одном из состояний."""
+    return src.reconnect_label if total else (src.connect_label or "")
+
+
 def _row(src, stat: dict, now: datetime) -> str:
     total = stat.get("total", 0)
     cls = "" if total else "idle"
     detail = f'<a href="/sources/{esc(src.key)}">{esc(src.title)}</a>' \
         if (src.detail or total) else esc(src.title)
-    action = (f'<a href="{esc(src.connect_url)}">{esc(src.connect_label)}</a>'
+    action = (f'<a href="{esc(src.connect_url)}">{esc(action_label(src, total))}</a>'
               if src.connect_url else "")
     return (
         f'<tr class="{cls}">'
@@ -186,7 +192,8 @@ async def source_page(key: str, request: Request):
 
     action = (f'<a href="{esc(src.connect_url)}" '
               f'style="padding:8px 16px;border:1px solid #4dabf7;border-radius:8px">'
-              f'{esc(src.connect_label)}</a>' if src.connect_url else "")
+              f'{esc(action_label(src, stat.get("total", 0)))}</a>'
+              if src.connect_url else "")
     note = f'<p class="note">{esc(src.note)}</p>' if src.note else ""
     body = "".join(_render_block(b) for b in blocks) or \
         '<div class="blk"><div class="mute">Разбивок для этого источника нет — ' \
