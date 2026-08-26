@@ -214,6 +214,60 @@ Windows хочет свой цикл сообщений в ГЛАВНОМ пот
 экземпляр продолжает жить. После изменения кода нужно
 `Stop-ScheduledTask -TaskName VeraListener`, а потом `Start-ScheduledTask`.
 
+## Как приложение, а не «просто питон в процессах»
+
+Задача планировщика запускает `venv\Scripts\VeraListener.exe` — копию
+`pythonw.exe` под другим именем. В Диспетчере задач процесс так и называется,
+`VeraListener`, и его видно среди десятка других питонов. Копию делает
+`install.ps1`; ровно так же venv кладёт свои `python.exe` в `Scripts`.
+
+Почему копия, а не собранный бинарник: **Smart App Control режет любой
+неподписанный exe**. На рабочем ноуте он включён в режиме принуждения
+(`HKLM\SYSTEM\CurrentControlSet\Control\CI\Policy`,
+`VerifiedAndReputablePolicyState = 1`), и свежесобранный `VeraListener.exe`
+получил «An Application Control policy has blocked this file» плюс запись
+Code Integrity 3077 в журнале. Отключить его нельзя без последствий: выключение
+необратимо, обратно включается только переустановкой Windows. А переименованная
+копия несёт внутри PE подпись Python Software Foundation — политика её пускает
+(`Get-AuthenticodeSignature` → `Valid`).
+
+Подпись живёт внутри файла и от переименования не портится, поэтому приём
+надёжен, а не хак «пока работает».
+
+### Сборка в самостоятельное приложение (машины без Smart App Control)
+
+`build.ps1` собирает `dist\VeraListener\VeraListener.exe` (PyInstaller,
+onedir, ~255 МБ) с иконкой и версией из `packaging/`. Иконку рисует
+`tray.write_ico` — тот же код, что и иконку в трее, чтобы они не разъезжались.
+
+    .uild.ps1 -Zip          # + dist\VeraListener.zip для переноса
+    .\install.ps1 -ExePath <путь>\VeraListener.exe
+
+Onedir, а не onefile, осознанно: onefile распаковывал бы ~400 МБ в temp при
+каждом старте и стабильно ловил бы антивирус. Python на целевой машине не
+нужен, модель распознавания (~500 МБ) докачается при первом разговоре.
+
+Если Smart App Control включён — этот путь не работает, ставь обычным
+`install.ps1` (он сам поставит Python 3.12 и venv через winget).
+
+### Переезд на другой ноутбук
+
+    git clone <репозиторий>; cd vera-listener
+    .\install.ps1
+    # затем впиши INTERNAL_SECRET в ~/.vera/listener.env и
+    # проверь захват: VeraListener.exe --probe 15 из своей сессии Windows
+
+## COM: два режима в одном потоке
+
+`pycaw` (кто сейчас звучит) при импорте инициализирует COM в том режиме, что
+прочитает из `sys.coinit_flags`, и падает, если поток уже в другом. Захват
+через `soundcard` → Media Foundation ставит потоку MTA раньше, поэтому
+`winctx.active_audio_app` просит тот же режим до импорта. В venv порядок
+импорта складывался удачно и это не всплывало; в собранном exe первый же
+`--probe` умирал с `Cannot change thread mode after it is set` — уже после
+того, как обе дорожки отработали десять секунд. Там же расширен `except`:
+ошибка импорта прилетала как `OSError`, а ловился только `ImportError`.
+
 ## Три грабли установки, все поймано вживую
 
 Установщик не запускался ни разу с момента появления, и слушатель поэтому не

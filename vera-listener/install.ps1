@@ -13,6 +13,10 @@ param(
     # Поймано вживую при первой установке — задача падала мгновенно.
     [string]$Root = "$env:USERPROFILE\.vera\listener",
     [string]$TaskName = "VeraListener",
+    # Путь к собранному VeraListener.exe. Указан — задача запускает обычное
+    # приложение (в Диспетчере задач так и называется), и venv на этой машине не
+    # нужен вовсе. Не указан — работаем через venv, как раньше.
+    [string]$ExePath = "",
     [switch]$Uninstall
 )
 
@@ -25,12 +29,22 @@ if ($Uninstall) {
     return
 }
 
+if ($ExePath) {
+    if (-not (Test-Path $ExePath)) { throw "Нет файла $ExePath" }
+    $ExePath = (Resolve-Path $ExePath).Path
+    Write-Host "Ставлю как приложение: $ExePath"
+    $runner = $ExePath
+    $runnerArgs = ""
+    $workdir = Split-Path -Parent $ExePath
+}
+
 $python = Get-ChildItem "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe" -ErrorAction SilentlyContinue
 if (-not $python) { $python = Get-Command python3.12 -ErrorAction SilentlyContinue }
-if (-not $python) {
+if (-not $python -and -not $ExePath) {
     throw "Нет Python 3.12. Поставь: winget install --id Python.Python.3.12 --scope user"
 }
 
+if (-not $ExePath) {
 $venv = Join-Path $Root "venv"
 if (-not (Test-Path $venv)) {
     Write-Host "Создаю venv в $venv"
@@ -45,10 +59,28 @@ Write-Host "Ставлю зависимости (это надолго: faster-w
 
 & $venvPy -m vera_listener --setup
 
+# В Диспетчере задач процесс должен называться VeraListener, а не pythonw.
+# Собранный PyInstaller-ом exe для этого не годится, если на машине включён
+# Smart App Control: он режет любой неподписанный бинарник (поймано вживую,
+# Code Integrity 3077). Переименованная копия pythonw сохраняет подпись Python
+# Software Foundation внутри самого PE-файла, поэтому проходит политику — и
+# ровно так же venv кладёт свои python.exe в Scripts.
+$launcher = Join-Path $venv "Scripts\VeraListener.exe"
+Copy-Item $venvPyw $launcher -Force
+
+$runner = $launcher
+$runnerArgs = "-m vera_listener"
+$workdir = $Root
+}
+
 # Одна задача с двумя триггерами: вход в систему поднимает слушателя, а
 # повтор раз в 15 минут работает вотчдогом — новый запуск игнорируется, пока
 # процесс жив, и подхватывает его, если тот умер.
-$action = New-ScheduledTaskAction -Execute $venvPyw -Argument "-m vera_listener" -WorkingDirectory $Root
+$action = if ($runnerArgs) {
+    New-ScheduledTaskAction -Execute $runner -Argument $runnerArgs -WorkingDirectory $workdir
+} else {
+    New-ScheduledTaskAction -Execute $runner -WorkingDirectory $workdir
+}
 $atLogon = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
 # RepetitionDuration: НЕ [TimeSpan]::MaxValue — планировщик отвергает такую
 # задачу целиком ("value which is incorrectly formatted or out of range",
@@ -80,5 +112,9 @@ Write-Host "Задача $TaskName зарегистрирована и запу�
 Write-Host "В трее должен появиться кружок: серый - тишина, зелёный - идёт разговор."
 Write-Host ""
 Write-Host "Готово. Дальше:"
-Write-Host "  проверь захват:  $venvPy -m vera_listener --probe 15"
+if ($ExePath) {
+    Write-Host "  проверь захват:  `"$ExePath`" --probe 15"
+} else {
+    Write-Host "  проверь захват:  $venvPy -m vera_listener --probe 15"
+}
 Write-Host "  логи: $Root\listener.log   очередь: $Root\queue"

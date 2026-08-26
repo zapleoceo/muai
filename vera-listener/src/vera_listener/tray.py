@@ -52,6 +52,16 @@ def _icon_image(state: str):
     return img
 
 
+def write_ico(path) -> None:
+    """Иконка приложения из того же кода, что рисует трей.
+
+    Один источник правды: иначе картинка в трее и картинка в Проводнике
+    разъезжаются при первой же правке. Серый вариант — «жив, тишина».
+    """
+    _icon_image(IDLE).save(str(path), format="ICO",
+                          sizes=[(16, 16), (32, 32), (48, 48), (64, 64), (256, 256)])
+
+
 def _human(seconds: float | None) -> str:
     if seconds is None:
         return "ещё ничего"
