@@ -144,6 +144,15 @@ def _collision_section(groups: list[dict], dossiers: dict[int, dict]) -> str:
         )
     return (
         '<div class="section" style="border-left:3px solid #2f9e44">'
+        '<h2>📧 Точные совпадения по рабочему email</h2>'
+        '<p class="mute">Рабочий адрес глобально уникален, поэтому две '
+        'person-сущности, претендующие на один email, — это один человек, '
+        'попавший в граф дважды (почта держит адрес алиасом, профиль Slack — '
+        'атрибутом). Однозначные пары сливаются кнопкой; группы из трёх и '
+        'более остаются на разбор глазами.</p>'
+        '<form method="post" action="/entities/merge-email-dupes" '
+        'style="margin-bottom:18px"><button style="background:#2f9e44">'
+        '📧 Объединить дубли по email</button></form>'
         '<h2>🎯 Точные совпадения по @username</h2>'
         '<p class="mute">Разные entity-строки с ОДНИМ @username — это один и '
         'тот же объект Telegram (username уникален). Однозначные пары '
@@ -235,6 +244,19 @@ async def entities_analyze(request: Request):
         t = asyncio.create_task(_run_analysis_bg())
         _bg_tasks.add(t)
         t.add_done_callback(_bg_tasks.discard)
+    return RedirectResponse("/entities/duplicates", status_code=303)
+
+
+@router.post("/entities/merge-email-dupes")
+async def entities_merge_email_dupes(request: Request):
+    """Слить дубли по рабочему email — он глобально уникален, поэтому две
+    person-сущности на один адрес это детерминированный дубль, а не догадка.
+    Группы из трёх и более не трогаются: там разбирать глазами."""
+    if (resp := owner_or_auth_error(request)) is not None:
+        return resp
+    from vera_shared.graph.collisions import merge_email_collision_pairs
+    done = await merge_email_collision_pairs()
+    log.info("email-collision bulk merge: %d pairs", len(done))
     return RedirectResponse("/entities/duplicates", status_code=303)
 
 

@@ -25,9 +25,10 @@ import json
 import re
 import unicodedata
 
-from sqlalchemy import bindparam, text
+from sqlalchemy import bindparam, text, update
 
 from vera_shared.db.engine import get_session
+from vera_shared.db.models_graph import EntityRow
 
 
 def _as_dict(attrs) -> dict:
@@ -302,6 +303,23 @@ async def merge_entities(keeper_id: int, merged_id: int) -> dict:
         return {"error": "keeper_id == merged_id, refusing"}
 
     async with get_session() as s:
+        # ATTRIBUTES: слить, а не потерять. Строка merged удаляется целиком, и
+        # до 2026-08-26 её attributes уходили вместе с ней — при слиянии
+        # Igor/Olga/Ruslan так пропали телефон и должность из профиля Slack
+        # (email выжил только потому, что его пишет ещё и почтовый ингестор).
+        # Значения keeper'а приоритетнее: он выбран как более полная сторона,
+        # а merged лишь дозаполняет пустые места.
+        keeper_attrs, merged_attrs = (await s.execute(text(
+            "SELECT (SELECT attributes FROM entities WHERE id = :keeper), "
+            "       (SELECT attributes FROM entities WHERE id = :merged)"
+        ), {"keeper": keeper_id, "merged": merged_id})).one()
+        combined = {**_as_dict(merged_attrs), **_as_dict(keeper_attrs)}
+        attrs_gained = len(combined) - len(_as_dict(keeper_attrs))
+        if attrs_gained:
+            await s.execute(
+                update(EntityRow).where(EntityRow.id == keeper_id)
+                .values(attributes=combined)
+            )
         # ALIASES: move what fits, drop conflicts (rowcount, не CTE —
         # data-modifying CTE не работает в SQLite, на которой идут тесты)
         aliases_moved = (await s.execute(text("""
@@ -389,4 +407,5 @@ async def merge_entities(keeper_id: int, merged_id: int) -> dict:
         "aliases_moved": aliases_moved,
         "aliases_dropped": aliases_dropped,
         "memberships_moved": mems_moved,
+        "attributes_gained": attrs_gained,
     }
