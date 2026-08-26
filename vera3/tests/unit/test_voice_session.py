@@ -169,9 +169,8 @@ class TestIngest:
         from vera_shared.llm.client import LLMCoolingDown
 
         with patch.object(fold_mod, "chat_async",
-                          AsyncMock(side_effect=LLMCoolingDown("chat:smart", remaining_s=60))),              patch("gateway.voice.get_session", lambda: _Sess()),              patch("gateway.voice.check_internal_secret", lambda s: None):
-            with pytest.raises(LLMCoolingDown):
-                await v.ingest_voice_session(_session(), x_internal_secret="ok")
+                          AsyncMock(side_effect=LLMCoolingDown("chat:smart", remaining_s=60))),              patch("gateway.voice.get_session", lambda: _Sess()),              patch("gateway.voice.check_internal_secret", lambda s: None),              pytest.raises(LLMCoolingDown):
+            await v.ingest_voice_session(_session(), x_internal_secret="ok")
 
     @pytest.mark.asyncio
     async def test_same_session_resent_is_deduped(self):

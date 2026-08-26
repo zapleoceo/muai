@@ -18,7 +18,6 @@ from datetime import datetime, timedelta, timezone
 from sqlalchemy import select, update
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import ClaudeSessionQueueRow
-
 from vera_shared.llm.client import LLMCoolingDown
 
 from gateway.claude_distill import distill
@@ -66,14 +65,13 @@ async def claim() -> ClaudeSessionQueueRow | None:
         )).scalar_one_or_none()
         if chosen is None:
             return None
-        row = (await s.execute(
+        return (await s.execute(
             update(ClaudeSessionQueueRow)
             .where(ClaudeSessionQueueRow.session_id == chosen)
             .values(status="processing", attempts=ClaudeSessionQueueRow.attempts + 1,
                     updated_at=_now())
             .returning(ClaudeSessionQueueRow)
         )).scalar_one_or_none()
-        return row
 
 
 async def finish(session_id: str, *, event_id: int | None, turns: int) -> None:

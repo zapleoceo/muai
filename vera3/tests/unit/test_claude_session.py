@@ -427,9 +427,8 @@ class TestQueueOnSqlite:
     async def test_open_circuit_does_not_burn_attempts(self):
         """Дневной бюджет брокера — виновата не сессия: попытки не считаем,
         цикл уходит в сон вместо мгновенных отказов по всей очереди."""
-        from vera_shared.llm.client import LLMCoolingDown
-
         import gateway.claude_session_worker as w
+        from vera_shared.llm.client import LLMCoolingDown
 
         fail = AsyncMock()
         with patch.object(w, "claim", AsyncMock(return_value=_Row(attempts=1))),              patch.object(w, "distill",
