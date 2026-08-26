@@ -12,6 +12,7 @@
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from sqlalchemy import select, text
@@ -27,6 +28,8 @@ from vera_shared.db.models_sources import (
 )
 
 from dashboard.render import local_dt
+
+log = logging.getLogger(__name__)
 
 Block = dict[str, Any]
 
@@ -273,5 +276,22 @@ PROVIDERS = {
 
 
 async def blocks_for(key: str) -> list[Block]:
+    """Разбивки одного источника. Сбой одного НЕ роняет страницу.
+
+    Тот же случай, что в `source_state`: `trello_boards` не была накатана на
+    прод, и обращение к ней уронило страницу пятисоткой. Ошибку показываем
+    текстом — она сама и есть полезная информация.
+    """
     provider = PROVIDERS.get(key)
-    return await provider() if provider else []
+    if provider is None:
+        return []
+    try:
+        return await provider()
+    except Exception as e:  # noqa: BLE001 — сломанный источник не роняет страницу
+        log.warning("разбивки источника %s не собрал: %s", key, e)
+        reason = ("таблица не создана — миграция не накатана"
+                  if "does not exist" in str(e) or "no such table" in str(e)
+                  else f"{type(e).__name__}: {str(e)[:200]}")
+        return [rows_block("Разбивки недоступны", [("Причина", reason)],
+                           "Состояние подключения и объём событий выше — они "
+                           "берутся отдельно и этой ошибкой не затронуты.")]

@@ -180,3 +180,60 @@ class TestStateReadsTheRealTable:
     @pytest.mark.asyncio
     async def test_internal_source_has_no_notion_of_connection(self):
         assert (await source_state.state_of("vera_memory")).connected is None
+
+
+class TestBrokenSourceDoesNotKillThePage:
+    """Поймано вживую: trello_boards не была накатана на прод, и запрос к ней
+    уронил всю страницу из четырнадцати источников пятисоткой. Страница обязана
+    переживать сломанный источник — иначе одна ненакатанная миграция прячет
+    состояние всех остальных."""
+
+    @pytest.mark.asyncio
+    async def test_missing_table_becomes_a_readable_state(self, monkeypatch):
+        async def boom():
+            raise RuntimeError('relation "trello_boards" does not exist')
+
+        monkeypatch.setitem(source_state.PROVIDERS, "trello", boom)
+        state = await source_state.state_of("trello")
+        assert state.connected is False
+        assert "миграция не накатана" in state.label
+
+    @pytest.mark.asyncio
+    async def test_any_other_failure_names_its_type(self, monkeypatch):
+        async def boom():
+            raise TimeoutError("db timeout")
+
+        monkeypatch.setitem(source_state.PROVIDERS, "slack", boom)
+        state = await source_state.state_of("slack")
+        assert state.connected is False
+        assert "TimeoutError" in state.label
+
+    @pytest.mark.asyncio
+    async def test_page_still_lists_everyone_when_one_source_is_broken(self):
+        from dashboard.source_registry import CATALOG
+
+        async def one_broken(key):
+            if key == "trello":
+                return source_state.State(False, "таблица не создана — миграция не накатана")
+            return source_state.State(True, "ок")
+
+        with patch("dashboard.sources_routes.get_sources_overview",
+                   AsyncMock(return_value={})), \
+             patch("dashboard.sources_routes.state_of", AsyncMock(side_effect=one_broken)):
+            r = client.get("/sources", cookies={COOKIE_NAME: _owner_cookie()})
+        assert r.status_code == 200
+        for s in CATALOG:
+            assert s.title in r.text
+        assert "миграция не накатана" in r.text
+
+    @pytest.mark.asyncio
+    async def test_detail_blocks_survive_a_missing_table(self, monkeypatch):
+        from dashboard import source_detail
+
+        async def boom():
+            raise RuntimeError('relation "trello_boards" does not exist')
+
+        monkeypatch.setitem(source_detail.PROVIDERS, "trello", boom)
+        blocks = await source_detail.blocks_for("trello")
+        assert len(blocks) == 1
+        assert "миграция не накатана" in str(blocks[0]["pairs"])

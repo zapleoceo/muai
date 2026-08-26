@@ -13,6 +13,7 @@
 """
 from __future__ import annotations
 
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 
@@ -24,6 +25,8 @@ from vera_shared.db.models_sources import (
     SlackAuthRow,
     TelegramSessionRow,
 )
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -118,8 +121,29 @@ PROVIDERS: dict[str, Callable[[], Awaitable[State]]] = {
 
 
 async def state_of(key: str) -> State:
+    """Состояние одного источника. Сбой одного НЕ роняет страницу.
+
+    Поймано вживую: `trello_boards` не была накатана на прод, и запрос к ней
+    уронил всю страницу из четырнадцати источников пятисоткой. Страница-список
+    обязана переживать сломанный источник — иначе один ненакатанный migration
+    прячет состояние всех остальных.
+    """
     provider = PROVIDERS.get(key)
-    return await provider() if provider else UNKNOWN
+    if provider is None:
+        return UNKNOWN
+    try:
+        return await provider()
+    except Exception as e:  # noqa: BLE001 — один источник не роняет список
+        log.warning("состояние источника %s не прочитал: %s", key, e)
+        return State(False, _why(e))
+
+
+def _why(error: Exception) -> str:
+    """Причина коротко и по делу, а не «внутренняя ошибка»."""
+    text = str(error)
+    if "does not exist" in text or "no such table" in text:
+        return "таблица не создана — миграция не накатана"
+    return f"состояние не прочитано: {type(error).__name__}"
 
 
 # ─── отключение ─────────────────────────────────────────────────────────────
