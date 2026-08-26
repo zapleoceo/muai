@@ -90,8 +90,14 @@ CATALOG: tuple[Source, ...] = (
         how="агент сохраняет выведенные факты сам",
     ),
     Source(
-        key="claude", title="Claude", icon="🤖",
-        how="факты из разговоров с Claude через MCP",
+        key="claude", title="Claude — факты", icon="🤖",
+        how="агент сохраняет выведенные факты через MCP",
+    ),
+    Source(
+        key="claude_chat", title="Claude — переписка", icon="💻",
+        how="scripts/claude_chat_sync.py на ноутбуке, транскрипты сессий",
+        live_min=90, warn_min=1440,
+        note="Шлёт по событию на сообщение. Саммари по сессии — отдельная задача.",
     ),
     Source(
         key="perplexity", title="Perplexity", icon="🔎",

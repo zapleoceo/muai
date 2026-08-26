@@ -18,6 +18,14 @@ log = logging.getLogger("listener.sender")
 
 TIMEOUT_S = 60
 
+#: Cloudflare перед шлюзом режет запросы по подписи клиента: с
+#: User-Agent «Python-urllib/3.12» он отдаёт 403 error code 1010 («banned
+#: based on your browser signature»). Поймано вживую — синк claude не работал с
+#: самого начала именно из-за этого, а curl проходил, потому что у него
+#: другой UA. Своё имя честнее подделки под браузер и проходит.
+USER_AGENT = "vera-listener/1.0 (+https://dima.veranda.my)"
+
+
 
 class Sender:
     def __init__(self, config: Config, outbox: Outbox):
@@ -35,7 +43,8 @@ class Sender:
         request = urllib.request.Request(
             self.endpoint, data=data, method="POST",
             headers={"Content-Type": "application/json",
-                     "X-Internal-Secret": self.config.internal_secret},
+                     "X-Internal-Secret": self.config.internal_secret,
+                     "User-Agent": USER_AGENT},
         )
         try:
             with urllib.request.urlopen(request, timeout=TIMEOUT_S) as response:

@@ -5,7 +5,6 @@ from datetime import datetime
 
 import pytest
 from pydantic import ValidationError
-
 from vera_shared.events.schema import (
     EntityHint,
     RawEvent,
@@ -167,3 +166,33 @@ class TestTriageMetadata:
         )
         assert len(m.signals) == 1
         assert m.needs_action is True
+
+
+class TestNaiveUtcOccurredAt:
+    """`events.occurred_at` — timestamp WITHOUT time zone, и на tz-aware
+    значении asyncpg падает DataError, а FastAPI отдаёт 500 на КЛИЕНТСКИХ
+    данных. Поймано вживую: claude_chat_sync прислал «…Z» из транскриптов
+    Claude — 66 файлов, 0 отправлено, в логе только «HTTP 500».
+    """
+
+    def test_utc_suffix_is_accepted_and_stripped(self):
+        e = RawEvent(source="claude_chat", source_event_id="x",
+                     occurred_at="2026-08-20T10:19:04Z")
+        assert e.occurred_at.tzinfo is None
+        assert e.occurred_at == datetime(2026, 8, 20, 10, 19, 4)
+
+    def test_offset_is_converted_to_utc_not_just_dropped(self):
+        """Отбросить зону мало: +07:00 без пересчёта сдвинул бы время на 7 часов."""
+        e = RawEvent(source="claude_chat", source_event_id="x",
+                     occurred_at="2026-08-20T17:19:04+07:00")
+        assert e.occurred_at == datetime(2026, 8, 20, 10, 19, 4)
+
+    def test_negative_offset(self):
+        e = RawEvent(source="claude_chat", source_event_id="x",
+                     occurred_at="2026-08-20T05:19:04-05:00")
+        assert e.occurred_at == datetime(2026, 8, 20, 10, 19, 4)
+
+    def test_already_naive_is_left_alone(self):
+        e = RawEvent(source="gmail", source_event_id="x",
+                     occurred_at="2026-08-20T10:19:04")
+        assert e.occurred_at == datetime(2026, 8, 20, 10, 19, 4)

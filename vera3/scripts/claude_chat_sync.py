@@ -32,6 +32,7 @@ import sys
 import time
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 
 # ─── Config ──────────────────────────────────────────────────────────────
@@ -41,8 +42,28 @@ CLAUDE_ROOT = HOME / ".claude" / "projects"
 STATE_FILE = HOME / ".claude" / "vera_sync_state.json"
 ENV_FILE = HOME / ".claude" / "vera_sync.env"
 
-VERA_GATEWAY_URL = os.environ.get("VERA_GATEWAY_URL", "https://dima.veranda.my")
-INTERNAL_SECRET = os.environ.get("INTERNAL_SECRET", "")
+
+
+def _read_env_file(path: Path) -> dict[str, str]:
+    """Прочитать KEY=VALUE. Скрипт САМ создаёт этот файл в --setup и до
+    2026-08-26 никогда его не читал: секрет брался только из окружения,
+    поэтому каждый запуск давал HTTP 401 и «85 errors, 0 posted». Порядок как
+    у слушателя: окружение важнее файла."""
+    if not path.exists():
+        return {}
+    out: dict[str, str] = {}
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        out[key.strip()] = value.strip()
+    return out
+
+
+_ENV = {**_read_env_file(ENV_FILE), **os.environ}
+VERA_GATEWAY_URL = _ENV.get("VERA_GATEWAY_URL", "https://dima.veranda.my").rstrip("/")
+INTERNAL_SECRET = _ENV.get("INTERNAL_SECRET", "")
 
 # Records to skip entirely (UI / control plane, no semantic value)
 SKIP_TYPES = {
@@ -52,6 +73,33 @@ SKIP_TYPES = {
 
 # Hard cap per content text — keep events small
 MAX_CONTENT_LEN = 16000
+
+#: Cloudflare перед шлюзом режет запросы по подписи клиента: с
+#: User-Agent «Python-urllib/3.12» он отдаёт 403 error code 1010 («banned
+#: based on your browser signature»). Поймано вживую — синк не работал с
+#: самого начала именно из-за этого, а curl проходил, потому что у него
+#: другой UA. Своё имя честнее подделки под браузер и проходит.
+USER_AGENT = "vera-claude-sync/1.0 (+https://dima.veranda.my)"
+
+
+def _naive_utc(value: str | None) -> str | None:
+    """Метка Claude («…Z», со смещением) → наивный UTC.
+
+    Соглашение всего проекта — наивный UTC: `events.occurred_at` это
+    `timestamp WITHOUT time zone`. Со зоной asyncpg падал DataError, а шлюз
+    отдавал 500 (шлюз это теперь и сам нормализует, но врать ему незачем).
+    """
+    if not value:
+        return value
+    text = str(value).replace("Z", "+00:00")
+    try:
+        moment = datetime.fromisoformat(text)
+    except ValueError:
+        return value
+    if moment.tzinfo is not None:
+        moment = moment.astimezone(timezone.utc).replace(tzinfo=None)
+    return moment.isoformat()
+
 
 
 # ─── State (per-file byte offset) ────────────────────────────────────────
@@ -121,7 +169,7 @@ def parse_record(rec: dict, project_dir: str, session_id: str) -> dict | None:
     uuid = rec.get("uuid") or rec.get("id")
     if not uuid:
         return None
-    timestamp = rec.get("timestamp") or msg.get("timestamp")
+    timestamp = _naive_utc(rec.get("timestamp") or msg.get("timestamp"))
     cwd = rec.get("cwd", "")
     git_branch = rec.get("gitBranch", "")
     is_compact_summary = bool(rec.get("isCompactSummary"))
@@ -174,6 +222,7 @@ def post_event(payload: dict) -> tuple[bool, str]:
         headers={
             "Content-Type": "application/json",
             "X-Internal-Secret": INTERNAL_SECRET,
+            "User-Agent": USER_AGENT,
         },
     )
     try:
@@ -205,31 +254,48 @@ def scan_project(project_dir: Path, state: dict[str, int],
 
         session_id = jsonl.stem
         try:
-            with jsonl.open("r", encoding="utf-8", errors="replace") as f:
+            # Бинарно, а не текстом: у текстового файла f.tell() при итерации
+            # запрещён («telling position disabled by next() call»), а смещение
+            # нам нужно в БАЙТАХ — в тексте len(строки) считает символы, и на
+            # кириллице курсор уехал бы вдвое. Считаем сами, tell не нужен.
+            with jsonl.open("rb") as f:
                 f.seek(offset)
-                for raw_line in f:
+                # Курсор двигается ТОЛЬКО за успешно отправленным. До 2026-08-26
+                # он прыгал на размер файла «даже если отдельные события
+                # упали» — и один 401 или обрыв сети молча съедал весь хвост
+                # навсегда. Та же грабля, что чинили у gmail с date-granular
+                # after: и у Trello: молча пропустить середину нельзя.
+                good = position = offset
+                for raw_bytes in f:
                     seen += 1
-                    line = raw_line.strip()
+                    position += len(raw_bytes)
+                    line = raw_bytes.decode("utf-8", errors="replace").strip()
                     if not line:
+                        good = position
                         continue
                     try:
                         rec = json.loads(line)
                     except json.JSONDecodeError:
+                        # Битая строка — это ядовитое сообщение, а не сбой
+                        # транспорта: её пропускаем и идём дальше, иначе
+                        # застрянем на ней навсегда.
+                        good = position
                         continue
                     payload = parse_record(rec, project_dir.name, session_id)
                     if not payload:
+                        good = position
                         continue
                     ok, info = post_event(payload)
                     if ok:
                         posted += 1
-                    else:
-                        errors += 1
-                        if verbose:
-                            logging.warning("POST fail %s: %s",
-                                            payload["source_event_id"], info)
-                # Update offset to current file size — even if individual events
-                # failed, we don't loop forever on bad lines.
-                state[rel] = f.tell()
+                        good = position
+                        continue
+                    errors += 1
+                    logging.warning("отправка %s не прошла (%s) — курсор "
+                                    "оставляю, хвост доберём в следующий раз",
+                                    payload["source_event_id"], info)
+                    break
+                state[rel] = good
         except Exception as e:
             logging.exception("scan %s failed: %s", rel, e)
             errors += 1
@@ -303,7 +369,14 @@ def main():
         total_posted += posted
         total_errors += errors
 
-    save_state(state)
+    # Сухой прогон НЕ трогает курсор. До 2026-08-26 он подменял отправку на
+    # успех и сохранял состояние — то есть «посмотреть, что будет» молча
+    # съедало весь бэклог: следующий настоящий прогон видел 216 строк вместо
+    # 25 069, а 11 627 событий были помечены отправленными, ни разу не уйдя.
+    if not args.dry_run:
+        save_state(state)
+    else:
+        logging.info("dry-run: курсор не сдвинут")
     logging.info(
         "claude-sync done: %d files scanned, %d events seen, %d posted, %d errors, %.1fs",
         len(state), total_seen, total_posted, total_errors,

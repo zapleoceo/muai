@@ -5,7 +5,7 @@ shape с которым работают brain workers и storage.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -78,6 +78,26 @@ class RawEvent(BaseModel):
     @classmethod
     def source_lowercase(cls, v: str) -> str:
         return v.lower().strip()
+
+    @field_validator("occurred_at")
+    @classmethod
+    def naive_utc(cls, v: datetime) -> datetime:
+        """Время со зоной → наивный UTC.
+
+        `events.occurred_at` — `timestamp WITHOUT time zone`, и asyncpg на
+        tz-aware значении не приводит его, а падает с DataError. Через
+        обработчик FastAPI это выходило пятисоткой на КЛИЕНТСКИЕ данные:
+        поймано вживую, когда claude_chat_sync прислал `…Z` из транскриптов
+        Claude — 66 файлов, 0 отправлено, и в логе только «HTTP 500».
+
+        Наивный UTC — соглашение всего проекта (см. `parse_date` у trello,
+        `parse_ts` у slack), поэтому приводим на приёме: любой будущий клиент
+        и вебхук получают его бесплатно, а 500 на входных данных — это баг
+        сервера, а не клиента.
+        """
+        if v.tzinfo is None:
+            return v
+        return v.astimezone(UTC).replace(tzinfo=None)
 
     @field_validator("content_text")
     @classmethod
