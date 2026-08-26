@@ -45,7 +45,9 @@ class SlackClient:
     def __init__(self, token: str | None = None):
         self.token = token if token is not None else os.environ.get("SLACK_USER_TOKEN", "")
         if not self.token:
-            raise SlackAuthError("SLACK_USER_TOKEN не задан")
+            raise SlackAuthError(
+                "токен не задан — подключи Slack в дашборде (/sources/slack) "
+                "либо задай SLACK_USER_TOKEN")
 
     async def _call(self, method: str, **params: Any) -> dict[str, Any]:
         payload = {k: v for k, v in params.items() if v is not None}

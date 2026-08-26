@@ -80,7 +80,10 @@ Returns `AnswerResponse` with `answer`, `results`, `provider`, `cost_usd`,
 | `/logout` | GET | none | Clear cookie |
 | `/` | GET | owner cookie | Home — cards, live progress |
 | `/events` | GET | owner cookie | Event browser with filters. Nav label is "log" — per-event columns show the broker call that triaged it (`request_id`/model/tokens/cost, via `usage_log`); batch-triaged events show "в пачке ✓" instead of a blank (see `domain-model.md`) |
-| `/sources` | GET | owner cookie | Per-source health (telegram/gmail/instagram) |
+| `/sources` | GET | owner cookie | Список источников — состояние потока, объём, действие. Строится из `source_registry`, не из ручной разметки |
+| `/sources/{key}` | GET | owner cookie | Подробности источника: подключение, разбивки от провайдера `source_detail`. Источник без провайдера так и говорит |
+| `/api/slack/start` | GET | owner cookie | Форма ввода user-токена Slack (`slack_start_form`) — со списком нужных прав |
+| `/api/slack/start` | POST | owner cookie | Проверка токена через `auth.test` и сохранение в `slack_auth` под шифрованием (`slack_start`). Токен не логируется и в ответ не возвращается |
 | `/graph` | GET | owner cookie | Knowledge-graph visualizer page (`graph_page`) — Cytoscape.js force layout of entities+relationships. See "Graph visualizer" below. |
 | `/api/graph` | GET | owner cookie | Node/edge JSON for the visualizer (`graph_data`). Params: `min_degree`, `limit` (≤800), `predicate`, `focus` (entity id), `q` (name→focus). |
 | `/api/instagram/start` | GET | owner cookie | Instagram login form (`instagram_start_form`) |
@@ -115,12 +118,20 @@ so the queries run on both Postgres (prod) and SQLite (tests).
 
 `/` and `/sources` used to run ~15-17 heavy `COUNT`/`GROUP BY` scans per
 page load (and again every `/_progress` poll) — the main cause of slow
-page loads before this. `get_stats()` / `get_sources_stats()` collapse
+page loads before this. `get_stats()` collapses
 those into ~2 scans total via `FILTER` aggregates, cached for
 `TTL_S=60` with stale-while-revalidate (`_serve_cached`): a stale value
 is returned instantly while a background refresh (`_bg_refresh`) runs, so
 the heavy scan almost never blocks a request. `cache_age_s()` reports how
 old the cached value is, for the "updated N sec ago" note in the UI.
+
+Страница источников разделена на два уровня, и ни один не знает имён
+источников: `get_sources_overview()` — один `GROUP BY source` на весь список,
+`get_source_detail(key)` — разбивки одного источника, по требованию и с
+отдельным кэшем на каждый (скан по 400 тыс. строк telegram незачем повторять
+на каждый показ). `drop_detail_cache(key)` сбрасывает кэш после
+переподключения, иначе страница ещё минуту показывала бы «не подключено».
+Сами разбивки собирает `blocks_for()` из `source_detail`.
 
 ## Ingestor-telegram tools (`vera3-ingestor-telegram`, port 8000)
 

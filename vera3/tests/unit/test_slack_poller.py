@@ -273,13 +273,18 @@ class TestAuthResilience:
 
     @pytest.mark.asyncio
     async def test_auth_error_resets_the_session_and_propagates(self, monkeypatch):
+        from ingestor_slack import auth as auth_mod
         from ingestor_slack.client import SlackAuthError
 
         session = poller._Session()
 
-        def boom():
+        async def token():
+            return "xoxp-live", None
+
+        def boom(_token):
             raise SlackAuthError("token_revoked")
 
+        monkeypatch.setattr(auth_mod, "load_token", token)
         monkeypatch.setattr(poller, "SlackClient", boom)
         with pytest.raises(SlackAuthError):
             await session.connect()
@@ -288,19 +293,61 @@ class TestAuthResilience:
 
     @pytest.mark.asyncio
     async def test_connect_is_cached_between_runs(self, monkeypatch):
+        from ingestor_slack import auth as auth_mod
+
         session = poller._Session()
+        marked: list[int | None] = []
+
+        async def token():
+            return "xoxp-live", 7
+
+        async def mark_ok(row_id):
+            marked.append(row_id)
 
         class _C:
             calls = 0
 
-            def __init__(self):
+            def __init__(self, _token):
                 type(self).calls += 1
 
             async def whoami(self):
                 return {"user_id": ME, "team": "acme", "user": "dima"}
 
+        monkeypatch.setattr(auth_mod, "load_token", token)
+        monkeypatch.setattr(auth_mod, "mark_ok", mark_ok)
         monkeypatch.setattr(poller, "SlackClient", _C)
         first, _ = await session.connect()
         second, _ = await session.connect()
         assert first is second and _C.calls == 1
         assert session.account == "acme/dima"
+        # Успех записывается один раз, а не на каждый прогон.
+        assert marked == [7]
+
+    @pytest.mark.asyncio
+    async def test_token_from_dashboard_is_used_over_environment(self, monkeypatch):
+        """Подключил через UI — обход обязан пойти новым токеном, а не старым
+        из .env, иначе подключение выглядит сделанным и не работает."""
+        from ingestor_slack import auth as auth_mod
+
+        monkeypatch.setenv("SLACK_USER_TOKEN", "xoxp-from-env")
+        session = poller._Session()
+        seen: list[str] = []
+
+        async def token():
+            return "xoxp-from-dashboard", 3
+
+        async def mark_ok(_row):
+            return None
+
+        class _C:
+            def __init__(self, token):
+                seen.append(token)
+
+            async def whoami(self):
+                return {"user_id": ME, "team": "acme", "user": "dima"}
+
+        monkeypatch.setattr(auth_mod, "load_token", token)
+        monkeypatch.setattr(auth_mod, "mark_ok", mark_ok)
+        monkeypatch.setattr(poller, "SlackClient", _C)
+        await session.connect()
+        assert seen == ["xoxp-from-dashboard"]

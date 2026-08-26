@@ -85,6 +85,7 @@ just not with its own billed row.
 | `telegram_sessions` | Telethon MTProto session (StringSession), encrypted. |
 | `instagram_sessions` | instagrapi sessionid + device fingerprint, encrypted. |
 | `trello_boards` (migration 022) | Курсор обхода на доску: `last_action_id` (id действия, не дата), `is_active`, `last_error`. Ключ и токен Trello — в `infra/.env`, в БД их нет. |
+| `slack_auth` / `SlackAuthRow` (migration 025) | Пользовательский токен Slack (`xoxp-`) под `crypto`: `team_id` (уникален), `team_name`, `user_id`, `username`, `token_enc`, `is_active`, `last_ok_at`, `last_error`. Заполняется из дашборда (`/api/slack/start`). `SLACK_USER_TOKEN` в env остаётся запасным путём. |
 | `slack_conversations` (migration 024) | Курсор обхода на канал/личку/группу: `last_ts` (`ts` сообщения — он же и время, и идентификатор), `kind`, `is_private`, `is_active`, `last_error`. Токен Slack — в `infra/.env`, в БД его нет. |
 | `slack_threads` (migration 024) | Треды под наблюдением: `thread_ts`, `last_reply_ts`, `last_activity_at`, `last_polled_at`. Нужна потому, что `conversations.history` не отдаёт ответы в тредах, а тред со старым корневым сообщением в истории не появляется вовсе. |
 

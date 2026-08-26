@@ -116,8 +116,7 @@ async def _compute_stats() -> dict[str, Any]:
         """), {"today": today, "month": month_ago, "h1": h1, "h24": h24})).mappings().one()
 
     # Свод по всем источникам (суммируем группы — без ещё одного скана)
-    agg = {k: 0 for k in ("total", "done", "pending", "media_pending", "error",
-                          "dead", "ingest_1h", "ingest_24h")}
+    agg = dict.fromkeys(("total", "done", "pending", "media_pending", "error", "dead", "ingest_1h", "ingest_24h"), 0)
     per_source_total: list[tuple[str, int]] = []
     per_source_1h: list[tuple[str, int]] = []
     earliest: datetime | None = None
@@ -156,79 +155,54 @@ def cache_age_s() -> int:
     return int(time.monotonic() - _cache["mono"])
 
 
-# ─── Кэш страницы /sources (тоже ~15 тяжёлых сканов) ─────────────────────────
-_src_cache: dict[str, Any] = {"value": None, "mono": 0.0}
-_src_lock = asyncio.Lock()
+# ─── Страница источников ─────────────────────────────────────────────────────
+# Раньше здесь считался один блоб на всю страницу с зашитыми ключами под
+# telegram/instagram/gmail (tg_total, ig_1h, gmail_counts…): новый источник
+# требовал правки и тут. Теперь два уровня, и оба не знают имён источников:
+# обзор — один GROUP BY по всем сразу, подробности — по запросу, на источник.
+
+_overview_cache: dict[str, Any] = {"value": None, "mono": 0.0}
+_overview_lock = asyncio.Lock()
+
+_detail_caches: dict[str, dict[str, Any]] = {}
+_detail_locks: dict[str, asyncio.Lock] = {}
 
 
-async def get_sources_stats(force: bool = False) -> dict[str, Any]:
-    """Разбивки по telegram/instagram/gmail для /sources. stale-while-revalidate.
-
-    Убран N+1 по gmail-аккаунтам (был COUNT в цикле по каждому ящику) — теперь
-    один GROUP BY account. Остальные агрегаты сгруппированы по source за проход.
-    """
-    return await _serve_cached(_src_cache, _src_lock, _compute_sources_stats, force)
+async def get_sources_overview(force: bool = False) -> dict[str, dict[str, Any]]:
+    """`{source: {total, c1h, c24h, last}}` для списка источников. Один скан."""
+    return await _serve_cached(_overview_cache, _overview_lock,
+                               _compute_overview, force)
 
 
-async def _compute_sources_stats() -> dict[str, Any]:
+async def _compute_overview() -> dict[str, dict[str, Any]]:
     now = datetime.utcnow()
-    h1 = now - timedelta(hours=1)
-    h24 = now - timedelta(hours=24)
-
     async with get_session() as s:
-        # Один проход: total/1h/24h/last по каждому source (tg+ig и любые прочие)
-        by_src = {r["source"]: r for r in (await s.execute(text("""
+        rows = (await s.execute(text("""
             SELECT source, COUNT(*) AS total,
               COUNT(*) FILTER (WHERE received_at >= :h1)  AS c1h,
               COUNT(*) FILTER (WHERE received_at >= :h24) AS c24h,
               MAX(received_at) AS last
             FROM events GROUP BY source
-        """), {"h1": h1, "h24": h24})).mappings().all()}
+        """), {"h1": now - timedelta(hours=1),
+               "h24": now - timedelta(hours=24)})).mappings().all()
+    return {r["source"]: dict(r) for r in rows}
 
-        # Gmail per-account — ОДИН GROUP BY вместо цикла (был N+1)
-        gmail_counts = dict((await s.execute(text(
-            "SELECT account, COUNT(*) FROM events WHERE source='gmail' GROUP BY account"
-        ))).all())
 
-        tg_by_type = (await s.execute(text(
-            "SELECT COALESCE(metadata->>'chat_type', category) AS t, COUNT(*) "
-            "FROM events WHERE source='telegram' GROUP BY 1 ORDER BY 2 DESC"
-        ))).all()
-        tg_by_direction = (await s.execute(text(
-            "SELECT COALESCE(metadata->>'direction','?'), COUNT(*) "
-            "FROM events WHERE source='telegram' GROUP BY 1 ORDER BY 2 DESC"
-        ))).all()
-        tg_top_chats = (await s.execute(text(
-            "SELECT COALESCE(metadata->>'chat_title','(unknown)'), "
-            "COALESCE(metadata->>'chat_type','?'), COUNT(*) "
-            "FROM events WHERE source='telegram' GROUP BY 1,2 ORDER BY 3 DESC LIMIT 20"
-        ))).all()
-        ig_by_direction = (await s.execute(text(
-            "SELECT COALESCE(metadata->>'direction','?'), COUNT(*) "
-            "FROM events WHERE source='instagram' GROUP BY 1 ORDER BY 2 DESC"
-        ))).all()
-        ig_top_threads = (await s.execute(text(
-            "SELECT COALESCE(metadata->>'thread_title','(unknown)'), "
-            "COALESCE((metadata->>'is_group')::text,'false'), COUNT(*) "
-            "FROM events WHERE source='instagram' GROUP BY 1,2 ORDER BY 3 DESC LIMIT 20"
-        ))).all()
-        events_by_src = [(k, v["total"]) for k, v in
-                         sorted(by_src.items(), key=lambda x: x[1]["total"], reverse=True)]
+async def get_source_detail(key: str, force: bool = False) -> list[dict[str, Any]]:
+    """Разбивки одного источника. Кэш свой на каждый источник: страница
+    подробностей открывается по требованию, а скан по 400 тыс. строк telegram
+    незачем повторять на каждый показ."""
+    cache = _detail_caches.setdefault(key, {"value": None, "mono": 0.0})
+    lock = _detail_locks.setdefault(key, asyncio.Lock())
 
-    def _src(name: str, field: str, default=0):
-        r = by_src.get(name)
-        return r[field] if r else default
+    async def compute():
+        from dashboard.source_detail import blocks_for
+        return await blocks_for(key)
 
-    return {
-        "gmail_counts": gmail_counts,
-        "events_by_src": events_by_src,
-        "tg_total": _src("telegram", "total"), "tg_1h": _src("telegram", "c1h"),
-        "tg_24h": _src("telegram", "c24h"), "tg_last": _src("telegram", "last", None),
-        "tg_by_type": list(tg_by_type),
-        "tg_by_direction": list(tg_by_direction),
-        "tg_top_chats": list(tg_top_chats),
-        "ig_total": _src("instagram", "total"), "ig_1h": _src("instagram", "c1h"),
-        "ig_24h": _src("instagram", "c24h"), "ig_last": _src("instagram", "last", None),
-        "ig_by_direction": list(ig_by_direction),
-        "ig_top_threads": list(ig_top_threads),
-    }
+    return await _serve_cached(cache, lock, compute, force)
+
+
+def drop_detail_cache(key: str) -> None:
+    """Сбросить кэш подробностей — после переподключения источника, чтобы
+    страница не показывала «не подключено» ещё минуту."""
+    _detail_caches.pop(key, None)

@@ -1,94 +1,105 @@
-"""Sources page (`/sources`) — Gmail/Telegram/Instagram ingest health,
-per-source event counts, top chats/threads."""
+"""Источники: `/sources` — один список, `/sources/{key}` — подробности.
+
+Ни одного имени источника в этом файле. Список строится из каталога
+(`source_registry`) в объединении с тем, что реально лежит в `events`; блоки на
+странице источника рисуются из данных, которые вернул провайдер
+(`source_detail`). Новый источник добавляет запись в каталог — и появляется
+здесь сам.
+
+Так было не всегда: до 2026-08-26 страница набиралась вручную, по блоку HTML на
+источник, и Trello, добавленный днём раньше, своего блока так и не получил.
+"""
 from __future__ import annotations
 
 from datetime import datetime
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
-from sqlalchemy import select
-from vera_shared.db.engine import get_session
-from vera_shared.db.models_sources import (
-    GmailAccountRow,
-    InstagramSessionRow,
-    TelegramSessionRow,
-)
 
-from dashboard.render import (
-    _render,
-    data_table,
-    esc,
-    freshness_pill,
-    local_dt,
-    owner_or_redirect,
-    row_list,
-)
-from dashboard.stats import get_sources_stats
+from dashboard.render import _render, data_table, esc, local_dt, owner_or_redirect
+from dashboard.source_detail import Block, Html
+from dashboard.source_registry import CATALOG, resolve_source
+from dashboard.stats import get_source_detail, get_sources_overview
 
 router = APIRouter()
 
+_STYLE = """<style>
+.src-list { width:100%; border-collapse:collapse; font-size:14px; }
+.src-list th { font-size:11px; text-transform:uppercase; color:#888; font-weight:500;
+               text-align:left; padding:0 12px 8px 0; white-space:nowrap; }
+.src-list td { padding:12px 12px 12px 0; border-top:1px solid #2a2d34;
+               vertical-align:middle; }
+.src-list tr:hover td { background:#171a20; }
+.src-name { display:flex; align-items:center; gap:10px; }
+.src-name .ico { font-size:17px; width:22px; text-align:center; }
+.src-name a { font-weight:600; }
+.src-how { color:#6b7280; font-size:12px; margin-top:2px; }
+.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+.act { text-align:right; white-space:nowrap; }
+.act a { font-size:12px; padding:5px 11px; border:1px solid #2a2d34; border-radius:7px;
+         color:#9aa4b2; }
+.act a:hover { border-color:#4dabf7; color:#4dabf7; }
+.idle td { opacity:.55; }
+.crumb { font-size:13px; color:#6b7280; margin:0 0 10px; }
+.head { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin:0 0 4px; }
+.head h1 { margin:0; font-size:24px; }
+.strip { display:flex; gap:28px; flex-wrap:wrap; margin:18px 0 4px;
+         padding:16px 0; border-top:1px solid #2a2d34; border-bottom:1px solid #2a2d34; }
+.strip div { min-width:110px; }
+.strip .k { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#888; }
+.strip .v { font-size:22px; font-weight:600; margin-top:3px;
+            font-variant-numeric:tabular-nums; }
+.blocks { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr));
+          gap:18px; margin-top:22px; }
+.blk { background:#1a1d24; border:1px solid #2a2d34; border-radius:12px; padding:16px 18px; }
+.blk.wide { grid-column:1/-1; }
+.blk h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em;
+          color:#888; margin:0 0 12px; }
+.blk .hint { color:#6b7280; font-size:12px; margin-top:12px; line-height:1.45; }
+.note { color:#9aa4b2; font-size:13px; margin:6px 0 0; }
+</style>"""
 
-def _instagram_block(ig_sessions, ig_total, ig_1h, ig_24h, ig_last,
-                      ig_by_direction, ig_top_threads, now) -> str:
-    rows = "".join(
-        f'<tr><td>{s.id}</td><td>@{esc(s.username)}</td>'
-        f'<td class="pill {"ok" if s.is_active else "err"}">'
-        f'{"✓ active" if s.is_active else "✗ inactive"}</td>'
-        f'<td>{local_dt(s.last_polled_at, "datetime_sec", "никогда")}</td></tr>'
-        for s in ig_sessions
+
+def _freshness(last: datetime | None, now: datetime, src) -> str:
+    """Свежесть потока. Источникам без опроса (внутренние) она не положена."""
+    if src.live_min is None:
+        return '<span class="mute">—</span>'
+    if last is None:
+        return '<span class="pill err">нет данных</span>'
+    mins = int((now - last).total_seconds() / 60)
+    if mins < src.live_min:
+        return f'<span class="pill ok">живой · {mins} мин</span>'
+    if mins < (src.warn_min or src.live_min * 4):
+        return f'<span class="pill warn">тихо · {mins} мин</span>'
+    return f'<span class="pill err">молчит · {mins} мин</span>'
+
+
+def _sources_in_order(overview: dict) -> list:
+    """Каталог + всё, что есть в events. Источник без записи в каталоге тоже
+    показывается: скрыть его — значит соврать про содержимое мозга."""
+    known = list(CATALOG)
+    extra = sorted(set(overview) - {s.key for s in known})
+    return known + [resolve_source(key) for key in extra]
+
+
+def _row(src, stat: dict, now: datetime) -> str:
+    total = stat.get("total", 0)
+    cls = "" if total else "idle"
+    detail = f'<a href="/sources/{esc(src.key)}">{esc(src.title)}</a>' \
+        if (src.detail or total) else esc(src.title)
+    action = (f'<a href="{esc(src.connect_url)}">{esc(src.connect_label)}</a>'
+              if src.connect_url else "")
+    return (
+        f'<tr class="{cls}">'
+        f'<td><div class="src-name"><span class="ico">{src.icon}</span>'
+        f'<span>{detail}<div class="src-how">{esc(src.how)}</div></span></div></td>'
+        f'<td>{_freshness(stat.get("last"), now, src)}</td>'
+        f'<td class="num">{total:,}</td>'
+        f'<td class="num">{stat.get("c24h", 0):,}</td>'
+        f'<td>{local_dt(stat.get("last"), "datetime", "—")}</td>'
+        f'<td class="act">{action}</td>'
+        f'</tr>'
     )
-
-    last_txt = local_dt(ig_last, "datetime_sec", "никогда")
-    freshness = freshness_pill(ig_last, now, live_within_min=10, warn_within_min=120)
-
-    dir_html = row_list((esc(d), f"{cnt:,}") for d, cnt in ig_by_direction)
-    threads_html = row_list(
-        (f'{esc((title or "")[:60])} '
-         f'<span class="mute">({"group" if is_group=="true" else "direct"})</span>',
-         f"{cnt:,}")
-        for title, is_group, cnt in ig_top_threads
-    ) if ig_top_threads else '<div class="mute">пока нет данных</div>'
-
-    any_inactive = any(not s.is_active for s in ig_sessions) or not ig_sessions
-    connect_btn = (
-        '<a href="/api/instagram/start" '
-        'style="display:inline-block;margin:10px 0;padding:10px 18px;'
-        'background:#4dabf7;color:#fff;border-radius:8px;font-weight:600">'
-        '🔑 Подключить Instagram</a>'
-        + ('<div class="mute" style="font-size:12px;margin-top:4px">'
-           'Сессия неактивна/отсутствует — жми и войди заново (логин+пароль, '
-           'при 2FA/challenge попросит код).</div>' if any_inactive else "")
-    )
-
-    return f"""
-        <h2 style="margin-top:32px">📸 Instagram</h2>
-        <div style="margin-bottom:12px">Статус потока: {freshness}</div>
-        {connect_btn}
-        {data_table(["id", "username", "state", "last polled"], rows, "нет сессий")}
-
-        <div class="cards" style="margin-top:14px">
-          <div class="card"><div class="card-label">Всего DM-событий</div>
-            <div class="card-value">{ig_total:,}</div>
-            <div class="card-sub">последнее {last_txt}</div></div>
-          <div class="card"><div class="card-label">За час</div>
-            <div class="card-value">+{ig_1h:,}</div>
-            <div class="card-sub">{ig_24h:,} за 24ч</div></div>
-        </div>
-
-        <div class="two-col" style="margin-top:14px">
-          <div class="section">
-            <h3 style="margin-top:0;font-size:14px">По направлению</h3>
-            {dir_html}
-            <div class="mute" style="font-size:11px;margin-top:8px">
-              <b>received</b> = входящие в DM · <b>sent</b> = ваши исходящие
-            </div>
-          </div>
-          <div class="section">
-            <h3 style="margin-top:0;font-size:14px">Топ-20 диалогов</h3>
-            {threads_html}
-          </div>
-        </div>
-    """
 
 
 @router.get("/sources", response_class=HTMLResponse)
@@ -97,139 +108,102 @@ async def sources_page(request: Request):
         return resp
 
     now = datetime.utcnow()
+    overview = await get_sources_overview()
+    sources = _sources_in_order(overview)
+    rows = "".join(_row(s, overview.get(s.key, {}), now) for s in sources)
 
-    # Списки аккаунтов/сессий — маленькие таблицы, держим живыми.
-    async with get_session() as s:
-        gmail_rows = (await s.execute(
-            select(GmailAccountRow).order_by(GmailAccountRow.id)
-        )).scalars().all()
-        tg_sessions = (await s.execute(
-            select(TelegramSessionRow).order_by(TelegramSessionRow.id)
-        )).scalars().all()
-        ig_sessions = (await s.execute(
-            select(InstagramSessionRow).order_by(InstagramSessionRow.id)
-        )).scalars().all()
-
-    # Все тяжёлые агрегаты по events — из кэша (один набор сканов раз в TTL).
-    ss = await get_sources_stats()
-    events_by_src = ss["events_by_src"]
-    tg_total, tg_1h, tg_24h, tg_last = ss["tg_total"], ss["tg_1h"], ss["tg_24h"], ss["tg_last"]
-    tg_by_type, tg_by_direction, tg_top_chats = ss["tg_by_type"], ss["tg_by_direction"], ss["tg_top_chats"]
-    ig_total, ig_1h, ig_24h, ig_last = ss["ig_total"], ss["ig_1h"], ss["ig_24h"], ss["ig_last"]
-    ig_by_direction, ig_top_threads = ss["ig_by_direction"], ss["ig_top_threads"]
-    gmail_counts = ss["gmail_counts"]
-
-    # Gmail (per-account count из кэша, без N+1)
-    gmail_html_rows = []
-    for g in gmail_rows:
-        ev_count = gmail_counts.get(g.email, 0)
-        last = local_dt(g.last_polled_at, "datetime", "никогда")
-        # Честный статус: needs_reauth важнее is_active
-        if getattr(g, "needs_reauth", False):
-            state, state_cls = "✗ токен отозван", "err"
-        elif not g.is_active:
-            state, state_cls = "✗ выключен", "err"
-        else:
-            state, state_cls = "✓ live", "ok"
-        err_note = (f'<div class="mute" style="font-size:11px">{esc((g.last_error or "")[:80])}</div>'
-                    if getattr(g, "needs_reauth", False) and g.last_error else "")
-        gmail_html_rows.append(
-            f'<tr><td>{g.id}</td><td>{esc(g.email)}{err_note}</td>'
-            f'<td class="pill {state_cls}">{state}</td>'
-            f'<td>{last}</td><td>{ev_count:,}</td></tr>'
-        )
-
-    any_reauth = any(getattr(g, "needs_reauth", False) for g in gmail_rows)
-    reconnect_btn = (
-        '<a href="/api/gmail/start" '
-        'style="display:inline-block;margin:10px 0;padding:10px 18px;'
-        'background:#4dabf7;color:#fff;border-radius:8px;font-weight:600">'
-        '🔑 Переподключить Gmail</a>'
-        + ('<div class="mute" style="font-size:12px;margin-top:4px">'
-           'Один или несколько ящиков отвалились (Google отзывает токены '
-           'каждые 7 дней в Testing-режиме). Жми — пройди вход Google заново.'
-           '</div>' if any_reauth else "")
-    )
-
-    # Telegram session info
-    tg_session_rows = "".join(
-        f'<tr><td>{t.id}</td><td>{esc(t.phone)}</td>'
-        f'<td class="pill {"ok" if t.is_active else "err"}">'
-        f'{"✓ active" if t.is_active else "✗ inactive"}</td>'
-        f'<td>{local_dt(t.created_at, "date")}</td></tr>'
-        for t in tg_sessions
-    )
-
-    tg_last_txt = local_dt(tg_last, "datetime_sec", "никогда")
-    tg_freshness = freshness_pill(tg_last, now, live_within_min=5, warn_within_min=60)
-
-    tg_types_html = row_list((esc(t or "—"), f"{cnt:,}") for t, cnt in tg_by_type)
-    tg_dir_html = row_list((esc(d), f"{cnt:,}") for d, cnt in tg_by_direction)
-    tg_top_html = row_list(
-        (f'{esc((title or "")[:60])} <span class="mute">({esc(ctype or "?")})</span>', f"{cnt:,}")
-        for title, ctype, cnt in tg_top_chats
-    ) if tg_top_chats else '<div class="mute">пока нет данных</div>'
-
-    src_html = row_list(
-        (esc(src), f"{cnt:,} событий") for src, cnt in events_by_src
-    )
+    live = sum(1 for s in sources if s.live_min is not None and s.connect_url)
+    total_events = sum(v.get("total", 0) for v in overview.values())
+    last_24h = sum(v.get("c24h", 0) for v in overview.values())
 
     return HTMLResponse(_render("sources", f"""
-        <h2>📧 Gmail аккаунты</h2>
-        {data_table(["id", "email", "state", "last polled", "events"], "".join(gmail_html_rows), "нет аккаунтов")}
-        {reconnect_btn}
+      {_STYLE}
+      <div class="head"><h1>Источники</h1></div>
+      <p class="note">Всё, откуда Вера берёт события. Имя источника —
+         ссылка на подробности.</p>
 
-        <h2 style="margin-top:32px">✈️ Telegram userbot</h2>
-        <div style="margin-bottom:12px">Статус потока: {tg_freshness}</div>
-        {data_table(["id", "phone", "state", "created"], tg_session_rows, "нет сессий")}
-        <a href="/api/telegram/start" style="display:inline-block;margin:10px 0;
-           padding:10px 18px;background:#4dabf7;color:#fff;border-radius:8px;
-           font-weight:600">🔑 Переподключить Telegram</a>
-        <div class="mute" style="font-size:12px;margin-top:4px">Если сессия
-           отвалилась (userbot в рестарт-лупе, AuthKeyUnregistered) — жми и
-           пройди вход по коду из приложения.</div>
+      <div class="strip">
+        <div><div class="k">Источников</div><div class="v">{len(sources)}</div></div>
+        <div><div class="k">Подключаемых</div><div class="v">{live}</div></div>
+        <div><div class="k">Событий всего</div><div class="v">{total_events:,}</div></div>
+        <div><div class="k">За сутки</div><div class="v">+{last_24h:,}</div></div>
+      </div>
 
-        <div class="cards" style="margin-top:14px">
-          <div class="card"><div class="card-label">Всего сообщений</div>
-            <div class="card-value">{tg_total:,}</div>
-            <div class="card-sub">последнее {tg_last_txt}</div></div>
-          <div class="card"><div class="card-label">За час</div>
-            <div class="card-value">+{tg_1h:,}</div>
-            <div class="card-sub">{tg_24h:,} за 24ч</div></div>
-        </div>
+      <table class="src-list">
+        <thead><tr>
+          <th>источник</th><th>поток</th><th class="num">событий</th>
+          <th class="num">за сутки</th><th>последнее</th><th></th>
+        </tr></thead>
+        <tbody>{rows}</tbody>
+      </table>
+    """))
 
-        <div class="two-col" style="margin-top:14px">
-          <div class="section">
-            <h3 style="margin-top:0;font-size:14px">По типу чата</h3>
-            {tg_types_html}
-            <div class="mute" style="font-size:11px;margin-top:8px">
-              <b>user</b> = личка · <b>chat</b> = малая группа · <b>channel</b> = канал или супергруппа
-            </div>
-          </div>
-          <div class="section">
-            <h3 style="margin-top:0;font-size:14px">По направлению</h3>
-            {tg_dir_html}
-            <div class="mute" style="font-size:11px;margin-top:8px">
-              <b>received</b> = входящие · <b>sent</b> = ваши исходящие
-            </div>
-          </div>
-        </div>
 
-        <div class="section" style="margin-top:14px">
-          <h3 style="margin-top:0;font-size:14px">Топ-20 чатов по объёму</h3>
-          {tg_top_html}
-        </div>
+def _cell(value) -> str:
+    return value if isinstance(value, Html) else esc(value)
 
-        {_instagram_block(ig_sessions, ig_total, ig_1h, ig_24h, ig_last, ig_by_direction, ig_top_threads, now)}
 
-        <div class="section" style="margin-top:24px">
-          <h2>Все источники в БД</h2>
-          {src_html}
-        </div>
+def _render_block(b: Block) -> str:
+    hint = f'<div class="hint">{esc(b["hint"])}</div>' if b.get("hint") else ""
+    title = f'<h2>{esc(b["title"])}</h2>' if b.get("title") else ""
+    if b["kind"] == "rows":
+        body = "".join(
+            f'<div class="row"><span>{esc(k)}</span>'
+            f'<span class="mute">{esc(v)}</span></div>'
+            for k, v in b["pairs"]
+        ) or '<div class="mute">нет данных</div>'
+        return f'<div class="blk">{title}{body}{hint}</div>'
 
-        <style>
-          .two-col {{ display:grid; grid-template-columns: 1fr 1fr; gap:14px; }}
-          @media (max-width: 800px) {{ .two-col {{ grid-template-columns: 1fr; }} }}
-          .pill.warn {{ background:#3d2f0a; color:#ffd84a; }}
-        </style>
+    # По умолчанию экранируем всё; разметку провайдер помечает типом Html.
+    # Обратное правило («провайдер сам не забудет esc») дало бы XSS на первом
+    # же чате с названием <script>…</script> — они приходят из БД как есть.
+    rows = "".join("<tr>" + "".join(f"<td>{_cell(c)}</td>" for c in r) + "</tr>"
+                   for r in b["rows"])
+    wide = " wide" if len(b["headers"]) > 3 else ""
+    table = data_table(b["headers"], rows, b.get("empty", "нет данных"))
+    return f'<div class="blk{wide}">{title}{table}{hint}</div>'
+
+
+@router.get("/sources/{key}", response_class=HTMLResponse)
+async def source_page(key: str, request: Request):
+    if (resp := owner_or_redirect(request)) is not None:
+        return resp
+
+    now = datetime.utcnow()
+    src = resolve_source(key)
+    stat = (await get_sources_overview()).get(key, {})
+    blocks = await get_source_detail(key)
+
+    action = (f'<a href="{esc(src.connect_url)}" '
+              f'style="padding:8px 16px;border:1px solid #4dabf7;border-radius:8px">'
+              f'{esc(src.connect_label)}</a>' if src.connect_url else "")
+    note = f'<p class="note">{esc(src.note)}</p>' if src.note else ""
+    body = "".join(_render_block(b) for b in blocks) or \
+        '<div class="blk"><div class="mute">Разбивок для этого источника нет — ' \
+        'он не хранит своего состояния.</div></div>'
+
+    return HTMLResponse(_render("sources", f"""
+      {_STYLE}
+      <p class="crumb"><a href="/sources">← источники</a></p>
+      <div class="head">
+        <h1>{src.icon} {esc(src.title)}</h1>
+        {_freshness(stat.get("last"), now, src)}
+        <span style="margin-left:auto">{action}</span>
+      </div>
+      <p class="note">{esc(src.how)}</p>
+      {note}
+
+      <div class="strip">
+        <div><div class="k">Событий</div>
+             <div class="v">{stat.get("total", 0):,}</div></div>
+        <div><div class="k">За час</div>
+             <div class="v">+{stat.get("c1h", 0):,}</div></div>
+        <div><div class="k">За сутки</div>
+             <div class="v">+{stat.get("c24h", 0):,}</div></div>
+        <div><div class="k">Последнее</div>
+             <div class="v" style="font-size:15px">
+               {local_dt(stat.get("last"), "datetime_sec", "—")}</div></div>
+      </div>
+
+      <div class="blocks">{body}</div>
     """))

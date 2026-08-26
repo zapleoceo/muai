@@ -22,7 +22,7 @@ from vera_shared.db.models_sources import SlackConversationRow
 from vera_shared.ingest import poll_forever
 from vera_shared.ingest_policy import is_ignored_slack_channel
 
-from ingestor_slack import store
+from ingestor_slack import auth, store
 from ingestor_slack.client import SlackAuthError, SlackClient
 from ingestor_slack.mapper import message_to_event, parse_ts
 
@@ -164,16 +164,20 @@ class _Session:
         self.me_id = ""
         self.account = ""
         self.names: Names | None = None
+        self.auth_row: int | None = None
 
     async def connect(self) -> tuple[SlackClient, Names]:
         if self.client is None or self.names is None:
-            self.client = SlackClient()
+            token, self.auth_row = await auth.load_token()
+            self.client = SlackClient(token)
             me = await self.client.whoami()
             self.me_id = str(me.get("user_id") or "")
             self.account = f"{me.get('team') or 'slack'}/{me.get('user') or 'me'}"
             self.names = Names(self.client)
-            log.info("Slack: %s (%s), опрос каждые %sс",
-                     self.account, self.me_id, POLL_S)
+            await auth.mark_ok(self.auth_row)
+            log.info("Slack: %s (%s), токен %s, опрос каждые %sс",
+                     self.account, self.me_id,
+                     "из дашборда" if self.auth_row else "из окружения", POLL_S)
         return self.client, self.names
 
     def reset(self) -> None:
@@ -199,7 +203,10 @@ async def main_loop() -> None:
                 await poll_conversation(client, row, session.me_id,
                                         session.account, names)
                 await asyncio.sleep(1)
-        except SlackAuthError:
+        except SlackAuthError as e:
+            # Токен отозван или прав не хватает — гасим строку, чтобы дашборд
+            # показывал «переподключить», а не «подключено» при мёртвом токене.
+            await auth.mark_dead(session.auth_row, str(e))
             session.reset()
             raise
 

@@ -68,7 +68,16 @@ this project's own "~200 lines, one responsibility per file" convention):
 | `home_routes.py` | `/` — top-line stats cards |
 | `progress_routes.py` | `/_progress`, `/control/backfill(-rate)` — HTMX live-progress fragment + pause/rate controls |
 | `events_routes.py` | `/events` — triage log table |
-| `sources_routes.py` | `/sources` — Gmail/Telegram/Instagram ingest health |
+| `sources_routes.py` | `/sources` — список источников, `/sources/{key}` — подробности. Имён источников не знает: список строится из `source_registry`, блоки — из данных провайдера. Экранирует всё, кроме помеченного `Html` |
+| `source_registry.py` | Каталог источников данными: ключ, название, как получаем, порог свежести, ссылка на подключение, провайдер подробностей |
+| `source_detail.py` | Провайдеры разбивок по источнику — отдают блоки `rows`/`table`, не разметку. `Html` помечает готовую разметку, всё прочее страница экранирует |
+| `slack_connect.py` | `/api/slack/start` — ввод user-токена Slack, проверка через `auth.test` ДО сохранения, шифрование в `slack_auth` |
+
+Функции этого слоя, чтобы не искать глазами: каталог — `resolve_source()` и
+`unlisted()` (источник без записи в каталоге всё равно показывается строкой);
+подключение Slack — `verify()`, затем `save_token()`; страница одного источника
+— `source_page()`. На стороне ингестора токен достаёт `load_token()`, а
+`mark_ok()` / `mark_dead()` пишут в `SlackAuthRow`, живой он или отозван.
 | `search_routes.py` | `/search-ui` — proxies to brain-search |
 | `settings_routes.py` | `/settings`, `/control/settings` — SETTINGS registry |
 | `entities_routes.py` | `/entities/duplicates`, `/entities/merge` |

@@ -63,6 +63,30 @@ class InstagramSessionRow(Base):
     )
 
 
+class SlackAuthRow(Base):
+    """Пользовательский токен Slack (xoxp-), зашифрованный.
+
+    Как у telegram/instagram: секрет живёт в БД под `crypto`, а не в `.env` —
+    тогда подключение делается из дашборда, а не правкой файла на сервере.
+    Переменная `SLACK_USER_TOKEN` остаётся запасным путём: если строки нет,
+    поллер берёт токен из окружения.
+    """
+    __tablename__ = "slack_auth"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    team_id: Mapped[str] = mapped_column(String(32), nullable=False, unique=True)
+    team_name: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    user_id: Mapped[str] = mapped_column(String(32), nullable=False, default="")
+    username: Mapped[str] = mapped_column(String(255), nullable=False, default="")
+    token_enc: Mapped[str] = mapped_column(Text, nullable=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    last_ok_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(),
+    )
+
+
 class SlackConversationRow(Base):
     """Курсор опроса одного канала / лички / группы Slack.
 

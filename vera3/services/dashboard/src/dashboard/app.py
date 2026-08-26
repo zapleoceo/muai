@@ -6,8 +6,8 @@ bootstrap, favicon serving, and mounting every router.
 """
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from fastapi import FastAPI, Response
 from vera_shared.db.engine import close_engine, init_engine
@@ -23,6 +23,7 @@ from dashboard.progress_routes import router as progress_router
 from dashboard.render import FAVICON_SVG
 from dashboard.search_routes import router as search_router
 from dashboard.settings_routes import router as settings_router
+from dashboard.slack_connect import router as slack_connect_router
 from dashboard.sources_routes import router as sources_router
 from dashboard.telegram_login import router as telegram_login_router
 
@@ -40,7 +41,7 @@ for router in (
     auth_router, home_router, progress_router, events_router,
     sources_router, search_router, settings_router, entities_router,
     graph_router, gmail_oauth_router, instagram_login_router,
-    telegram_login_router,
+    telegram_login_router, slack_connect_router,
 ):
     app.include_router(router)
 
