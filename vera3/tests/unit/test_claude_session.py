@@ -315,3 +315,91 @@ class TestFold:
         assert got["summary"] == _FULL["summary"]
         # Последняя реплика попала в один из промптов, а не была срезана.
         assert any("шаг 39" in prompt for prompt in calls)
+
+
+class TestQueueOnSqlite:
+    """Жизненный цикл очереди на живой БД — claim/finish/fail без моков."""
+
+    @staticmethod
+    async def _put(get_session, **over):
+        from vera_shared.db.models import ClaudeSessionQueueRow
+        values = {
+            "session_id": "s-1", "project_dir": "myAI",
+            "started_at": _T0.replace(tzinfo=None),
+            "ended_at": _T0.replace(tzinfo=None),
+            "turns": [{"role": "user", "text": "привет"}], "turn_count": 1,
+        }
+        values.update(over)
+        async with get_session() as s:
+            s.add(ClaudeSessionQueueRow(**values))
+
+    @staticmethod
+    async def _row(get_session, session_id="s-1"):
+        from sqlalchemy import select
+        from vera_shared.db.models import ClaudeSessionQueueRow
+        async with get_session() as s:
+            return (await s.execute(
+                select(ClaudeSessionQueueRow)
+                .where(ClaudeSessionQueueRow.session_id == session_id)
+            )).scalar_one()
+
+    @pytest.mark.asyncio
+    async def test_claim_takes_pending_and_counts_the_attempt(self, sqlite_db):
+        import gateway.claude_session_worker as w
+
+        await self._put(sqlite_db)
+        with patch.object(w, "get_session", sqlite_db):
+            row = await w.claim()
+        assert row is not None and row.session_id == "s-1"
+        assert (await self._row(sqlite_db)).status == "processing"
+        assert (await self._row(sqlite_db)).attempts == 1
+
+    @pytest.mark.asyncio
+    async def test_claim_on_empty_queue(self, sqlite_db):
+        import gateway.claude_session_worker as w
+
+        with patch.object(w, "get_session", sqlite_db):
+            assert await w.claim() is None
+
+    @pytest.mark.asyncio
+    async def test_finish_clears_the_raw_transcript(self, sqlite_db):
+        """Сырая переписка лежит в очереди ТОЛЬКО до осмысления."""
+        import gateway.claude_session_worker as w
+
+        await self._put(sqlite_db, status="processing")
+        with patch.object(w, "get_session", sqlite_db):
+            await w.finish("s-1", event_id=42, turns=1)
+        row = await self._row(sqlite_db)
+        assert row.status == "done" and row.event_id == 42
+        assert row.done_turns == 1
+        assert row.turns == []
+
+    @pytest.mark.asyncio
+    async def test_fail_returns_to_queue_until_attempts_run_out(self, sqlite_db):
+        import gateway.claude_session_worker as w
+
+        await self._put(sqlite_db, status="processing", attempts=1)
+        with patch.object(w, "get_session", sqlite_db):
+            await w.fail("s-1", "брокер лёг", attempts=1)
+        assert (await self._row(sqlite_db)).status == "pending"
+
+        with patch.object(w, "get_session", sqlite_db):
+            await w.fail("s-1", "брокер лёг", attempts=w.MAX_ATTEMPTS)
+        row = await self._row(sqlite_db)
+        assert row.status == "error" and "брокер" in row.error
+
+    @pytest.mark.asyncio
+    async def test_revive_stale_returns_hung_processing(self, sqlite_db):
+        """Перезапуск контейнера посреди осмысления не теряет сессию."""
+        from datetime import timedelta
+
+        import gateway.claude_session_worker as w
+
+        stale = _T0.replace(tzinfo=None) - timedelta(hours=2)
+        await self._put(sqlite_db, status="processing", updated_at=stale)
+        await self._put(sqlite_db, session_id="s-2", status="processing")
+        with patch.object(w, "get_session", sqlite_db):
+            revived = await w.revive_stale()
+        assert revived == 1
+        assert (await self._row(sqlite_db)).status == "pending"
+        assert (await self._row(sqlite_db, "s-2")).status == "processing"
