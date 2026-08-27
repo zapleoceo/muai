@@ -3,3 +3,5 @@
 # "Missing closing '}'" на строке, где всё в порядке. BOM хранится в самом
 # файле, а eol=crlf не даёт нормализации в LF при checkout.
 *.ps1 text eol=crlf
+# Shell-скрипты уезжают на Linux — CRLF там даёт «bad interpreter».
+*.sh text eol=lf

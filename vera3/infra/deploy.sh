@@ -67,7 +67,7 @@ build_and_up() {
 verify_containers() {
     cd "$TARGET_DIR/infra"
     local problems=0 seen=0
-    local line service name state image actual target
+    local service name state ref actual target health
 
     while IFS=$'\t' read -r service name state image; do
         [ -z "$name" ] && continue
@@ -79,13 +79,23 @@ verify_containers() {
             continue
         fi
 
+        # Ссылку берём из САМОГО контейнера (.Config.Image), а не из вывода
+        # `compose ps`: тот показывает ссылку, только пока она разрешается в
+        # этот образ, а как только тег уехал на новую сборку — печатает sha
+        # контейнера. Сравнение sha с самим собой всегда совпадает, и проверка
+        # молча пропускала ровно тот случай, ради которого написана (поймано
+        # тестом: тег двигали на другой образ, а проверка отвечала «0 проблем»).
+        ref="$(docker inspect -f '{{.Config.Image}}' "$name" 2>/dev/null || true)"
         actual="$(docker inspect -f '{{.Image}}' "$name" 2>/dev/null || true)"
-        target="$(docker image inspect -f '{{.Id}}' "$image" 2>/dev/null || true)"
-        if [ -z "$target" ]; then
-            echo "ПЛОХО $name ($service): образа '$image' больше нет — контейнер на осиротевшем слое"
+        target="$(docker image inspect -f '{{.Id}}' "$ref" 2>/dev/null || true)"
+        if [ -z "$ref" ]; then
+            echo "ПЛОХО $name ($service): не удалось прочитать ссылку на образ"
+            problems=$((problems + 1))
+        elif [ -z "$target" ]; then
+            echo "ПЛОХО $name ($service): образа '$ref' больше нет — контейнер на осиротевшем слое"
             problems=$((problems + 1))
         elif [ "$actual" != "$target" ]; then
-            echo "ПЛОХО $name ($service): образ контейнера ${actual:7:12} ≠ текущий тег ${target:7:12} ('$image')"
+            echo "ПЛОХО $name ($service): образ контейнера ${actual:7:19} ≠ текущий '$ref' = ${target:7:19}"
             echo "      сборка дала новый образ, а контейнер не пересоздан: код в нём ПРОШЛЫЙ"
             problems=$((problems + 1))
         fi
