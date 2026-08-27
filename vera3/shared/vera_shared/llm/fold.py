@@ -201,12 +201,29 @@ async def fold(lines: list[str], spec: FoldSpec, context: dict[str, str],
     if not parts:
         return dict(spec.empty), {**report, "distilled": False}
 
-    merged = await _one(
-        spec.merge_prompt.format(
-            parts=json.dumps(parts, ensure_ascii=False, indent=1), **context),
-        spec, max_tokens=min(spec.part_tokens + 400 * len(parts), 4000),
-        capability=spec.merge_capability, poll_deadline_s=poll_deadline_s)
+    prompt = spec.merge_prompt.format(
+        parts=json.dumps(parts, ensure_ascii=False, indent=1), **context)
+    tokens = min(spec.part_tokens + 400 * len(parts), 4000)
+    how = "llm"
+    try:
+        merged = await _one(prompt, spec, max_tokens=tokens,
+                            capability=spec.merge_capability,
+                            poll_deadline_s=poll_deadline_s)
+    except LLMCoolingDown:
+        # Умный пул закрыт — но части уже осмыслены, и выбрасывать их, чтобы
+        # переделать всё через час, дороже, чем собрать дешёвым пулом. Замер
+        # доступности умного: единицы вызовов в час против сотен у дешёвого,
+        # так что «подождём» здесь означает «сутки». Чем собрано — видно в
+        # метаданных события, а не замазано.
+        if spec.part_capability == spec.merge_capability:
+            raise
+        log.info("%s: умный пул закрыт, собираю частями через %s",
+                 spec.name, spec.part_capability)
+        merged = await _one(prompt, spec, max_tokens=tokens,
+                            capability=spec.part_capability,
+                            poll_deadline_s=poll_deadline_s)
+        how = f"llm:{spec.part_capability}"
     if merged is None:
         # Слить моделью не вышло — событие всё равно должно быть полным.
         return stitch(parts, spec), {**report, "merged": "mechanical"}
-    return merged, {**report, "merged": "llm", "parts": len(parts)}
+    return merged, {**report, "merged": how, "parts": len(parts)}

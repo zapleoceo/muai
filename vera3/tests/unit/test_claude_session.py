@@ -310,8 +310,12 @@ class TestWorker:
         """Иначе за один кулдаун сессия набирала 122 холостые попытки."""
         import gateway.claude_session_worker as w
 
-        with patch.object(w, "llm_cooldown_remaining_s", AsyncMock(return_value=180.0)):
+        remaining = AsyncMock(return_value=180.0)
+        with patch.object(w, "llm_cooldown_remaining_s", remaining):
             assert await w.cooling_s() == 180.0
+        # Спрашиваем ровно про пул окон: закрытый умный работу не стопорит,
+        # сборку в этом случае доводит тот же дешёвый.
+        assert remaining.await_args.args == (SPEC.part_capability,)
         with patch.object(w, "llm_cooldown_remaining_s", AsyncMock(return_value=0.0)):
             assert await w.cooling_s() == 0.0
 
@@ -430,6 +434,30 @@ class TestFold:
         assert got["summary"] == _FULL["summary"]
         # Последняя реплика попала в один из промптов, а не была срезана.
         assert any("шаг 39" in prompt for prompt in calls)
+
+    @pytest.mark.asyncio
+    async def test_merge_falls_back_to_the_cheap_pool_when_smart_is_closed(self):
+        """Части уже осмыслены — выбрасывать их ради «подождём сутки» дороже."""
+        from gateway.claude_distill import distill
+        from vera_shared.llm.client import LLMCoolingDown
+
+        turns = [{"role": "user" if i % 2 == 0 else "assistant",
+                  "text": f"шаг {i} " + "x" * 3000} for i in range(40)]
+        used: list[str] = []
+
+        async def fake_chat(**kw):
+            used.append(kw["capability"])
+            if kw["capability"] == "chat:smart":
+                raise LLMCoolingDown("chat:smart", remaining_s=1200)
+            return json.dumps(_FULL), {}
+
+        with patch.object(fold_mod, "chat_async", AsyncMock(side_effect=fake_chat)):
+            got, report = await distill(turns, project="myAI", branch="master")
+
+        assert got["summary"] == _FULL["summary"]
+        # Чем именно собрано — видно в метаданных, а не замазано.
+        assert report["merged"] == "llm:structured"
+        assert used[-1] == "structured"
 
     @pytest.mark.asyncio
     async def test_each_phase_goes_to_its_own_pool(self):
