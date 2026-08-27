@@ -98,6 +98,19 @@ class TestWindows:
         assert windows([]) == ([], False)
 
 
+class TestPools:
+    def test_map_phase_runs_on_the_cheap_pool(self):
+        """Обычный разговор — одно окно, то есть весь путь целиком.
+
+        Замер 2026-08-27: `structured` 18с с той же точностью, `chat:smart`
+        126с и не уложился даже в 120с ожидания брокера. Судить, что важно,
+        всё равно оставляем умному — сборка частей идёт через него.
+        """
+        from gateway.voice_distill import SPEC
+        assert SPEC.part_capability == "structured"
+        assert SPEC.merge_capability == "chat:smart"
+
+
 class TestBodyText:
     def test_keeps_structure_quotes_and_outline(self):
         d = {"summary": "Обсудили выход по разделу 6.",

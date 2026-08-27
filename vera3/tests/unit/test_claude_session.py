@@ -450,6 +450,16 @@ class TestQueueOnSqlite:
         assert (await self._row(sqlite_db)).attempts == 0
 
     @pytest.mark.asyncio
+    async def test_startup_revives_processing_regardless_of_age(self, sqlite_db):
+        """Воркер один: на старте в processing заведомо нет живой работы."""
+        import gateway.claude_session_worker as w
+
+        await self._put(sqlite_db, status="processing")
+        with patch.object(w, "get_session", sqlite_db):
+            assert await w.revive_stale(everything=True) == 1
+        assert (await self._row(sqlite_db)).status == "pending"
+
+    @pytest.mark.asyncio
     async def test_revive_stale_returns_hung_processing(self, sqlite_db):
         """Перезапуск контейнера посреди осмысления не теряет сессию."""
         from datetime import timedelta

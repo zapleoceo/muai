@@ -1,9 +1,9 @@
 """Фоновый воркер: осмысляет сессии Claude Code из очереди.
 
 Живёт внутри шлюза и стартует в lifespan. Отдельный сервис здесь ничего бы не
-дал: работа сводится к ожиданию брокера, состояние целиком в БД, а на перезапуск
-контейнера воркер поднимает незакрытую сессию заново (`processing` старше
-`STALE_MINUTES` возвращается в очередь).
+дал: работа сводится к ожиданию брокера, а состояние целиком в БД. Сессию,
+осиротевшую при перезапуске контейнера, поднимает `revive_stale` — на каждом
+витке цикла, а не только на старте, иначе она ждала бы следующего перезапуска.
 
 Почему не в запросе: одно окно на 21 тыс. символов не уложилось в 120с ожидания
 брокера, а сессия бывает на 20 окон — это десятки минут. Здесь ожидание брокера
@@ -16,6 +16,7 @@ import logging
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy import case, select, update
+from sqlalchemy import true as sa_true
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import ClaudeSessionQueueRow
 from vera_shared.llm.circuit import llm_cooldown_remaining_s
@@ -34,7 +35,9 @@ POLL_DEADLINE_S = 900.0
 #: кругу на ядовитой сессии дороже, чем пропустить одну.
 MAX_ATTEMPTS = 3
 #: Контейнер перезапустили посреди осмысления — сессия зависла в processing.
-STALE_MINUTES = 45
+#: Порог выше самого долгого честного осмысления: 24 окна по три параллельно
+#: при ожидании брокера 900с это до полутора часов.
+STALE_MINUTES = 120
 #: Потолок на один сон по кулдауну: кап брокера сбрасывается в 00:00 UTC, и
 #: ждать до него одним куском значит проспать досрочно ожившый пул.
 MAX_COOLDOWN_SLEEP_S = 600.0
@@ -44,14 +47,21 @@ def _now() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
-async def revive_stale() -> int:
-    """Вернуть в очередь то, что осталось в processing после перезапуска."""
+async def revive_stale(*, everything: bool = False) -> int:
+    """Вернуть в очередь то, что осталось в processing после перезапуска.
+
+    `everything` — для старта процесса: воркер в шлюзе один, и на старте в
+    processing заведомо не может быть живой работы, поэтому ждать порога незачем.
+    В цикле порог нужен: там сессия могла быть взята этим же воркером минуту
+    назад и честно осмысляться.
+    """
+    stale = (ClaudeSessionQueueRow.updated_at
+             < _now() - timedelta(minutes=STALE_MINUTES))
     async with get_session() as s:
         result = await s.execute(
             update(ClaudeSessionQueueRow)
             .where(ClaudeSessionQueueRow.status == "processing",
-                   ClaudeSessionQueueRow.updated_at
-                   < _now() - timedelta(minutes=STALE_MINUTES))
+                   sa_true() if everything else stale)
             .values(status="pending", updated_at=_now())
         )
         return result.rowcount or 0
@@ -174,11 +184,19 @@ async def process_one() -> bool:
 
 async def run_forever() -> None:
     log.info("claude-worker: запущен")
-    revived = await revive_stale()
-    if revived:
-        log.info("claude-worker: вернул в очередь после перезапуска: %d", revived)
+    orphaned = await revive_stale(everything=True)
+    if orphaned:
+        log.info("claude-worker: осиротело при перезапуске: %d", orphaned)
     while True:
         try:
+            # Проверка на каждом витке, а не только на старте: сессию, которую
+            # осиротил перезапуск контейнера, иначе никто не поднимет до
+            # следующего перезапуска. Текущую работу это не задевает —
+            # process_one последователен, и пока он идёт, витка нет.
+            revived = await revive_stale()
+            if revived:
+                log.info("claude-worker: вернул в очередь осиротевших: %d", revived)
+
             cooling = await cooling_s()
             if cooling > 0:
                 log.info("claude-worker: предохранитель закрыт, жду %.0f мин",
