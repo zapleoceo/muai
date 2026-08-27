@@ -19,13 +19,14 @@ from vera_listener.app import Listener
 from vera_listener.capture import MIC, SYSTEM, Capture, Frame
 from vera_listener.config import ENV_FILE, load_config
 from vera_listener.status import Status
+from vera_listener.transcriber import Transcriber
 from vera_listener.vad import FRAME_S, SpeechDetector
 from vera_listener.winctx import active_audio_app, foreground_window_title
 
 TEMPLATE = """VERA_GATEWAY_URL=https://dima.veranda.my
 INTERNAL_SECRET=<взять из /var/www/vera3/infra/.env на hetzner-root>
-# VERA_MODEL_SIZE=small
-# VERA_CPU_THREADS=2
+# VERA_STT_DEVICE=NPU          # NPU | GPU | CPU, откатится сам
+# VERA_MODEL_ID=OpenVINO/whisper-large-v3-turbo-int8-ov
 # VERA_ALLOW_APPS=zoom.exe,telegram.exe,discord.exe
 # VERA_DENY_APPS=spotify.exe
 """
@@ -38,6 +39,23 @@ def setup() -> None:
         return
     ENV_FILE.write_text(TEMPLATE, encoding="utf-8")
     print(f"Создал {ENV_FILE} — впиши INTERNAL_SECRET и запусти без --setup")
+
+
+def warmup() -> int:
+    """Скачать модель и скомпилировать её под устройство заранее.
+
+    Замер: загрузка 790 МБ плюс первая компиляция под нейропроцессор — 153
+    секунды. Дальше берётся из кэша за 1.9с. Без прогрева эту цену платил бы
+    первый разговор: звук копится в памяти и не теряется, но выжимка пришла
+    бы через минуты, а со стороны выглядело бы как повисание.
+    """
+    config = load_config()
+    print(f"устройство: {config.stt_device}, модель: {config.model_id}")
+    transcriber = Transcriber(config)
+    started = time.monotonic()
+    device = transcriber.warm_up()
+    print(f"готово за {time.monotonic() - started:.0f}с, считаем на {device}")
+    return 0
 
 
 def probe(seconds: float) -> int:
@@ -99,6 +117,8 @@ def main() -> int:
     parser.add_argument("--setup", action="store_true", help="создать шаблон конфига")
     parser.add_argument("--probe", type=float, nargs="?", const=10.0, default=None,
                         metavar="СЕК", help="самопроверка захвата")
+    parser.add_argument("--warmup", action="store_true",
+                        help="скачать и скомпилировать модель заранее")
     parser.add_argument("--verbose", "-v", action="store_true")
     parser.add_argument("--no-tray", action="store_true",
                         help="не показывать иконку в трее")
@@ -109,6 +129,8 @@ def main() -> int:
     if args.setup:
         setup()
         return 0
+    if args.warmup:
+        return warmup()
     if args.probe is not None:
         return probe(args.probe)
 
