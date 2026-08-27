@@ -10,7 +10,13 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy import text
 from vera_shared.db.engine import get_session
 
-from dashboard.render import _render, esc, local_dt, owner_or_redirect
+from dashboard.render import (
+    _render,
+    esc,
+    local_dt,
+    owner_or_redirect,
+    row_list,
+)
 
 router = APIRouter()
 
@@ -102,7 +108,8 @@ async def events_page(request: Request, limit: int = Query(100, ge=1, le=500),  
         else:
             model = tokens = cost = "—"
         tbody.append(
-            f'<tr><td>{e["id"]}</td><td title="{status_title}">{emoji}</td><td>{imp}</td>'
+            f'<tr><td><a href="/events/{e["id"]}">{e["id"]}</a></td>'
+            f'<td title="{status_title}">{emoji}</td><td>{imp}</td>'
             f'<td>{esc(e["source"])}</td><td>{esc(e["account"] or "—")}</td>'
             f'<td class="mute">{local_dt(e["occurred_at"], "datetime")}</td>'
             f'<td class="preview">{preview}…</td>'
@@ -141,4 +148,79 @@ async def events_page(request: Request, limit: int = Query(100, ge=1, le=500),  
           <thead><tr>{thead}</tr></thead>
           <tbody>{''.join(tbody)}</tbody>
         </table>
+    """))
+
+
+#: Дорожка записи → кто говорил. Это и есть авторство на сегодня: своё
+#: авторство доказано устройством, а не догадкой модели.
+STREAM_LABEL: dict[str, str] = {"mic": "Я", "system": "собеседник"}
+
+
+def transcript_html(extra: dict[str, Any] | None) -> str:
+    """Стенограмма события → HTML. Пусто, если её нет (старые события)."""
+    if not extra or extra.get("kind") != "voice_transcript":
+        return ""
+    utterances = extra.get("utterances") or []
+    if not utterances:
+        return ""
+    rows = []
+    for u in utterances:
+        at = float(u.get("at") or 0.0)
+        stamp = f"{int(at) // 60:02d}:{int(at) % 60:02d}"
+        who = STREAM_LABEL.get(str(u.get("stream")), str(u.get("stream") or "?"))
+        cls = "self" if u.get("stream") == "mic" else "other"
+        rows.append(
+            f'<tr><td class="mute">{stamp}</td>'
+            f'<td class="who {cls}">{esc(who)}</td>'
+            f'<td>{esc(u.get("text") or "")}</td></tr>')
+    return f"""
+      <h3>Стенограмма ({len(utterances)} реплик, {extra.get('chars', 0)} символов)</h3>
+      <p class="mute">Дословно, как распознал слушатель. В поиск по мозгу идёт
+      только выжимка выше — иначе обрывки перебивали бы её. Здесь текст лежит
+      целиком: выжимка сжимает разговор примерно в тридцать раз, а звук не
+      хранится вообще.</p>
+      <table class="data transcript"><tbody>{''.join(rows)}</tbody></table>
+    """
+
+
+@router.get("/events/{event_id}", response_class=HTMLResponse)
+async def event_page(request: Request, event_id: int):
+    """Карточка события: выжимка плюс дословная стенограмма, если она есть."""
+    if (resp := owner_or_redirect(request)) is not None:
+        return resp
+
+    async with get_session() as s:
+        row = (await s.execute(text("""
+            SELECT id, source, account, category, occurred_at, importance,
+                   nature, project, triage_status, triage_error,
+                   content_text, content_extra, metadata
+            FROM events WHERE id = :id
+        """), {"id": event_id})).mappings().first()
+
+    if row is None:
+        return HTMLResponse(_render("events", "<h2>Событие не найдено</h2>"), 404)
+
+    meta = row["metadata"] or {}
+    facts = row_list([
+        ("источник", esc(row["source"])),
+        ("аккаунт", esc(row["account"] or "—")),
+        ("вид", esc(row["category"] or "—")),
+        ("когда", local_dt(row["occurred_at"], "datetime")),
+        ("важность", str(row["importance"]) if row["importance"] is not None else "—"),
+        ("природа", esc(row["nature"] or "—")),
+        ("проект", esc(row["project"] or "—")),
+        ("триаж", esc(row["triage_status"] or "—")),
+        ("где", esc(" / ".join(str(meta.get(k)) for k in ("app", "window_title")
+                               if meta.get(k)) or "—")),
+    ])
+    error = (f'<p class="err">Ошибка триажа: {esc(row["triage_error"])}</p>'
+             if row["triage_error"] else "")
+    return HTMLResponse(_render("events", f"""
+        <h2>Событие {row['id']}</h2>
+        {facts}
+        {error}
+        <h3>Выжимка</h3>
+        <pre class="wrap">{esc(row['content_text'] or '')}</pre>
+        {transcript_html(row['content_extra'])}
+        <p><a href="/events">← в журнал</a></p>
     """))

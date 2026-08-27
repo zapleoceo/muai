@@ -20,7 +20,7 @@ from __future__ import annotations
 import hashlib
 import logging
 from datetime import datetime, timezone
-from typing import Literal
+from typing import Any, Literal
 
 from fastapi import APIRouter, Header
 from pydantic import BaseModel, Field
@@ -60,6 +60,23 @@ class VoiceSessionResult(BaseModel):
     event_id: int | None
     deduped: bool = False
     summary: str | None = None
+
+
+def transcript_record(utterances: list[Utterance]) -> dict[str, Any]:
+    """Стенограмма для `events.content_extra` — дословно, с автором реплики.
+
+    `stream` и есть авторство на сегодня: mic — владелец, system — удалённая
+    сторона. Метки конкретных говорящих внутри системной дорожки появятся
+    отдельно; формат заранее оставляет под них место в каждой реплике.
+    """
+    return {
+        "kind": "voice_transcript",
+        "chars": sum(len(u.text) for u in utterances),
+        "utterances": [
+            {"at": round(u.at, 2), "stream": u.stream, "text": u.text}
+            for u in utterances
+        ],
+    }
 
 
 def body_text(d: dict, app: str | None, title: str | None) -> str:
@@ -110,6 +127,13 @@ async def ingest_voice_session(
                 account="laptop",
                 category="conversation",
                 content_text=body_text(distilled, body.app, body.window_title)[:8000],
+                # Дословная стенограмма — рядом с событием, но НЕ в content_text:
+                # вектор строится только по выжимке (brain-triage/worker.py), и
+                # сотня обрывков «ага, давай» не должна перебивать её в поиске.
+                # Хранить дословное обязательно: выжимка сжимает разговор в
+                # тридцать раз (замер: 66 445 символов при потолке 8 000), а
+                # звук не хранится вообще — что выброшено, того больше нигде нет.
+                content_extra=transcript_record(body.utterances),
                 occurred_at=body.started_at.astimezone(timezone.utc).replace(tzinfo=None),
                 metadata_={
                     "app": body.app,
