@@ -1,6 +1,13 @@
 """Backfill TG history — пройдись по всем диалогам и подтяни старые сообщения.
 
 Запуск: docker exec vera3-ingestor-telegram python -m ingestor_telegram.backfill
+
+Политика распознавания медиа — общая с живым юзерботом
+(`vera_shared.media_policy`). До 2026-08-27 здесь была своя захардкоженная:
+любое фото → распознавать, а статичные webp-стикеры → в vision, хотя политика
+говорит «стикеры никогда». Плюс не писался `chat_kind`, из-за чего 679 старых
+записей в очереди на распознавание не знали, из канала они или из лички.
+Отсюда и брались фото вещательных каналов в дефицитном vision-пуле.
 """
 from __future__ import annotations
 
@@ -14,8 +21,10 @@ from pathlib import Path
 from sqlalchemy import select
 from telethon import TelegramClient
 
+from vera_shared.chat_activity import min_own_messages, own_message_count
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
+from vera_shared.media_policy import classify_chat_kind, media_skip_reason
 
 log = logging.getLogger("tg-backfill")
 
@@ -30,7 +39,8 @@ DAYS_BACK = int(os.environ.get("BACKFILL_DAYS_BACK", "30"))
 MAX_PER_DIALOG = int(os.environ.get("BACKFILL_MAX_PER_DIALOG", "500"))
 
 
-async def backfill_dialog(client: TelegramClient, dialog, cutoff: datetime, me) -> int:
+async def backfill_dialog(client: TelegramClient, dialog, cutoff: datetime, me,
+                          min_own: int) -> int:
     """Backfill сообщений из одного диалога с момента cutoff."""
     inserted = 0
     try:
@@ -44,14 +54,11 @@ async def backfill_dialog(client: TelegramClient, dialog, cutoff: datetime, me) 
 
             media_kind: str | None = None
             media_meta: dict = {}
-            needs_recognition = False
             if getattr(msg, "photo", None):
                 media_kind = "photo"
-                needs_recognition = True
             elif getattr(msg, "voice", None):
                 media_kind = "voice"
                 media_meta["duration_s"] = getattr(msg.voice, "duration", None)
-                needs_recognition = True
             elif getattr(msg, "video_note", None):
                 media_kind = "video_note"
                 media_meta["duration_s"] = getattr(msg.video_note, "duration", None)
@@ -61,15 +68,10 @@ async def backfill_dialog(client: TelegramClient, dialog, cutoff: datetime, me) 
             elif getattr(msg, "audio", None):
                 media_kind = "audio"
                 media_meta["duration_s"] = getattr(msg.audio, "duration", None)
-                needs_recognition = True
             elif getattr(msg, "sticker", None):
                 media_kind = "sticker"
                 media_meta["emoji"] = getattr(msg.sticker, "alt", None) or ""
-                _mime = getattr(msg.sticker, "mime_type", "") or ""
-                media_meta["mime"] = _mime
-                # Static webp → vision; animated .tgs / video .webm keep emoji.
-                if _mime == "image/webp":
-                    needs_recognition = True
+                media_meta["mime"] = getattr(msg.sticker, "mime_type", "") or ""
             elif getattr(msg, "document", None):
                 media_kind = "document"
                 media_meta["mime"] = getattr(msg.document, "mime_type", None)
@@ -120,6 +122,18 @@ async def backfill_dialog(client: TelegramClient, dialog, cutoff: datetime, me) 
                 f"---\n{text}"
             )
 
+            # chat_type выводим так же, как живой юзербот: по классу сущности
+            # Telethon. Супергруппа приходит как Channel, поэтому megagroup —
+            # обязательный второй аргумент.
+            entity = dialog.entity
+            chat_kind = classify_chat_kind(type(entity).__name__.lower(),
+                                           bool(getattr(entity, "megagroup", False)))
+            own_messages = await own_message_count(dialog.id)
+            skip_reason = media_skip_reason(media_kind, chat_kind,
+                                           own_messages=own_messages,
+                                           min_own_messages=min_own)
+            needs_recognition = skip_reason is None
+
             sid = f"tg:{dialog.id}:{msg.id}"
 
             async with get_session() as s:
@@ -141,6 +155,7 @@ async def backfill_dialog(client: TelegramClient, dialog, cutoff: datetime, me) 
                     metadata_={
                         "chat_id": dialog.id,
                         "chat_title": chat_title,
+                        "chat_kind": chat_kind,
                         "sender_id": sender.id if sender else None,
                         "sender_username": sender_username,
                         "direction": direction,
@@ -150,6 +165,8 @@ async def backfill_dialog(client: TelegramClient, dialog, cutoff: datetime, me) 
                         "media_kind": media_kind,
                         "media_meta": media_meta or None,
                         "needs_recognition": needs_recognition,
+                        "media_skip_reason": skip_reason,
+                        "owner_participates": own_messages > 0,
                     },
                     triage_status="media_pending" if needs_recognition else "pending",
                 ))
@@ -170,6 +187,9 @@ async def main():
         return
 
     me = await client.get_me()
+    # Порог участия читаем один раз на прогон: он настройка, а не константа,
+    # но меняться посреди бэкфилла ему незачем.
+    min_own = await min_own_messages()
     cutoff = datetime.utcnow() - timedelta(days=DAYS_BACK)
     log.info("Backfilling TG dialogs since %s for @%s", cutoff.date(), me.username)
 
@@ -178,7 +198,7 @@ async def main():
     async for dialog in client.iter_dialogs():
         n_dialogs += 1
         title = getattr(dialog, "title", None) or getattr(dialog.entity, "first_name", "?")
-        n = await backfill_dialog(client, dialog, cutoff, me)
+        n = await backfill_dialog(client, dialog, cutoff, me, min_own)
         total_inserted += n
         log.info("[%s/?] dialog '%s' (id=%s): +%s new (running total: %s)",
                  n_dialogs, title[:30], dialog.id, n, total_inserted)

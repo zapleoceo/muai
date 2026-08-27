@@ -18,8 +18,9 @@ from vera_shared.crypto import decrypt
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import TelegramSessionRow
+from vera_shared.chat_activity import min_own_messages, own_message_count
 from vera_shared.ingest_policy import is_ignored_chat, is_ignored_sender
-from vera_shared.media_policy import should_recognize_media
+from vera_shared.media_policy import classify_chat_kind, media_skip_reason
 
 from ingestor_telegram.entity_sync import sync_message_entities
 from ingestor_telegram.tools_http import build_app
@@ -29,23 +30,6 @@ log = logging.getLogger("tg")
 API_ID = int(os.environ["TELEGRAM_API_ID"])
 API_HASH = os.environ["TELEGRAM_API_HASH"]
 PHONE = os.environ["TELEGRAM_PHONE"]
-
-
-def classify_chat_kind(chat_type: str, is_megagroup: bool) -> str:
-    """private | group | channel — единственный источник правды на "тип чата".
-
-    Telethon отдаёт супергруппы КАК Channel-объект (chat_type=="channel"),
-    поэтому просто "chat_type=='channel' → канал" — БАГ: 96% реальных
-    "групп" сегодня это именно супергруппы (легаси Chat почти не осталось),
-    и без is_megagroup их бы ошибочно посчитали вещательными каналами.
-    """
-    if chat_type == "user":
-        return "private"
-    if chat_type in {"chat", "chatfull"}:
-        return "group"
-    if chat_type == "channel":
-        return "group" if is_megagroup else "channel"
-    return "other"
 
 
 async def load_session_string() -> str:
@@ -159,11 +143,16 @@ async def save_message(client: TelegramClient, msg) -> None:
     )
 
     chat_kind = classify_chat_kind(chat_type, getattr(chat, "megagroup", False))
-    # Единая политика распознавания: голос/аудио всегда, фото кроме вещательных
-    # каналов и шумных пабликов, стикеры никогда (Дима 2026-07-20 и 07-29 —
-    # жгли vision-бюджет впустую). Событие всё равно сохраняется с
-    # плейсхолдером — теряется только текст распознавания.
-    needs_recognition = should_recognize_media(media_kind, chat_kind, chat_title)
+    # Единая политика распознавания на все пути загрузки: голос/аудио всегда,
+    # фото в личке всегда, в вещательном канале никогда, в группе — только где
+    # владелец реально участвует. Событие всё равно сохраняется с плейсхолдером:
+    # теряется только текст распознавания, а причина пропуска пишется в
+    # метаданные, чтобы решение можно было пересмотреть.
+    own_messages = await own_message_count(chat.id)
+    skip_reason = media_skip_reason(media_kind, chat_kind,
+                                   own_messages=own_messages,
+                                   min_own_messages=await min_own_messages())
+    needs_recognition = skip_reason is None
 
     source_event_id = f"tg:{chat.id}:{msg.id}"
 
@@ -204,6 +193,10 @@ async def save_message(client: TelegramClient, msg) -> None:
                 "media_kind": media_kind,
                 "media_meta": media_meta or None,
                 "needs_recognition": needs_recognition,
+                # Причина пропуска и признак участия — чтобы граф связей и
+                # доливка очереди решали по данным, а не по названию чата.
+                "media_skip_reason": skip_reason,
+                "owner_participates": own_messages > 0,
             },
             triage_status="media_pending" if needs_recognition else "pending",
         ))

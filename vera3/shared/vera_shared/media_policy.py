@@ -1,53 +1,102 @@
-"""Which media gets LLM recognition (vision / whisper) — one policy, one place.
+"""Что отправлять на распознавание (vision/whisper) и по чему строить граф связей.
 
-Set 2026-07-20 (Dima): the vision daily budget on the broker kept getting
-exhausted by news-channel graphics and stickers — content with ~zero value
-for searching Dima's own memory. So:
+Одна политика на ВСЕ пути загрузки: живой юзербот, исторический бэкфилл,
+доливка очереди из бэклога. Чистые функции — данные для решения приносит
+вызывающий (`vera_shared.chat_activity`), поэтому политика тривиально
+тестируется и не умеет расходиться между путями.
 
-  - voice / audio → recognize (whisper; valuable everywhere, separate pool
-    that isn't the bottleneck)
-  - photo / image → recognize, EXCEPT in broadcast channels (news/memes,
-    not personal correspondence) and EXCEPT noisy public groups (below)
-  - sticker → never (tiny, emoji-like; the alt-text placeholder is enough)
-  - everything else (video, video_note, document, …) → no recognition
+  - голос / аудио → распознаём всегда (whisper: дешёвый пул, самый ценный
+    контент, vision ему не конкурент)
+  - фото / картинка → в личке всегда; в вещательном канале никогда; в группе —
+    только если владелец в ней РЕАЛЬНО участвует (см. ниже)
+  - стикеры → никогда (мелкие, эмодзи-подобные; заглушки с alt-текстом хватает)
+  - остальное (видео, кружочки, документы) → без распознавания
 
-Noisy-group denylist added 2026-07-29 (Dima: «это все в топку»): the
-channel rule above only catches broadcast channels, but the biggest photo
-sources were large public *groups* — expat communities and channel
-discussion chats. They kept eating the vision budget that work and personal
-chats need. Audited share: ~71% of the photo backlog.
+Отфильтрованное всё равно попадает в мозг: событие сохраняется с заглушкой
+`[photo]` и метаданными, пропускается только описание от модели. Причина
+пропуска пишется в `media_skip_reason`, чтобы решение можно было пересмотреть
+позже, а не терять молча.
 
-Filtered media still lands in the brain — it keeps its `[photo]` placeholder
-and metadata, only the LLM description is skipped.
+## Почему участие, а не список названий
 
-Pure function so it's trivially unit-tested and shared by every ingest path.
+До 2026-08-27 группы фильтровались денилистом по НАЧАЛУ названия чата
+(«nexta live», «українці…», «квизда» и ещё шесть строк). Он оказался и
+неверным, и недешёвым:
+
+- **врал по существу.** «Быть Или» — публичный канал (3 650 сообщений от
+  одного автора) плюс его группа-обсуждение (27 748 сообщений от 1 792
+  авторов). Владелец не написал там НИ ОДНОГО сообщения, а фото оттуда
+  занимали 196 мест в очереди — четверть всей очереди. В денилист чат просто
+  не попал, и попасть мог только руками.
+- **жил в трёх копиях**: питоновский список, тот же список условиями SQL в
+  кроне доливки, и третий в тестах. Комментарий «держать в синхроне» — это и
+  есть признак, что синхронизировать нечего.
+- **фильтр каналов его не спасал**: группа-обсуждение канала — это megagroup,
+  то есть `chat_kind == "group"`, и она проходила насквозь.
+
+Объективный признак вместо списка: сколько сообщений в этом чате написал сам
+владелец. Замер по живым данным 2026-08-27 — 782 фото в очереди:
+65% из чатов, где он писал; 33% из чатов, где не написал ни разу; 2% где
+почти не писал. Порог участия — настройка `media_min_own_messages`, а не
+константа в коде.
 """
 from __future__ import annotations
 
-_RECOGNIZABLE_IMAGES = {"photo", "image"}
+_RECOGNIZABLE_IMAGES = frozenset({"photo", "image"})
+_ALWAYS_RECOGNIZED = frozenset({"voice", "audio"})
 
-# Совпадение по НАЧАЛУ названия чата (регистр не важен), кроме явных
-# подстрок. Держать в синхроне с NOISE_CHATS в scripts/vera-media-requeue.sh.
-_NOISE_CHAT_PREFIXES = (
-    "nexta live",          # + «NEXTA Live Chat» — чат-обсуждение канала
-    "українці",            # экспат-группы: Вʼєтнам, Шрі-Ланка, Нячанг, курилка
-    "хдніпро",
-    "велигамность",
-    "квизда",
-    "ии - боты",
-    "chatgpt",
-    "канал лучкова",
-)
-_NOISE_CHAT_SUBSTRINGS = ("badcomedian",)
+#: Причины пропуска — пишутся в metadata и позволяют пересмотреть решение.
+SKIP_KIND = "kind"                      # видео/документ/стикер: не распознаём никогда
+SKIP_CHANNEL = "channel"                # вещательный канал: новости и мемы
+SKIP_NO_PARTICIPATION = "no_participation"  # группа, где владелец не участвует
 
 
-def is_noise_chat(chat_title: str | None) -> bool:
-    """Шумный паблик/канал, фото из которого не распознаём."""
-    if not chat_title:
-        return False
-    t = chat_title.strip().lower()
-    return (t.startswith(_NOISE_CHAT_PREFIXES)
-            or any(s in t for s in _NOISE_CHAT_SUBSTRINGS))
+def classify_chat_kind(chat_type: str, is_megagroup: bool) -> str:
+    """private | group | channel | other — единственный источник правды на тип чата.
+
+    Telethon отдаёт супергруппы КАК Channel-объект (`chat_type == "channel"`),
+    поэтому просто «chat_type=='channel' → канал» — БАГ: 96% реальных «групп»
+    сегодня это именно супергруппы (легаси Chat почти не осталось), и без
+    `is_megagroup` их бы ошибочно посчитали вещательными каналами.
+    """
+    if chat_type == "user":
+        return "private"
+    if chat_type in {"chat", "chatfull"}:
+        return "group"
+    if chat_type == "channel":
+        return "group" if is_megagroup else "channel"
+    return "other"
+
+
+def media_skip_reason(media_kind: str | None, chat_kind: str | None, *,
+                      own_messages: int, min_own_messages: int) -> str | None:
+    """Почему это медиа НЕ идёт на распознавание. None — идёт.
+
+    `own_messages` — сколько сообщений владелец сам написал в этом чате
+    (`vera_shared.chat_activity.own_message_count`). Неизвестно → передавай 0:
+    решение обязано быть детерминированным, а событие всё равно сохранится с
+    заглушкой и причиной пропуска.
+    """
+    if media_kind in _ALWAYS_RECOGNIZED:
+        return None
+    if media_kind not in _RECOGNIZABLE_IMAGES:
+        return SKIP_KIND
+    if chat_kind == "private":
+        return None
+    if chat_kind == "channel":
+        return SKIP_CHANNEL
+    # group / supergroup / other — решает участие владельца.
+    if own_messages >= min_own_messages:
+        return None
+    return SKIP_NO_PARTICIPATION
+
+
+def should_recognize_media(media_kind: str | None, chat_kind: str | None, *,
+                           own_messages: int, min_own_messages: int) -> bool:
+    """Отправлять ли это медиа на распознавание моделью."""
+    return media_skip_reason(media_kind, chat_kind,
+                             own_messages=own_messages,
+                             min_own_messages=min_own_messages) is None
 
 
 def should_extract_relations(metadata: dict | None) -> bool:
@@ -60,26 +109,14 @@ def should_extract_relations(metadata: dict | None) -> bool:
     подтянулось к случайному контакту. Такой же мусор: `NEXTA Live -[works_at]->
     Telegram`, `Канал Лучкова -[works_at]-> Microsoft`, `Дніпро -[lives_in]->
     ХДніпро`. Всего 11 рёбер из 10 постов — все выдуманные, удалены.
+
+    Та же логика для групп, где владелец не участвует: чужая публичная болтовня
+    личных фактов о нём не несёт. Признак берётся из метаданных события
+    (`owner_participates`, пишется на загрузке) — у старых событий поля нет, и
+    для них остаётся только проверка канала.
     """
     if not metadata:
         return True
     if metadata.get("chat_kind") == "channel":
         return False
-    return not is_noise_chat(metadata.get("chat_title"))
-
-
-def should_recognize_media(
-    media_kind: str | None,
-    chat_kind: str | None,
-    chat_title: str | None = None,
-) -> bool:
-    """True if this media should be sent for LLM recognition."""
-    if media_kind in ("voice", "audio"):
-        return True
-    if media_kind in _RECOGNIZABLE_IMAGES:
-        # Skip broadcast channels — their images are news/memes, not Dima's.
-        if chat_kind == "channel":
-            return False
-        # …и шумные публичные группы (каналами не считаются, но такой же шум).
-        return not is_noise_chat(chat_title)
-    return False  # sticker, video, video_note, document, anything else
+    return metadata.get("owner_participates") is not False

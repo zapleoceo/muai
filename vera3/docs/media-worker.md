@@ -115,38 +115,58 @@ Goes through the broker's free-first chains:
 
 | Kind | Recognized? | How |
 |---|---|---|
-| photo / image (private / group) | ✅ | vision |
-| photo / image (broadcast channel) | ❌ | placeholder `[photo]` kept, no vision |
-| photo / image (noisy public group) | ❌ | placeholder kept — see denylist below |
-| sticker | ❌ | placeholder `[sticker: <emoji>]` only |
-| voice / audio | ✅ | broker whisper |
-| video / video_note | ❌ | not processed |
-| document | ❌ | not processed |
+| photo / image (личка) | ✅ | vision |
+| photo / image (группа, владелец в ней пишет) | ✅ | vision |
+| photo / image (группа, владелец молчит) | ❌ | заглушка `[photo]`, причина `no_participation` |
+| photo / image (вещательный канал) | ❌ | заглушка `[photo]`, причина `channel` |
+| sticker | ❌ | заглушка `[sticker: <emoji>]`, причина `kind` |
+| voice / audio | ✅ | whisper у брокера — отдельный дешёвый пул, работает везде |
+| video / video_note / document | ❌ | причина `kind` |
 
-The recognition gate is one pure policy — `vera_shared.media_policy.
-should_recognize_media(media_kind, chat_kind)` — so every ingest path decides
-identically and it's unit-tested. Set 2026-07-20 (Dima): the free vision pool
-kept getting exhausted by news-channel graphics and stickers — content with
-~zero value for searching Dima's own memory. So channel images and all
-stickers now skip vision entirely; the event still lands in the brain with its
-`[photo]`/`[sticker]` placeholder, only the recognised text is dropped.
-Voice/audio go through the separate (uncapped) whisper pool and are recognised
-everywhere, including channels.
+Решение принимает одна чистая функция —
+`media_policy.media_skip_reason(media_kind, chat_kind, own_messages=…,
+min_own_messages=…)`; `should_recognize_media` — та же проверка одним булевым
+ответом. Данные для неё приносит `chat_activity.own_message_count(chat_id)`
+(кэш на час, `forget()` сбрасывает), порог — `chat_activity.min_own_messages()`,
+то есть настройка `media_min_own_messages`, а не константа в коде. Тип чата
+даёт `media_policy.classify_chat_kind(chat_type, is_megagroup)`: супергруппа
+приходит от Telethon как Channel, и без второго аргумента её приняли бы за
+вещательный канал.
 
-**Noisy-group denylist (2026-07-29).** The channel rule above only covers
-broadcast channels, but an audit of the live inflow showed the biggest photo
-sources were large public *groups* — expat communities and channel discussion
-chats — which the rule let through (~39 photos/day, ~71% of the photo
-backlog). `media_policy.is_noise_chat(chat_title)` now also skips vision for
-chats whose title starts with `nexta live`, `українці`, `хдніпро`,
-`велигамность`, `квизда`, `ии - боты`, `chatgpt`, `канал лучкова`, or
-contains `badcomedian` (Dima's approved list: «это все в топку»). Keep it in
-sync with `NOISE_CHATS` in `scripts/vera-media-requeue.sh`, which applies the
-same filter when refilling the queue from the backlog. Voice/audio from these
-chats is still transcribed — whisper is a separate, cheap pool.
+Отфильтрованное всё равно попадает в мозг: событие сохраняется с заглушкой,
+причина пишется в `media_skip_reason`, а признак участия — в
+`owner_participates` (его же читает `should_extract_relations`, чтобы не
+строить граф связей по чужой публичной болтовне).
 
-Earlier (2026-06-29 → 2026-07-20) static `image/webp` stickers were sent to
-vision and channel photos were recognised; both were rolled back here.
+### Почему участие, а не список названий (2026-08-27)
+
+С 2026-07-29 группы фильтровались денилистом по началу названия чата. Он
+оказался и неверным, и дорогим в поддержке:
+
+- **не поймал главного.** «Быть Или» — публичный канал (3 650 сообщений от
+  одного автора) плюс его группа-обсуждение (27 748 сообщений от 1 792
+  авторов). Владелец не написал там ни одного сообщения, а фото оттуда
+  занимали 196 мест в очереди — четверть всей очереди. Фильтр каналов их не
+  ловил: группа-обсуждение это megagroup, то есть `chat_kind == "group"`.
+- **жил в трёх копиях**: список в Python, он же условиями SQL в кроне доливки,
+  и третий в тестах. Комментарий «держать в синхроне» — признак, что
+  синхронизировать нечего.
+
+Замер очереди 2026-08-27 (782 фото): 65% из чатов, где владелец писал; **33%
+из чатов, где он не написал ни разу**; 2% где почти не писал. Порог участия
+по умолчанию — 5 своих сообщений: «Кайфушники Нячанга» (3 своих из 1735 при
+235 авторах) отсекается, «Jakarta sales» (16), «BEER AI Нячанг» (17) и
+«JAKARTA <> MARKETING HQ TEAM» (30) проходят.
+
+Порог — настройка в дашборде, 0 означает «распознавать фото из всех групп».
+
+### Два пути загрузки, одна политика
+
+До 2026-08-27 `backfill.py` политику вообще не применял: своя захардкоженная
+логика (любое фото → распознавать, статичный webp-стикер → в vision, хотя
+политика говорит «стикеры никогда») и ни одного `chat_kind` в метаданных.
+Отсюда 679 записей в очереди, про которые нельзя было сказать, из канала они
+или из лички. Теперь оба пути — живой юзербот и бэкфилл — зовут одну функцию.
 
 ## Re-recognising the backlog
 
@@ -163,8 +183,10 @@ by the LLM circuit breaker + broker-hosted whisper. The unrecoverable tail
 (~8.1k) is `Could not find the input entity` (peer not in session cache),
 `message not found` (deleted), and `too large`.
 
-To re-recognise, reset recoverable failures back to `media_pending` and let
-the hardened pipeline reprocess them:
+Разгребает это `scripts/media_requeue.py` — той же политикой, что и загрузка.
+Ручной SQL ниже оставлен как справка о том, что считается восстановимым
+провалом; сам скрипт делает три шага за прогон (уборка `sweep`, пересмотр
+`revisit`, доливка `top_up`):
 
 ```sql
 UPDATE events e SET
@@ -183,6 +205,15 @@ non-disruptive because of the claim order (step 3): voice/audio drain first
 through the fast whisper pool (~5.3k clear in days), live media always jumps
 the queue within its class, the photo backlog chips away on spare vision
 capacity, the circuit breaker paces it under the daily budget cap, and every
-download is size-capped (no OOM). A host cron `vera-media-requeue.sh` (every
-3 h) tops the queue up to ~800 from the recoverable backlog so it drains
-steadily without a giant permanent `media_pending`.
+download is size-capped (no OOM). Крон на хосте раз в 3 часа гоняет `scripts/media_requeue.py`, и он держит
+очередь на ~800 (`VERA_MEDIA_QUEUE_TARGET`):
+
+1. `sweep` — выкидывает из очереди то, что политика больше не пропускает
+   (каналы, стикеры, группы без участия). Событие остаётся в мозге с
+   заглушкой, освобождается место в дефицитной очереди.
+2. `revisit` — возвращает пропущенное по `no_participation`, если владелец в
+   этом чате уже пишет: решение принимается по данным, а данные меняются.
+3. `top_up` — доливает из восстановимых провалов, голосовые вперёд, дальше
+   свежие фото, и только то, что политика пропускает.
+
+`--dry-run` показывает все три шага, ничего не меняя.

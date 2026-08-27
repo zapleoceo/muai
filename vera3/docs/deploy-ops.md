@@ -139,7 +139,9 @@ neighbours 2-5), while an empty three-hour stretch never occurred.
   контейнер, т.е. до ~2 ГБ на одну Vera. Compose переопределяет его
   явным якорем `x-logging` (10m×3) для всех сервисов vera3.
 - **Логи cron-скриптов** (`vera-backup`, `vera-media-requeue`,
-  `vera3-monitor`, `vera3-sync-projects`): `infra/logrotate/vera` →
+  `vera3-monitor`, `vera3-sync-projects`; сам скрипт доливки очереди с
+  2026-08-27 — `scripts/media_requeue.py`, крон запускает его через
+  `docker exec -i vera3-media-worker python -`, имя лога прежнее): `infra/logrotate/vera` →
   `/etc/logrotate.d/vera`, weekly ×4 + compress, `su root adm`
   (без него logrotate отказывается: `/var/log` принадлежит `root:syslog`).
 - **`shm_size: 256mb`** у postgres — Docker даёт `/dev/shm` 64 МБ, из-за чего
