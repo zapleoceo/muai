@@ -114,6 +114,16 @@ class TestSpec:
         """Окна независимы, а ждём мы брокер: без параллели 20 окон это часы."""
         assert SPEC.parallel > 1
 
+    def test_map_phase_runs_on_the_cheap_pool(self):
+        """Окно — выборка фактов по строгой схеме, и её тянет дешёвый пул.
+
+        Замер 2026-08-27 на живом окне: `structured` 18с с той же точностью,
+        `chat:smart` 126с и вдобавок постоянный кулдаун по дневному капу — на
+        нём бэкфилл стоял. Судить, что важно, всё равно оставляем умному.
+        """
+        assert SPEC.part_capability == "structured"
+        assert SPEC.merge_capability == "chat:smart"
+
 
 class TestBodyText:
     def test_keeps_the_structure(self):
@@ -294,6 +304,16 @@ class TestWorker:
 
         assert distill.await_args.kwargs["poll_deadline_s"] >= 600
 
+    @pytest.mark.asyncio
+    async def test_worker_waits_out_the_cooldown_before_claiming(self):
+        """Иначе за один кулдаун сессия набирала 122 холостые попытки."""
+        import gateway.claude_session_worker as w
+
+        with patch.object(w, "llm_cooldown_remaining_s", AsyncMock(return_value=180.0)):
+            assert await w.cooling_s() == 180.0
+        with patch.object(w, "llm_cooldown_remaining_s", AsyncMock(return_value=0.0)):
+            assert await w.cooling_s() == 0.0
+
 
 class TestFold:
     @pytest.mark.asyncio
@@ -317,6 +337,25 @@ class TestFold:
         assert got["summary"] == _FULL["summary"]
         # Последняя реплика попала в один из промптов, а не была срезана.
         assert any("шаг 39" in prompt for prompt in calls)
+
+    @pytest.mark.asyncio
+    async def test_each_phase_goes_to_its_own_pool(self):
+        """Окна — дешёвым пулом, финальную сборку — умным."""
+        from gateway.claude_distill import distill
+
+        turns = [{"role": "user" if i % 2 == 0 else "assistant",
+                  "text": f"шаг {i} " + "x" * 3000} for i in range(40)]
+        used: list[str] = []
+
+        async def fake_chat(**kw):
+            used.append(kw["capability"])
+            return json.dumps(_FULL), {}
+
+        with patch.object(fold_mod, "chat_async", AsyncMock(side_effect=fake_chat)):
+            await distill(turns, project="myAI", branch="master")
+
+        assert set(used[:-1]) == {"structured"}
+        assert used[-1] == "chat:smart"
 
 
 class TestQueueOnSqlite:
@@ -391,6 +430,26 @@ class TestQueueOnSqlite:
         assert row.status == "error" and "брокер" in row.error
 
     @pytest.mark.asyncio
+    async def test_defer_rolls_the_attempt_back(self, sqlite_db):
+        """Кулдаун предохранителя не имеет права съесть попытки сессии."""
+        import gateway.claude_session_worker as w
+
+        await self._put(sqlite_db, status="processing", attempts=2)
+        with patch.object(w, "get_session", sqlite_db):
+            await w.defer("s-1", "LLM circuit open for chat:smart")
+        row = await self._row(sqlite_db)
+        assert row.status == "pending" and row.attempts == 1
+
+    @pytest.mark.asyncio
+    async def test_defer_never_goes_below_zero(self, sqlite_db):
+        import gateway.claude_session_worker as w
+
+        await self._put(sqlite_db, status="processing", attempts=0)
+        with patch.object(w, "get_session", sqlite_db):
+            await w.defer("s-1", "circuit open")
+        assert (await self._row(sqlite_db)).attempts == 0
+
+    @pytest.mark.asyncio
     async def test_revive_stale_returns_hung_processing(self, sqlite_db):
         """Перезапуск контейнера посреди осмысления не теряет сессию."""
         from datetime import timedelta
@@ -430,9 +489,11 @@ class TestQueueOnSqlite:
         import gateway.claude_session_worker as w
         from vera_shared.llm.client import LLMCoolingDown
 
-        fail = AsyncMock()
+        defer, fail = AsyncMock(), AsyncMock()
         with patch.object(w, "claim", AsyncMock(return_value=_Row(attempts=1))),              patch.object(w, "distill",
-                          AsyncMock(side_effect=LLMCoolingDown("budget cap", remaining_s=1260))),              patch.object(w, "fail", fail):
+                          AsyncMock(side_effect=LLMCoolingDown("budget cap",
+                                                               remaining_s=1260))),              patch.object(w, "defer", defer), patch.object(w, "fail", fail):
             assert await w.process_one() is False
 
-        assert fail.await_args.kwargs["attempts"] == 0
+        defer.assert_awaited_once()
+        fail.assert_not_awaited()

@@ -15,12 +15,13 @@ import asyncio
 import logging
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import select, update
+from sqlalchemy import case, select, update
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import ClaudeSessionQueueRow
+from vera_shared.llm.circuit import llm_cooldown_remaining_s
 from vera_shared.llm.client import LLMCoolingDown
 
-from gateway.claude_distill import distill
+from gateway.claude_distill import SPEC, distill
 from gateway.claude_session import store_summary
 
 log = logging.getLogger(__name__)
@@ -34,6 +35,9 @@ POLL_DEADLINE_S = 900.0
 MAX_ATTEMPTS = 3
 #: Контейнер перезапустили посреди осмысления — сессия зависла в processing.
 STALE_MINUTES = 45
+#: Потолок на один сон по кулдауну: кап брокера сбрасывается в 00:00 UTC, и
+#: ждать до него одним куском значит проспать досрочно ожившый пул.
+MAX_COOLDOWN_SLEEP_S = 600.0
 
 
 def _now() -> datetime:
@@ -98,6 +102,40 @@ async def fail(session_id: str, reason: str, attempts: int) -> None:
                 session_id, reason[:120], attempts, status)
 
 
+async def defer(session_id: str, reason: str) -> None:
+    """Вернуть сессию в очередь, не засчитывая попытку.
+
+    Предохранитель открыт — виновата не сессия, и счётчик попыток обязан
+    остаться честным: иначе она израсходует все три, ни разу не попробовав, и
+    первый же настоящий сбой пометит её error.
+    """
+    async with get_session() as s:
+        await s.execute(
+            update(ClaudeSessionQueueRow)
+            .where(ClaudeSessionQueueRow.session_id == session_id)
+            .values(status="pending", error=reason[:500], updated_at=_now(),
+                    # CASE, а не greatest(): в SQLite такой функции нет, а
+                    # тесты очереди гоняются на живом SQLite.
+                    attempts=case(
+                        (ClaudeSessionQueueRow.attempts > 0,
+                         ClaudeSessionQueueRow.attempts - 1),
+                        else_=0))
+        )
+
+
+async def cooling_s() -> float:
+    """Секунд до конца кулдауна пулов, которыми осмысляем. 0 — можно работать.
+
+    Проверяем ДО claim: иначе воркер каждые 30с забирает сессию, получает отказ
+    предохранителя и кладёт обратно. Поймано вживую — за один кулдаун одна
+    сессия набрала 122 попытки, и первый же настоящий сбой после этого сразу
+    пометил бы её error, хотя своих попыток у неё не было ни одной.
+    """
+    waits = [await llm_cooldown_remaining_s(cap)
+             for cap in {SPEC.part_capability, SPEC.merge_capability}]
+    return max(waits)
+
+
 async def process_one() -> bool:
     """Осмыслить одну сессию. False — очередь пуста."""
     row = await claim()
@@ -123,10 +161,10 @@ async def process_one() -> bool:
                  report["transcript_chars"], report["windows"],
                  ", ХВОСТ ОБРЕЗАН" if report["truncated"] else "")
     except LLMCoolingDown as e:
-        # Предохранитель открыт (дневной бюджет, нет провайдера) — попытки не
-        # жжём: виновата не сессия. False уводит цикл в сон, а не гонит его
-        # мгновенными отказами по всей очереди.
-        await fail(row.session_id, str(e), attempts=0)
+        # Предохранитель открылся уже после claim (проверка перед ним есть, но
+        # окно между ними существует). Попытку не засчитываем, а False уводит
+        # цикл в сон, а не гонит его отказами по всей очереди.
+        await defer(row.session_id, str(e))
         return False
     except Exception as e:
         # Любая причина — сессия возвращается в очередь, а не теряется.
@@ -141,6 +179,12 @@ async def run_forever() -> None:
         log.info("claude-worker: вернул в очередь после перезапуска: %d", revived)
     while True:
         try:
+            cooling = await cooling_s()
+            if cooling > 0:
+                log.info("claude-worker: предохранитель закрыт, жду %.0f мин",
+                         cooling / 60)
+                await asyncio.sleep(min(cooling + 5, MAX_COOLDOWN_SLEEP_S))
+                continue
             busy = await process_one()
         except asyncio.CancelledError:
             log.info("claude-worker: остановлен")

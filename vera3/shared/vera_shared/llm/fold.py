@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from vera_shared.llm.client import LLMCallFailed, LLMCoolingDown, chat_async
+from vera_shared.llm.routing import Capability
 
 log = logging.getLogger(__name__)
 
@@ -49,6 +50,12 @@ class FoldSpec:
     #: поэтому параллель сокращает 20-оконную сессию с часов до минут. Больше
     #: трёх не берём: пул брокера общий, и его занимают не только мы.
     parallel: int = 1
+    #: Разные пулы на две фазы. Окно — механическая выборка фактов по строгой
+    #: схеме, её тянет дешёвый пул; судить, что из этого важно, оставляем
+    #: умному. Замер 2026-08-27 на живом окне: `structured` 18с, `chat:fast`
+    #: 7с, `chat:smart` 126с и при этом постоянный кулдаун по дневному капу.
+    part_capability: Capability = "chat:smart"
+    merge_capability: Capability = "chat:smart"
 
     def __post_init__(self) -> None:
         if not self.fields or self.fields[0] != "summary":
@@ -109,11 +116,12 @@ def windows(lines: list[str], *, limit: int = DEFAULT_WINDOW_CHARS,
 
 
 async def _one(prompt: str, spec: FoldSpec, *, max_tokens: int,
+               capability: Capability = "chat:smart",
                poll_deadline_s: float | None = None) -> dict[str, Any] | None:
     try:
         raw, _meta = await chat_async(
             messages=[{"role": "user", "content": prompt}],
-            capability="chat:smart", response_format=spec.json_schema,
+            capability=capability, response_format=spec.json_schema,
             max_tokens=max_tokens, temperature=0.2, workflow=spec.name,
             poll_deadline_s=poll_deadline_s,
         )
@@ -154,7 +162,8 @@ async def _map(chunks: list[str], spec: FoldSpec, context: dict[str, str],
             return await _one(
                 spec.part_prompt.format(scope=f"часть {index} из {len(chunks)}",
                                         transcript=chunk, **context),
-                spec, max_tokens=spec.part_tokens, poll_deadline_s=poll_deadline_s)
+                spec, max_tokens=spec.part_tokens,
+                capability=spec.part_capability, poll_deadline_s=poll_deadline_s)
 
     done = await asyncio.gather(*(one(i, c) for i, c in enumerate(chunks, start=1)))
     return [part for part in done if part is not None]
@@ -182,7 +191,8 @@ async def fold(lines: list[str], spec: FoldSpec, context: dict[str, str],
     if len(chunks) == 1:
         result = await _one(
             spec.part_prompt.format(scope="текст", transcript=chunks[0], **context),
-            spec, max_tokens=spec.part_tokens, poll_deadline_s=poll_deadline_s)
+            spec, max_tokens=spec.part_tokens, capability=spec.part_capability,
+            poll_deadline_s=poll_deadline_s)
         if result is None:
             return dict(spec.empty), {**report, "distilled": False}
         return result, report
@@ -195,7 +205,7 @@ async def fold(lines: list[str], spec: FoldSpec, context: dict[str, str],
         spec.merge_prompt.format(
             parts=json.dumps(parts, ensure_ascii=False, indent=1), **context),
         spec, max_tokens=min(spec.part_tokens + 400 * len(parts), 4000),
-        poll_deadline_s=poll_deadline_s)
+        capability=spec.merge_capability, poll_deadline_s=poll_deadline_s)
     if merged is None:
         # Слить моделью не вышло — событие всё равно должно быть полным.
         return stitch(parts, spec), {**report, "merged": "mechanical"}
