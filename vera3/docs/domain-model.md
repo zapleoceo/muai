@@ -102,7 +102,7 @@ LLM-guessing for `itstep`/`veranda`. Populated by
 | `kind` | `key` | Rule (see `vera_shared/projects/rules.py`) |
 |---|---|---|
 | `chat` | canonical chat_id (supergroup `-100` prefix stripped) | Telegram folder "ItStep" → `itstep`; chat title contains "veranda"/"веранда" → `veranda` |
-| `account` | ILIKE pattern | Gmail account `%itstep.org%` → `itstep` |
+| `account` | ILIKE pattern | Gmail account `%itstep.org%` → `itstep`; Slack workspace `Sintegrum Team/%` → `itstep` |
 | `person` | Telegram sender_id | Derived: anyone who posted in a project chat (excluding owner) |
 
 PK `(project, kind, key)` — a person/chat can belong to only one row per
@@ -115,6 +115,23 @@ guess, and any LLM-guessed `itstep`/`veranda` on a telegram chat that
 ISN'T in `project_membership` gets reset to `other` (closes the loop —
 LLM can no longer silently misclassify a chat as itstep/veranda that
 membership doesn't recognize).
+
+The `account` rule applies to **any** source, not just Gmail. Account values
+don't overlap across sources (`zaporozec_d@itstep.org` for gmail,
+`Sintegrum Team/dimondra` for slack, `userbot` for telegram), so a membership
+pattern hits exactly what it was written for.
+
+Slack is covered by an owner's explicit rule: everything in the work workspace
+is `itstep`. The LLM guess failed systematically on short replies — «)))» and
+«згоден» landed in `family` and `personal`, 174 events out of 815 on
+2026-08-27. Short messages carry no signal, so this is not a prompt problem;
+it needs a deterministic rule.
+
+**Jira is not ingested at all.** There is no Jira connector — only its email
+notifications reach the brain (`jira@itstep.atlassian.net`, already classified
+`itstep` because the sender domain is a strong signal). Issues, comments and
+transitions themselves are absent, so "everything in Jira is itstep" currently
+has nothing to attribute.
 
 A fourth override in the same block handles `source='manual'` events
 (notes inserted directly via `gateway`'s `/event/manual`, e.g. call

@@ -24,10 +24,19 @@ async def apply_project_override(batch_ids: list[int]) -> None:
               AND {CHAT_CANON} = pm.key::bigint
               AND e.project IS DISTINCT FROM pm.project
         """), {"ids": batch_ids})
+        # Аккаунт — ключ на любой источник, не только на почту. Значения по
+        # источникам не пересекаются (`zaporozec_d@itstep.org` у gmail,
+        # `Sintegrum Team/dimondra` у slack, `userbot` у telegram), поэтому
+        # шаблон membership бьёт ровно туда, куда заведён.
+        #
+        # Slack сюда попал по прямому правилу владельца: вся переписка в
+        # рабочем пространстве — itstep. Догадка модели там systematically
+        # врала на коротких репликах: «)))» и «згоден» уезжали в family и
+        # personal, 174 события из 815.
         await s.execute(text("""
             UPDATE events e SET project = pm.project
             FROM project_membership pm
-            WHERE e.id = ANY(:ids) AND pm.kind='account' AND e.source='gmail'
+            WHERE e.id = ANY(:ids) AND pm.kind='account'
               AND e.account ILIKE pm.key
               AND e.project IS DISTINCT FROM pm.project
         """), {"ids": batch_ids})
