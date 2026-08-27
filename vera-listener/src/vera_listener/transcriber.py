@@ -15,6 +15,11 @@ from vera_listener.config import Config
 
 log = logging.getLogger("listener.stt")
 
+#: Короче этого распознавать нечего: на обрывке в 64 мс whisper выдаёт либо
+#: пустоту, либо выдумку («Спасибо за просмотр»). В логе 2026-08-27 таких
+#: запусков было шесть за два часа — все на закрытии пустых сессий.
+MIN_AUDIO_S = 0.6
+
 
 class Transcriber:
     def __init__(self, config: Config):
@@ -35,9 +40,9 @@ class Transcriber:
 
     def transcribe(self, pcm: bytes) -> list[tuple[float, str]]:
         """PCM16 16 кГц → [(смещение от начала куска, текст)]."""
-        if not pcm:
-            return []
         audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+        if len(audio) < MIN_AUDIO_S * 16_000:
+            return []
         segments, _info = self._load().transcribe(
             audio,
             language=self.config.language,

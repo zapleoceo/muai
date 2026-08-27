@@ -18,7 +18,8 @@ from typing import Any
 from vera_listener.capture import MIC, SYSTEM, Capture, Frame
 from vera_listener.config import Config
 from vera_listener.dedup import drop_echo
-from vera_listener.gate import judge
+from vera_listener.gate import judge, system_audio_allowed
+from vera_listener.hold import BYTES_PER_S, Hold
 from vera_listener.outbox import Outbox, read_payload
 from vera_listener.recorder import TrackRecorder
 from vera_listener.segmenter import Closed, Segmenter
@@ -31,6 +32,9 @@ from vera_listener.winctx import active_audio_app, foreground_window_title
 log = logging.getLogger("listener")
 
 CONTEXT_POLL_S = 2.0
+#: Сколько системного звука держим, пока не ясно — созвон это или ролик.
+#: Десять минут PCM16 16 кГц ≈ 19 МБ; дальше забываем самое старое.
+HOLD_MAX_S = 600.0
 #: сколько секунд без кадров считаем глухотой, а не переоткрытием устройства
 DEAF_AFTER_TICKS = 3
 
@@ -59,6 +63,9 @@ class Listener:
         # следующей части). None — следующая сессия начинает новую встречу.
         self._continues: tuple[str, int] | None = None
         self._meeting: tuple[str, int] | None = None
+        # Системный звук сессии, ещё не прошедшей ворота: распознавать его
+        # сразу — значит платить за каждый ютуб полностью (см. hold.py).
+        self._held = Hold(int(HOLD_MAX_S * BYTES_PER_S))
         self._silent_ticks = 0
         self._stop = threading.Event()
 
@@ -150,12 +157,39 @@ class Listener:
         recorder.add(frame.pcm, speech, frame.at - self._session_zero)
         if recorder.ready():
             self._queue_chunk(frame.track)
+        if self._held and self._system_confirmed():
+            self._flush_held()
 
     def _queue_chunk(self, track: str) -> None:
         taken = self.recorders[track].take()
-        if taken and self.session is not None:
-            offset, pcm = taken
-            self.jobs.put(("chunk", self.session, track, offset, pcm))
+        if not taken or self.session is None:
+            return
+        offset, pcm = taken
+        # Системный звук идёт в распознавание только когда ворота уже пропускают
+        # эту сессию. Иначе — в копилку: ролик так не стоит ни такта, а созвон
+        # ничего не теряет, потому что копилка уйдёт распознаваться, как только
+        # заговорит микрофон (или сессию примут на закрытии).
+        if track == SYSTEM and not self._system_confirmed():
+            self._held.add(offset, pcm)
+            return
+        self.jobs.put(("chunk", self.session, track, offset, pcm))
+
+    def _system_confirmed(self) -> bool:
+        """Прошла ли сессия ворота настолько, что системный звук уже ценен."""
+        session = self.segmenter.current
+        if session is None:
+            return False
+        return system_audio_allowed(
+            session.app, mic_speech_s=session.speech_s.get(MIC, 0.0),
+            allow=self.config.allow_apps, browsers=self.config.browser_apps,
+            deny=self.config.deny_apps)
+
+    def _flush_held(self) -> None:
+        """Микрофон заговорил — накопленное больше не под вопросом."""
+        if self.session is None:
+            return
+        for offset, pcm in self._held.take():
+            self.jobs.put(("chunk", self.session, SYSTEM, offset, pcm))
 
     def _finish(self, closed: Closed) -> None:
         if self.session is None:
@@ -164,7 +198,9 @@ class Listener:
         for track in (MIC, SYSTEM):
             self._queue_chunk(track)
         self.jobs.put(("close", self.session, closed, speech_s,
-                       self._wall(closed.ended_at)))
+                       self._wall(closed.ended_at), self._held.take(),
+                       self._held.dropped_s))
+        self._held.clear()
         # Разрез по предохранителю — не конец разговора: следующая сессия
         # продолжает ту же встречу. Тишина и смена приложения — конец.
         if closed.reason == "max_duration" and self._meeting is not None:
@@ -199,7 +235,7 @@ class Listener:
             for at, text in self.transcriber.transcribe(pcm):
                 self.outbox.append(path, offset + at, track, text)
             return
-        _, path, closed, speech_s, ended_wall = job
+        _, path, closed, speech_s, ended_wall, held, held_lost_s = job
         verdict = judge(speech_s, app=closed.session.app,
                         allow=self.config.allow_apps,
                         browsers=self.config.browser_apps,
@@ -207,15 +243,27 @@ class Listener:
                         min_speech_s=self.config.min_speech_s,
                         monologue_speech_s=self.config.monologue_speech_s)
         if not verdict.keep:
-            log.info("разговор отброшен (%s, %s)", verdict.reason, closed.reason)
+            held_s = sum(len(pcm) for _at, pcm in held) / BYTES_PER_S
+            log.info("разговор отброшен (%s, %s), не распознавали %.0fс системного",
+                     verdict.reason, closed.reason, held_s)
             self.status.note_dropped()
             self.outbox.drop(path)
             return
+        # Сессию берём — теперь придержанный системный звук стоит распознать.
+        if held_lost_s:
+            log.warning("придержанного звука не хватило памяти: забыто %.0fс",
+                        held_lost_s)
+        for offset, pcm in held:
+            for at, text in self.transcriber.transcribe(pcm):
+                self.outbox.append(path, offset + at, SYSTEM, text)
         payload = read_payload(path)
         if payload is None:
             self.outbox.drop(path)
             return
-        utterances: list[dict[str, Any]] = drop_echo(payload["utterances"])
+        # По времени, а не по порядку дописывания: придержанное уехало в файл
+        # позже реплик микрофона, а осмысление ждёт хронологию.
+        in_order = sorted(payload["utterances"], key=lambda u: u.get("at", 0.0))
+        utterances: list[dict[str, Any]] = drop_echo(in_order)
         self.outbox.finish(path, ended_wall.isoformat(), utterances=utterances)
         log.info("разговор сохранён: %s, реплик %d (%s)",
                  closed.reason, len(utterances), verdict.reason)

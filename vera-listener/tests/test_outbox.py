@@ -1,6 +1,9 @@
 """Очередь на диске: дозапись, закрытие, восстановление после падения."""
 from __future__ import annotations
 
+import os
+import time
+
 from vera_listener.outbox import Outbox, read_payload
 
 
@@ -93,3 +96,31 @@ def test_finish_can_replace_utterances_after_echo_cleanup(tmp_path):
     assert len(payload["utterances"]) == 1
     assert payload["utterances"][0]["stream"] == "system"
     assert payload["app"] == "zoom.exe"
+
+def test_stale_open_files_do_not_pile_up(tmp_path):
+    """recover зовётся только при старте, и тогда живых файлов в open/ нет.
+
+    Порог в час оставлял мусор навсегда: 2026-08-27 в open/ лежало пять
+    брошенных сессий возрастом от восьми минут — ни одна не подбиралась.
+    """
+    box = Outbox(tmp_path)
+    path = box.start("s-1", "2026-08-27T18:16:08+07:00", app="chrome.exe",
+                     window_title="ролик", device_hint=None)
+    box.append(path, 1.0, "system", "что-то сказали")
+    os.utime(path, (time.time() - 300, time.time() - 300))
+
+    moved = box.recover()
+    assert [p.name for p in moved] == ["s-1.jsonl"]
+    assert list(box.open_dir.glob("*.jsonl")) == []
+
+
+def test_empty_stale_file_is_deleted_not_queued(tmp_path):
+    """Пустышка без реплик — мусор: слать нечего, держать незачем."""
+    box = Outbox(tmp_path)
+    path = box.start("s-2", "2026-08-27T18:23:34+07:00", app=None,
+                     window_title=None, device_hint=None)
+    os.utime(path, (time.time() - 300, time.time() - 300))
+
+    assert box.recover() == []
+    assert not path.exists()
+    assert list(box.ready_dir.glob("*.jsonl")) == []
