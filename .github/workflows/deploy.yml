@@ -86,7 +86,10 @@ jobs:
           # would retroactively fail on its pre-existing legacy coverage gap.
           # It IS collected/run (regressions still fail this job) and IS
           # covered by the quality job's diff-cover (new-lines-only, below).
-          PYTHONPATH=shared:services/gateway/src:services/dashboard/src:services/media-worker/src:services/ingestor-telegram/src:services/ingestor-gmail/src:services/ingestor-trello/src:services/ingestor-slack/src:services/brain-search/src:services/bot-telegram/src \
+          # PYTHONPATH здесь НЕ задаётся: tests/unit/conftest.py сам кладёт в
+          # sys.path shared и все services/*/src. Раньше список жил в трёх
+          # копиях в двух воркфлоу и разъехался — у шага diff-cover не было
+          # brain-triage, сборка тестов падала, а деплой стоял молча.
           pytest tests/ \
             --cov=vera_shared --cov=gateway \
             --cov-report=term-missing \
@@ -223,7 +226,10 @@ jobs:
           fi
           cd vera3
           export TELEGRAM_API_ID=1 TELEGRAM_API_HASH=test TELEGRAM_PHONE=+10000000000
-          PYTHONPATH=shared:services/gateway/src:services/dashboard/src:services/media-worker/src:services/ingestor-telegram/src:services/ingestor-gmail/src:services/ingestor-trello/src:services/ingestor-slack/src:services/brain-search/src:services/bot-telegram/src \
+          # PYTHONPATH здесь НЕ задаётся: tests/unit/conftest.py сам кладёт в
+          # sys.path shared и все services/*/src. Раньше список жил в трёх
+          # копиях в двух воркфлоу и разъехался — у шага diff-cover не было
+          # brain-triage, сборка тестов падала, а деплой стоял молча.
             pytest tests/ -q --no-header \
               --cov=vera_shared --cov=gateway --cov=media_worker --cov=brain_search \
               --cov-report=xml:coverage.xml -p no:cacheprovider \
@@ -331,17 +337,34 @@ jobs:
             https://dima.veranda.my/login | grep -qE "200|303" \
             || echo "(CF probe failed but origin was healthy at deploy end)"
 
-      - name: Notify failure
-        if: failure()
+  # ─── 5. Уведомление о ЛЮБОМ падении ──────────────────────────────────────
+  # Отдельный job, а не шаг внутри deploy: при красном гейте job deploy не
+  # запускается вовсе, поэтому шаг внутри него не срабатывал — падение гейта
+  # проходило молча. Реальный случай 2026-08-27: у шага diff-cover разъехался
+  # PYTHONPATH, сборка тестов падала, деплой стоял на ЧЕТЫРЁХ коммитах, и
+  # узналось это только когда кто-то заметил, что сервер отстал.
+  notify:
+    needs: [docs, test, quality, deploy]
+    if: always() && contains(needs.*.result, 'failure')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Написать владельцу, что и где упало
         env:
           BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN_VERA }}
           OWNER_ID: ${{ secrets.OWNER_TELEGRAM_ID }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          R_DOCS: ${{ needs.docs.result }}
+          R_TEST: ${{ needs.test.result }}
+          R_QUALITY: ${{ needs.quality.result }}
+          R_DEPLOY: ${{ needs.deploy.result }}
         run: |
           [ -z "$BOT_TOKEN" ] && exit 0
           [ -z "$OWNER_ID" ] && exit 0
+          FAILED=""
+          for pair in "docs:$R_DOCS" "test:$R_TEST" "quality:$R_QUALITY" "deploy:$R_DEPLOY"; do
+            case "${pair#*:}" in failure) FAILED="$FAILED ${pair%%:*}";; esac
+          done
           curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
                -d "chat_id=${OWNER_ID}" \
-               -d "parse_mode=HTML" \
-               -d "text=⚠️ vera3 deploy failed%0A${RUN_URL}" \
+               -d "text=vera3: деплой НЕ прошёл. Упало:${FAILED}%0A${RUN_URL}" \
                -o /dev/null || true

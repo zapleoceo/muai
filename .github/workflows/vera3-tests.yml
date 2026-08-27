@@ -55,7 +55,10 @@ jobs:
 
       - name: Run all tests with coverage
         run: |
-          PYTHONPATH=shared:services/gateway/src:services/dashboard/src:services/media-worker/src:services/ingestor-telegram/src:services/ingestor-gmail/src:services/ingestor-trello/src:services/ingestor-slack/src:services/brain-search/src:services/brain-triage/src:services/bot-telegram/src:services/ingestor-instagram/src \
+          # PYTHONPATH здесь НЕ задаётся: tests/unit/conftest.py сам кладёт в
+          # sys.path shared и все services/*/src. Раньше список жил в трёх
+          # копиях в двух воркфлоу и разъехался — у шага diff-cover не было
+          # brain-triage, сборка тестов падала, а деплой стоял молча.
           pytest tests/ \
             --cov=vera_shared \
             --cov=gateway \

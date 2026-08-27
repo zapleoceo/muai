@@ -3,8 +3,24 @@
 Lives in unit/conftest.py so it runs BEFORE any test-module import,
 keeping the test files themselves clean of stdlib/os env mutation
 between import statements (which ruff I001 flags as broken ordering).
+
+Здесь же в `sys.path` добавляются все `services/*/src` и `shared` — чтобы тесты
+не зависели от того, какой `PYTHONPATH` собрал очередной шаг CI. Список путей
+жил в трёх копиях в двух воркфлоу и разъехался: у шага diff-cover не было
+`brain-triage`, и новый тест на импорте `brain_triage.project_override` валил
+сборку тестов. Job quality краснел, деплой блокировался для ЧЕТЫРЁХ коммитов,
+и никто не узнал — уведомление о падении живёт внутри job deploy, а тот при
+красном гейте не запускается вовсе. Теперь список выводится из структуры
+репозитория, поэтому новый сервис подхватывается сам.
 """
 import os
+import sys
+from pathlib import Path
+
+_VERA3 = Path(__file__).resolve().parents[2]
+for _src in [_VERA3 / "shared", *sorted(_VERA3.glob("services/*/src"))]:
+    if _src.is_dir() and str(_src) not in sys.path:
+        sys.path.insert(0, str(_src))
 
 os.environ.setdefault("INTERNAL_SECRET", "test-internal-secret")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
