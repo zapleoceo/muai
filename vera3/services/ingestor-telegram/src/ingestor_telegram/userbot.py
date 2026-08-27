@@ -14,11 +14,11 @@ from typing import Any
 from sqlalchemy import select
 from telethon import TelegramClient, events
 from telethon.sessions import StringSession
+from vera_shared.chat_activity import min_own_messages, own_message_count
 from vera_shared.crypto import decrypt
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import TelegramSessionRow
-from vera_shared.chat_activity import min_own_messages, own_message_count
 from vera_shared.ingest_policy import is_ignored_chat, is_ignored_sender
 from vera_shared.media_policy import classify_chat_kind, media_skip_reason
 
