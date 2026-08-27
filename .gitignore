@@ -34,6 +34,7 @@ backups/**/*.json
 vera3/.venv/
 vera3/**/*.egg-info/
 vera3/.coverage
+vera3/coverage.xml
 vera3/htmlcov/
 
 # Session debris that lived in repo root but isn't part of the project

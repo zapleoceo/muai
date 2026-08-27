@@ -7,6 +7,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
@@ -313,6 +314,98 @@ class TestWorker:
             assert await w.cooling_s() == 180.0
         with patch.object(w, "llm_cooldown_remaining_s", AsyncMock(return_value=0.0)):
             assert await w.cooling_s() == 0.0
+
+
+class TestLoop:
+    """Цикл воркера: что он делает на каждом витке и чем его не убить."""
+
+    @staticmethod
+    async def _spin(w, *, iterations: int) -> list[float]:
+        """Прокрутить `iterations` витков и снять цикл. Возвращает сны."""
+        slept: list[float] = []
+
+        async def fake_sleep(seconds):
+            slept.append(seconds)
+            if len(slept) >= iterations:
+                raise asyncio.CancelledError
+
+        with patch.object(w.asyncio, "sleep", fake_sleep), \
+             pytest.raises(asyncio.CancelledError):
+            await w.run_forever()
+        return slept
+
+    @pytest.mark.asyncio
+    async def test_startup_revives_then_works(self):
+        import gateway.claude_session_worker as w
+
+        revive = AsyncMock(return_value=0)
+        with patch.object(w, "revive_stale", revive), \
+             patch.object(w, "cooling_s", AsyncMock(return_value=0.0)), \
+             patch.object(w, "process_one", AsyncMock(return_value=False)):
+            slept = await self._spin(w, iterations=1)
+
+        # Первый вызов — старт, без порога; второй — виток цикла.
+        assert revive.await_args_list[0].kwargs == {"everything": True}
+        assert revive.await_args_list[1].kwargs == {}
+        assert slept == [w.IDLE_SLEEP_S]
+
+    @pytest.mark.asyncio
+    async def test_cooldown_is_slept_out_instead_of_claiming(self):
+        """Иначе воркер весь кулдаун дёргает очередь каждые 30 секунд."""
+        import gateway.claude_session_worker as w
+
+        process = AsyncMock(return_value=True)
+        with patch.object(w, "revive_stale", AsyncMock(return_value=0)), \
+             patch.object(w, "cooling_s", AsyncMock(return_value=300.0)), \
+             patch.object(w, "process_one", process):
+            slept = await self._spin(w, iterations=1)
+
+        process.assert_not_awaited()
+        assert slept == [305.0]
+
+    @pytest.mark.asyncio
+    async def test_long_cooldown_is_slept_in_chunks(self):
+        """Кап сбрасывается в 00:00 UTC, но пул может ожить и раньше."""
+        import gateway.claude_session_worker as w
+
+        with patch.object(w, "revive_stale", AsyncMock(return_value=0)), \
+             patch.object(w, "cooling_s", AsyncMock(return_value=7200.0)), \
+             patch.object(w, "process_one", AsyncMock(return_value=True)):
+            slept = await self._spin(w, iterations=1)
+
+        assert slept == [w.MAX_COOLDOWN_SLEEP_S]
+
+    @pytest.mark.asyncio
+    async def test_db_failure_does_not_kill_the_loop(self):
+        """Иначе очередь встанет молча до перезапуска контейнера."""
+        import gateway.claude_session_worker as w
+
+        with patch.object(w, "revive_stale", AsyncMock(return_value=0)), \
+             patch.object(w, "cooling_s", AsyncMock(return_value=0.0)), \
+             patch.object(w, "process_one",
+                          AsyncMock(side_effect=RuntimeError("БД отвалилась"))):
+            slept = await self._spin(w, iterations=2)
+
+        assert slept == [w.IDLE_SLEEP_S, w.IDLE_SLEEP_S]
+
+    @pytest.mark.asyncio
+    async def test_busy_loop_does_not_sleep_between_sessions(self):
+        import gateway.claude_session_worker as w
+
+        calls = {"n": 0}
+
+        async def process():
+            calls["n"] += 1
+            # Третий виток отдаёт «пусто», и цикл впервые уходит в сон.
+            return calls["n"] < 3
+
+        with patch.object(w, "revive_stale", AsyncMock(return_value=0)), \
+             patch.object(w, "cooling_s", AsyncMock(return_value=0.0)), \
+             patch.object(w, "process_one", process):
+            slept = await self._spin(w, iterations=1)
+
+        assert calls["n"] == 3
+        assert slept == [w.IDLE_SLEEP_S]
 
 
 class TestFold:
