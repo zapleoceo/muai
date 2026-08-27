@@ -300,3 +300,39 @@ class TestLongMeeting:
 
         assert report["parts"] == report["windows"] - 1
         assert result["summary"]
+
+
+class TestChronology:
+    """Диалог модель должна видеть по времени, а не блоками по дорожкам."""
+
+    def test_utterances_are_sorted_by_time(self):
+        """Слушатель дописывает куски по готовности: между ними время падает.
+
+        Поймано на живом созвоне 2026-08-27: реплика 41 из 104 прыгала с 111-й
+        секунды на вторую, потому что сначала легли куски микрофона, потом
+        системной дорожки.
+        """
+        mixed = [
+            Utterance(at=0.0, stream="mic", text="Ли, по разделу шесть?"),
+            Utterance(at=111.0, stream="mic", text="Ок, до пятницы решим."),
+            Utterance(at=4.0, stream="system", text="Сорок пять."),
+            Utterance(at=108.0, stream="system", text="Пришлю разбивку."),
+        ]
+        assert render(mixed) == [
+            "[я] Ли, по разделу шесть?",
+            "[собеседник] Сорок пять.",
+            "[собеседник] Пришлю разбивку.",
+            "[я] Ок, до пятницы решим.",
+        ]
+
+    def test_dicts_from_the_offline_queue_sort_too(self):
+        """Файлы из офлайн-очереди приходят словарями, а не моделью."""
+        mixed = [{"at": 9.0, "stream": "mic", "text": "второе"},
+                 {"at": 1.0, "stream": "system", "text": "первое"}]
+        assert render(mixed) == ["[собеседник] первое", "[я] второе"]
+
+    def test_missing_at_does_not_crash(self):
+        """Старые файлы могли не нести время — тогда просто в начало."""
+        assert render([{"stream": "mic", "text": "без времени"},
+                       {"at": 5.0, "stream": "mic", "text": "со временем"}]) == [
+            "[я] без времени", "[я] со временем"]

@@ -84,14 +84,30 @@ SPEC = FoldSpec(
 EMPTY = SPEC.empty
 
 
+def _field(u: Any, name: str, default: Any) -> Any:
+    return getattr(u, name, default) if hasattr(u, name) else u.get(name, default)
+
+
 def render(utterances: list[Any]) -> list[str]:
-    """Реплики → строки расшифровки. Порядок как пришёл, пустые выброшены."""
+    """Реплики → строки расшифровки в ХРОНОЛОГИИ, пустые выброшены.
+
+    Порядок «как пришёл» брать нельзя. Слушатель распознаёт дорожки кусками и
+    дописывает их по готовности, поэтому в файле сначала идут минуты моей речи,
+    потом минуты собеседника: внутри куска время растёт, а между кусками падает
+    назад. Поймано на живом созвоне — реплика 41 из 104 прыгала с 111-й секунды
+    на вторую.
+
+    Модель в таком виде теряет сам диалог: вопрос и ответ на него оказываются в
+    разных концах текста. Смещения при этом честные, от начала сессии, так что
+    достаточно отсортировать.
+    """
+    ordered = sorted(utterances, key=lambda u: float(_field(u, "at", 0.0) or 0.0))
     lines = []
-    for u in utterances:
-        text = (u.text if hasattr(u, "text") else u.get("text", "")).strip()
+    for u in ordered:
+        text = str(_field(u, "text", "")).strip()
         if not text:
             continue
-        stream = u.stream if hasattr(u, "stream") else u.get("stream", "mic")
+        stream = _field(u, "stream", "mic")
         lines.append(f"[{'я' if stream == 'mic' else 'собеседник'}] {text}")
     return lines
 
