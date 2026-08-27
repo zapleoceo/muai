@@ -43,12 +43,18 @@ if (-not $python) { $python = Get-Command python3.12 -ErrorAction SilentlyContin
 if (-not $python -and -not $ExePath) {
     throw "Нет Python 3.12. Поставь: winget install --id Python.Python.3.12 --scope user"
 }
+# Get-ChildItem отдаёт FileInfo (.FullName), Get-Command — CommandInfo (.Source):
+# берём то, что есть, иначе вторая ветка поиска молча даёт пустой путь.
+if ($python) {
+    $pythonPath = if ($python.FullName) { $python.FullName } else { $python.Source }
+    $pythonHome = Split-Path -Parent $pythonPath
+}
 
 if (-not $ExePath) {
 $venv = Join-Path $Root "venv"
 if (-not (Test-Path $venv)) {
     Write-Host "Создаю venv в $venv"
-    & $python.FullName -m venv $venv
+    & $pythonPath -m venv $venv
 }
 $venvPy = Join-Path $venv "Scripts\python.exe"
 $venvPyw = Join-Path $venv "Scripts\pythonw.exe"
@@ -62,11 +68,40 @@ Write-Host "Ставлю зависимости (это надолго: faster-w
 # В Диспетчере задач процесс должен называться VeraListener, а не pythonw.
 # Собранный PyInstaller-ом exe для этого не годится, если на машине включён
 # Smart App Control: он режет любой неподписанный бинарник (поймано вживую,
-# Code Integrity 3077). Переименованная копия pythonw сохраняет подпись Python
-# Software Foundation внутри самого PE-файла, поэтому проходит политику — и
-# ровно так же venv кладёт свои python.exe в Scripts.
+# Code Integrity 3077). Копия настоящего интерпретатора сохраняет подпись
+# Python Software Foundation внутри самого PE-файла, поэтому политику проходит.
+#
+# Копируем именно БАЗОВЫЙ pythonw.exe, а НЕ venv-овский: тот лишь перенаправляет
+# запуск и порождает настоящий интерпретатор дочерним процессом. Имя тогда
+# получает пустышка на один поток и 2 МБ, а работу — и место в Диспетчере
+# задач — дочерний pythonw.exe. Поймано вживую при первой же проверке нагрузки.
+#
+# Рядом кладём ВСЕ библиотеки из каталога интерпретатора: без python312.dll
+# копия не стартует вовсе, а без vcruntime140* падает уже на импорте нативных
+# модулей — «DLL load failed while importing silero_vad». Своей папки копии
+# хватает: PATH под планировщиком каталога Python не содержит. Всё это
+# обновляется при каждом запуске установщика, поэтому после обновления Python
+# его надо прогнать заново — иначе библиотеки разъедутся со стандартной
+# библиотекой venv.
 $launcher = Join-Path $venv "Scripts\VeraListener.exe"
-Copy-Item $venvPyw $launcher -Force
+
+# Работающий слушатель держит свои exe и dll открытыми, и Copy-Item падает с
+# IOException — повторная установка молча оставалась бы на старых файлах.
+# Поэтому сначала останавливаем задачу и ждём, пока процесс действительно умрёт.
+Stop-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+foreach ($i in 1..20) {
+    $alive = Get-Process -Name "VeraListener" -ErrorAction SilentlyContinue
+    if (-not $alive) { break }
+    if ($i -eq 10) { $alive | Stop-Process -Force -ErrorAction SilentlyContinue }
+    Start-Sleep -Milliseconds 500
+}
+
+Copy-Item (Join-Path $pythonHome "pythonw.exe") $launcher -Force
+foreach ($dll in @("python3.dll", "python312.dll",
+                   "vcruntime140.dll", "vcruntime140_1.dll")) {
+    $from = Join-Path $pythonHome $dll
+    if (Test-Path $from) { Copy-Item $from (Join-Path $venv "Scripts\$dll") -Force }
+}
 
 $runner = $launcher
 $runnerArgs = "-m vera_listener"
