@@ -301,7 +301,10 @@ jobs:
   deploy:
     needs: [docs, test, quality]
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 25, а не 15: опрос занятого замка до десяти минут плюс сам деплой до
+    # семи в прежний бюджет не влезали, а упор в таймаут даёт cancelled —
+    # то есть тихий провал, который уведомление раньше не ловило.
+    timeout-minutes: 25
     env:
       HOST: ${{ secrets.HETZNER_HOST }}
       PORT: ${{ secrets.HETZNER_PORT || '9617' }}
@@ -326,10 +329,41 @@ jobs:
         # the server — connecting at all runs git-pull + rsync vera3/ + compose
         # up. Any other command the client passes is ignored. Worst-case key
         # leak = attacker can re-run our own deploy, nothing else.
+        #
+        # Код 15 — «другой деплой уже идёт» (замок на сервере). Это не поломка:
+        # ручной прогон или второй раннер держит замок. Ждём и пробуем ещё раз,
+        # а НЕ проглатываем молча: молчаливый пропуск означал бы, что пуш не
+        # задеплоился и об этом никто не узнал. Не удалось со второго раза —
+        # падаем громко. Код 17 (замок сломан) повтору не подлежит: это уже
+        # инфраструктура, и глотать его вместе с 15 нельзя.
         run: |
-          ssh -p "$PORT" -o ServerAliveInterval=30 \
-              -o BatchMode=yes -o ConnectTimeout=15 \
-              root@"$HOST"
+          deploy() {
+            ssh -p "$PORT" -o ServerAliveInterval=30 \
+                -o BatchMode=yes -o ConnectTimeout=15 \
+                root@"$HOST"
+          }
+          deploy && exit 0
+          rc=$?
+          if [ "$rc" -ne 15 ]; then
+            echo "::error::деплой упал с кодом $rc"
+            exit "$rc"
+          fi
+          # Полный деплой идёт 3–7 минут, поэтому одного повтора мало: ждём в
+          # опросе до пяти раз по 120с. Дольше не тянем — упрёмся в
+          # timeout-minutes, а таймаут даёт cancelled, который надо ловить
+          # отдельно (см. job notify).
+          for attempt in 1 2 3 4 5; do
+            echo "::notice::замок занят другим деплоем — попытка $attempt, жду 120с"
+            sleep 120
+            deploy && exit 0
+            rc=$?
+            if [ "$rc" -ne 15 ]; then
+              echo "::error::деплой упал с кодом $rc"
+              exit "$rc"
+            fi
+          done
+          echo "::error::замок занят больше десяти минут — деплой не прошёл"
+          exit 15
 
       - name: HTTPS probe (best-effort)
         run: |
@@ -345,7 +379,11 @@ jobs:
   # узналось это только когда кто-то заметил, что сервер отстал.
   notify:
     needs: [docs, test, quality, deploy]
-    if: always() && contains(needs.*.result, 'failure')
+    # cancelled обязателен наравне с failure: при упоре в timeout-minutes
+    # GitHub помечает job как cancelled, и условие только на failure пропускало
+    # бы ровно тот случай, от которого этот job и написан — «деплой встал, и
+    # никто не узнал». Нашло ревью.
+    if: always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
     runs-on: ubuntu-latest
     steps:
       - name: Написать владельцу, что и где упало
