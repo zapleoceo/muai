@@ -181,6 +181,12 @@ services:
     logging: *default-logging
 
   ingestor-instagram:
+    # Отключён намеренно (2026-08-28, решение владельца): Instagram не
+    # используем. Профиль `optional` держит сервис вне дефолтного
+    # `docker compose up -d`, поэтому деплой его не поднимает. Вернуть —
+    # убрать профиль или `docker compose --profile optional up -d ingestor-instagram`.
+    # Убран и из vera3-monitor REQUIRED_CONTAINERS, чтобы не было ложных тревог.
+    profiles: ["optional"]
     build:
       context: ..
       dockerfile: services/ingestor-instagram/Dockerfile

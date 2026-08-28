@@ -121,7 +121,6 @@ REQUIRED_CONTAINERS=(
     vera3-dashboard
     vera3-ingestor-gmail
     vera3-ingestor-telegram
-    vera3-ingestor-instagram
 )
 down=()
 for c in "${REQUIRED_CONTAINERS[@]}"; do
