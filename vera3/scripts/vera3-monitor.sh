@@ -1,10 +1,19 @@
 #!/bin/bash
-# vera3-monitor: каждые 5 минут проверяет 11 dimensions и шлёт алерт в Telegram
-#                при поломке. Throttle: один alert per key per 30 min.
+# vera3-monitor: каждые 5 минут проверяет состояние стека и шлёт алерт в
+#                Telegram при поломке. Throttle: один alert per key per 30 min.
 #
-# Установка:
-#   sudo install -m 755 vera3-monitor.sh /usr/local/bin/vera3-monitor
-#   crontab -e   →   */5 * * * * /usr/local/bin/vera3-monitor 2>&1 >> /var/log/vera3-monitor.log
+# Установка — крон зовёт ЭТОТ файл прямо из развёрнутого дерева:
+#   crontab -e → */5 * * * * bash /var/www/vera3/scripts/vera3-monitor.sh >> /var/log/vera3-monitor.log 2>&1
+#
+# Через `bash <путь>`, а не напрямую: так запуск не зависит от бита +x,
+# который легко потерять при переносе дерева, — а потеряв его, крон замолчал
+# бы точно так же тихо, как молчал прибитый список контейнеров.
+#
+# Копии в /usr/local/bin быть не должно. До 28.08.2026 крон запускал именно её,
+# а деплой обновлял только /var/www/vera3/scripts/ — то есть правка в
+# репозитории на живой монитор не влияла вовсе, и заметить это было нечем.
+# Сюда же относится порядок редиректов: `2>&1 >> file` уводит stderr в почту
+# крона, а не в лог, поэтому сначала файл, потом `2>&1`.
 #
 # Конфиг — берётся из /var/www/vera3/infra/.env (TELEGRAM_BOT_TOKEN, OWNER_TELEGRAM_ID).
 set -u
@@ -12,6 +21,75 @@ set -u
 ENV_FILE="/var/www/vera3/infra/.env"
 STATE_DIR="/var/lib/vera3-monitor"
 LOG_TAG="vera3-monitor"
+COMPOSE_DIR="${COMPOSE_DIR:-/var/www/vera3/infra}"
+
+# ─── состав стека: что должно быть поднято ──────────────────────────────────
+# Список сервисов берётся из compose, а НЕ из перечня имён в этом файле.
+# Прибитый список бьёт дважды, и оба раза молча.
+#
+# 27.08.2026 деплой оставил снесёнными media-worker, ingestor-trello и
+# bot-telegram; поднялись они только через 15 часов.
+#   * media-worker и ingestor-trello в списке НЕ ЧИСЛИЛИСЬ — про них монитор
+#     не сказал ни слова, распознавание стояло всю ночь, и нашлось это по
+#     логу крона доливки, который упирался в мёртвый контейнер.
+#   * bot-telegram в списке был, и монитор честно прислал 6 тревог за 15
+#     часов. Но в тех же тревогах стоял vera3-ingestor-instagram — сервис,
+#     давно снятый и забытый в списке. Сообщение выглядело шумом про
+#     instagram, его так и прочли: instagram убрали из списка, тревога
+#     позеленела, а мёртвый bot-telegram остался мёртвым.
+#
+# Отсюда правило: список берётся из compose. Тогда снятый сервис уходит из
+# охраны сам, и в тревоге не может оказаться имени, которое нечего чинить.
+#
+# Функция ничего не решает про алерты — печатает по строке на проблему. Так её
+# гоняет тест с подставным docker (`vera3-monitor.sh --check-containers`), не
+# поднимая ни env-файла, ни postgres, ни telegram.
+# Тело в скобках, а не в фигурных: это подоболочка, поэтому `cd` ниже не
+# утекает в остальной скрипт. Заходим в каталог ОДИН раз и падаем громко, если
+# не вышло. Прежний вариант делал `cd` в каждой итерации через `&&`: не сработай
+# он там, `running` осталось бы ПУСТЫМ, `[ "" -lt 1 ]` ругнулось бы в stderr и
+# вернуло ложь — и сервис молча не засчитался бы как проблемный. Ровно тот
+# класс тихого «всё хорошо», ради которого вся эта функция и переписана.
+# Нашло ревью.
+check_containers() (
+    local spec svc want running problems=0
+    cd "$COMPOSE_DIR" 2>/dev/null || {
+        echo "нет каталога $COMPOSE_DIR — проверять состав стека не по чему"
+        exit 1
+    }
+    # Число реплик — из compose, а не из головы: 3 живых из 5 у brain-triage
+    # это тихая потеря 40% пропускной способности, и её надо видеть.
+    # `// 1` в jq не считает 0 ложью, поэтому осознанный `replicas: 0` не
+    # превращается в 1 и не даёт вечную тревогу о выключенном сервисе.
+    local filter='.services | to_entries[] | "\(.key) \(.value.deploy.replicas // 1)"'
+    spec=$(docker compose config --format json 2>/dev/null | jq -r "$filter" 2>/dev/null)
+    if [ -z "$spec" ]; then
+        # Пустой ответ — это НЕ «всё хорошо». Так выглядит мёртвый демон docker,
+        # сломанный compose-файл или отсутствующий jq. Промолчать здесь значит
+        # снять охрану со всего стека ровно тогда, когда она нужнее всего.
+        echo "состав стека не читается из $COMPOSE_DIR (docker, compose-файл или jq)"
+        exit 1
+    fi
+    # Через here-string, не через конвейер: `while` за пайпом уходит в
+    # подоболочку, и счётчик problems терялся бы вместе с ней.
+    while read -r svc want; do
+        [ -z "$svc" ] && continue
+        running=$(docker compose ps --status running -q "$svc" 2>/dev/null | grep -c .)
+        if [ "$running" -lt "$want" ]; then
+            echo "$svc: живых контейнеров $running из $want"
+            problems=$(( problems + 1 ))
+        fi
+    done <<< "$spec"
+    # Цена всей проверки — 3.3с на 12 сервисов (замер на сервере, 28.08):
+    # отдельный вызов `docker compose ps` на сервис по 0.23с. Раз в 5 минут это
+    # около процента времени, и ради простоты оно того стоит.
+    [ "$problems" -eq 0 ]
+)
+
+if [ "${1:-}" = "--check-containers" ]; then
+    check_containers
+    exit $?
+fi
 
 mkdir -p "$STATE_DIR"
 
@@ -112,34 +190,14 @@ recover() {
     fi
 }
 
-# ─── 1. Все ключевые контейнеры подняты ─────────────────────────────────────
-REQUIRED_CONTAINERS=(
-    vera3-postgres
-    vera3-gateway
-    vera3-brain-search
-    vera3-bot-telegram
-    vera3-dashboard
-    vera3-ingestor-gmail
-    vera3-ingestor-telegram
-)
-down=()
-for c in "${REQUIRED_CONTAINERS[@]}"; do
-    if ! docker ps --format '{{.Names}}' | grep -q "^${c}$"; then
-        down+=("$c")
-    fi
-done
-if [ "${#down[@]}" -gt 0 ]; then
-    alert "containers_down" "Containers down: $(IFS=,; echo "${down[*]}")"
+# ─── 1. Весь состав стека поднят ────────────────────────────────────────────
+# Сравнение идёт с объявленным числом реплик, поэтому отдельная проверка
+# «хотя бы одна реплика brain-triage» больше не нужна — она входит сюда.
+containers_bad=$(check_containers | paste -sd ';' - | sed 's/;/; /g')
+if [ -n "$containers_bad" ]; then
+    alert "containers_down" "Контейнеры: ${containers_bad}"
 else
-    recover "containers_down" "All vera3 containers up."
-fi
-
-# Минимум 1 brain-triage реплика
-triage_count=$(docker ps --filter 'name=brain-triage' --format '{{.Names}}' | wc -l)
-if [ "$triage_count" -lt 1 ]; then
-    alert "triage_replicas" "No brain-triage replicas running."
-else
-    recover "triage_replicas" "Triage replicas: $triage_count."
+    recover "containers_down" "Весь состав стека поднят."
 fi
 
 # ─── 2. Health endpoints ─────────────────────────────────────────────────────

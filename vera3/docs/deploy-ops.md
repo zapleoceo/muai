@@ -214,23 +214,70 @@ Opt-out: `docs-not-needed` literal in any commit in the range.
 
 ## Monitor
 
-`/usr/local/bin/vera3-monitor` — Bash script run by cron `*/5 * * * *`.
-Checks 11 dimensions:
+`vera3/scripts/vera3-monitor.sh` — Bash script run by cron
+`*/5 * * * * bash /var/www/vera3/scripts/vera3-monitor.sh`, **straight from the
+deployed tree**, so a repo edit reaches the live monitor with the next deploy.
+Until 2026-08-28 cron ran a hand-installed copy at `/usr/local/bin/vera3-monitor`
+that the deploy never touched — the versioned file was decorative and nothing
+said so. Do not reintroduce that copy.
 
-1. All key vera3-* containers up
-2. `brain-triage` has ≥1 replica
-3. `/healthz` on gateway, brain-search, dashboard
-4. HTTPS dashboard reachable through Cloudflare
-5. Disk usage <85% (warn) / <92% (critical)
-6. Postgres `pg_isready`
-7. Gmail accounts polled in last 30 min
-8. Telegram events flowing in last 1h (userbot disconnected detection)
-9. Triage backlog <5k (warn) / <10k (critical)
-10. ≥1 LLM token available (not all in cooldown)
-11. SSL cert expiry on `aib.zapleo.com` Origin cert <14 days
+Checks 10 dimensions:
+
+1. Every service in `docker compose config` runs its declared replica count —
+   the list is derived from compose, never spelled out in the script (below)
+2. `/healthz` on gateway, brain-search, dashboard
+3. HTTPS dashboard reachable through Cloudflare
+4. Disk usage <85% (warn) / <92% (critical)
+5. Postgres `pg_isready`
+6. Gmail accounts polled in last 30 min
+7. Telegram events flowing in last 1h (userbot disconnected detection)
+8. Triage backlog <5k (warn) / <10k (critical)
+9. ≥1 LLM token available (not all in cooldown)
+10. SSL cert expiry on `aib.zapleo.com` Origin cert <14 days
 
 Alerts to `@Dimondra_Ai_Bot` DM to `OWNER_TELEGRAM_ID`. State-file
 throttle 30 min (or `monitor_throttle_min` setting — see below).
+
+**Состав стека берётся из compose (2026-08-28).** Раньше монитор сверялся с
+прибитым списком из семи имён, а сервисов двенадцать: `media-worker`,
+`ingestor-slack`, `ingestor-trello`, `prune` не охранялись вовсе.
+
+27.08 деплой (столкновение ручного прогона с CI) оставил снесёнными
+`media-worker`, `ingestor-trello` и `bot-telegram` — поднялись они лишь
+28.08 в 04:26, через 15 часов. Прибитый список подвёл обоими концами:
+
+* `media-worker` и `ingestor-trello` в нём не значились — ни одной тревоги;
+  распознавание картинок и голосовых стояло всю ночь, а нашлось по логу
+  крона доливки, который упирался в мёртвый контейнер.
+* `bot-telegram` в нём был, и монитор прислал **6 тревог за 15 часов**
+  (13:10 → 04:20). Но рядом в каждой стоял `vera3-ingestor-instagram` —
+  сервис, снятый ранее и забытый в списке. Сообщение прочли как шум про
+  instagram: instagram убрали из списка (коммит `eb87701b`), тревога
+  позеленела, мёртвый бот остался мёртвым ещё на четыре часа.
+
+Мораль не «читать тревоги внимательнее», а убрать источник шума: снятый
+сервис обязан уходить из охраны сам. Теперь список сервисов и число реплик
+читаются из `docker compose config --format json`, поэтому новый сервис
+охраняется с момента появления в compose, а снятый — перестаёт немедленно.
+Отдельная проверка «хотя бы одна реплика brain-triage» ушла туда же: три
+живых из пяти она считала нормой. Пустой ответ (мёртвый демон, сломанный
+compose, нет `jq`) — это тревога, а не тишина: промолчать в такой момент
+значит снять охрану со всего стека.
+
+Проверить логику без побочных эффектов: `vera3-monitor.sh --check-containers`
+печатает по строке на проблему и не трогает ни env, ни postgres, ни telegram
+(тест `tests/unit/test_monitor_containers.py` гоняет её с подставным docker).
+
+Что этой проверкой ПОКА не покрыто — чтобы не выглядело закрытым:
+
+* Сервисы за `profiles:` (сейчас только `ingestor-instagram`) в вывод
+  `docker compose config` не попадают и потому не охраняются — это и нужно.
+  Проверено на compose `2.40.3`; поведение профилей между версиями менялось,
+  так что при апгрейде стоит перепроверить, что выключенный сервис не
+  вернулся в список и не начал слать тревоги, которые нечем чинить.
+* Проверка `/healthz` (пункт 2) всё ещё ходит по прибитому списку
+  `gateway brain-search dashboard`. Живой контейнер с повисшим приложением
+  внутри нового сервиса она не заметит — тот же класс, отдельная задача.
 
 **Anti-flapping (2026-08-06).** An alert now needs `monitor_fail_streak`
 (default 2) consecutive failed checks; `recover()` resets the streak.
