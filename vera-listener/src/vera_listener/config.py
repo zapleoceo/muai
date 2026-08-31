@@ -50,6 +50,16 @@ def _split(value: str) -> tuple[str, ...]:
     return tuple(x.strip().lower() for x in value.split(",") if x.strip())
 
 
+def _split_keep_case(value: str) -> tuple[str, ...]:
+    """Как `_split`, но без приведения к нижнему регистру.
+
+    Имена и термины для подсказки распознаванию важны буквами: «LAMAS»,
+    приведённое к «lamas», модель напишет строчными и, скорее всего, не
+    точнее, чем без подсказки вовсе — Whisper учитывает регистр промпта.
+    """
+    return tuple(x.strip() for x in value.split(",") if x.strip())
+
+
 @dataclass(frozen=True)
 class Config:
     gateway_url: str = "https://dima.veranda.my"
@@ -78,6 +88,11 @@ class Config:
     deny_apps: tuple[str, ...] = ()
     send_interval_s: float = 30.0
     send_backoff_max_s: float = 900.0
+    #: Имена и термины, которые модель обычно коверкает: без подсказки
+    #: «LAMAS» распознаётся как «LAMRS», «Веранда» — как «Veranda» латиницей
+    #: (замер 2026-08-31, см. transcriber.py). Пусто по умолчанию — слушатель
+    #: не должен нести чужие имена в исходниках, это личный список владельца.
+    glossary: tuple[str, ...] = ()
 
     @property
     def queue_dir(self) -> Path:
@@ -122,4 +137,5 @@ def load_config() -> Config:
         allow_apps=_split(get("VERA_ALLOW_APPS", ",".join(DEFAULT_ALLOW_APPS))),
         browser_apps=_split(get("VERA_BROWSER_APPS", ",".join(DEFAULT_BROWSER_APPS))),
         deny_apps=_split(get("VERA_DENY_APPS", "")),
+        glossary=_split_keep_case(get("VERA_GLOSSARY", "")),
     )

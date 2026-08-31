@@ -13,7 +13,7 @@ import sys
 import numpy as np
 import pytest
 
-from vera_listener.config import Config
+from vera_listener.config import Config, load_config
 from vera_listener.transcriber import (
     MIN_AUDIO_S,
     Transcriber,
@@ -119,6 +119,132 @@ class TestTooShort:
         assert seen["kw"]["return_timestamps"] is True
 
 
+class TestGlossary:
+    """Подсказка именам — best-effort, а не обязательный контракт.
+
+    Замер на синтезированной фразе (2026-08-31): без подсказки whisper пишет
+    «LAMAS» как «LAMRS», «Веранда» — латиницей «Veranda». С initial_prompt на
+    CPU — оба верно. На NPU initial_prompt/hotwords падает RuntimeError-ом
+    независимо от длины подсказки — статический граф не рассчитан на
+    добавочные токены. Пайплайн при этом остаётся рабочим: следующий вызов
+    без подсказки на том же объекте отрабатывает как обычно.
+    """
+
+    @staticmethod
+    def _transcriber(tmp_path, glossary=("LAMAS", "Веранда")) -> Transcriber:
+        return Transcriber(Config(root=tmp_path, internal_secret="x", glossary=glossary))
+
+    def _pcm(self):
+        return np.zeros(int((MIN_AUDIO_S + 0.5) * 16_000), dtype=np.int16).tobytes()
+
+    def test_no_glossary_means_no_prompt_kwarg(self, tmp_path, monkeypatch):
+        """Пустой глоссарий — поведение НЕ должно отличаться от прежнего."""
+        t = Transcriber(Config(root=tmp_path, internal_secret="x"))
+        t._pipe, t._device = object(), "NPU"
+        seen = {}
+
+        class _Pipe:
+            def generate(self, audio, **kw):
+                seen["kw"] = kw
+                return _Result(chunks=[_Chunk(0.0, "текст")])
+
+        monkeypatch.setattr(t, "_load", lambda: _Pipe())
+        t.transcribe(self._pcm())
+        assert "initial_prompt" not in seen["kw"]
+
+    def test_glossary_is_sent_as_comma_joined_prompt(self, tmp_path, monkeypatch):
+        t = self._transcriber(tmp_path)
+        t._pipe, t._device = object(), "CPU"
+        seen = {}
+
+        class _Pipe:
+            def generate(self, audio, **kw):
+                seen["kw"] = kw
+                return _Result(chunks=[_Chunk(0.0, "LAMAS и Веранда")])
+
+        monkeypatch.setattr(t, "_load", lambda: _Pipe())
+        assert t.transcribe(self._pcm()) == [(0.0, "LAMAS и Веранда")]
+        assert seen["kw"]["initial_prompt"] == "LAMAS, Веранда"
+
+    def test_prompt_failure_falls_back_without_prompt_on_the_same_device(
+            self, tmp_path, monkeypatch):
+        """Ровно случай NPU: подсказка падает, обычный вызов на том же
+        пайплайне отрабатывает, устройство НЕ забанено."""
+        t = self._transcriber(tmp_path)
+        t._pipe, t._device = object(), "NPU"
+        calls = []
+
+        class _Pipe:
+            def generate(self, audio, **kw):
+                calls.append(kw)
+                if "initial_prompt" in kw:
+                    raise RuntimeError("Check '*roi_end <= *max_dim' failed")
+                return _Result(chunks=[_Chunk(0.0, "без подсказки")])
+
+        monkeypatch.setattr(t, "_load", lambda: _Pipe())
+        assert t.transcribe(self._pcm()) == [(0.0, "без подсказки")]
+        assert len(calls) == 2
+        assert t._pipe is not None, "пайплайн не должен сбрасываться"
+        assert t.device == "NPU", "устройство не должно баниться"
+        assert "NPU" not in t._banned
+
+    def test_second_chunk_skips_the_failed_prompt_attempt(self, tmp_path, monkeypatch):
+        """Не пробуем подсказку заново на каждом куске — она уже помечена
+        неработающей на этом устройстве."""
+        t = self._transcriber(tmp_path)
+        t._pipe, t._device = object(), "NPU"
+        calls = []
+
+        class _Pipe:
+            def generate(self, audio, **kw):
+                calls.append(kw)
+                if "initial_prompt" in kw:
+                    raise RuntimeError("падает")
+                return _Result(chunks=[_Chunk(0.0, "ок")])
+
+        monkeypatch.setattr(t, "_load", lambda: _Pipe())
+        t.transcribe(self._pcm())
+        t.transcribe(self._pcm())
+        assert len(calls) == 3, "первый кусок: 2 попытки; второй — уже без подсказки, 1"
+        assert "initial_prompt" not in calls[-1]
+
+    def test_real_device_failure_still_bans_the_device(self, tmp_path, monkeypatch):
+        """Подсказка — не единственная причина сбоя. Настоящий отказ
+        устройства (оба вызова падают) обязан забанить его, как раньше."""
+        t = self._transcriber(tmp_path)
+        t._pipe, t._device = object(), "NPU"
+
+        class _Dead:
+            def generate(self, audio, **kw):
+                raise RuntimeError("устройство отвалилось")
+
+        monkeypatch.setattr(t, "_load", lambda: _Dead())
+        with pytest.raises(RuntimeError, match="отвалилось"):
+            t.transcribe(self._pcm())
+        assert t._pipe is None
+        assert t.device is None
+        assert "NPU" in t._banned
+
+    def test_different_devices_track_glossary_support_separately(self, tmp_path, monkeypatch):
+        """Откат на CPU после отказа NPU — глоссарий на CPU не должен
+        считаться неподдержанным из-за прошлого отказа на NPU."""
+        t = self._transcriber(tmp_path)
+        t._pipe, t._device = object(), "NPU"
+        t._glossary_unsupported.add("NPU")
+        seen = {}
+
+        class _Pipe:
+            def generate(self, audio, **kw):
+                seen["kw"] = kw
+                return _Result(chunks=[_Chunk(0.0, "на CPU")])
+
+        # Откат на новое устройство: _load() вернула бы новый пайплайн на CPU.
+        t._device = "CPU"
+        monkeypatch.setattr(t, "_load", lambda: _Pipe())
+        t.transcribe(self._pcm())
+        assert seen["kw"]["initial_prompt"] == "LAMAS, Веранда"
+
+
 class TestConfig:
     def test_model_and_cache_live_under_the_root(self, tmp_path):
         assert Config(root=tmp_path, internal_secret="x").model_dir == tmp_path / "models"
@@ -128,6 +254,21 @@ class TestConfig:
 
     def test_turbo_is_the_default_model(self):
         assert "turbo" in Config().model_id
+
+    def test_glossary_is_empty_by_default(self):
+        """Слушатель не несёт чужие имена в исходниках — список личный."""
+        assert Config().glossary == ()
+
+    def test_glossary_from_env_keeps_case(self, monkeypatch):
+        """Сквозной путь: env → load_config() → Config.glossary, без
+        приведения к нижнему регистру — это отдельная функция от `_split`,
+        которая используется для имён приложений и регистр как раз стирает."""
+        monkeypatch.setenv("VERA_GLOSSARY", "LAMAS, Веранда, Синтегрум")
+        assert load_config().glossary == ("LAMAS", "Веранда", "Синтегрум")
+
+    def test_glossary_trims_and_drops_empty_items(self, monkeypatch):
+        monkeypatch.setenv("VERA_GLOSSARY", " LAMAS ,, Веранда ,")
+        assert load_config().glossary == ("LAMAS", "Веранда")
 
 
 class TestLoadFallback:

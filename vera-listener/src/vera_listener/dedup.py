@@ -32,6 +32,28 @@ RATIO = 0.75
 #: на реальной записи все пойманные вхождения были заметно длиннее.
 CONTAINED_MIN_CHARS = 16
 
+#: Третий сигнал — доля общих СЛОВ (Jaccard), а не подстрока символов. Ловит
+#: случай, когда в середину фразы вставлено или выпало одно слово: «я хочу
+#: там, чтобы» vs «я хочу там ПРЯМ, чтобы» рвёт непрерывную подстроку и роняет
+#: обычное сходство до 0.735 (порог 0.75), а по словам пересечение остаётся
+#: почти полным (0.60 на этой паре — реальные числа, не округление).
+#:
+#: Порог проверен на реальной записи по обеим сторонам, но честно: на записи
+#: нашлась ровно ОДНА пара, которую нужно ловить (эта, Jaccard=0.60), и ровно
+#: одна, которую ловить НЕЛЬЗЯ (Jaccard=0.50, см. `TestKnownResidual` — там
+#: причина не в цифре, а в порядке времени: mic звучит РАНЬШЕ system, а эхо
+#: физически не может обгонять источник). Порог стоит между ними без запаса
+#: прочности — это калибровка по единственному известному случаю в каждую
+#: сторону, а не статистика. Он может сдвинуться, когда наберётся больше
+#: записей; проверять заново перед изменением, не подкручивать на глаз.
+JACCARD_THRESH = 0.6
+
+#: Отдельное имя от CONTAINED_MIN_CHARS, хотя сейчас то же число: пороги
+#: защищают от разных ложных срабатываний (короткая подстрока — от вхождения
+#: «да» в любую длинную фразу; здесь — от случайного набора общих служебных
+#: слов в двух коротких репликах) и незачем менять один вслед за другим.
+JACCARD_MIN_CHARS = CONTAINED_MIN_CHARS
+
 _PUNCT = re.compile(r"[^\w\s]+", re.UNICODE)
 _SPACES = re.compile(r"\s+", re.UNICODE)
 
@@ -52,12 +74,23 @@ def similar(a: str, b: str) -> float:
     return SequenceMatcher(None, left, right).ratio()
 
 
+def word_overlap(a: str, b: str) -> float:
+    """Доля общих слов (Jaccard) — устойчива к одному вставленному/выпавшему слову."""
+    wa, wb = set(normalize(a).split()), set(normalize(b).split())
+    if not wa or not wb:
+        return 0.0
+    return len(wa & wb) / len(wa | wb)
+
+
 def looks_like_echo(mic_text: str, system_text: str, *, ratio: float = RATIO) -> bool:
-    """Одна ли это речь: либо строки почти равны, либо одна содержит другую."""
+    """Одна ли это речь: почти равны, одна содержит другую, или общих слов много."""
     if similar(mic_text, system_text) >= ratio:
         return True
     short, long = sorted((normalize(mic_text), normalize(system_text)), key=len)
-    return len(short) >= CONTAINED_MIN_CHARS and short in long
+    if len(short) >= CONTAINED_MIN_CHARS and short in long:
+        return True
+    return (len(short) >= JACCARD_MIN_CHARS
+            and word_overlap(mic_text, system_text) >= JACCARD_THRESH)
 
 
 def mark_echo(utterances: list[dict[str, Any]], *, window_s: float = WINDOW_S,

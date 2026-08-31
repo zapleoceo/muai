@@ -34,6 +34,24 @@ NPU, а не GPU, хотя GPU быстрее: слушатель работае
 запуске, а он стартует на каждом логоне и после каждого падения. Обновление
 драйвера кэш обесценивает — тогда одна медленная компиляция повторится, и об
 этом честно пишется в лог, иначе выглядит как повисание.
+
+## Подсказка именам (глоссарий) не работает на NPU
+
+Whisper умеет `initial_prompt`: список терминов, которые модель учитывает при
+расшифровке. Замер на синтезированной фразе с «LAMAS», «Веранда», «Синтегрум»
+(2026-08-31): без подсказки — «LAMRS», «Veranda» и «Sintegrum» латиницей; с
+подсказкой на CPU — все три написаны верно, без единой ошибки.
+
+На NPU тот же вызов падает: `RuntimeError` из `make_tensor.cpp` ещё до начала
+счёта, при ЛЮБОЙ подсказке, даже одном коротком слове — это не про длину,
+статический граф NPU просто не рассчитан на добавочные токены. Пайплайн при
+этом не портится: следующий вызов без подсказки на том же объекте отрабатывает
+как обычно (проверено, не предположено).
+
+Поэтому подсказка — best-effort для устройства: сорвалась один раз, дальше
+кванты на нём не пробуем, а не баним устройство целиком. Обычный отказ
+устройства (драйвер, память) — другое дело, и его гасит внешний обработчик
+ниже.
 """
 from __future__ import annotations
 
@@ -99,6 +117,10 @@ class Transcriber:
         # Устройства, отвалившиеся УЖЕ В РАБОТЕ. Второй раз туда не идём: иначе
         # каждый кусок платил бы компиляцией и падением по кругу.
         self._banned: set[str] = set()
+        # Устройства, где сорвалась ПОДСКАЗКА (не сам пайплайн — см. докстринг
+        # модуля). Отдельно от _banned: устройство рабочее, просто этот приём
+        # ему не даётся, и это не повод переставать на нём распознавать вовсе.
+        self._glossary_unsupported: set[str] = set()
 
     @property
     def device(self) -> str | None:
@@ -165,13 +187,24 @@ class Transcriber:
         audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
         if len(audio) < MIN_AUDIO_S * SAMPLE_RATE:
             return []
+        pipe = self._load()
+        kwargs = {"language": f"<|{self.config.language}|>", "task": "transcribe",
+                 "return_timestamps": True}
+        if self.config.glossary and self._device not in self._glossary_unsupported:
+            try:
+                result = pipe.generate(audio, initial_prompt=", ".join(self.config.glossary),
+                                       **kwargs)
+                return segments_of(result)
+            except Exception as e:                      # noqa: BLE001
+                # НЕ отказ устройства — сам приём подсказки на нём не работает
+                # (см. докстринг модуля). Поэтому не трогаем _banned/_pipe:
+                # обычный вызов ниже, без подсказки, пойдёт на том же пайплайне.
+                self._glossary_unsupported.add(self._device)
+                log.warning("подсказка глоссария не работает на %s (%s) — "
+                           "дальше без неё на этом устройстве",
+                           self._device, type(e).__name__)
         try:
-            result = self._load().generate(
-                audio,
-                language=f"<|{self.config.language}|>",
-                task="transcribe",
-                return_timestamps=True,
-            )
+            result = pipe.generate(audio, **kwargs)
         except Exception:                              # noqa: BLE001
             # Устройство могло отвалиться уже в работе: драйвер откатился, NPU
             # занят, память кончилась. Пайплайн кэширован, поэтому без сброса
