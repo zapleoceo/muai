@@ -62,6 +62,30 @@ class TestForcedFlushLog:
         listener._queue_chunk(MIC, via_ready=True)
         assert not any("предохранителю" in r.message for r in caplog.records)
 
+    def test_fires_even_when_current_pause_is_already_long(self, tmp_path, caplog):
+        """Предохранитель может сработать ВО ВРЕМЯ обычной паузы ≥2с — норма
+        речи (60с) просто ещё не набрана: редкая речь несколькими короткими
+        всплесками, растянутая на несколько минут через паузы чуть за 2с.
+
+        Первая версия проверки судила по «пауза короче 2с» — здесь она
+        ложноотрицательна: пауза уже длинная, а сработал именно
+        предохранитель, не обычное условие (норма речи не выполнена).
+        Нашло ревью."""
+        listener = _listener(tmp_path, chunk_speech_s=60.0, chunk_max_wall_s=4.0)
+        caplog.set_level(logging.INFO, logger="listener")
+        recorder = listener.recorders[MIC]
+        at = 0.0
+        for _ in range(int(0.3 / FRAME_S) + 1):
+            recorder.add(b"x", True, at)
+            at += FRAME_S
+        assert recorder.speech_s < recorder.chunk_speech_s, "норма НЕ набрана"
+        while not recorder.ready():
+            recorder.add(b"x", False, at)
+            at += FRAME_S
+        assert recorder.silence_s >= PAUSE_FLUSH_S, "сработало во время долгой паузы"
+        listener._queue_chunk(MIC, via_ready=True)
+        assert any("предохранителю" in r.message for r in caplog.records)
+
     def test_session_close_never_logs_it_even_with_low_silence(self, tmp_path, caplog):
         """Хвост речи без паузы, закрытый через `_finish` (не `ready()`):
         не должен звучать так, будто сработал предохранитель."""
