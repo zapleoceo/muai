@@ -69,3 +69,42 @@ class TestNothingToShow:
                                 "utterances": [{"text": "без метки и времени"}]})
         assert "без метки и времени" in html
         assert ">00:00<" in html
+
+
+class TestEchoIsVisible:
+    """Помеченное эхо — голос собеседника, пойманный микрофоном.
+
+    Показать его как речь владельца значит соврать об авторстве; спрятать —
+    потерять слова, потому что в том же куске бывают и его собственные.
+    Поэтому реплика видна, но подписана.
+    """
+
+    @staticmethod
+    def _with_echo():
+        return _extra(utterances=[
+            {"at": 0.0, "stream": "system", "text": "сроки сдвигаем на среду"},
+            {"at": 1.0, "stream": "mic", "text": "сроки сдвигаем на среду понял",
+             "echo": True},
+            {"at": 9.0, "stream": "mic", "text": "тогда предупрежу заказчика"},
+        ])
+
+    def test_echo_line_is_shown_not_hidden(self):
+        html = transcript_html(self._with_echo())
+        assert "сроки сдвигаем на среду понял" in html
+
+    def test_echo_line_is_labelled(self):
+        html = transcript_html(self._with_echo())
+        assert "· эхо" in html
+
+    def test_own_line_keeps_the_owner_label(self):
+        html = transcript_html(self._with_echo())
+        assert html.count("· эхо") == 1
+        assert STREAM_LABEL["mic"] in html
+
+    def test_count_of_echoes_is_explained(self):
+        html = transcript_html(self._with_echo())
+        assert "Помечено как эхо: 1" in html
+
+    def test_transcript_without_echo_says_nothing_about_it(self):
+        """Лишний абзац у каждой записи без эха — шум."""
+        assert "Помечено как эхо" not in transcript_html(_extra())

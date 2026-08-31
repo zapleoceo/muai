@@ -338,6 +338,11 @@ class TestChronology:
             "[я] без времени", "[я] со временем"]
 
 
+#: Отчёт настоящей distill (`vera_shared.llm.fold`): все четыре ключа
+#: читаются рабочим кодом, и неполный мок падает на KeyError уже в логировании.
+_REPORT = {"transcript_chars": 42, "windows": 1, "truncated": False, "distilled": True}
+
+
 class TestEchoNotSummarized:
     """Помеченное эхо не идёт в осмысление, но остаётся в стенограмме.
 
@@ -365,7 +370,7 @@ class TestEchoNotSummarized:
 
         async def _spy(utterances, **kw):
             seen["texts"] = [u.text for u in utterances]
-            return _FULL, {"transcript_chars": 42, "windows": 1}
+            return _FULL, _REPORT
 
         sess = _Sess(event_id=11)
         with patch("gateway.voice.distill", _spy),              patch("gateway.voice.get_session", lambda: sess),              patch("gateway.voice.check_internal_secret", lambda s: None):
@@ -379,7 +384,7 @@ class TestEchoNotSummarized:
         import gateway.voice as v
 
         async def _ok(utterances, **kw):
-            return _FULL, {"transcript_chars": 42, "windows": 1}
+            return _FULL, _REPORT
 
         sess = _Sess(event_id=12)
         with patch("gateway.voice.distill", _ok),              patch("gateway.voice.get_session", lambda: sess),              patch("gateway.voice.check_internal_secret", lambda s: None):
@@ -398,7 +403,7 @@ class TestEchoNotSummarized:
 
         async def _spy(utterances, **kw):
             seen["n"] = len(utterances)
-            return _FULL, {"transcript_chars": 42, "windows": 1}
+            return _FULL, _REPORT
 
         body = VoiceSession(
             started_at=_T0, ended_at=_T0 + timedelta(minutes=2),
