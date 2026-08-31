@@ -131,3 +131,45 @@ class TestStored:
         assert "не удалось осмыслить" in sess.params["content_text"]
         assert any(_SECRET in u["text"]
                    for u in sess.params["content_extra"]["utterances"])
+
+
+class TestEchoSplit:
+    """Эхо помечено слушателем: стенограмма берёт всё, осмысление — чистое.
+
+    Микрофон слышит динамики, поэтому часть реплик дорожки `mic` — голос
+    собеседника. Слушатель их не выбрасывает: в один кусок попадает и эхо, и
+    слова владельца, а звук не хранится, значит выброшенное не вернуть.
+    Разделение проходит здесь.
+    """
+
+    @staticmethod
+    def _utterances():
+        return [
+            Utterance(at=0.0, stream="system", text="давай сверим сроки по проекту"),
+            Utterance(at=1.0, stream="mic",
+                      text="давай сверим сроки по проекту ага записал", echo=True),
+            Utterance(at=8.0, stream="mic", text="во вторник пришлю смету"),
+        ]
+
+    def test_transcript_keeps_every_utterance(self):
+        record = transcript_record(self._utterances())
+        assert len(record["utterances"]) == 3
+        assert record["echoes"] == 1
+        assert any("ага записал" in u["text"] for u in record["utterances"])
+
+    def test_flag_written_only_where_true(self):
+        """Ключ у каждой реплики раздувал бы jsonb: эха около десятой части."""
+        record = transcript_record(self._utterances())
+        flagged = [u for u in record["utterances"] if "echo" in u]
+        assert len(flagged) == 1
+        assert flagged[0]["echo"] is True
+
+    def test_chars_count_everything_including_echo(self):
+        record = transcript_record(self._utterances())
+        assert record["chars"] == sum(len(u.text) for u in self._utterances())
+
+    def test_old_listener_without_the_field_still_works(self):
+        """Слушатель может быть старее сервера — деплой идёт в этом порядке."""
+        record = transcript_record([Utterance(at=0.0, stream="mic", text="привет")])
+        assert record["echoes"] == 0
+        assert "echo" not in record["utterances"][0]

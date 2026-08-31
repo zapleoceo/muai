@@ -169,16 +169,28 @@ def transcript_html(extra: dict[str, Any] | None) -> str:
         stamp = f"{int(at) // 60:02d}:{int(at) % 60:02d}"
         who = STREAM_LABEL.get(str(u.get("stream")), str(u.get("stream") or "?"))
         cls = "self" if u.get("stream") == "mic" else "other"
+        # Помеченное эхо — это голос собеседника, пойманный микрофоном. Показать
+        # его как речь владельца значит соврать об авторстве, а спрятать —
+        # потерять слова: в том же куске бывают и его собственные.
+        if u.get("echo"):
+            who, cls = f"{who} · эхо", "echo"
         rows.append(
             f'<tr><td class="mute">{stamp}</td>'
             f'<td class="who {cls}">{esc(who)}</td>'
             f'<td>{esc(u.get("text") or "")}</td></tr>')
+    echoes = sum(1 for u in utterances if u.get("echo"))
+    echo_note = (
+        f'<p class="mute">Помечено как эхо: {echoes}. Это речь собеседника, '
+        f'пойманная микрофоном из динамиков. В выжимку такие реплики не '
+        f'попадают, но здесь остаются — в одном куске с эхом бывают и слова '
+        f'владельца.</p>' if echoes else "")
     return f"""
       <h3>Стенограмма ({len(utterances)} реплик, {extra.get('chars', 0)} символов)</h3>
       <p class="mute">Дословно, как распознал слушатель. В поиск по мозгу идёт
       только выжимка выше — иначе обрывки перебивали бы её. Здесь текст лежит
       целиком: выжимка сжимает разговор примерно в тридцать раз, а звук не
       хранится вообще.</p>
+      {echo_note}
       <table class="data transcript"><tbody>{''.join(rows)}</tbody></table>
     """
 

@@ -17,7 +17,7 @@ from typing import Any
 
 from vera_listener.capture import MIC, SYSTEM, Capture, Frame
 from vera_listener.config import Config
-from vera_listener.dedup import drop_echo
+from vera_listener.dedup import mark_echo
 from vera_listener.gate import judge, system_audio_allowed
 from vera_listener.hold import BYTES_PER_S, Hold
 from vera_listener.outbox import Outbox, read_payload
@@ -263,10 +263,14 @@ class Listener:
         # По времени, а не по порядку дописывания: придержанное уехало в файл
         # позже реплик микрофона, а осмысление ждёт хронологию.
         in_order = sorted(payload["utterances"], key=lambda u: u.get("at", 0.0))
-        utterances: list[dict[str, Any]] = drop_echo(in_order)
+        # Помечаем эхо, но отправляем ВСЁ: в микрофонный кусок попадает и голос
+        # из динамиков, и слова владельца. Что выбросить — решает сервер, и
+        # только для осмысления; дословная стенограмма хранит всё.
+        utterances: list[dict[str, Any]] = mark_echo(in_order)
+        echoes = sum(1 for u in utterances if u.get("echo"))
         self.outbox.finish(path, ended_wall.isoformat(), utterances=utterances)
-        log.info("разговор сохранён: %s, реплик %d (%s)",
-                 closed.reason, len(utterances), verdict.reason)
+        log.info("разговор сохранён: %s, реплик %d (из них эхо %d) (%s)",
+                 closed.reason, len(utterances), echoes, verdict.reason)
 
     def _send(self) -> None:
         while not self._stop.is_set():

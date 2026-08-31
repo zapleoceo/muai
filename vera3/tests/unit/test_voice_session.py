@@ -336,3 +336,75 @@ class TestChronology:
         assert render([{"stream": "mic", "text": "без времени"},
                        {"at": 5.0, "stream": "mic", "text": "со временем"}]) == [
             "[я] без времени", "[я] со временем"]
+
+
+class TestEchoNotSummarized:
+    """Помеченное эхо не идёт в осмысление, но остаётся в стенограмме.
+
+    Задвоенные реплики и портят выжимку, и приписывают слова собеседника
+    владельцу. Выбрасывать их насовсем нельзя: в микрофонный кусок попадает и
+    речь владельца, а звук не хранится.
+    """
+
+    @staticmethod
+    def _with_echo():
+        return VoiceSession(
+            started_at=_T0, ended_at=_T0 + timedelta(minutes=5),
+            app="chrome.exe", window_title="Meet",
+            utterances=[
+                Utterance(at=0.0, stream="system", text="сроки сдвигаем на среду"),
+                Utterance(at=1.0, stream="mic",
+                          text="сроки сдвигаем на среду понял", echo=True),
+                Utterance(at=9.0, stream="mic", text="тогда я предупрежу заказчика"),
+            ])
+
+    @pytest.mark.asyncio
+    async def test_distill_sees_only_clean_lines(self):
+        import gateway.voice as v
+        seen = {}
+
+        async def _spy(utterances, **kw):
+            seen["texts"] = [u.text for u in utterances]
+            return _FULL, {"transcript_chars": 42, "windows": 1}
+
+        sess = _Sess(event_id=11)
+        with patch("gateway.voice.distill", _spy),              patch("gateway.voice.get_session", lambda: sess),              patch("gateway.voice.check_internal_secret", lambda s: None):
+            await v.ingest_voice_session(self._with_echo(), x_internal_secret="ok")
+
+        assert "сроки сдвигаем на среду понял" not in seen["texts"]
+        assert "тогда я предупрежу заказчика" in seen["texts"]
+
+    @pytest.mark.asyncio
+    async def test_transcript_and_counters_keep_the_echo(self):
+        import gateway.voice as v
+
+        async def _ok(utterances, **kw):
+            return _FULL, {"transcript_chars": 42, "windows": 1}
+
+        sess = _Sess(event_id=12)
+        with patch("gateway.voice.distill", _ok),              patch("gateway.voice.get_session", lambda: sess),              patch("gateway.voice.check_internal_secret", lambda s: None):
+            await v.ingest_voice_session(self._with_echo(), x_internal_secret="ok")
+
+        extra = sess.params["content_extra"]
+        assert len(extra["utterances"]) == 3
+        assert extra["echoes"] == 1
+        assert sess.params["metadata"]["utterances_echo"] == 1
+
+    @pytest.mark.asyncio
+    async def test_all_echo_falls_back_to_everything(self):
+        """Иначе разговор, целиком опознанный как эхо, остался бы без выжимки."""
+        import gateway.voice as v
+        seen = {}
+
+        async def _spy(utterances, **kw):
+            seen["n"] = len(utterances)
+            return _FULL, {"transcript_chars": 42, "windows": 1}
+
+        body = VoiceSession(
+            started_at=_T0, ended_at=_T0 + timedelta(minutes=2),
+            utterances=[Utterance(at=0.0, stream="mic", text="всё эхо", echo=True)])
+        sess = _Sess(event_id=13)
+        with patch("gateway.voice.distill", _spy),              patch("gateway.voice.get_session", lambda: sess),              patch("gateway.voice.check_internal_secret", lambda s: None):
+            await v.ingest_voice_session(body, x_internal_secret="ok")
+
+        assert seen["n"] == 1

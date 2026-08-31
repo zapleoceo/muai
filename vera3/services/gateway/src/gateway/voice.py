@@ -39,6 +39,11 @@ class Utterance(BaseModel):
     at: float = Field(description="секунд от начала сессии")
     stream: Literal["mic", "system"]
     text: str
+    # Микрофон слышит динамики, поэтому часть реплик дорожки mic — это голос
+    # собеседника. Слушатель их помечает, но не выбрасывает: в один кусок
+    # попадает и эхо, и слова владельца. Старые слушатели поля не шлют — отсюда
+    # дефолт, и от этого ничего не ломается.
+    echo: bool = False
 
 
 class VoiceSession(BaseModel):
@@ -72,8 +77,12 @@ def transcript_record(utterances: list[Utterance]) -> dict[str, Any]:
     return {
         "kind": "voice_transcript",
         "chars": sum(len(u.text) for u in utterances),
+        "echoes": sum(1 for u in utterances if u.echo),
         "utterances": [
-            {"at": round(u.at, 2), "stream": u.stream, "text": u.text}
+            # `echo` пишем только когда он есть: в записи их около десятой части,
+            # и ключ у каждой второй реплики раздувал бы jsonb без пользы.
+            {"at": round(u.at, 2), "stream": u.stream, "text": u.text,
+             **({"echo": True} if u.echo else {})}
             for u in utterances
         ],
     }
@@ -107,7 +116,15 @@ async def ingest_voice_session(
 ) -> VoiceSessionResult:
     check_internal_secret(x_internal_secret)
 
-    distilled, report = await distill(body.utterances, app=body.app,
+    # Осмысление получает разговор БЕЗ эха: задвоенные реплики и сбивают
+    # выжимку, и приписывают слова собеседника владельцу. Стенограмма ниже
+    # берёт полный список — что выброшено здесь, там сохранено.
+    # `or body.utterances` — защита контракта, а не наблюдаемый случай: живой
+    # слушатель помечает только дорожку mic и только при наличии непомеченных
+    # реплик из loopback, поэтому хоть одна чистая остаётся всегда. Но сервер
+    # не обязан верить клиенту на слово, а пустая выжимка хуже неточной.
+    for_summary = [u for u in body.utterances if not u.echo] or body.utterances
+    distilled, report = await distill(for_summary, app=body.app,
                                       title=body.window_title)
     if not report["transcript_chars"]:
         return VoiceSessionResult(ok=False, event_id=None)
@@ -141,6 +158,7 @@ async def ingest_voice_session(
                     "device_hint": body.device_hint,
                     "duration_s": dur,
                     "utterances": len(body.utterances),
+                    "utterances_echo": sum(1 for u in body.utterances if u.echo),
                     "counterparts": distilled.get("counterparts") or [],
                     "topics": distilled.get("topics") or [],
                     "meeting_id": body.meeting_id or src_id,
