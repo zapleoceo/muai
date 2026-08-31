@@ -83,6 +83,10 @@ class Config:
     min_speech_s: float = 25.0
     monologue_speech_s: float = 45.0
     chunk_speech_s: float = 60.0
+    #: Предохранитель: без паузы ≥2с кусок не флашится (см. recorder.py) —
+    #: без потолка по времени буфер растёт неограниченно на быстрой речи без
+    #: остановок. 5 минут почти никогда не задевает обычный разговор.
+    chunk_max_wall_s: float = 300.0
     allow_apps: tuple[str, ...] = field(default=DEFAULT_ALLOW_APPS)
     browser_apps: tuple[str, ...] = field(default=DEFAULT_BROWSER_APPS)
     deny_apps: tuple[str, ...] = ()
@@ -131,6 +135,8 @@ def load_config() -> Config:
         monologue_speech_s=float(
             get("VERA_MONOLOGUE_S", str(Config.monologue_speech_s))),
         chunk_speech_s=float(get("VERA_CHUNK_SPEECH_S", str(Config.chunk_speech_s))),
+        chunk_max_wall_s=float(
+            get("VERA_CHUNK_MAX_WALL_S", str(Config.chunk_max_wall_s))),
         send_interval_s=float(get("VERA_SEND_INTERVAL_S", str(Config.send_interval_s))),
         send_backoff_max_s=float(
             get("VERA_SEND_BACKOFF_MAX_S", str(Config.send_backoff_max_s))),

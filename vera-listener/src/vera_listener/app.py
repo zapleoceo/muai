@@ -21,7 +21,7 @@ from vera_listener.dedup import mark_echo
 from vera_listener.gate import judge, system_audio_allowed
 from vera_listener.hold import BYTES_PER_S, Hold
 from vera_listener.outbox import Outbox, read_payload
-from vera_listener.recorder import TrackRecorder
+from vera_listener.recorder import PAUSE_FLUSH_S, TrackRecorder
 from vera_listener.segmenter import Closed, Segmenter
 from vera_listener.sender import Sender
 from vera_listener.status import DEAF, IDLE, TALKING, Status
@@ -54,8 +54,11 @@ class Listener:
         self.segmenter = Segmenter(silence_timeout_s=config.silence_timeout_s,
                                    max_session_s=config.max_session_s)
         self.detectors = {MIC: SpeechDetector(), SYSTEM: SpeechDetector()}
-        self.recorders = {track: TrackRecorder(track, config.chunk_speech_s)
-                          for track in (MIC, SYSTEM)}
+        self.recorders = {
+            track: TrackRecorder(track, config.chunk_speech_s,
+                                 max_wall_s=config.chunk_max_wall_s)
+            for track in (MIC, SYSTEM)
+        }
         self.session: Path | None = None
         self._session_wall: datetime | None = None
         self._session_zero: float = 0.0
@@ -156,14 +159,31 @@ class Listener:
         recorder = self.recorders[frame.track]
         recorder.add(frame.pcm, speech, frame.at - self._session_zero)
         if recorder.ready():
-            self._queue_chunk(frame.track)
+            self._queue_chunk(frame.track, via_ready=True)
         if self._held and self._system_confirmed():
             self._flush_held()
 
-    def _queue_chunk(self, track: str) -> None:
-        taken = self.recorders[track].take()
+    def _queue_chunk(self, track: str, *, via_ready: bool = False) -> None:
+        """`via_ready` — вызов идёт следом за `ready()==True` (обычный ход).
+
+        Без него зовёт `_finish()`: там флашится ХВОСТ на закрытии сессии
+        независимо от `ready()`, и по низкой `silence_s` предохранитель
+        распознался бы там ложно — обрывок сессии не проходил через него
+        вовсе. Нашло на этом же шаге, ещё до коммита.
+        """
+        recorder = self.recorders[track]
+        # До take(): он сбрасывает счётчики, а после уже не отличить, сработал
+        # ли предохранитель по времени или обычная пауза. Событие редкое (пауза
+        # короче 2с минутами) — стоит видеть в логе, не молчать о нём.
+        forced = (via_ready and recorder.speech_s > 0
+                 and recorder.silence_s < PAUSE_FLUSH_S)
+        taken = recorder.take()
         if not taken or self.session is None:
             return
+        if forced:
+            log.info("дорожка %s: кусок закрыт по предохранителю (%.0fс без "
+                    "паузы ≥2с), не дожидаясь естественной остановки",
+                    track, self.config.chunk_max_wall_s)
         offset, pcm = taken
         # Системный звук идёт в распознавание только когда ворота уже пропускают
         # эту сессию. Иначе — в копилку: ролик так не стоит ни такта, а созвон
