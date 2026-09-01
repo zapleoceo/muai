@@ -6,17 +6,35 @@ on:
     paths:
       - 'vera3/**'
       - '.github/workflows/deploy.yml'
+  # На PR из этого воркфлоу гоняется ТОЛЬКО job `quality` — см. `if` у
+  # остальных. Он гейтит деплой, но жил один на push в master, поэтому
+  # покраснеть мог исключительно ПОСЛЕ мерджа: 2026-09-01 так и вышло —
+  # ветка зелёная, мердж прошёл, quality упал на diff-cover, job deploy
+  # пропущен, прод остался на старом коде. Теперь тот же гейт виден на PR.
+  #
+  # docs/test/build здесь на PR намеренно НЕ запускаются: их уже гоняют
+  # docs-check.yml и vera3-tests.yml (там же и сборка всех одиннадцати
+  # образов). Включить их — удвоить каждый PR, включая 11 сборок дважды.
+  pull_request:
+    paths:
+      - 'vera3/**'
+      - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
+# Прогон на PR НЕ должен стоять в одной очереди с продакшн-деплоем: группа
+# общая и cancel-in-progress: false, поэтому чужой PR задерживал бы выкладку.
+# У PR своя группа на ветку, и там отменять предыдущий прогон правильно —
+# у продакшн-деплоя нельзя никогда.
 concurrency:
-  group: deploy-production
-  cancel-in-progress: false
+  group: ${{ github.event_name == 'pull_request' && format('deploy-pr-{0}', github.ref) || 'deploy-production' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # ─── 1. Docs gate ────────────────────────────────────────────────────────
   # Blocks deploy if vera3/services or vera3/shared changed without
   # vera3/docs being updated. Opt-out per commit: `docs-not-needed`.
   docs:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
@@ -52,6 +70,7 @@ jobs:
 
   # ─── 2. Test gate ────────────────────────────────────────────────────────
   test:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 12
     defaults:
@@ -185,15 +204,24 @@ jobs:
         id: base
         shell: bash
         run: |
-          BASE="${{ github.event.before }}"
           HEAD="${{ github.sha }}"
+          # На pull_request `github.event.before` ПУСТОЙ, а github.sha — это
+          # merge-коммит PR с базой. Прежний фолбэк взял бы HEAD~1, то есть
+          # первого родителя merge-коммита (верхушку master), и дифф вышел бы
+          # вывернутым: правки PR прочитались бы как удаления. Правильная база
+          # — pull_request.base.sha.
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            BASE="${{ github.event.pull_request.base.sha }}"
+          else
+            BASE="${{ github.event.before }}"
+          fi
           if [ -z "${BASE:-}" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
              || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
             BASE="$(git rev-parse "${HEAD}~1" 2>/dev/null || echo "$HEAD")"
           fi
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
           echo "head=$HEAD" >> "$GITHUB_OUTPUT"
-          echo "Diff base: $BASE → $HEAD"
+          echo "Diff base: $BASE → $HEAD (event: ${{ github.event_name }})"
 
       - name: Secret scan (no credentials in the diff)
         # 2026-07-15 incident: the Telegram bot token was committed twice —
@@ -374,6 +402,7 @@ jobs:
   # Пуша нет — только сборка. Образы всё равно собираются на хосте: цель
   # гейта — отделить «код не собирается» от «код не работает».
   build:
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -408,6 +437,7 @@ jobs:
   # ─── 4. Deploy ───────────────────────────────────────────────────────────
   # Hard-gated: docs + tests + quality + build must ALL pass.
   deploy:
+    if: github.event_name != 'pull_request'
     needs: [docs, test, quality, build]
     runs-on: ubuntu-latest
     # 25, а не 15: опрос занятого замка до десяти минут плюс сам деплой до
@@ -492,7 +522,12 @@ jobs:
     # GitHub помечает job как cancelled, и условие только на failure пропускало
     # бы ровно тот случай, от которого этот job и написан — «деплой встал, и
     # никто не узнал». Нашло ревью.
-    if: always() && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
+    # Только на push: провал на PR виден в самом PR, а DM владельцу на каждый
+    # красный чек чужой ветки — шум, от которого перестают читать уведомления.
+    # Ровно так 27.08 и потеряли мёртвый bot-telegram среди ложных тревог.
+    if: >-
+      always() && github.event_name != 'pull_request'
+      && (contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled'))
     runs-on: ubuntu-latest
     steps:
       - name: Написать владельцу, что и где упало
