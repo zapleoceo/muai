@@ -124,6 +124,29 @@ into guaranteed failure: brain-triage `worker.py` checks
 `llm_cooldown_remaining_s("chat:fast")`, media-worker checks `"vision"`;
 both sleep in ≤60s slices and log «LLM circuit open».
 
+### In-process cooldown cache
+
+The cooldown is read **twice per LLM call** — `_circuit_precheck()` before,
+`_circuit_reset()` after — and three times in triage, where
+`resolve_triage_capability()` checks the same capability first. Each read
+was its own session: pool checkout with `pool_pre_ping`, `SELECT`, `COMMIT`.
+Individually cheap (`app_control.key` is the primary key), but with 5
+replicas × `TRIAGE_CONCURRENCY=10` it is steady traffic that can never
+change the answer — a cooldown moves once every tens of minutes.
+
+`circuit.py` caches it for `_CACHE_TTL_S` (5s). Two properties matter:
+
+- It caches the **expiry instant**, not the remaining seconds, so the
+  countdown keeps ticking correctly inside the TTL. Caching the remainder
+  would freeze it and hold the circuit open past its deadline.
+- `reset_llm_cooldown()` skips the DB entirely when the cache says there is
+  no cooldown to clear — that removes the second read on the happy path.
+
+A cooldown opened by *another* replica becomes visible after at most the TTL.
+For a 30-minute pause that is nothing. `forget_cooldowns()` drops the cache;
+the `sqlite_db` test fixture calls it, because the cache outlives a test's
+database and would otherwise leak an open circuit into the next test.
+
 ## What got deleted
 
 - `vera_shared/llm/cost_guard.py` — broker now decides caps

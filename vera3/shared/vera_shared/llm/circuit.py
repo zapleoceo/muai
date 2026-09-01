@@ -30,6 +30,7 @@ chat_async() отказывают МГНОВЕННО (LLMCoolingDown), не со
 from __future__ import annotations
 
 import logging
+import time
 from datetime import UTC, datetime, timedelta
 
 from vera_shared.control import (
@@ -43,6 +44,46 @@ from vera_shared.control import (
 log = logging.getLogger(__name__)
 
 _KEY_PREFIX = "llm_cooldown:"
+
+# Кулдаун читается ДВАЖДЫ на каждый LLM-вызов (precheck до, reset после), а в
+# триаже ещё и третий раз — resolve_triage_capability проверяет ту же ёмкость
+# перед вызовом. Каждое чтение — своя сессия, pool_pre_ping, SELECT и COMMIT.
+# Запросы дешёвые (app_control.key — первичный ключ), но на 5 репликах × 10
+# одновременных вызовов это лишний трафик к БД без единого шанса что-то
+# изменить: кулдаун меняется раз в десятки минут, а не раз в запрос.
+#
+# Кэшируем МОМЕНТ окончания, а не остаток: в пределах TTL остаток продолжает
+# честно убывать. Кулдаун, поставленный другой репликой, виден с задержкой до
+# TTL — для паузы в 30 минут это ничто.
+_CACHE_TTL_S = 5.0
+_cooldown_cache: dict[str, tuple[datetime | None, float]] = {}
+
+
+def _remember(capability: str, until: datetime | None) -> None:
+    _cooldown_cache[capability] = (until, time.monotonic())
+
+
+def _cached(capability: str) -> tuple[datetime | None, bool]:
+    """(момент окончания, попали ли в кэш)."""
+    hit = _cooldown_cache.get(capability)
+    if hit is None or time.monotonic() - hit[1] >= _CACHE_TTL_S:
+        return None, False
+    return hit[0], True
+
+
+def forget_cooldowns() -> None:
+    """Сбросить кэш. Для тестов и для скриптов, меняющих app_control мимо API."""
+    _cooldown_cache.clear()
+
+
+def _parse_until(raw: str) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        until = datetime.fromisoformat(raw)
+    except ValueError:
+        return None
+    return until.replace(tzinfo=UTC) if until.tzinfo is None else until
 
 
 def classify_broker_error(message: str) -> str:
@@ -76,27 +117,29 @@ async def note_llm_failure(capability: str, error_message: str) -> str:
     else:
         return kind
     await set_control(f"{_KEY_PREFIX}{capability}", until.isoformat())
+    _remember(capability, until)
     log.warning("LLM circuit OPEN for %s until %s (%s)", capability, until, kind)
     return kind
 
 
 async def llm_cooldown_remaining_s(capability: str) -> float:
     """Секунд до конца кулдауна capability; 0 — можно звонить."""
-    raw = await get_control(f"{_KEY_PREFIX}{capability}", "")
-    if not raw:
+    until, hit = _cached(capability)
+    if not hit:
+        until = _parse_until(await get_control(f"{_KEY_PREFIX}{capability}", ""))
+        _remember(capability, until)
+    if until is None:
         return 0.0
-    try:
-        until = datetime.fromisoformat(raw)
-    except ValueError:
-        return 0.0
-    if until.tzinfo is None:
-        until = until.replace(tzinfo=UTC)
     return max(0.0, (until - datetime.now(UTC)).total_seconds())
 
 
 async def reset_llm_cooldown(capability: str) -> None:
     """Успешный вызов закрывает circuit досрочно (пул ожил раньше срока)."""
+    until, hit = _cached(capability)
+    if hit and until is None:
+        return   # только что видели: кулдауна нет — читать нечего и стирать нечего
     raw = await get_control(f"{_KEY_PREFIX}{capability}", "")
     if raw:
         await set_control(f"{_KEY_PREFIX}{capability}", "")
         log.info("LLM circuit CLOSED for %s (successful call)", capability)
+    _remember(capability, None)
