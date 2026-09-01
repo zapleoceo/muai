@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import os
 from datetime import timedelta
+from pathlib import Path
 
 import pytest
 import pytest_asyncio
@@ -291,3 +292,280 @@ async def test_vector_branch_requires_embedding_via_inner_join(pg_db):
 
     assert found.mode == "vector"
     assert [r[2] for r in found.rows] == ["has"], "строка без эмбеддинга просочилась"
+
+
+# ─── pgvector: миграция 030 ─────────────────────────────────────────────────
+# Расширение объявлено в VERA.md и в образе базы, но не использовалось: колонка
+# была JSONB, ANN-индекса не было, косинус считался циклом на Python в двух
+# местах. Тесты проверяют ОБА состояния перехода — до бэкфила и после.
+
+
+async def _apply_pgvector_migration() -> bool:
+    """Накатить 030 на тестовую базу. False — расширения нет в сборке."""
+    from sqlalchemy import text as sa_text
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.vectors import forget_capability
+
+    try:
+        async with get_session() as s:
+            await s.execute(sa_text("CREATE EXTENSION IF NOT EXISTS vector"))
+            await s.execute(sa_text(
+                "ALTER TABLE event_embeddings "
+                "ADD COLUMN IF NOT EXISTS embedding_vec vector(3)"))
+    except Exception:
+        return False
+    forget_capability()
+    return True
+
+
+@pytest.mark.asyncio
+async def test_vector_column_detected_only_after_migration(pg_db):
+    from vera_shared.db.vectors import forget_capability, vector_column_available
+
+    forget_capability()
+    assert await vector_column_available() is False, "колонки ещё нет"
+
+    if not await _apply_pgvector_migration():
+        pytest.skip("расширение vector недоступно в этой сборке Postgres")
+    assert await vector_column_available() is True
+
+
+@pytest.mark.asyncio
+async def test_capability_is_cached_per_process(pg_db):
+    """Каталог не меняется в рантайме — спрашивать его на каждый запрос это
+    тот же класс расточительства, что и кулдаун LLM."""
+    from vera_shared.db import vectors
+    from vera_shared.db.vectors import forget_capability, vector_column_available
+
+    forget_capability()
+    await vector_column_available()
+
+    calls = 0
+    real = vectors.get_session
+
+    def counting(*a, **kw):
+        nonlocal calls
+        calls += 1
+        return real(*a, **kw)
+
+    vectors.get_session = counting
+    try:
+        for _ in range(5):
+            await vector_column_available()
+    finally:
+        vectors.get_session = real
+    assert calls == 0, "проверка колонки ходит в БД повторно"
+
+
+@pytest.mark.asyncio
+async def test_nearest_neighbour_by_index_matches_python_cosine(pg_db):
+    """Главное свойство миграции: ответ не должен измениться. Оператор <=> —
+    косинусное РАССТОЯНИЕ, поэтому сходство = 1 - расстояние; перепутать знак
+    здесь легко, и тогда дедуп начнёт считать похожими самые ДАЛЁКИЕ факты."""
+    from sqlalchemy import text as sa_text
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.vectors import as_pg_vector
+
+    if not await _apply_pgvector_migration():
+        pytest.skip("расширение vector недоступно в этой сборке Postgres")
+
+    from gateway.claude import _cosine
+
+    query = [1.0, 0.0, 0.0]
+    corpus = {
+        # 0.9997 — уровень настоящего почти-дубля факта, выше порога 0.92
+        "почти то же": [0.999, 0.026, 0.0],
+        "перпендикуляр": [0.0, 1.0, 0.0],
+        "напротив": [-1.0, 0.0, 0.0],
+    }
+    from vera_shared.db.models import EventRow
+
+    now = utc_naive_now()
+    async with get_session() as s:
+        for label, vec in corpus.items():
+            ev = EventRow(source="claude", source_event_id=label, category="fact",
+                          content_text=label, occurred_at=now, received_at=now,
+                          triage_status="done")
+            s.add(ev)
+            await s.flush()
+            await s.execute(sa_text(
+                "INSERT INTO event_embeddings (event_id, embedding, embedding_vec)"
+                " VALUES (:i, CAST(:j AS jsonb), CAST(:v AS vector))"),
+                {"i": ev.id, "j": str(vec), "v": as_pg_vector(vec)})
+
+        row = (await s.execute(sa_text("""
+            SELECT e.source_event_id, 1 - (ee.embedding_vec <=> CAST(:q AS vector))
+            FROM events e JOIN event_embeddings ee ON ee.event_id = e.id
+            ORDER BY ee.embedding_vec <=> CAST(:q AS vector) LIMIT 1
+        """), {"q": as_pg_vector(query)})).one()
+
+    assert row[0] == "почти то же", "индекс выбрал не ближайшего"
+    # та же величина, что дал бы питоновский перебор — знак не перепутан
+    assert row[1] == pytest.approx(_cosine(query, corpus["почти то же"]), abs=1e-6)
+    # и она проходит порог дедупа, ради которого всё это и считается
+    from gateway.claude import SEMANTIC_DEDUP_THRESHOLD
+    assert row[1] >= SEMANTIC_DEDUP_THRESHOLD
+
+
+@pytest.mark.asyncio
+async def test_backfill_is_idempotent_and_skips_broken_rows(pg_db):
+    """Скрипт можно прервать и запустить снова: условие `embedding_vec IS NULL`
+    само сужается. Битая строка удаляется, иначе цикл не закончился бы никогда."""
+    from sqlalchemy import text as sa_text
+    from vera_shared.db.engine import get_session
+
+    if not await _apply_pgvector_migration():
+        pytest.skip("расширение vector недоступно в этой сборке Postgres")
+
+    # scripts/ не пакет — грузим модуль по пути
+    import importlib.util
+    spec = importlib.util.spec_from_file_location(
+        "backfill_pgvector",
+        Path(__file__).resolve().parents[2] / "scripts" / "backfill_pgvector.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    copy_batch, remaining = mod.copy_batch, mod.remaining
+
+    from vera_shared.db.models import EventRow
+
+    now = utc_naive_now()
+    async with get_session() as s:
+        for i, payload in enumerate(['[1,0,0]', '[0,1,0]', '"мусор"'], start=1):
+            ev = EventRow(source="claude", source_event_id=f"e{i}", category="fact",
+                          content_text="x", occurred_at=now, received_at=now,
+                          triage_status="done")
+            s.add(ev)
+            await s.flush()
+            await s.execute(sa_text(
+                "INSERT INTO event_embeddings (event_id, embedding)"
+                " VALUES (:i, CAST(:j AS jsonb))"), {"i": ev.id, "j": payload})
+
+    assert await remaining() == 3
+    assert await copy_batch(10) == 2          # третья битая — удалена
+    assert await remaining() == 0
+    assert await copy_batch(10) == 0          # повторный прогон ничего не делает
+
+
+@pytest.mark.asyncio
+async def test_remember_dedup_uses_the_vector_branch(pg_db, monkeypatch):
+    """`_find_semantic_neighbour` на колонке vector: тот же вердикт, что и
+    питоновский перебор, но одним обращением к индексу."""
+    from sqlalchemy import text as sa_text
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models import EventRow
+    from vera_shared.db.vectors import as_pg_vector
+
+    if not await _apply_pgvector_migration():
+        pytest.skip("расширение vector недоступно в этой сборке Postgres")
+
+    from gateway import claude as gc
+
+    near, far = [0.999, 0.026, 0.0], [0.0, 1.0, 0.0]
+    now = utc_naive_now()
+    async with get_session() as s:
+        for sid, vec in (("близкий", near), ("далёкий", far)):
+            ev = EventRow(source="claude", source_event_id=sid, category="fact",
+                          content_text=sid, occurred_at=now, received_at=now,
+                          triage_status="done")
+            s.add(ev)
+            await s.flush()
+            await s.execute(sa_text(
+                "INSERT INTO event_embeddings (event_id, embedding, embedding_vec)"
+                " VALUES (:i, CAST(:j AS jsonb), CAST(:v AS vector))"),
+                {"i": ev.id, "j": str(vec), "v": as_pg_vector(vec)})
+            if sid == "близкий":
+                near_id = ev.id
+
+    async def _embed(_t):
+        return [[1.0, 0.0, 0.0]]
+
+    monkeypatch.setattr(gc, "embed", _embed)
+
+    q_vec, match = await gc._find_semantic_neighbour("почти тот же факт")
+
+    assert q_vec == [1.0, 0.0, 0.0]
+    assert match is not None, "почти-дубль не найден через индекс"
+    assert match[0] == near_id
+    assert match[1] >= gc.SEMANTIC_DEDUP_THRESHOLD
+
+
+@pytest.mark.asyncio
+async def test_remember_dedup_returns_none_when_nothing_is_close(pg_db, monkeypatch):
+    """Порог обязан работать в обе стороны: далёкий факт — не дубль."""
+    from sqlalchemy import text as sa_text
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models import EventRow
+    from vera_shared.db.vectors import as_pg_vector
+
+    if not await _apply_pgvector_migration():
+        pytest.skip("расширение vector недоступно в этой сборке Postgres")
+
+    from gateway import claude as gc
+
+    now = utc_naive_now()
+    async with get_session() as s:
+        ev = EventRow(source="claude", source_event_id="далёкий", category="fact",
+                      content_text="про другое", occurred_at=now, received_at=now,
+                      triage_status="done")
+        s.add(ev)
+        await s.flush()
+        await s.execute(sa_text(
+            "INSERT INTO event_embeddings (event_id, embedding, embedding_vec)"
+            " VALUES (:i, CAST(:j AS jsonb), CAST(:v AS vector))"),
+            {"i": ev.id, "j": "[0,1,0]", "v": as_pg_vector([0.0, 1.0, 0.0])})
+
+    monkeypatch.setattr(gc, "embed", lambda _t: _one([[1.0, 0.0, 0.0]]))
+
+    _q, match = await gc._find_semantic_neighbour("совсем про другое")
+    assert match is None
+
+
+async def _one(value):
+    return value
+
+
+@pytest.mark.asyncio
+async def test_triage_writes_both_columns_during_migration(pg_db, monkeypatch):
+    """Пока идёт бэкфил, новые события обязаны попадать И в vector, И в JSONB —
+    иначе они окажутся в дыре, которую бэкфил уже прошёл."""
+    from unittest.mock import AsyncMock
+
+    from sqlalchemy import text as sa_text
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models import EventRow
+
+    if not await _apply_pgvector_migration():
+        pytest.skip("расширение vector недоступно в этой сборке Postgres")
+
+    from brain_triage import worker
+
+    now = utc_naive_now()
+    async with get_session() as s:
+        ev = EventRow(source="telegram", source_event_id="tg:1", account="userbot",
+                      category="private", content_text="Игорь работает в Sintegrum",
+                      occurred_at=now, received_at=now, triage_status="processing",
+                      triage_started_at=now,
+                      metadata_={"chat_kind": "private", "owner_participates": True})
+        s.add(ev)
+        await s.flush()
+        await s.refresh(ev)
+        s.expunge(ev)
+
+    monkeypatch.setattr(worker, "is_backfill_paused", AsyncMock(return_value=False))
+    monkeypatch.setattr(worker, "reserve_backfill_allowance", AsyncMock(return_value=None))
+    monkeypatch.setattr(worker, "_claim_batch", AsyncMock(return_value=[ev]))
+    monkeypatch.setattr(worker, "_embed_batch", AsyncMock(return_value=[[0.1, 0.2, 0.3]]))
+    monkeypatch.setattr(worker, "apply_project_override", AsyncMock())
+    monkeypatch.setattr(worker, "_safe_rel_extract", AsyncMock())
+    monkeypatch.setattr(worker, "_process_one_with_sem",
+                        AsyncMock(return_value=[(ev.id, "done", {"importance": 10}, None)]))
+    monkeypatch.setattr(worker, "PACE_BETWEEN_S", 0)
+
+    assert await worker.process_pending() == 1
+
+    async with get_session() as s:
+        row = (await s.execute(sa_text(
+            "SELECT embedding, embedding_vec IS NOT NULL FROM event_embeddings"
+            " WHERE event_id = :e"), {"e": ev.id})).one()
+    assert row[0] == [0.1, 0.2, 0.3], "JSONB не записан"
+    assert row[1] is True, "колонка vector не записана — событие выпадет из дедупа"

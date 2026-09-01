@@ -28,6 +28,7 @@ from sqlalchemy import text, update
 from vera_shared.control import is_backfill_paused, reserve_backfill_allowance
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
+from vera_shared.db.vectors import as_pg_vector, vector_column_available
 from vera_shared.media_policy import should_extract_relations
 
 from brain_triage.background_loops import (
@@ -182,15 +183,31 @@ async def process_pending() -> int:
     # событие в event_embeddings не должно откатывать triage_status всего батча
     # (иначе события зависают в processing до watchdog). Savepoint на строку.
     if emb_writes:
+        # Во ВСЕ колонки, что есть: пока идёт бэкфил на pgvector (миграция
+        # 030), новые события обязаны попадать и в vector, и в JSONB —
+        # иначе они окажутся в дыре, которую бэкфил уже прошёл.
+        to_vec = await vector_column_available()
+        sql = text("""
+            INSERT INTO event_embeddings (event_id, embedding, embedding_vec)
+            VALUES (:eid, CAST(:emb AS jsonb), CAST(:vec AS vector))
+            ON CONFLICT (event_id) DO UPDATE
+              SET embedding = EXCLUDED.embedding,
+                  embedding_vec = EXCLUDED.embedding_vec
+        """) if to_vec else text("""
+            INSERT INTO event_embeddings (event_id, embedding)
+            VALUES (:eid, CAST(:emb AS jsonb))
+            ON CONFLICT (event_id) DO UPDATE SET embedding = EXCLUDED.embedding
+        """)
         async with get_session() as s:
             for eid, emb in emb_writes:
+                params = {"eid": eid, "emb": json.dumps(emb)}
+                if to_vec:
+                    params["vec"] = as_pg_vector(emb)
                 try:
+                    # Savepoint на строку: одно битое событие не должно
+                    # откатывать весь батч эмбеддингов.
                     async with s.begin_nested():
-                        await s.execute(text("""
-                            INSERT INTO event_embeddings (event_id, embedding)
-                            VALUES (:eid, CAST(:emb AS jsonb))
-                            ON CONFLICT (event_id) DO UPDATE SET embedding = EXCLUDED.embedding
-                        """), {"eid": eid, "emb": json.dumps(emb)})
+                        await s.execute(sql, params)
                 except Exception as e:
                     log.warning("embedding upsert failed event=%s: %s", eid, e)
 

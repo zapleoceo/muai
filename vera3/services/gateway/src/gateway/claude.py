@@ -30,6 +30,7 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
+from vera_shared.db.vectors import as_pg_vector, vector_column_available
 from vera_shared.llm.client import LLMCallFailed, embed
 from vera_shared.timeutil import utc_naive_now
 
@@ -95,6 +96,26 @@ async def _find_semantic_neighbour(
         days=SEMANTIC_LOOKBACK_DAYS
     )
     # Эмбеддинги вынесены в event_embeddings (миграция 011) — джойним.
+    if await vector_column_available():
+        # Ближайшего ищет Postgres по индексу. Оператор <=> — косинусное
+        # РАССТОЯНИЕ, поэтому сходство = 1 - расстояние.
+        async with get_session() as s:
+            row = (await s.execute(sa_text("""
+                SELECT e.id, 1 - (ee.embedding_vec <=> CAST(:q AS vector)) AS sim
+                FROM events e
+                JOIN event_embeddings ee ON ee.event_id = e.id
+                WHERE e.source = 'claude' AND e.received_at >= :since
+                  AND ee.embedding_vec IS NOT NULL
+                ORDER BY ee.embedding_vec <=> CAST(:q AS vector)
+                LIMIT 1
+            """), {"since": since, "q": as_pg_vector(q_vec)})).first()
+        if row is not None and row[1] >= SEMANTIC_DEDUP_THRESHOLD:
+            return q_vec, (row[0], float(row[1]))
+        return q_vec, None
+
+    # Пока бэкфил не прошёл: 500 векторов по 1024 float разбираются из
+    # JSON-текста и перебираются в Python. Это и есть та цена, ради которой
+    # делалась миграция 030.
     async with get_session() as s:
         rows = (
             await s.execute(sa_text("""

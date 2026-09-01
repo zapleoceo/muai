@@ -42,13 +42,15 @@ async def sqlite_db(tmp_path):
     import vera_shared.db.engine as engine_mod
     from vera_shared.db import models, models_graph, models_sources  # noqa: F401
     from vera_shared.db.engine import Base, get_session, init_engine
+    from vera_shared.db.vectors import forget_capability
     from vera_shared.llm.circuit import forget_cooldowns
 
-    # Кулдауны LLM кэшируются в процессе (circuit._cooldown_cache). Кэш живёт
-    # дольше, чем база теста, поэтому чужой открытый circuit протекал бы в
-    # следующий тест и блокировал вызов, которого тот не ждёт. Новая база —
-    # новое состояние.
+    # Кэши, которые живут в процессе и переживают базу теста. Оба уже
+    # ловились на протечке: чужой открытый circuit блокировал вызов, которого
+    # тест не ждал, а «колонка vector есть» из pg-теста уводила SQLite-тест в
+    # ветку, которой на SQLite нет вовсе. Новая база — новое состояние.
     forget_cooldowns()
+    forget_capability()
 
     if engine_mod._engine is not None:
         import contextlib

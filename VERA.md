@@ -35,7 +35,7 @@ Hard rules that still bind:
 | Server | Hetzner VPS `ubuntu-2gb-nbg1-1`, SSH alias `hetzner-root` (port 9617) |
 | Project dir | `/var/www/vera3` (compose at `/var/www/vera3/infra`) |
 | Deploy checkout | `/var/www/muai-checkout` |
-| State | **Postgres + pgvector** — container `vera3-postgres`, user `vera`, db `vera`, host `127.0.0.1:5433` |
+| State | **Postgres + pgvector** — container `vera3-postgres`, user `vera`, db `vera`, host `127.0.0.1:5433`. pgvector включён миграцией 030 (до неё расширение не создавалось ни разу, хотя эта строка обещала обратное); переход на колонку `vector` — см. brain.md |
 | Graph | Materialized **inside Postgres** (`entities`, `entity_aliases`, `memberships`, `relationships`, `identity_nodes`, `patterns`) behind a `graph_repo` API |
 | LLM | External **AIbroker** (`chat:fast` via `/v1/jobs`) — separate stack on the same host |
 | Bot | `@Dimondra_Ai_Bot`, owner-only DM |
