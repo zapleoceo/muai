@@ -31,6 +31,28 @@
 - Private (module-internal) prefixed `_`.
 - Service verbs: `get_`, `create_`, `update_`, `delete_`, `fetch_`, `record_`.
 
+## Coverage floors are per package
+
+`vera3/scripts/check_coverage.py` runs after pytest in both workflows and
+holds a floor for **each** package, plus a repo-wide one.
+
+The old gate was a single `--cov-fail-under=70` measured over `vera_shared`
+and `gateway` only — two packages of twelve, 38.8% of production code. Not
+only did dashboard, triage, search, the bot and every ingestor have no floor
+at all; a single average also hides zeroes *inside* what it does measure —
+`vera_shared/tools` sat at 0% and rode along on well-tested neighbours.
+
+Measured properly the repo is at **70.8%**, not the 88% the old gate
+reported.
+
+The floors are a ratchet: set from the actual numbers with a few points of
+slack, so ordinary churn doesn't turn them red. Raising one is routine;
+lowering one has to be its own line in a diff, with a reason.
+
+`ingestor-telegram` sits lowest (15%) on purpose — most of that module is
+live telethon plumbing that a unit test cannot reach. Lift it by extracting
+pure logic, not by mocking half the file.
+
 ## Tests: SQLite for logic, Postgres for SQL
 
 Unit tests run on `sqlite+aiosqlite` — fast, no service, and it is a *real*

@@ -113,10 +113,20 @@ jobs:
           # sys.path shared и все services/*/src. Раньше список жил в трёх
           # копиях в двух воркфлоу и разъехался — у шага diff-cover не было
           # brain-triage, сборка тестов падала, а деплой стоял молча.
+          # ВСЕ пакеты под измерением, и порог у каждого свой.
+          # Один общий процент по двум пакетам из двенадцати описывал 38.8%
+          # продового кода: регресс в дашборде, триаже, поиске, боте или
+          # любом ингесторе ворота не останавливали. И даже внутри
+          # измеряемого пакета среднее прятало нули — vera_shared/tools
+          # стоял на 0% и ехал на хорошо покрытых соседях.
           pytest tests/ \
-            --cov=vera_shared --cov=gateway \
+            --cov=vera_shared --cov=gateway --cov=media_worker \
+            --cov=brain_search --cov=brain_triage --cov=dashboard \
+            --cov=ingestor_gmail --cov=ingestor_slack --cov=ingestor_trello \
+            --cov=ingestor_telegram --cov=bot_telegram \
             --cov-report=term-missing \
-            --cov-fail-under=70
+            --cov-report=xml:coverage.xml
+          python scripts/check_coverage.py coverage.xml
 
   # ─── 3. Quality gate ─────────────────────────────────────────────────────
   # Strict static analysis on the diff:

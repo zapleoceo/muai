@@ -172,8 +172,12 @@ as a pre-commit hook.
 - **No migration tracking table.** Nothing records which of
   `vera3/infra/migrations/*.sql` has been applied. Numbering also skips
   `018` and `019`.
-- **Coverage gate is 40% in `vera3-tests.yml` but 70% in `deploy.yml`** —
-  deploy is the binding one; the target is 70%+.
+- ~~Coverage gate is 40% in `vera3-tests.yml` but 70% in `deploy.yml`~~ —
+  **исправлено 2026-09-01.** Оба воркфлоу гоняют один и тот же гейт
+  (`vera3/scripts/check_coverage.py`) с порогом НА КАЖДЫЙ пакет, а не одним
+  процентом на репозиторий. Прежние 70% считались по двум пакетам из
+  двенадцати, то есть описывали 38.8% продового кода; настоящая цифра по
+  всему коду — 70.8%.
 - **Host memory is tight**: 3.7 GiB total, ~2 GiB in use with 5 triage
   replicas. Scaling `brain-triage` up needs a resize first.
 - **Legacy tree is still in the repo** (§3). It pollutes greps and search
