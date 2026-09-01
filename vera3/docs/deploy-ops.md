@@ -292,15 +292,22 @@ i.e. always after the fact.
 
 Every service now carries `mem_limit`. Two things to keep straight:
 
-- It is a **ceiling, not a reservation**. The sum (~4.4 GiB) deliberately
-  exceeds physical RAM. The point is to kill a *runaway* container instead
-  of a random neighbour; slow collective growth is still the host's problem,
-  which is what dimensions 4b/4c are for.
-- The numbers are **upper-bound estimates, not measurements** — they were
-  written without access to the live box. Under-sizing is the dangerous
-  direction: too tight a limit kills a healthy container, i.e. causes the
-  outage it is meant to prevent. First quiet hour on prod, run
-  `docker stats --no-stream` and tighten them down to reality.
+- It is a **ceiling, not a reservation**. The sum (4.8 GiB, or 4.6 without
+  the profile-disabled `ingestor-instagram`) deliberately exceeds physical
+  RAM. The point is to kill a *runaway* container instead of a random
+  neighbour; slow collective growth is still the host's problem, which is
+  what dimensions 4b/4c are for.
+- Each limit has a **measured floor** — the RSS of the service's entry-point
+  module right after import — and the limit itself is that floor × ~2.5-3,
+  since the SQLAlchemy pool, httpx buffers and processing peaks sit on top.
+  It is therefore still a ceiling, not a measurement of working RSS.
+  Under-sizing is the dangerous direction: too tight a limit kills a healthy
+  container, i.e. causes the outage it is meant to prevent. That is not
+  hypothetical — the measurement caught `bot-telegram` set to 160m while
+  importing 169 MB, which would have been OOM-killed before its first
+  update. Per-service numbers, the aiogram cause, and how to re-measure:
+  [`deploy-ops-memory.md`](deploy-ops-memory.md). First quiet hour on prod,
+  run `docker stats --no-stream` and tighten them down to reality.
 
 **Состав стека берётся из compose (2026-08-28).** Раньше монитор сверялся с
 прибитым списком из семи имён, а сервисов двенадцать: `media-worker`,
@@ -495,7 +502,7 @@ WAL; на пустом хвосте выходит с первой итерац�
   TOKEN_SECRET дампы бесполезны) + SHA256SUMS. Ротация `KEEP_DAILY_DAYS`
   (**2** — буфер на случай пропуска NAS-пула, не хранилище).
 - `/var/backups/vera/vera/weekly/YYYY-MM-DD/` — тот же лёгкий vera.dump
-  (тоже без `event_embeddings`), но дольше живёт: чекпоинт с бóльшим
+  (тоже без `event_embeddings`), но дольше живёт: чекпоинт с бо́льшим
   окном восстановления (`FULL_DOW`, 7 = воскресенье; `KEEP_WEEKLY_DAYS` 7).
 
 Все параметры — env-переменные скрипта, не правки кода.
