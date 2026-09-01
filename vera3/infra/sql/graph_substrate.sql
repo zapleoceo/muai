@@ -36,6 +36,9 @@ CREATE TABLE IF NOT EXISTS memberships (
   CONSTRAINT uq_membership UNIQUE (parent_entity_id, child_entity_id, source)
 );
 CREATE INDEX IF NOT EXISTS ix_membership_parent ON memberships(parent_entity_id);
+-- Обе стороны, как у relationships: graph_snapshot ходит по child не реже,
+-- чем по parent, а uq_membership для этого не годится — там parent ведущий.
+CREATE INDEX IF NOT EXISTS ix_membership_child ON memberships(child_entity_id);
 
 CREATE TABLE IF NOT EXISTS relationships (
   id SERIAL PRIMARY KEY,

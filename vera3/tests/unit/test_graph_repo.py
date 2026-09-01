@@ -183,6 +183,47 @@ async def test_graph_snapshot_predicate_filter(sqlite_repo):
 
 
 @pytest.mark.asyncio
+async def test_degree_is_total_not_filtered(sqlite_repo):
+    """Показываемая степень — ПОЛНАЯ, даже когда рёбра отфильтрованы по
+    predicate. Отбор узлов идёт по степени В РАМКАХ фильтра (CTE degree),
+    а в карточке узла стоит «сколько связей у него вообще» — две разные
+    величины, и считать вторую первой было бы регрессом."""
+    repo = sqlite_repo
+    a, _b, _c = await _triangle(repo)   # A: works_at + friend_of → всего 2
+
+    snap = await repo.graph_snapshot(min_degree=1, limit=100, predicate="works_at")
+    hub = next(n for n in snap["nodes"] if n["id"] == a)
+    assert hub["degree"] == 2, "степень посчитана по фильтру, а не полная"
+    assert len(snap["edges"]) == 1   # ребро при этом отфильтровано
+
+
+@pytest.mark.asyncio
+async def test_degree_counts_memberships_on_both_sides(sqlite_repo):
+    """Членства входят в степень обеими сторонами. Половина по
+    child_entity_id до миграции 028 шла без индекса — заодно фиксируем,
+    что она вообще учитывается."""
+    repo = sqlite_repo
+    a, b, c = await _triangle(repo)
+    await repo.upsert_membership(parent_entity_id=b, child_entity_id=c, source="s")
+
+    snap = await repo.graph_snapshot(min_degree=1, limit=100)
+    by_id = {n["id"]: n["degree"] for n in snap["nodes"]}
+    assert by_id[a] == 2            # два ребра
+    assert by_id[b] == 2            # ребро + членство (родитель)
+    assert by_id[c] == 2            # ребро + членство (ребёнок)
+
+
+@pytest.mark.asyncio
+async def test_focus_node_carries_degree(sqlite_repo):
+    """В ego-режиме степень тоже проставлена: раньше её давали
+    коррелированные подзапросы, теперь общий групповой запрос."""
+    repo = sqlite_repo
+    a, _b, _c = await _triangle(repo)
+    snap = await repo.graph_snapshot(focus_id=a, limit=100)
+    assert next(n for n in snap["nodes"] if n["id"] == a)["degree"] == 2
+
+
+@pytest.mark.asyncio
 async def test_graph_snapshot_empty_when_no_relationships(sqlite_repo):
     repo = sqlite_repo
     await repo.upsert_entity(type="person", name="Lonely", source="s", identifier="z")

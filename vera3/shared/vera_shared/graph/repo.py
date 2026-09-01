@@ -311,20 +311,37 @@ async def graph_snapshot(
         if not ids:
             return {"nodes": [], "edges": []}
 
+        # Степень — ОДНОЙ группировкой по набору узлов. Раньше это были два
+        # коррелированных подзапроса на КАЖДУЮ строку, то есть до 800×2 на
+        # показ страницы, причём половина по memberships.child_entity_id, у
+        # которой индекса не было вовсе (добавлен миграцией 028).
+        #
+        # Считается ПОЛНАЯ степень (все связи + все текущие членства), без
+        # фильтра по predicate — как и раньше. Это сознательно не то же, что
+        # `deg` из CTE выше: там степень В РАМКАХ фильтра, ею отбираются узлы,
+        # а показываем мы «сколько связей у человека вообще».
+        degree_by_id = dict((await s.execute(
+            text("""
+                SELECT eid, COUNT(*) AS deg FROM (
+                    SELECT subject_entity_id AS eid FROM relationships
+                    UNION ALL
+                    SELECT object_entity_id  AS eid FROM relationships
+                    UNION ALL
+                    SELECT parent_entity_id  AS eid FROM memberships WHERE is_current
+                    UNION ALL
+                    SELECT child_entity_id   AS eid FROM memberships WHERE is_current
+                ) u WHERE eid IN :ids GROUP BY eid
+            """).bindparams(bindparam("ids", expanding=True)),
+            {"ids": ids},
+        )).all())
+
         # Expanding bindparam for IN — portable across Postgres (prod) and
         # SQLite (tests); raw `= ANY(:ids)` is Postgres-only.
         node_rows = (await s.execute(
             text("""
                 SELECT e.id, e.name, e.type,
                        e.attributes->>'username' AS username,
-                       e.attributes->>'tg_id'    AS tg_id,
-                       (SELECT COUNT(*) FROM relationships r
-                          WHERE r.subject_entity_id = e.id
-                             OR r.object_entity_id = e.id)
-                     + (SELECT COUNT(*) FROM memberships m
-                          WHERE (m.parent_entity_id = e.id
-                                 OR m.child_entity_id = e.id)
-                            AND m.is_current) AS degree
+                       e.attributes->>'tg_id'    AS tg_id
                 FROM entities e WHERE e.id IN :ids
             """).bindparams(bindparam("ids", expanding=True)),
             {"ids": ids},
@@ -358,7 +375,8 @@ async def graph_snapshot(
     return {
         "nodes": [
             {"id": r["id"], "name": r["name"], "type": r["type"],
-             "degree": r["degree"], "username": r["username"], "tg_id": r["tg_id"]}
+             "degree": degree_by_id.get(r["id"], 0),
+             "username": r["username"], "tg_id": r["tg_id"]}
             for r in node_rows
         ],
         "edges": [

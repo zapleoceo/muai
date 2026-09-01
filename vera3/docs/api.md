@@ -126,6 +126,19 @@ renders "everything":
 - `predicate` filter narrows to one relationship type. Node colour = entity
   type (person / group / channel), size ∝ degree.
 
+Two different degrees are in play, deliberately: node **selection** uses the
+degree *within the active predicate filter* (the `degree` CTE), while the
+degree **shown on a node** is its total — every relationship plus every
+current membership, both sides, unfiltered. The displayed number answers
+"how connected is this person", not "how many edges survived the filter".
+
+That total is one grouped query over the returned id set. It used to be two
+correlated subqueries per row, i.e. up to 800 × 2 per page render, and half
+of them keyed on `memberships.child_entity_id`, which had no index at all —
+`ix_membership_child`, migration 028. Both sides of `relationships` were
+already indexed; memberships only had the parent side, and `uq_membership`
+couldn't stand in for it because `parent_entity_id` leads that constraint.
+
 All graph SQL lives in `vera_shared.graph.repo` (the repository layer);
 the route only shapes JSON / HTML. `IN` clauses use expanding bindparams
 so the queries run on both Postgres (prod) and SQLite (tests).
