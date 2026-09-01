@@ -213,3 +213,31 @@ async def test_graph_snapshot_on_postgres(pg_db):
     assert by_id[a]["username"] == "aaa"    # attributes->>'username'
     assert by_id[a]["tg_id"] == "1"
     assert len(snap["edges"]) == 3      # 2 связи + membership как member_of
+
+
+@pytest.mark.asyncio
+async def test_find_project_chats_matches_membership_to_graph(pg_db):
+    """`'chat:' || pm.key` и `attributes->>'tg_id'` — запрос жил в воркере
+    ingestor-telegram и джойнил entity_aliases с entities напрямую."""
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models import ProjectMembershipRow
+    from vera_shared.graph import repo
+
+    grp = await repo.upsert_entity(type="supergroup", name="ITSTEP HQ",
+                                   source="telegram", identifier="chat:-100777",
+                                   attributes={"tg_id": -100777})
+    await repo.upsert_entity(type="person", name="Кто-то",
+                             source="telegram", identifier="user:5",
+                             attributes={"tg_id": 5})
+    async with get_session() as s:
+        s.add(ProjectMembershipRow(kind="chat", key="-100777",
+                                   project="itstep", source="folder"))
+        # аккаунт того же проекта не должен попасть в выборку чатов
+        s.add(ProjectMembershipRow(kind="account", key="mail@x",
+                                   project="itstep", source="folder"))
+
+    chats = await repo.find_project_chats()
+
+    assert [c["entity_id"] for c in chats] == [grp]
+    assert chats[0]["tg_id"] == "-100777"
+    assert chats[0]["type"] == "supergroup"

@@ -1,7 +1,22 @@
 """Graph repository — sync/upsert API for entities/aliases/memberships/etc.
 
-This is the ONLY layer that touches graph tables directly. Future swap to
-Neo4j is a new implementation behind the same interface (DIP).
+**Границу этого слоя не пересекает ни один сервис.** Раньше докстринг
+утверждал «это ЕДИНСТВЕННЫЙ слой, который трогает графовые таблицы», а
+`gateway/query.py` джойнил `relationships` с `entities` прямо в
+route-функции, и `ingestor_telegram/roster_sync.py` — `entity_aliases` с
+`entities` в воркере. Оба переехали сюда (`list_relationships`,
+`find_project_chats`, `get_entity`).
+
+Что остаётся снаружи и почему: соседние модули пакета `graph/` —
+`dedup.py`, `identity.py`, `dossiers.py`, `avatars.py`, `clusters.py` —
+пишут по этим таблицам свой SQL. Это осознанно: `merge_entities`, разбор
+коллизий и досье — операции, которые репозиторным CRUD'ом не выражаются,
+и растаскивать их по обёрткам значило бы прятать транзакционную логику. Но
+это ОДИН пакет: замена хранилища — правка `graph/`, а не поиск по всему
+репозиторию. Формулировка «единственный слой» была про сервисы, и вот
+теперь она верна.
+
+Future swap to Neo4j is a new implementation behind the same interface (DIP).
 """
 from __future__ import annotations
 
@@ -441,6 +456,59 @@ async def list_members(parent_entity_id: int) -> list[dict[str, Any]]:
 
 
 # ─── Relationships (Graphiti-style facts) ────────────────────────────────────
+
+
+async def get_entity(entity_id: int) -> EntityRow | None:
+    """Сущность по id. Существует, чтобы вызывающему не приходилось открывать
+    свою сессию и трогать таблицу напрямую (gateway так и делал)."""
+    async with get_session() as s:
+        return (await s.execute(
+            select(EntityRow).where(EntityRow.id == entity_id)
+        )).scalar_one_or_none()
+
+
+async def list_relationships(entity_id: int, limit: int = 40) -> list[dict[str, Any]]:
+    """Связи сущности в обе стороны, с именем и типом второго конца.
+
+    Жила в `gateway/query.py` сырым SQL с двумя JOIN'ами по `entities` —
+    то есть route-модуль ходил в графовые таблицы мимо этого слоя.
+    """
+    async with get_session() as s:
+        rows = (await s.execute(text("""
+            SELECT r.predicate, r.fact, r.confidence,
+                   CASE WHEN r.subject_entity_id = :eid THEN 'out' ELSE 'in' END AS direction,
+                   CASE WHEN r.subject_entity_id = :eid THEN eo.name ELSE es.name END AS other_name,
+                   CASE WHEN r.subject_entity_id = :eid THEN eo.type ELSE es.type END AS other_type
+            FROM relationships r
+            JOIN entities es ON es.id = r.subject_entity_id
+            JOIN entities eo ON eo.id = r.object_entity_id
+            WHERE (r.subject_entity_id = :eid OR r.object_entity_id = :eid)
+              AND r.is_current
+            ORDER BY r.confidence DESC
+            LIMIT :limit
+        """), {"eid": entity_id, "limit": limit})).mappings().all()
+    return [dict(r) for r in rows]
+
+
+async def find_project_chats() -> list[dict[str, Any]]:
+    """Групповые чаты проектов: entity_id + tg_id + тип.
+
+    Источник — `project_membership` (kind='chat'), сматченный на граф через
+    alias `telegram:chat:<key>`. Жила в `ingestor_telegram/roster_sync.py`:
+    воркер ингестора джойнил `entity_aliases` и `entities` напрямую.
+    """
+    async with get_session() as s:
+        rows = (await s.execute(text("""
+            SELECT DISTINCT e.id AS entity_id, e.name, e.type,
+                   (e.attributes->>'tg_id') AS tg_id
+            FROM project_membership pm
+            JOIN entity_aliases a
+              ON a.source = 'telegram' AND a.identifier = 'chat:' || pm.key
+            JOIN entities e ON e.id = a.entity_id
+            WHERE pm.kind = 'chat'
+              AND e.type IN ('group', 'supergroup')
+        """))).mappings().all()
+    return [dict(r) for r in rows]
 
 
 async def upsert_relationship(

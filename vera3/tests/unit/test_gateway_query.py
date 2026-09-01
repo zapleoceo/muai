@@ -220,13 +220,9 @@ async def test_recent_events_rejects_bad_secret():
 # ─── entity_context ──────────────────────────────────────────────────────────
 
 
-def _context_session(entity, rel_rows):
-    session = MagicMock()
-    session.get = AsyncMock(return_value=entity)
-    execute_result = MagicMock()
-    execute_result.mappings.return_value.all.return_value = rel_rows
-    session.execute = AsyncMock(return_value=execute_result)
-    return session
+# Раньше здесь подделывалась СЕССИЯ: route сам открывал её и сам писал
+# сырой SQL по графовым таблицам. Теперь и то и другое живёт в graph_repo,
+# поэтому подменяем сам репозиторий — шов честнее и тест короче.
 
 
 @pytest.mark.asyncio
@@ -238,12 +234,11 @@ async def test_entity_context_composes_full_response():
     )
     rel_rows = [{"predicate": "coworker_of", "fact": None, "confidence": 0.8,
                  "direction": "out", "other_name": "Марина", "other_type": "person"}]
-    session = _context_session(entity, rel_rows)
     ctx = {"aliases": [{"source": "telegram", "identifier": "1"}],
            "memberships": [], "recent_30d_messages": 3}
-    with patch("gateway.query.get_session",
-               MagicMock(return_value=_FakeSessionCtx(session))), \
-         patch("gateway.query.find_entity_by_name", AsyncMock(return_value=42)), \
+    with patch("gateway.query.find_entity_by_name", AsyncMock(return_value=42)), \
+         patch("gateway.query.get_entity", AsyncMock(return_value=entity)), \
+         patch("gateway.query.list_relationships", AsyncMock(return_value=rel_rows)), \
          patch("gateway.query.get_entity_context", AsyncMock(return_value=ctx)), \
          patch("gateway.query.list_members", AsyncMock(return_value=[])):
         result = await entity_context(name="Дмитрий",
@@ -266,13 +261,10 @@ async def test_entity_context_404_when_not_found():
 
 @pytest.mark.asyncio
 async def test_entity_context_404_when_entity_vanishes_after_id_lookup():
-    """find_entity_by_name found an id, but s.get(EntityRow, id) returns
-    None (row deleted between the two calls) — must 404, not crash on
-    entity.name below."""
-    session = _context_session(None, [])
-    with patch("gateway.query.get_session",
-               MagicMock(return_value=_FakeSessionCtx(session))), \
-         patch("gateway.query.find_entity_by_name", AsyncMock(return_value=42)), \
+    """find_entity_by_name нашла id, а get_entity вернула None (строку
+    удалили между двумя вызовами) — надо 404, а не падение на entity.name."""
+    with patch("gateway.query.find_entity_by_name", AsyncMock(return_value=42)), \
+         patch("gateway.query.get_entity", AsyncMock(return_value=None)), \
          pytest.raises(HTTPException) as exc:
         await entity_context(name="X", x_internal_secret="test-internal-secret")
     assert exc.value.status_code == 404

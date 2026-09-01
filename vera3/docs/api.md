@@ -139,8 +139,18 @@ of them keyed on `memberships.child_entity_id`, which had no index at all —
 already indexed; memberships only had the parent side, and `uq_membership`
 couldn't stand in for it because `parent_entity_id` leads that constraint.
 
-All graph SQL lives in `vera_shared.graph.repo` (the repository layer);
-the route only shapes JSON / HTML. `IN` clauses use expanding bindparams
+All graph SQL lives in the `vera_shared.graph` package; **no service
+reaches past it**. `gateway/query.py` used to join `relationships` with
+`entities` inside the route function and `ingestor_telegram/roster_sync.py`
+joined `entity_aliases` with `entities` in the worker — both now call
+`repo.list_relationships()` / `repo.find_project_chats()`, and
+`tests/unit/test_graph_boundary.py` fails the build if a service grows raw
+SQL against a graph table again. Routes only shape JSON / HTML.
+
+Within the `graph/` package itself raw SQL is fine and deliberate:
+`merge_entities`, collision handling and dossiers are not expressible as
+repository CRUD, and wrapping them would hide transactional logic. The
+point of the boundary is that swapping the store is an edit to one package. `IN` clauses use expanding bindparams
 so the queries run on both Postgres (prod) and SQLite (tests).
 
 ### Stats caching (`dashboard/stats.py`)

@@ -248,3 +248,58 @@ async def test_metadata_create_all_compiles_on_sqlite():
             await conn.run_sync(Base.metadata.create_all)
     finally:
         await engine.dispose()
+
+
+# ─── читатели для сервисов ──────────────────────────────────────────────────
+# Эти три функции переехали сюда из route-модуля gateway и из воркера
+# ingestor-telegram, которые писали по графовым таблицам свой SQL.
+
+
+@pytest.mark.asyncio
+async def test_get_entity_returns_row_or_none(sqlite_repo):
+    repo = sqlite_repo
+    eid = await repo.upsert_entity(type="person", name="Игорь",
+                                   source="s", identifier="i")
+
+    got = await repo.get_entity(eid)
+    assert got is not None and got.name == "Игорь" and got.type == "person"
+
+    assert await repo.get_entity(eid + 999) is None, "исчезнувшая сущность → None, не бросок"
+
+
+@pytest.mark.asyncio
+async def test_list_relationships_covers_both_directions(sqlite_repo):
+    """Связь интересна с обеих сторон: для запрошенной сущности она либо
+    исходящая, либо входящая, и во втором конце должен стоять ДРУГОЙ."""
+    repo = sqlite_repo
+    a, b, c = await _triangle(repo)
+
+    rels = await repo.list_relationships(a)
+    by_pred = {r["predicate"]: r for r in rels}
+    assert set(by_pred) == {"works_at", "friend_of"}
+    assert by_pred["works_at"]["direction"] == "out"
+    assert by_pred["works_at"]["other_name"] == "B"
+    assert by_pred["works_at"]["other_type"] == "org"
+
+    # для B та же связь — входящая, а на другом конце A
+    (incoming,) = await repo.list_relationships(b)
+    assert incoming["direction"] == "in"
+    assert incoming["other_name"] == "A"
+
+
+@pytest.mark.asyncio
+async def test_list_relationships_orders_by_confidence_and_honours_limit(sqlite_repo):
+    repo = sqlite_repo
+    a, _b, _c = await _triangle(repo)      # works_at 0.8, friend_of 0.7
+
+    rels = await repo.list_relationships(a)
+    assert [r["confidence"] for r in rels] == [0.8, 0.7]
+    assert len(await repo.list_relationships(a, limit=1)) == 1
+
+
+@pytest.mark.asyncio
+async def test_list_relationships_empty_for_isolated_entity(sqlite_repo):
+    repo = sqlite_repo
+    lone = await repo.upsert_entity(type="person", name="Один",
+                                    source="s", identifier="z")
+    assert await repo.list_relationships(lone) == []

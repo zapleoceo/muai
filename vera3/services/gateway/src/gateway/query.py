@@ -12,12 +12,16 @@ from typing import Any
 import httpx
 from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select, text
+from sqlalchemy import select
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
-from vera_shared.db.models_graph import EntityRow
 from vera_shared.graph.dedup import get_entity_context
-from vera_shared.graph.repo import find_entity_by_name, list_members
+from vera_shared.graph.repo import (
+    find_entity_by_name,
+    get_entity,
+    list_members,
+    list_relationships,
+)
 from vera_shared.timeutil import utc_naive_now
 
 from gateway.auth import check_internal_secret
@@ -109,19 +113,6 @@ async def recent_events(
 # ─── vera_context → GET /v1/entity/context ───────────────────────────────────
 
 
-_RELATIONSHIPS_SQL = text("""
-    SELECT r.predicate, r.fact, r.confidence,
-           CASE WHEN r.subject_entity_id = :eid THEN 'out' ELSE 'in' END AS direction,
-           CASE WHEN r.subject_entity_id = :eid THEN eo.name ELSE es.name END AS other_name,
-           CASE WHEN r.subject_entity_id = :eid THEN eo.type ELSE es.type END AS other_type
-    FROM relationships r
-    JOIN entities es ON es.id = r.subject_entity_id
-    JOIN entities eo ON eo.id = r.object_entity_id
-    WHERE (r.subject_entity_id = :eid OR r.object_entity_id = :eid)
-      AND r.is_current
-    ORDER BY r.confidence DESC
-    LIMIT :limit
-""")
 
 
 @router.get("/v1/entity/context")
@@ -135,13 +126,10 @@ async def entity_context(
     if entity_id is None:
         raise HTTPException(404, f"no entity matching '{name}'")
 
-    async with get_session() as s:
-        entity = await s.get(EntityRow, entity_id)
-        if entity is None:
-            raise HTTPException(404, f"entity {entity_id} vanished")
-        rel_rows = (await s.execute(
-            _RELATIONSHIPS_SQL, {"eid": entity_id, "limit": RELATIONSHIPS_LIMIT},
-        )).mappings().all()
+    entity = await get_entity(entity_id)
+    if entity is None:
+        raise HTTPException(404, f"entity {entity_id} vanished")
+    rel_rows = await list_relationships(entity_id, limit=RELATIONSHIPS_LIMIT)
 
     ctx = await get_entity_context(entity_id)
     members = await list_members(entity_id)
@@ -157,5 +145,5 @@ async def entity_context(
         "memberships": ctx["memberships"],
         "members": members,
         "recent_30d_messages": ctx["recent_30d_messages"],
-        "relationships": [dict(r) for r in rel_rows],
+        "relationships": rel_rows,
     }
