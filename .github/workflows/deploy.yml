@@ -138,7 +138,27 @@ jobs:
   # Opt-out per commit: `docs-not-needed` (skips d only).
   quality:
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 12
+    # Тот же Postgres, что в job `test`, и по той же причине — но здесь она
+    # стоила заблокированного деплоя. Postgres подняли только в `test`, а
+    # порог diff-cover гейтит `quality`, где pytest шёл на одном SQLite.
+    # Postgres-only код (to_tsvector, FILTER, FOR UPDATE SKIP LOCKED) при
+    # этом не исполняется, его строки считаются непокрытыми — и свежий
+    # разбор brain_search на модули дал 63% вместо 88%. Деплой встал на
+    # ровном месте: тесты зелёные, покрытие настоящее, красный — измеритель.
+    # Замерено на том же диффе: без Postgres 146 непокрытых строк из 396,
+    # с Postgres — 47.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: vera
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: vera_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U vera -d vera_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
         with:
@@ -269,6 +289,10 @@ jobs:
           fi
           cd vera3
           export TELEGRAM_API_ID=1 TELEGRAM_API_HASH=test TELEGRAM_PHONE=+10000000000
+          # Без этих двух переменных tests/pg и tests/integration молча
+          # пропускаются, а Postgres-only строки считаются непокрытыми.
+          export RUN_INTEGRATION_TESTS=1
+          export TEST_DATABASE_URL=postgresql+asyncpg://vera:test@localhost:5432/vera_test
           # PYTHONPATH здесь НЕ задаётся: tests/unit/conftest.py сам кладёт в
           # sys.path shared и все services/*/src. Раньше список жил в трёх
           # копиях в двух воркфлоу и разъехался — у шага diff-cover не было
