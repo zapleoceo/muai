@@ -7,6 +7,24 @@ x-logging: &default-logging
   driver: json-file
   options: {max-size: 10m, max-file: "3"}
 
+# ─── Про mem_limit ───────────────────────────────────────────────────────────
+# До 2026-09-01 лимитов памяти не было НИ У ОДНОГО контейнера. На боксе 3.7 ГиБ
+# и три стека (vera3, aibroker, stepan2), поэтому утечка или разовый тяжёлый
+# батч в любом контейнере отдавали выбор жертвы OOM-killer'у — включая чужие
+# проекты. Монитор память тоже не смотрел вообще (теперь смотрит: проверки 3b
+# и 3c в scripts/vera3-monitor.sh).
+#
+# mem_limit — ПОТОЛОК, а не резервирование, поэтому сумма может превышать
+# физическую память, и здесь она её превышает (~4.4 ГиБ потолков) сознательно.
+# Смысл этих цифр — поймать РАЗБЕЖАВШИЙСЯ контейнер и убить именно его, а не
+# случайного соседа. От медленного коллективного роста они не спасают.
+#
+# Числа — верхние оценки, а не замеры: снять `docker stats` с живого бокса при
+# написании было нельзя. Занижение опаснее завышения — слишком тесный лимит
+# убивает здоровый контейнер, то есть ровно ту аварию, которую предотвращает.
+# Первый же спокойный час на проде: `docker stats --no-stream` и подтянуть
+# вниз по факту.
+
 services:
   # ─── Storage ─────────────────────────────────────────────────────────────
   postgres:
@@ -31,6 +49,8 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+    # shared_buffers 128m + work_mem на бэкенд + кэш; крупнейший потребитель
+    mem_limit: 768m
     restart: unless-stopped
     logging: *default-logging
 
@@ -56,6 +76,8 @@ services:
       LOG_LEVEL: INFO
     ports:
       - "127.0.0.1:8001:8000"
+    # FastAPI + пул на 10 соединений
+    mem_limit: 192m
     restart: unless-stopped
     logging: *default-logging
 
@@ -97,6 +119,8 @@ services:
       VERA_DAILY_GLOBAL_CAP_USD: ${VERA_DAILY_GLOBAL_CAP_USD:-2.0}
       BROKER_URL: ${BROKER_URL:-}
       BROKER_PROJECT_KEY: ${BROKER_PROJECT_KEY:-}
+    # ×5 реплик = 1.25 ГБ потолка; держит батч из 16 событий и до 10 ответов LLM
+    mem_limit: 256m
     restart: unless-stopped
     logging: *default-logging
 
@@ -120,6 +144,8 @@ services:
       TELEGRAM_TOOLS_URL: http://ingestor-telegram:8000
     ports:
       - "127.0.0.1:8002:8000"
+    # до 200 строк с векторами по 1024 float из JSONB на запрос
+    mem_limit: 320m
     restart: unless-stopped
     logging: *default-logging
 
@@ -142,6 +168,8 @@ services:
       SEARCH_URL: http://brain-search:8000
       GATEWAY_URL: http://gateway:8000
       INTERNAL_SECRET: ${INTERNAL_SECRET:?INTERNAL_SECRET must be set}
+    # aiogram, лонг-поллинг
+    mem_limit: 160m
     restart: unless-stopped
     logging: *default-logging
 
@@ -160,6 +188,8 @@ services:
       GMAIL_CLIENT_ID: ${GMAIL_CLIENT_ID}
       GMAIL_CLIENT_SECRET: ${GMAIL_CLIENT_SECRET}
       GMAIL_POLL_S: 300
+    # до MAX_PER_RUN=500 писем в пачке
+    mem_limit: 192m
     restart: unless-stopped
     logging: *default-logging
 
@@ -184,6 +214,8 @@ services:
       - vera3_tg_sessions:/sessions
     expose:
       - "8000"
+    # telethon + отдача медиа base64: raw 25 МБ + b64 33 + тело ответа 33
+    mem_limit: 384m
     restart: unless-stopped
     logging: *default-logging
 
@@ -209,6 +241,8 @@ services:
       GATEWAY_URL: http://gateway:8000
       INTERNAL_SECRET: ${INTERNAL_SECRET:?INTERNAL_SECRET must be set}
       IG_POLL_INTERVAL_S: "90"
+    # выключен профилем, лимит на случай возврата
+    mem_limit: 192m
     restart: unless-stopped
     logging: *default-logging
 
@@ -231,6 +265,7 @@ services:
       TRELLO_TOKEN: ${TRELLO_TOKEN:-}
       TRELLO_POLL_S: "300"
       TRELLO_BOOTSTRAP_DAYS: "7"
+    mem_limit: 160m
     restart: unless-stopped
     logging: *default-logging
 
@@ -262,6 +297,7 @@ services:
       SLACK_THREAD_WATCH_DAYS: "21"
       # Каналы, которые в мозг не идут вообще (через запятую, без #).
       SLACK_DENY_CHANNELS: ${SLACK_DENY_CHANNELS:-}
+    mem_limit: 192m
     restart: unless-stopped
     logging: *default-logging
 
@@ -289,6 +325,8 @@ services:
       BROKER_PROJECT_KEY: ${BROKER_PROJECT_KEY:-}
       MEDIA_POLL_S: "10"
       MEDIA_BATCH: "3"
+    # приём того же медиа обратно: текст 33 + dict 33 + raw 25 + b64 33
+    mem_limit: 384m
     restart: unless-stopped
     logging: *default-logging
 
@@ -322,6 +360,8 @@ services:
       TELEGRAM_TOOLS_URL: http://ingestor-telegram:8000
     ports:
       - "127.0.0.1:8003:8000"
+    # htmx-рендер + кэш статистики
+    mem_limit: 256m
     restart: unless-stopped
     logging: *default-logging
 
@@ -336,6 +376,8 @@ services:
         docker system prune -af --filter 'until=72h' || true;
         sleep 86400;
       done"
+    # docker:cli, дёргает демон раз в сутки
+    mem_limit: 64m
     restart: unless-stopped
     logging: *default-logging
 

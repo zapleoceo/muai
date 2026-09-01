@@ -221,13 +221,18 @@ Until 2026-08-28 cron ran a hand-installed copy at `/usr/local/bin/vera3-monitor
 that the deploy never touched — the versioned file was decorative and nothing
 said so. Do not reintroduce that copy.
 
-Checks 10 dimensions:
+Checks 12 dimensions:
 
 1. Every service in `docker compose config` runs its declared replica count —
    the list is derived from compose, never spelled out in the script (below)
 2. `/healthz` on gateway, brain-search, dashboard
 3. HTTPS dashboard reachable through Cloudflare
 4. Disk usage <85% (warn) / <92% (critical)
+4b. **Host RAM** <87% (warn) / <93% (critical), measured as
+   `MemAvailable` — page cache is reclaimable and doesn't show in `free`
+4c. **OOM-kills in the last hour** (`journalctl -k`), reported separately:
+   by the time a percentage check runs the memory is free again, so the
+   kill itself is invisible to dimension 4b
 5. Postgres `pg_isready`
 6. Gmail accounts polled in last 30 min
 7. Telegram events flowing in last 1h (userbot disconnected detection)
@@ -237,6 +242,27 @@ Checks 10 dimensions:
 
 Alerts to `@Dimondra_Ai_Bot` DM to `OWNER_TELEGRAM_ID`. State-file
 throttle 30 min (or `monitor_throttle_min` setting — see below).
+
+### Memory ceilings (`mem_limit`)
+
+Until 2026-09-01 **no container had a memory limit at all**, and the monitor
+had no memory dimension either. On a 3.7 GiB box shared with `aibroker-*`
+and `stepan2-*`, that meant a leak or one heavy batch anywhere let the
+OOM-killer pick the victim — possibly in another project — and the only
+trace was dimension 1 (a container went missing) or the restart-loop check,
+i.e. always after the fact.
+
+Every service now carries `mem_limit`. Two things to keep straight:
+
+- It is a **ceiling, not a reservation**. The sum (~4.4 GiB) deliberately
+  exceeds physical RAM. The point is to kill a *runaway* container instead
+  of a random neighbour; slow collective growth is still the host's problem,
+  which is what dimensions 4b/4c are for.
+- The numbers are **upper-bound estimates, not measurements** — they were
+  written without access to the live box. Under-sizing is the dangerous
+  direction: too tight a limit kills a healthy container, i.e. causes the
+  outage it is meant to prevent. First quiet hour on prod, run
+  `docker stats --no-stream` and tighten them down to reality.
 
 **Состав стека берётся из compose (2026-08-28).** Раньше монитор сверялся с
 прибитым списком из семи имён, а сервисов двенадцать: `media-worker`,
