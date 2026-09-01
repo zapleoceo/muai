@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import func, select
@@ -47,6 +48,65 @@ class TestInsertEvents:
         assert len(fresh) == 2
         assert all(isinstance(sp["event_id"], int) for sp in fresh)
         assert await self._count() == 2
+
+    @pytest.mark.asyncio
+    async def test_batch_is_one_statement_not_one_per_event(self):
+        """Пачка вставляется одним многострочным INSERT. Поллер gmail тянет до
+        500 писем за прогон — это были 500 round-trip'ов."""
+        from vera_shared.db.engine import AsyncSessionLocal
+
+        executed: list[str] = []
+        orig = AsyncSessionLocal.class_.execute
+
+        async def spy(self, stmt, *a, **kw):
+            executed.append(type(stmt).__name__)
+            return await orig(self, stmt, *a, **kw)
+
+        with patch.object(AsyncSessionLocal.class_, "execute", spy):
+            fresh = await insert_events([_spec(f"B:{i}") for i in range(25)])
+
+        assert len(fresh) == 25
+        assert executed.count("Insert") == 1, f"вставок: {executed}"
+
+    @pytest.mark.asyncio
+    async def test_mixed_shapes_are_grouped_not_null_filled(self):
+        """Источники заполняют разные поля. Недостающие колонки НЕ должны
+        подставляться как NULL — это затёрло бы дефолты; вместо этого специи
+        группируются по форме."""
+        rich = _spec("S:1", account="acct", importance=7)
+        plain = _spec("S:2")
+        fresh = await insert_events([rich, plain])
+
+        assert {sp["source_event_id"] for sp in fresh} == {"S:1", "S:2"}
+        from vera_shared.db.engine import get_session
+        async with get_session() as s:
+            rows = {
+                r.source_event_id: r for r in
+                (await s.execute(select(EventRow))).scalars().all()
+            }
+        assert rows["S:1"].account == "acct" and rows["S:1"].importance == 7
+        assert rows["S:2"].account is None
+        # дефолт колонки жив у ОБЕИХ форм
+        assert rows["S:1"].triage_status == rows["S:2"].triage_status == "pending"
+
+    @pytest.mark.asyncio
+    async def test_partial_duplicate_batch_returns_only_the_new_ones(self):
+        """Половина пачки уже в базе: RETURNING отдаёт только вставленные, и
+        каждый event_id должен лечь на СВОЙ spec, а не по позиции."""
+        await insert_events([_spec("P:1"), _spec("P:3")])
+        fresh = await insert_events([_spec("P:1"), _spec("P:2"),
+                                     _spec("P:3"), _spec("P:4")])
+
+        assert [sp["source_event_id"] for sp in fresh] == ["P:2", "P:4"]
+        from vera_shared.db.engine import get_session
+        async with get_session() as s:
+            by_id = {
+                r.id: r.source_event_id for r in
+                (await s.execute(select(EventRow))).scalars().all()
+            }
+        for sp in fresh:
+            assert by_id[sp["event_id"]] == sp["source_event_id"], "id приклеен не к тому spec"
+        assert await self._count() == 4
 
     @pytest.mark.asyncio
     async def test_repeat_is_deduped_not_duplicated(self):
