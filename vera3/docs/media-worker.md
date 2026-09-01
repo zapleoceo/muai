@@ -31,7 +31,8 @@ Code layout (one responsibility per file):
    keep transcribing through the separate whisper pool (which isn't capped), so
    a vision cap no longer stalls speech. `_claim_batch`
    does the claim as ONE atomic `UPDATE ... FOR UPDATE SKIP LOCKED ...
-   RETURNING` that stamps a 10-minute `media_next_retry_at` lease on the
+   RETURNING` that stamps a `MEDIA_LEASE_MIN`-minute (default 25)
+   `media_next_retry_at` lease on the
    selected rows — a plain `SELECT ... FOR UPDATE` in its own transaction
    released the lock the moment the `SELECT` closed, before the row was
    actually processed, so a second worker instance (or the next poll
@@ -55,6 +56,16 @@ Code layout (one responsibility per file):
    OCR/caption prompt (Russian, 1-3 sentences + verbatim text under
    `Текст:` if readable). The broker picks a vision key (gemini →
    anthropic → openai) — no provider keys live in media-worker.
+   The poll deadline for one photo is `MEDIA_VISION_DEADLINE_S`
+   (default 420 s), not the client-wide 120 s: the broker can serve vision
+   from a **local** model (`local/qwen3vl`), which is unlimited but slow —
+   measured 42 s min / 117 s avg / 222 s max, so 5 of 8 local jobs used to
+   overrun the 120 s ceiling. The broker still finished them; Vera had
+   already given up, and the photo burned a retry and degraded after three
+   rounds. **Invariant:** `MEDIA_LEASE_MIN * 60 >= MEDIA_BATCH *
+   MEDIA_VISION_DEADLINE_S` — the batch is processed sequentially, so a
+   shorter lease would let a sibling replica re-claim the last row while
+   it is still being recognised (`test_lease_covers_worst_case_batch`).
 6. Voice/audio → **broker `POST /v1/transcribe`** (multipart upload).
    Whisper is hosted broker-side since 2026-07-18 (the local `asr-local`
    experiment was removed the same day — the backlog of ~3.3k failed
@@ -101,6 +112,9 @@ lost. When keys are added later, re-seed degraded events if desired.
 - `BROKER_PROJECT_KEY` — `aib_prj_…`; project must hold `llm:vision` +
   `llm:audio` scopes (set on the `vera` project)
 - `MEDIA_POLL_S` (default 10), `MEDIA_BATCH` (default 3)
+- `MEDIA_VISION_DEADLINE_S` (default 420) — per-photo broker poll ceiling
+- `MEDIA_LEASE_MIN` (default 25) — claim lease; must cover
+  `MEDIA_BATCH * MEDIA_VISION_DEADLINE_S`
 
 No provider keys here — vision/whisper keys live in the broker. Whisper
 audio is capped at 25 MB (mirrors the broker's limit); larger files degrade.

@@ -170,6 +170,28 @@ async def test_claim_batch_builds_kind_filter_only_when_voice_only():
         assert "media_kind' IN ('voice','audio')" in sess2.sql.split("ORDER BY")[0]
 
 
+def test_lease_covers_worst_case_batch():
+    """Фото в батче распознаются ПОСЛЕДОВАТЕЛЬНО, и одно локальное vision
+    ждёт до MEDIA_VISION_DEADLINE_S. Если лиз короче BATCH*дедлайна,
+    последняя строка стартует с протухшим лизом и её подхватывает соседняя
+    реплика — работа сгорает дважды."""
+    assert repo.LEASE_MIN * 60 >= repo.BATCH * rec.VISION_DEADLINE_S
+
+
+def test_vision_deadline_exceeds_observed_local_max():
+    # локальный `local/qwen3vl` замерен на 222с максимум; дефолт клиента
+    # (120с) обрывал брокера на полпути
+    assert rec.VISION_DEADLINE_S >= 300
+
+
+@pytest.mark.asyncio
+async def test_claim_batch_stamps_configured_lease():
+    sess = _FakeClaimSession()
+    with patch.object(repo, "get_session", lambda: sess):
+        await repo._claim_batch(5)
+    assert f"make_interval(mins => {repo.LEASE_MIN})" in sess.sql
+
+
 def test_claim_batch_prioritises_voice_then_newest():
     # voice/audio (быстрый whisper) вперёд фото (медленный vision); внутри
     # класса — newest-first (живые впереди requeue-бэклога)
@@ -203,6 +225,7 @@ async def test_recognize_photo_sends_multimodal_and_returns_text():
         captured["capability"] = capability
         captured["messages"] = messages
         captured["event_id"] = event_id
+        captured["kw"] = kw
         return "на фото кот", {"provider": "gemini"}
 
     with patch.object(rec, "chat_async", AsyncMock(side_effect=fake_chat_async)):
@@ -211,6 +234,9 @@ async def test_recognize_photo_sends_multimodal_and_returns_text():
     assert txt == "на фото кот"
     assert captured["capability"] == "vision"
     assert captured["event_id"] == 42
+    # без явного дедлайна chat_async взял бы 120с из broker_client и бросил
+    # бы локальную vision-джобу, которую брокер ещё считает
+    assert captured["kw"]["poll_deadline_s"] == rec.VISION_DEADLINE_S
     content = captured["messages"][0]["content"]
     assert content[0]["type"] == "text"
     assert content[1]["type"] == "image_url"

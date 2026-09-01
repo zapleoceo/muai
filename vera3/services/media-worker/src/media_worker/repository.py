@@ -12,6 +12,13 @@ from vera_shared.db.engine import get_session
 log = logging.getLogger("media-worker")
 
 BATCH = int(os.environ.get("MEDIA_BATCH", "3"))
+# Лиз на захват должен покрывать ХУДШИЙ случай всего батча: фото идут
+# последовательно, а одно фото на локальном vision ждёт до
+# MEDIA_VISION_DEADLINE_S (420с). При батче 3 это ~21 мин, тогда как лиз
+# стоял на 10 — третье фото начиналось уже с протухшим лизом, и его
+# подхватывала соседняя реплика. Двойного текста не будет (finalize
+# сверяет triage_status), но работа сгорала бы дважды.
+LEASE_MIN = int(os.environ.get("MEDIA_LEASE_MIN", "25"))
 MAX_MEDIA_RETRIES = 3
 BACKOFF_MIN = [2, 15, 60]   # minutes for retry 1, 2, 3
 
@@ -58,17 +65,17 @@ async def _claim_batch(limit: int = BATCH, *, voice_only: bool = False) -> list[
         "AND metadata->>'media_kind' IN ('voice','audio')" if voice_only else ""
     )
     # Атомарный lease-claim: одним UPDATE проставляем media_next_retry_at на
-    # 10 мин вперёд у выбранных строк и их же возвращаем. Это (а) не даёт
+    # LEASE_MIN мин вперёд у выбранных строк и их же возвращаем. Это (а) не даёт
     # второму инстансу/следующему поллу забрать те же события (claim атомарен
     # со сменой состояния, чего SELECT FOR UPDATE в отдельной транзакции не
     # давал), (б) если finalize упадёт — строка не зациклится, лиз оттолкнёт
-    # следующую попытку на 10 мин.
+    # следующую попытку на LEASE_MIN мин.
     async with get_session() as s:
         rs = (await s.execute(text(f"""
             UPDATE events SET metadata = jsonb_set(
                 COALESCE(metadata, '{{}}'::jsonb),
                 '{{media_next_retry_at}}',
-                to_jsonb((NOW() + interval '10 minutes')::text)
+                to_jsonb((NOW() + make_interval(mins => {LEASE_MIN}))::text)
             )
             WHERE id IN (
                 SELECT id FROM events
@@ -96,7 +103,7 @@ async def _on_success(event_id: int, append: str, extra_meta: dict | None = None
     """Append recognized text + merge extra metadata (e.g. how the voice
     was recognized: media_recognition=ok_local|ok_broker).
 
-    Guard triage_status: воркер, переживший 10-мин lease (другой инстанс уже
+    Guard triage_status: воркер, переживший lease (другой инстанс уже
     обработал и перевёл в pending), не должен приклеить текст ВТОРОЙ раз."""
     async with get_session() as s:
         res = await s.execute(text("""

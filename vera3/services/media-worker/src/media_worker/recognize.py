@@ -21,6 +21,16 @@ INTERNAL_SECRET = os.environ["INTERNAL_SECRET"]
 BROKER_URL = os.environ.get("BROKER_URL", "").rstrip("/")
 BROKER_PROJECT_KEY = os.environ.get("BROKER_PROJECT_KEY", "")
 _MAX_AUDIO_BYTES = 25 * 1024 * 1024   # Whisper limit, mirror broker's guard
+
+# Сколько ждать ответа брокера на ОДНО фото. Дефолт клиента — 120с, и его
+# не хватает: брокер умеет считать vision локально (`local/qwen3vl`), а это
+# медленно. Замер за неделю: 42с минимум, 117с в среднем, 222с максимум —
+# 5 из 8 локальных джоб перевалили за 120с. Брокер их досчитывал, а Вера
+# уже сдавалась: работа сожжена, фото уходило в ретрай и через три круга
+# деградировало. Потолок с запасом к наблюдаемому максимуму. Лиз на claim
+# (MEDIA_LEASE_MIN) обязан покрывать BATCH * этот дедлайн — фото в батче
+# идут последовательно.
+VISION_DEADLINE_S = float(os.environ.get("MEDIA_VISION_DEADLINE_S", "420"))
 _EMPTY_TRANSCRIPT = "(тишина/неразборчиво)"
 
 
@@ -99,6 +109,7 @@ async def _recognize_photo(image_b64: str, mime: str, event_id: int | None = Non
         txt, _meta = await chat_async(
             messages=messages, capability="vision", max_tokens=400,
             temperature=0.1, workflow="media_vision", event_id=event_id,
+            poll_deadline_s=VISION_DEADLINE_S,
         )
     except LLMCallFailed as e:
         raise RuntimeError(f"broker vision: {e}") from e
