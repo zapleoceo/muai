@@ -7,11 +7,10 @@ and picks work via `list_entities_needing_avatar`.
 """
 from __future__ import annotations
 
-from datetime import datetime
-
 from sqlalchemy import bindparam, text
 
 from vera_shared.db.engine import get_session
+from vera_shared.timeutil import utc_naive_now
 
 
 async def get_avatar(entity_id: int) -> tuple[bytes, str] | None:
@@ -37,7 +36,7 @@ async def upsert_avatar(
             "SELECT 1 FROM entity_avatars WHERE entity_id = :eid"
         ), {"eid": entity_id})).first()
         params = {"eid": entity_id, "img": image, "mime": mime,
-                  "missing": missing, "ts": datetime.utcnow()}
+                  "missing": missing, "ts": utc_naive_now()}
         if exists:
             await s.execute(text(
                 "UPDATE entity_avatars SET image=:img, mime=:mime, "

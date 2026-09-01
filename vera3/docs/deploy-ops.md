@@ -157,9 +157,16 @@ Docker (82% всех) никем не востребованы** плюс **3.74
 - `docker image prune -f` **без `-a`** — только висячие образы; чужие
   проекты машины (aibroker, stepan2) держат свои под тегами и не задеваются;
 - `docker builder prune -f --filter until=24h` — кэш BuildKit **хоста**,
-  общий на все проекты; фильтр давности тут единственная защита. Это в рамках
-  уже принятой практики: дневной крон делает host-wide prune с фильтром 72h,
-  то есть то же самое, но реже.
+  общий на все проекты; фильтр давности тут единственная защита.
+
+**Контейнер `vera3-prune` теперь делает ровно то же самое, раз в сутки.**
+Раньше он гонял `docker system prune -af --filter until=72h`, и это было
+единственное место, где vera3 могла снести чужое: `-a` удаляет любой образ,
+на который в этот момент не смотрит контейнер, включая **тегированные**
+образы aibroker и stepan2. Рассуждение выше (`image prune` без `-a` чужого
+не трогает) было записано здесь же — но применялось только к деплою, а
+суточный крон продолжал ходить по всему демону. Теперь пара одна и та же в
+обоих местах.
 
 Уборка — best-effort (`|| true`): её сбой не имеет права переворачивать
 вердикт успешного деплоя в FAILURE. В `--verify-only` не выполняется.
@@ -221,13 +228,18 @@ Until 2026-08-28 cron ran a hand-installed copy at `/usr/local/bin/vera3-monitor
 that the deploy never touched — the versioned file was decorative and nothing
 said so. Do not reintroduce that copy.
 
-Checks 10 dimensions:
+Checks 12 dimensions:
 
 1. Every service in `docker compose config` runs its declared replica count —
    the list is derived from compose, never spelled out in the script (below)
 2. `/healthz` on gateway, brain-search, dashboard
 3. HTTPS dashboard reachable through Cloudflare
 4. Disk usage <85% (warn) / <92% (critical)
+4b. **Host RAM** <87% (warn) / <93% (critical), measured as
+   `MemAvailable` — page cache is reclaimable and doesn't show in `free`
+4c. **OOM-kills in the last hour** (`journalctl -k`), reported separately:
+   by the time a percentage check runs the memory is free again, so the
+   kill itself is invisible to dimension 4b
 5. Postgres `pg_isready`
 6. Gmail accounts polled in last 30 min
 7. Telegram events flowing in last 1h (userbot disconnected detection)
@@ -237,6 +249,65 @@ Checks 10 dimensions:
 
 Alerts to `@Dimondra_Ai_Bot` DM to `OWNER_TELEGRAM_ID`. State-file
 throttle 30 min (or `monitor_throttle_min` setting — see below).
+
+### Container user and healthchecks
+
+All images ran as **root** until 2026-09-01. On a box whose daemon is shared
+with two other projects and where one container mounts `docker.sock`, that is
+an unnecessary rung on the escalation ladder. Ten of eleven now run as uid
+10001 (`USER vera`, added after `pip install` — installation writes to the
+system `site-packages`).
+
+`ingestor-telegram` is deliberately **still root**, and this is the one thing
+to finish by hand. It writes its StringSession into the `vera3_tg_sessions`
+volume; Docker only transfers ownership from the image onto an *empty*
+volume, and that volume already exists in production owned by root. Adding
+`USER` without fixing it would mean `Permission denied` on the session write
+— i.e. the main data source down immediately after a deploy that runs
+automatically on push to master. One-time fix on the host:
+
+```bash
+docker compose stop ingestor-telegram
+docker run --rm -v vera3_tg_sessions:/s alpine chown -R 10001 /s
+```
+
+then add the same two lines to its Dockerfile.
+
+`brain-triage` also gained a `HEALTHCHECK`. It was the only replicated
+service with a real "process alive, doing nothing" failure mode (pool
+exhaustion by background tasks) and no way to observe it: Docker and the
+monitor both count containers and restarts, not progress. Liveness is a
+file the worker touches at the top of every loop iteration — deliberately
+**not** a DB probe, since a brief Postgres outage would then take down all
+five replicas at once, and they are not what needs fixing.
+
+### Memory ceilings (`mem_limit`)
+
+Until 2026-09-01 **no container had a memory limit at all**, and the monitor
+had no memory dimension either. On a 3.7 GiB box shared with `aibroker-*`
+and `stepan2-*`, that meant a leak or one heavy batch anywhere let the
+OOM-killer pick the victim — possibly in another project — and the only
+trace was dimension 1 (a container went missing) or the restart-loop check,
+i.e. always after the fact.
+
+Every service now carries `mem_limit`. Two things to keep straight:
+
+- It is a **ceiling, not a reservation**. The sum (4.8 GiB, or 4.6 without
+  the profile-disabled `ingestor-instagram`) deliberately exceeds physical
+  RAM. The point is to kill a *runaway* container instead of a random
+  neighbour; slow collective growth is still the host's problem, which is
+  what dimensions 4b/4c are for.
+- Each limit has a **measured floor** — the RSS of the service's entry-point
+  module right after import — and the limit itself is that floor × ~2.5-3,
+  since the SQLAlchemy pool, httpx buffers and processing peaks sit on top.
+  It is therefore still a ceiling, not a measurement of working RSS.
+  Under-sizing is the dangerous direction: too tight a limit kills a healthy
+  container, i.e. causes the outage it is meant to prevent. That is not
+  hypothetical — the measurement caught `bot-telegram` set to 160m while
+  importing 169 MB, which would have been OOM-killed before its first
+  update. Per-service numbers, the aiogram cause, and how to re-measure:
+  [`deploy-ops-memory.md`](deploy-ops-memory.md). First quiet hour on prod,
+  run `docker stats --no-stream` and tighten them down to reality.
 
 **Состав стека берётся из compose (2026-08-28).** Раньше монитор сверялся с
 прибитым списком из семи имён, а сервисов двенадцать: `media-worker`,
@@ -384,6 +455,33 @@ Server `.env` at `/var/www/vera3/infra/.env` (mode 600):
 | `BROKER_URL` | `https://aib.zapleo.com` |
 | `BROKER_PROJECT_KEY` | one-shot from broker `/admin/projects` |
 | `VERA_DAILY_GLOBAL_CAP_USD` | hard global LLM spend cap |
+
+## Ретенция usage_log
+
+`usage_log` растёт на строку с **каждого** LLM-вызова
+(`broker_client._log_usage`) и до 2026-09-01 не чистилась ничем — политики
+хранения в репозитории не было вообще. При 10-14 тыс. триажей в час это
+сотни тысяч строк в сутки.
+
+Дашборд при этом считал по ней агрегат без `WHERE`, то есть полным сканом
+всей накопленной истории, на каждое обновление кэша (TTL 60 c, плюс поллинг
+`/_progress` раз в 30 c, пока страница открыта). Теперь запрос ограничен
+окном в 30 дней — самый широкий `FILTER` там и был `:month`, поэтому цифры
+не изменились — а под окно добавлен `ix_usage_created_at` (миграция 029).
+Существующие индексы не годились: `ix_usage_provider_date` ведёт с
+`provider`, `ix_usage_event` — с `event_id`.
+
+Чистка — отдельным крон-скриптом, не миграцией (удаление по времени
+неидемпотентно и держало бы блокировку):
+
+```cron
+15 4 * * * docker exec -i vera3-postgres psql -qU vera -d vera \
+             < /var/www/vera3/scripts/prune_usage_log.sql
+```
+
+Срок — 90 дней, правится одним числом в самом скрипте. Удаляет порциями по
+50 тыс. с `COMMIT` в цикле, поэтому не держит долгую блокировку и не раздувает
+WAL; на пустом хвосте выходит с первой итерации.
 
 ## Backup
 

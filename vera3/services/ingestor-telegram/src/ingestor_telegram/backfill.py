@@ -24,6 +24,7 @@ from vera_shared.chat_activity import min_own_messages, own_message_count
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.media_policy import classify_chat_kind, media_skip_reason
+from vera_shared.timeutil import utc_naive_now
 
 log = logging.getLogger("tg-backfill")
 
@@ -189,7 +190,7 @@ async def main():
     # Порог участия читаем один раз на прогон: он настройка, а не константа,
     # но меняться посреди бэкфилла ему незачем.
     min_own = await min_own_messages()
-    cutoff = datetime.utcnow() - timedelta(days=DAYS_BACK)
+    cutoff = utc_naive_now() - timedelta(days=DAYS_BACK)
     log.info("Backfilling TG dialogs since %s for @%s", cutoff.date(), me.username)
 
     total_inserted = 0

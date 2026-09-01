@@ -17,11 +17,9 @@ import logging
 import os
 from typing import Any
 
-from sqlalchemy import text
 from telethon.errors import ChatAdminRequiredError, FloodWaitError
 from telethon.tl.types import PeerChannel, PeerChat
-from vera_shared.db.engine import get_session
-from vera_shared.graph.repo import upsert_entity, upsert_membership
+from vera_shared.graph.repo import find_project_chats, upsert_entity, upsert_membership
 
 from ingestor_telegram.entity_sync import _person_name
 
@@ -35,20 +33,9 @@ state: dict[str, Any] = {"running": False, "last": None}
 
 
 async def project_chats() -> list[dict[str, Any]]:
-    """Групповые чаты проектов: entity_id + tg_id + тип. Источник —
-    project_membership (kind='chat'), сматченный на граф через alias."""
-    async with get_session() as s:
-        rows = (await s.execute(text("""
-            SELECT DISTINCT e.id AS entity_id, e.name, e.type,
-                   (e.attributes->>'tg_id') AS tg_id
-            FROM project_membership pm
-            JOIN entity_aliases a
-              ON a.source = 'telegram' AND a.identifier = 'chat:' || pm.key
-            JOIN entities e ON e.id = a.entity_id
-            WHERE pm.kind = 'chat'
-              AND e.type IN ('group', 'supergroup')
-        """))).mappings().all()
-    return [dict(r) for r in rows]
+    """Групповые чаты проектов. Запрос живёт в graph_repo — воркер ингестора
+    не должен джойнить entity_aliases и entities сам."""
+    return await find_project_chats()
 
 
 def _peer_of(chat: dict[str, Any]):

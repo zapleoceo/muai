@@ -27,6 +27,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import ClaudeSessionQueueRow, EventRow
+from vera_shared.timeutil import utc_naive_now
 
 from gateway.auth import check_internal_secret
 
@@ -172,7 +173,7 @@ async def accept_claude_session(
         ClaudeSessionQueueRow.status: "pending",
         ClaudeSessionQueueRow.attempts: 0,
         ClaudeSessionQueueRow.error: None,
-        ClaudeSessionQueueRow.updated_at: datetime.now(timezone.utc).replace(tzinfo=None),
+        ClaudeSessionQueueRow.updated_at: utc_naive_now(),
     }
     async with get_session() as s:
         stmt = (

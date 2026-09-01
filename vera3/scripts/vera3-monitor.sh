@@ -228,6 +228,45 @@ else
     recover "disk_warn" "Disk back to ${disk_pct}%."
 fi
 
+# ─── 3b. Память хоста ────────────────────────────────────────────────────────
+# Бокс — 3.7 ГиБ на ТРИ стека (vera3, aibroker, stepan2). До 2026-09-01 у
+# контейнеров не было лимитов памяти вообще, и монитор память не смотрел ни в
+# каком виде: авария всплывала задним числом, когда OOM-killer уже выбрал
+# жертву и она попадала в проверку 1 (счёт контейнеров) или 10 (рестарт-петля).
+# Считаем available, а не free: страничный кэш отдаётся под нагрузкой и в
+# free не виден.
+mem_total=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
+mem_avail=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
+if [ -n "$mem_total" ] && [ "$mem_total" -gt 0 ]; then
+    mem_used_pct=$(( (mem_total - mem_avail) * 100 / mem_total ))
+    mem_avail_mb=$(( mem_avail / 1024 ))
+    if [ "$mem_used_pct" -ge 93 ]; then
+        alert "mem_critical" "RAM <b>${mem_used_pct}%</b> занято, свободно ${mem_avail_mb} МБ. OOM-killer близко."
+    elif [ "$mem_used_pct" -ge 87 ]; then
+        alert "mem_warn" "RAM ${mem_used_pct}% занято, свободно ${mem_avail_mb} МБ."
+    else
+        recover "mem_critical" "RAM back to ${mem_used_pct}%."
+        recover "mem_warn" "RAM back to ${mem_used_pct}%."
+    fi
+fi
+
+# ─── 3c. OOM-kill за последний час ───────────────────────────────────────────
+# Отдельно от 3b: убийство уже случилось, память к моменту проверки свободна,
+# и по одному лишь проценту это не видно никогда.
+if command -v journalctl >/dev/null 2>&1; then
+    oom_hits=$(journalctl -k --since '-1h' --no-pager 2>/dev/null \
+                 | grep -ciE 'out of memory: killed process|oom-kill:' || true)
+    if [ "${oom_hits:-0}" -gt 0 ]; then
+        oom_who=$(journalctl -k --since '-1h' --no-pager 2>/dev/null \
+                    | grep -iE 'out of memory: killed process' | tail -3 \
+                    | sed 's/&/\&amp;/g; s/</\&lt;/g; s/>/\&gt;/g')
+        alert "oom_kill" "OOM-killer сработал ${oom_hits} раз(а) за час:
+<pre>${oom_who}</pre>"
+    else
+        recover "oom_kill" "OOM-kill'ов за последний час нет."
+    fi
+fi
+
 # ─── 4. Postgres reachable ───────────────────────────────────────────────────
 if ! docker exec vera3-postgres pg_isready -U vera -d vera -q 2>/dev/null; then
     alert "postgres_down" "Postgres pg_isready failed."

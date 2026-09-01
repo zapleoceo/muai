@@ -9,6 +9,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 from typing import Any
 
+from vera_shared.timeutil import utc_naive_now
+
 from ingestor_trello.describe import category, describe
 
 MAX_CONTENT_LEN = 8000
@@ -20,7 +22,7 @@ def parse_date(value: str | None) -> datetime:
     try:
         dt = datetime.fromisoformat(text)
     except ValueError:
-        return datetime.utcnow()
+        return utc_naive_now()
     if dt.tzinfo is None:
         return dt
     return dt.astimezone(timezone.utc).replace(tzinfo=None)

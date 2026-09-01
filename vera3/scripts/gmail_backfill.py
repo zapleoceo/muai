@@ -20,7 +20,7 @@ import asyncio
 import logging
 import os
 import sys
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 sys.path.insert(0, "/app/src")
 sys.path.insert(0, "/work/services/ingestor-gmail/src")
@@ -31,6 +31,7 @@ from vera_shared.crypto import decrypt
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import GmailAccountRow
+from vera_shared.timeutil import utc_naive_now
 
 logging.basicConfig(
     level=logging.INFO,
@@ -109,7 +110,7 @@ async def backfill_account(acc: GmailAccountRow) -> int:
         return 0
 
     # Build query
-    start_date = (datetime.utcnow() - timedelta(days=DAYS_BACK)).strftime("%Y/%m/%d")
+    start_date = (utc_naive_now() - timedelta(days=DAYS_BACK)).strftime("%Y/%m/%d")
     query = f"after:{start_date}"
     log.info("Backfill %s with query: %s", acc.email, query)
 
@@ -159,7 +160,7 @@ async def backfill_account(acc: GmailAccountRow) -> int:
         await s.execute(
             update(GmailAccountRow)
             .where(GmailAccountRow.id == acc.id)
-            .values(last_polled_at=datetime.utcnow())
+            .values(last_polled_at=utc_naive_now())
         )
     return total_inserted
 

@@ -53,10 +53,29 @@ jobs:
   # ─── 2. Test gate ────────────────────────────────────────────────────────
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     defaults:
       run:
         working-directory: vera3
+    # Живой Postgres. Юнит-тесты идут на SQLite (быстро, без сервиса), но
+    # весь сырой SQL проекта — Postgres-only и на SQLite физически не
+    # исполняется: to_tsvector, FOR UPDATE SKIP LOCKED, FILTER (WHERE …),
+    # metadata->>, = ANY(:ids), NOW(). Из-за этого тела `_claim_batch`,
+    # `_compute_stats` и `brain_search.search` не исполнялись НИ ОДНИМ
+    # тестом — покрытие показывало 0% по их строкам, а «тест» на claim
+    # сравнивал inspect.getsource() со строкой.
+    # Образ тот же, что в проде (pgvector/pgvector:pg16).
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: vera
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: vera_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U vera -d vera_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -81,6 +100,10 @@ jobs:
           TELEGRAM_API_ID: "1"
           TELEGRAM_API_HASH: "test"
           TELEGRAM_PHONE: "+10000000000"
+          # Включает tests/pg и tests/integration. Без этих двух переменных
+          # они молча пропускаются — так они и простояли мёртвыми в CI.
+          RUN_INTEGRATION_TESTS: "1"
+          TEST_DATABASE_URL: postgresql+asyncpg://vera:test@localhost:5432/vera_test
         run: |
           # brain_search intentionally NOT in --cov here: repo-wide 70% gate
           # would retroactively fail on its pre-existing legacy coverage gap.
@@ -90,10 +113,20 @@ jobs:
           # sys.path shared и все services/*/src. Раньше список жил в трёх
           # копиях в двух воркфлоу и разъехался — у шага diff-cover не было
           # brain-triage, сборка тестов падала, а деплой стоял молча.
+          # ВСЕ пакеты под измерением, и порог у каждого свой.
+          # Один общий процент по двум пакетам из двенадцати описывал 38.8%
+          # продового кода: регресс в дашборде, триаже, поиске, боте или
+          # любом ингесторе ворота не останавливали. И даже внутри
+          # измеряемого пакета среднее прятало нули — vera_shared/tools
+          # стоял на 0% и ехал на хорошо покрытых соседях.
           pytest tests/ \
-            --cov=vera_shared --cov=gateway \
+            --cov=vera_shared --cov=gateway --cov=media_worker \
+            --cov=brain_search --cov=brain_triage --cov=dashboard \
+            --cov=ingestor_gmail --cov=ingestor_slack --cov=ingestor_trello \
+            --cov=ingestor_telegram --cov=bot_telegram \
             --cov-report=term-missing \
-            --cov-fail-under=70
+            --cov-report=xml:coverage.xml
+          python scripts/check_coverage.py coverage.xml
 
   # ─── 3. Quality gate ─────────────────────────────────────────────────────
   # Strict static analysis on the diff:
@@ -185,8 +218,18 @@ jobs:
           # B008 ignored: Depends()/Query()/File() in FastAPI param defaults
           # is THE idiomatic pattern (ruff docs recommend ignoring it for
           # FastAPI). Matches AIbroker's config.
+          # RUF006 (dangling create_task): ловит фоновую задачу, созданную без
+          # ссылки — цикл держит на неё только слабую, GC может собрать её на
+          # полпути. Проект защищается от этого руками в шести местах, и ровно
+          # в двух самых важных (watchdog и retry-цикл триажа) забыл. Линтер
+          # дешевле, чем ещё один такой пропуск.
+          #
+          # DTZ003 (datetime.utcnow): deprecated с 3.12, снята с плана
+          # поддержки. Вместо неё vera_shared.timeutil.utc_naive_now().
+          # Только DTZ003, а не весь DTZ: DTZ001 ругается на конструктор
+          # datetime(2026,...) в фикстурах тестов — там это ровно то, что надо.
           echo "$CHANGED" | xargs ruff check \
-            --select E,F,W,I,B,UP,SIM,C4,RET --ignore E501,E402,B008
+            --select E,F,W,I,B,UP,SIM,C4,RET,RUF006,DTZ003 --ignore E501,E402,B008
 
       - name: Vulture (dead-code on changed files)
         shell: bash
@@ -296,10 +339,52 @@ jobs:
           [ "$fail" -eq 0 ] && echo "docs name-sync passed"
           exit $fail
 
+  # ─── 3b. Build gate ──────────────────────────────────────────────────────
+  # Каждый образ должен собираться ДО того, как деплой начнёт их пересобирать
+  # на боевом хосте. Раньше в CI собирался ровно один Dockerfile из
+  # одиннадцати — gateway, и то в другом воркфлоу (vera3-tests.yml), которого
+  # нет в needs у деплоя. То есть сломанный Dockerfile или неразрешимая
+  # зависимость выяснялись уже на проде, в промежутке между «ворота зелёные»
+  # и «сервис не поднялся». Опрос /healthz после деплоя ловит только gateway.
+  #
+  # Пуша нет — только сборка. Образы всё равно собираются на хосте: цель
+  # гейта — отделить «код не собирается» от «код не работает».
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false          # хотим видеть ВСЕ сломанные образы за один прогон
+      matrix:
+        service:
+          - bot-telegram
+          - brain-search
+          - brain-triage
+          - dashboard
+          - gateway
+          - ingestor-gmail
+          - ingestor-instagram
+          - ingestor-slack
+          - ingestor-telegram
+          - ingestor-trello
+          - media-worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ${{ matrix.service }}
+        uses: docker/build-push-action@v6
+        with:
+          context: vera3
+          file: vera3/services/${{ matrix.service }}/Dockerfile
+          push: false
+          # Кэш на слой GitHub Actions: без него одиннадцать pip install
+          # заново на каждый пуш — минуты, которые никому не нужны.
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,scope=${{ matrix.service }},mode=max
+
   # ─── 4. Deploy ───────────────────────────────────────────────────────────
-  # Hard-gated: docs + tests + quality must ALL pass.
+  # Hard-gated: docs + tests + quality + build must ALL pass.
   deploy:
-    needs: [docs, test, quality]
+    needs: [docs, test, quality, build]
     runs-on: ubuntu-latest
     # 25, а не 15: опрос занятого замка до десяти минут плюс сам деплой до
     # семи в прежний бюджет не влезали, а упор в таймаут даёт cancelled —
@@ -378,7 +463,7 @@ jobs:
   # PYTHONPATH, сборка тестов падала, деплой стоял на ЧЕТЫРЁХ коммитах, и
   # узналось это только когда кто-то заметил, что сервер отстал.
   notify:
-    needs: [docs, test, quality, deploy]
+    needs: [docs, test, quality, build, deploy]
     # cancelled обязателен наравне с failure: при упоре в timeout-minutes
     # GitHub помечает job как cancelled, и условие только на failure пропускало
     # бы ровно тот случай, от которого этот job и написан — «деплой встал, и
@@ -394,12 +479,13 @@ jobs:
           R_DOCS: ${{ needs.docs.result }}
           R_TEST: ${{ needs.test.result }}
           R_QUALITY: ${{ needs.quality.result }}
+          R_BUILD: ${{ needs.build.result }}
           R_DEPLOY: ${{ needs.deploy.result }}
         run: |
           [ -z "$BOT_TOKEN" ] && exit 0
           [ -z "$OWNER_ID" ] && exit 0
           FAILED=""
-          for pair in "docs:$R_DOCS" "test:$R_TEST" "quality:$R_QUALITY" "deploy:$R_DEPLOY"; do
+          for pair in "docs:$R_DOCS" "test:$R_TEST" "quality:$R_QUALITY" "build:$R_BUILD" "deploy:$R_DEPLOY"; do
             case "${pair#*:}" in failure) FAILED="$FAILED ${pair%%:*}";; esac
           done
           curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \

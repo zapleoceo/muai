@@ -168,6 +168,98 @@ is skipped too.
 `rel_extract` is **not** batched (fires per-event, fire-and-forget,
 unaffected either way).
 
+### rel-extract admission threshold
+
+Two gates decide whether a triaged event gets a relationship-extraction
+call at all — it is the most expensive background work the worker does
+(one `structured` LLM call plus up to ~10 DB sessions resolving entity
+names, all outside `TRIAGE_CONCURRENCY`):
+
+1. `should_extract_relations(metadata)` (`vera_shared/media_policy.py`) —
+   drops broadcast-channel posts and groups the owner doesn't take part in.
+2. `importance >= REL_EXTRACT_MIN_IMPORTANCE` (`brain_triage/config.py`,
+   env `TRIAGE_REL_MIN_IMPORTANCE`, default **60**).
+
+**The importance scale is 0-100**, defined in `schemas.py` and restated in
+`prompts.py`. The threshold used to be a hardcoded `3`, which admits
+essentially the whole stream while the comment beside it promised "only
+high-signal events" — it reads like it was written against a 1-5 scale.
+At 60 the gate means what it says: rel-extract fires on events the model
+rated clearly above routine, not on every "ок, договорились".
+
+Set `TRIAGE_REL_MIN_IMPORTANCE=0` to restore the old build-the-graph-from-
+everything behaviour.
+
+### Эмбеддинги: pgvector (миграция 030)
+
+`VERA.md` и `architecture.md` с самого начала обещали «Postgres + pgvector
+для эмбеддингов», и образ базы действительно `pgvector/pgvector:pg16` — но
+расширение не создавалось ни разу. Колонка была `JSONB`, ANN-индекса не
+существовало, а косинус считался циклом на Python в двух местах:
+`brain_search/scoring.py` (до 200 строк на запрос) и `gateway/claude.py`
+(до **500** строк на каждый `/v1/claude/remember`).
+
+**Замер на симуляции**, 5000 событий по 1024 измерения, тот же Postgres 16
+с pgvector:
+
+| | было (JSONB + Python) | стало (vector) |
+|---|---|---|
+| один `/v1/claude/remember` | 332 мс (255 выборка + 77 перебор) | **27 мс** |
+| данные эмбеддингов | 60 МБ | **20 МБ** |
+
+На проде это 3.6 ГБ, 66% всей базы (`scripts/vera-backup.sh`) → ожидаемо
+около 1.2 ГБ.
+
+**Переход безопасен в любой точке.** Миграция 030 только создаёт расширение
+и ПУСТУЮ колонку `embedding_vec vector(1024)`; данные заливает отдельно
+`scripts/backfill_pgvector.py` батчами. Код читает вектор, если он есть, и
+JSONB, если нет (`vera_shared/db/vectors.py`), а триаж на время перехода
+пишет в ОБЕ колонки — иначе новые события попадали бы в дыру, которую
+бэкфил уже прошёл. Старая колонка не удаляется: пока бэкфил не проверен на
+живых данных, откат должен быть бесплатным.
+
+Порядок: накатить 030 → задеплоить код → гонять бэкфил до «осталось 0» →
+`--index` (HNSW строится `CONCURRENTLY`) → и только сильно позже думать про
+`DROP` старой колонки.
+
+Две вещи, которые всплыли на симуляции и стоят того, чтобы их знать:
+
+- **Знак оператора.** `<=>` — косинусное РАССТОЯНИЕ, сходство это
+  `1 - (a <=> b)`. Перепутать легко, и тогда дедуп начнёт считать похожими
+  самые ДАЛЁКИЕ факты. Тест сверяет величину с питоновским `_cosine`.
+- **Планировщик берёт индекс не всегда.** На 5 тыс. строк он предпочитает
+  seq scan, и это правильно; что индекс исправен, видно по
+  `SET enable_seqscan = off` → `Index Scan using ix_event_embeddings_vec`.
+  На продовых сотнях тысяч строк выбор станет естественным, но проверить
+  `EXPLAIN` после бэкфила всё равно стоит.
+
+### rel-extract concurrency ceiling
+
+Admitted events are dispatched **fire-and-forget** (`_safe_rel_extract`,
+never awaited). The `asyncio.Semaphore` inside `process_pending()` does not
+bound them: it is recreated on every call and only wraps the foreground
+triage calls, so background tasks accumulated *between* calls. With
+`PACE_BETWEEN_S=0.5` and no sleep while there is work, `process_pending()`
+cycles every ~1-3s, while one rel-extract can run up to the broker's
+`BROKER_JOB_DEADLINE_S` (120s) — dozens of tasks in flight, each opening up
+to ~10 DB sessions against a 10-connection pool (`pool_size=3 +
+max_overflow=7`) that also serves the claim query, the status writes, the
+watchdog and the retry loop. Exhausting it stalls the foreground too.
+
+Two bounds, both in `brain_triage/config.py`:
+
+- `REL_EXTRACT_CONCURRENCY` (`TRIAGE_REL_CONCURRENCY`, default **3**) — a
+  module-level semaphore, deliberately *not* per-cycle.
+- `REL_EXTRACT_TIMEOUT_S` (`TRIAGE_REL_TIMEOUT_S`, default **180**) — the
+  foreground path has had an `asyncio.wait_for` all along
+  (`concurrency.py`); the background path had none and relied on the broker
+  client's own ceiling. Kept above `JOB_POLL_DEADLINE_S` so it cuts hung
+  calls, not healthy slow ones — a test asserts that ordering.
+
+`extract_and_store()` also memoises name→entity within a single event: the
+same person usually appears in several facts in a row, and each resolve is
+its own session.
+
 ## Backfill pause + rate limit
 
 Two controls on the 📥 Live прогресс dashboard card, both stored in the

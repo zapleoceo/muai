@@ -22,6 +22,7 @@ from typing import Any
 
 import httpx
 from vera_shared.llm.client import LLMCallFailed, chat_async
+from vera_shared.timeutil import utc_naive_now
 
 log = logging.getLogger(__name__)
 
@@ -233,12 +234,11 @@ async def _exec_search_events(q: str, source: str = "any",
 
 async def _exec_memory_remember(fact: str, tags: list[str] | None = None,
                                   confidence: float = 0.8) -> dict[str, Any]:
-    from datetime import datetime
 
     from vera_shared.db.engine import get_session
     from vera_shared.db.models import EventRow
 
-    now = datetime.utcnow()
+    now = utc_naive_now()
     async with get_session() as s:
         ev = EventRow(
             source="vera_memory",

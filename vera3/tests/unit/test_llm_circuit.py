@@ -92,6 +92,110 @@ async def test_budget_cap_never_overshoots_utc_midnight(db):
     assert until == datetime(2026, 8, 1, 0, 0, tzinfo=timezone.utc)  # ровно полночь
 
 
+# ─── кэш кулдауна в процессе ────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_cooldown_read_is_cached_between_calls(db):
+    """Кулдаун читается дважды на каждый LLM-вызов (precheck + reset), а в
+    триаже трижды. Ходить за ним в БД каждый раз незачем: меняется он раз в
+    десятки минут."""
+    import vera_shared.llm.circuit as circ
+
+    await note_llm_failure("chat:fast", "no provider available")
+    circ.forget_cooldowns()
+
+    calls = 0
+    real = circ.get_control
+
+    async def counting(key, default=""):
+        nonlocal calls
+        calls += 1
+        return await real(key, default)
+
+    with patch.object(circ, "get_control", counting):
+        first = await llm_cooldown_remaining_s("chat:fast")
+        for _ in range(9):
+            await llm_cooldown_remaining_s("chat:fast")
+
+    assert calls == 1, "кулдаун читается из БД на каждый вызов"
+    assert first > 0
+
+
+@pytest.mark.asyncio
+async def test_cached_cooldown_still_counts_down(db):
+    """Кэшируется МОМЕНТ окончания, а не остаток — иначе внутри TTL остаток
+    замирал бы и circuit открывался бы дольше положенного."""
+    import vera_shared.llm.circuit as circ
+
+    circ.forget_cooldowns()
+    circ._remember("vision", datetime.now(timezone.utc) + timedelta(seconds=100))
+    first = await llm_cooldown_remaining_s("vision")
+
+    with patch.object(circ, "datetime", _shifted(seconds=3)):
+        later = await llm_cooldown_remaining_s("vision")
+
+    assert first > later, "остаток не убывает внутри TTL"
+    assert 2 < first - later < 4
+
+
+@pytest.mark.asyncio
+async def test_expired_cache_is_refetched(db):
+    """По истечении TTL значение перечитывается — кулдаун, поставленный
+    ДРУГОЙ репликой, виден с задержкой не больше TTL."""
+    import vera_shared.llm.circuit as circ
+
+    assert await llm_cooldown_remaining_s("chat:smart") == 0   # заполнили кэш «пусто»
+    await circ.set_control("llm_cooldown:chat:smart",
+                           (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat())
+
+    assert await llm_cooldown_remaining_s("chat:smart") == 0   # ещё из кэша
+
+    # `circ.time` — тот же самый модуль time, поэтому настоящую monotonic
+    # надо забрать ДО подмены, иначе лямбда позовёт саму себя.
+    real_monotonic = circ.time.monotonic
+    with patch.object(circ.time, "monotonic",
+                      lambda: real_monotonic() + circ._CACHE_TTL_S + 1):
+        assert await llm_cooldown_remaining_s("chat:smart") > 0
+
+
+@pytest.mark.asyncio
+async def test_reset_skips_db_when_cache_says_no_cooldown(db):
+    """Успешный вызов не должен ходить в БД, чтобы убедиться, что стирать
+    нечего — это второе чтение на каждый LLM-вызов."""
+    import vera_shared.llm.circuit as circ
+
+    circ.forget_cooldowns()
+    assert await llm_cooldown_remaining_s("chat:code") == 0
+
+    with patch.object(circ, "get_control", AsyncMock()) as get:
+        await reset_llm_cooldown("chat:code")
+    get.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_reset_clears_cache_so_next_read_is_zero(db):
+    import vera_shared.llm.circuit as circ
+
+    await note_llm_failure("vision", "no provider available")
+    assert await llm_cooldown_remaining_s("vision") > 0
+    await reset_llm_cooldown("vision")
+    assert await llm_cooldown_remaining_s("vision") == 0
+    assert await circ.get_control("llm_cooldown:vision", "") == ""
+
+
+def _shifted(*, seconds: int):
+    """datetime-подмена: now() сдвинут вперёд на N секунд."""
+    base = datetime.now(timezone.utc) + timedelta(seconds=seconds)
+
+    class _FakeDT(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return base
+
+    return _FakeDT
+
+
 @pytest.mark.asyncio
 async def test_no_provider_opens_for_configured_minutes(db):
     kind = await note_llm_failure("vision", "no provider available for vision (gave up)")

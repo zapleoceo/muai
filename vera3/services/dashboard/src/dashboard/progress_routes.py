@@ -1,8 +1,6 @@
 """Live-progress fragment (HTMX poll every 30s) + backfill pause/rate controls."""
 from __future__ import annotations
 
-from datetime import datetime
-
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy import select
@@ -14,6 +12,7 @@ from vera_shared.control import (
 )
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_sources import GmailAccountRow
+from vera_shared.timeutil import utc_naive_now
 
 from dashboard.render import esc, local_dt, owner_or_blank_401
 from dashboard.stats import get_stats
@@ -49,7 +48,7 @@ async def control_backfill_rate(request: Request, max_per_hour: int = Form(0)):
 
 
 async def _build_progress_fragment() -> str:
-    now = datetime.utcnow()
+    now = utc_naive_now()
     paused = await is_backfill_paused()
     max_per_hour = await get_backfill_max_per_hour()
 

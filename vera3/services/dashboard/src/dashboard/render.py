@@ -4,9 +4,9 @@ module (row list, data table, freshness pill, ETA text).
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import datetime
 from html import escape as _esc
-from typing import Iterable
 
 from fastapi import HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
@@ -50,8 +50,9 @@ def local_dt(dt: datetime | None, fmt: str = "datetime", empty: str = "—") -> 
         return empty
     strf = _FMT_FALLBACK.get(fmt, _FMT_FALLBACK["datetime"])
     iso = dt.isoformat()
-    # datetime-колонки в БД — наивный UTC (datetime.utcnow()). Помечаем 'Z',
-    # иначе new Date(iso) в браузере распарсит их как ЛОКАЛЬНОЕ время.
+    # datetime-колонки в БД — наивный UTC (vera_shared.timeutil.utc_naive_now).
+    # Помечаем 'Z', иначе new Date(iso) в браузере распарсит их как ЛОКАЛЬНОЕ
+    # время.
     if dt.tzinfo is None:
         iso += "Z"
     return f'<time data-utc="{esc(iso)}" data-fmt="{esc(fmt)}">{dt.strftime(strf)}</time>'

@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime
 from typing import Any
 
 from vera_shared.control import (
@@ -22,6 +21,7 @@ from vera_shared.control import (
     get_int_setting,
     set_control,
 )
+from vera_shared.timeutil import utc_naive_now
 
 log = logging.getLogger(__name__)
 
@@ -189,7 +189,7 @@ async def recompute_clusters(limit: int = 600) -> dict[str, Any]:
     payload = {
         "assign": {str(k): v for k, v in assign.items()},
         "labels": {str(k): v for k, v in labels.items()},
-        "computed_at": datetime.utcnow().isoformat(),
+        "computed_at": utc_naive_now().isoformat(),
         "nodes": len(node_ids), "edges": len(edges),
     }
     await set_control(CLUSTERS_KEY, json.dumps(payload, ensure_ascii=False))

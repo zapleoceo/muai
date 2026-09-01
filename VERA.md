@@ -35,7 +35,7 @@ Hard rules that still bind:
 | Server | Hetzner VPS `ubuntu-2gb-nbg1-1`, SSH alias `hetzner-root` (port 9617) |
 | Project dir | `/var/www/vera3` (compose at `/var/www/vera3/infra`) |
 | Deploy checkout | `/var/www/muai-checkout` |
-| State | **Postgres + pgvector** — container `vera3-postgres`, user `vera`, db `vera`, host `127.0.0.1:5433` |
+| State | **Postgres + pgvector** — container `vera3-postgres`, user `vera`, db `vera`, host `127.0.0.1:5433`. pgvector включён миграцией 030 (до неё расширение не создавалось ни разу, хотя эта строка обещала обратное); переход на колонку `vector` — см. brain.md |
 | Graph | Materialized **inside Postgres** (`entities`, `entity_aliases`, `memberships`, `relationships`, `identity_nodes`, `patterns`) behind a `graph_repo` API |
 | LLM | External **AIbroker** (`chat:fast` via `/v1/jobs`) — separate stack on the same host |
 | Bot | `@Dimondra_Ai_Bot`, owner-only DM |
@@ -172,8 +172,12 @@ as a pre-commit hook.
 - **No migration tracking table.** Nothing records which of
   `vera3/infra/migrations/*.sql` has been applied. Numbering also skips
   `018` and `019`.
-- **Coverage gate is 40% in `vera3-tests.yml` but 70% in `deploy.yml`** —
-  deploy is the binding one; the target is 70%+.
+- ~~Coverage gate is 40% in `vera3-tests.yml` but 70% in `deploy.yml`~~ —
+  **исправлено 2026-09-01.** Оба воркфлоу гоняют один и тот же гейт
+  (`vera3/scripts/check_coverage.py`) с порогом НА КАЖДЫЙ пакет, а не одним
+  процентом на репозиторий. Прежние 70% считались по двум пакетам из
+  двенадцати, то есть описывали 38.8% продового кода; настоящая цифра по
+  всему коду — 70.8%.
 - **Host memory is tight**: 3.7 GiB total, ~2 GiB in use with 5 triage
   replicas. Scaling `brain-triage` up needs a resize first.
 - **Legacy tree is still in the repo** (§3). It pollutes greps and search

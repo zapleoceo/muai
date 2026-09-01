@@ -51,24 +51,45 @@ async def insert_events(specs: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     Повтор уже виденного `(source, source_event_id)` молча пропускается — это
     и есть дедуп, и он безопасен при параллельных писателях.
+
+    Вставка идёт ПАЧКОЙ: один многострочный INSERT вместо round-trip на
+    событие. Поллер gmail тянет до MAX_PER_RUN=500 писем за прогон, то есть
+    раньше это были 500 отдельных обращений к базе внутри одной транзакции.
     """
     usable = [spec for spec in specs if valid_spec(spec)]
     if not usable:
         return []
 
-    fresh: list[dict[str, Any]] = []
     async with get_session() as s:
         insert = _insert_for(s)
+        # Многострочный VALUES требует одинакового набора колонок, а источники
+        # заполняют разные поля. Не подставляем недостающие как NULL — это
+        # затёрло бы server-side дефолты; вместо этого группируем по форме.
+        # У одного источника форма обычно одна, так что групп почти всегда 1.
+        by_shape: dict[frozenset[str], list[dict[str, Any]]] = {}
         for spec in usable:
+            by_shape.setdefault(frozenset(spec), []).append(spec)
+
+        new_ids: dict[tuple[str, str], int] = {}
+        for group in by_shape.values():
             stmt = (
                 insert(EventRow)
-                .values(triage_status="pending", **spec)
+                .values([{"triage_status": "pending", **spec} for spec in group])
                 .on_conflict_do_nothing(index_elements=["source", "source_event_id"])
-                .returning(EventRow.id)
+                # id недостаточно: RETURNING отдаёт только вставленные строки и
+                # НЕ говорит, какой из specs какой. Ключ дедупа — он же ключ
+                # сопоставления.
+                .returning(EventRow.id, EventRow.source, EventRow.source_event_id)
             )
-            event_id = (await s.execute(stmt)).scalar_one_or_none()
-            if event_id is not None:
-                fresh.append({**spec, "event_id": event_id})
+            for row in (await s.execute(stmt)).all():
+                new_ids[(row.source, row.source_event_id)] = row.id
+
+    # Порядок входа сохраняем: вызывающие ходят по результату как по своей пачке
+    fresh = [
+        {**spec, "event_id": new_ids[key]}
+        for spec in usable
+        if (key := (spec["source"], spec["source_event_id"])) in new_ids
+    ]
     if fresh:
         log.info("%s: %d новых событий", fresh[0]["source"], len(fresh))
     return fresh

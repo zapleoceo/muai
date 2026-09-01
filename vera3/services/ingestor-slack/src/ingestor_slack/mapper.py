@@ -13,6 +13,8 @@ import re
 from datetime import datetime, timezone
 from typing import Any
 
+from vera_shared.timeutil import utc_naive_now
+
 MAX_CONTENT_LEN = 8000
 
 #: служебные записи канала — тот же класс шума, что `updateCard` с одной сменой
@@ -36,7 +38,7 @@ def parse_ts(ts: str | None) -> datetime:
     try:
         seconds = float(str(ts or "").split(".")[0] or 0)
     except ValueError:
-        return datetime.utcnow()
+        return utc_naive_now()
     return datetime.fromtimestamp(seconds, tz=timezone.utc).replace(tzinfo=None)
 
 

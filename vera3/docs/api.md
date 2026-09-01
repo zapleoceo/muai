@@ -27,17 +27,29 @@ endpoint serves webhooks and the bot's `vera_chat` writes.
 }
 ```
 
-### Internal auth (`gateway/auth.py::check_internal_secret`)
+### Internal auth (`vera_shared/auth.py::internal_secret_ok`)
 
 Every gateway route that reads or writes data (`/event/*`, `/v1/claude/*`,
 `/v1/search`, `/v1/events/*`, `/v1/entity/*`, `/api/events/{id}`) requires
-the `X-Internal-Secret` header, checked by the single shared
-`check_internal_secret()` helper. It is **fail-closed**: if
-`INTERNAL_SECRET` is unset/empty, every request is rejected (401) rather
-than let through. `docker-compose.yml` marks the var required
-(`INTERNAL_SECRET:?...`), so a misconfigured non-compose deploy locks down
-instead of exposing event bodies. `/healthz` is the only unauthenticated
-route.
+the `X-Internal-Secret` header, checked by
+`gateway/auth.py::check_internal_secret()`. `/healthz` is the only
+unauthenticated route.
+
+The comparison itself lives in **`vera_shared.auth.internal_secret_ok()`** —
+gateway and brain-search each keep a thin `check_internal_secret()` wrapper
+that turns `False` into their own `HTTPException(401)`, because the services
+don't import each other and `vera_shared` deliberately doesn't depend on
+FastAPI. Two properties are the reason it's one function:
+
+- **Fail-closed.** If `INTERNAL_SECRET` is unset/empty, every request is
+  rejected rather than let through. `docker-compose.yml` marks the var
+  required (`INTERNAL_SECRET:?...`), so a misconfigured non-compose deploy
+  locks down instead of exposing event bodies.
+- **Constant-time.** `hmac.compare_digest`, not `!=`. Both copies used to
+  compare with `!=`, whose runtime depends on the length of the matching
+  prefix — the ports are loopback-only so this was never practically
+  exploitable, but `dashboard/auth.py` already did it right and there was no
+  reason for these two to differ.
 
 ## Brain Search (`vera3-brain-search`, internal port 8000)
 
@@ -47,9 +59,10 @@ route.
 | `/search` | POST | `X-Internal-Secret` | Hybrid retrieval + agent loop |
 
 `/search` requires the same `X-Internal-Secret` header as the gateway,
-checked by brain-search's own fail-closed `check_internal_secret()` (the
-port is published on the host's 127.0.0.1, so any local process could
-otherwise query the whole memory). Callers — bot-telegram, dashboard
+checked by brain-search's fail-closed `check_internal_secret()` wrapper over
+the shared `internal_secret_ok()` (the port is published on the host's
+127.0.0.1, so any local process could otherwise query the whole memory).
+Callers — bot-telegram, dashboard
 `/search-ui`, gateway `/v1/search` proxy — all send the header.
 
 The gateway's `MaxBodySizeMiddleware` also rejects POST/PUT/PATCH without
@@ -113,8 +126,31 @@ renders "everything":
 - `predicate` filter narrows to one relationship type. Node colour = entity
   type (person / group / channel), size ∝ degree.
 
-All graph SQL lives in `vera_shared.graph.repo` (the repository layer);
-the route only shapes JSON / HTML. `IN` clauses use expanding bindparams
+Two different degrees are in play, deliberately: node **selection** uses the
+degree *within the active predicate filter* (the `degree` CTE), while the
+degree **shown on a node** is its total — every relationship plus every
+current membership, both sides, unfiltered. The displayed number answers
+"how connected is this person", not "how many edges survived the filter".
+
+That total is one grouped query over the returned id set. It used to be two
+correlated subqueries per row, i.e. up to 800 × 2 per page render, and half
+of them keyed on `memberships.child_entity_id`, which had no index at all —
+`ix_membership_child`, migration 028. Both sides of `relationships` were
+already indexed; memberships only had the parent side, and `uq_membership`
+couldn't stand in for it because `parent_entity_id` leads that constraint.
+
+All graph SQL lives in the `vera_shared.graph` package; **no service
+reaches past it**. `gateway/query.py` used to join `relationships` with
+`entities` inside the route function and `ingestor_telegram/roster_sync.py`
+joined `entity_aliases` with `entities` in the worker — both now call
+`repo.list_relationships()` / `repo.find_project_chats()`, and
+`tests/unit/test_graph_boundary.py` fails the build if a service grows raw
+SQL against a graph table again. Routes only shape JSON / HTML.
+
+Within the `graph/` package itself raw SQL is fine and deliberate:
+`merge_entities`, collision handling and dossiers are not expressible as
+repository CRUD, and wrapping them would hide transactional logic. The
+point of the boundary is that swapping the store is an edit to one package. `IN` clauses use expanding bindparams
 so the queries run on both Postgres (prod) and SQLite (tests).
 
 ### Stats caching (`dashboard/stats.py`)

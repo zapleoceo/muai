@@ -21,6 +21,7 @@ from typing import Any
 
 from sqlalchemy import text
 from vera_shared.db.engine import get_session
+from vera_shared.timeutil import utc_naive_now
 
 log = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ async def get_stats(force: bool = False) -> dict[str, Any]:
 
 
 async def _compute_stats() -> dict[str, Any]:
-    now = datetime.utcnow()
+    now = utc_naive_now()
     h1 = now - timedelta(hours=1)
     h24 = now - timedelta(hours=24)
     today = now.date()
@@ -104,7 +105,11 @@ async def _compute_stats() -> dict[str, Any]:
         with_emb = (await s.execute(
             text("SELECT COUNT(*) FROM event_embeddings"))).scalar() or 0
 
-        # ── ОДИН проход по usage_log ──
+        # ── ОДИН проход по usage_log, и только по нужному окну ──
+        # WHERE обязателен: самый широкий FILTER здесь — :month (30 дней), всё
+        # остальное уже внутри него, поэтому результат тот же. Без него это
+        # был полный скан ВСЕЙ таблицы, а она растёт на строку с каждого
+        # LLM-вызова и не чистится (ретенция — scripts/prune_usage_log.sql).
         ul = (await s.execute(text("""
             SELECT
               COALESCE(SUM(cost_usd) FILTER (WHERE created_at >= :today), 0) AS cost_today,
@@ -113,6 +118,7 @@ async def _compute_stats() -> dict[str, Any]:
               COUNT(*) FILTER (WHERE workflow='triage' AND created_at >= :h1)  AS triage_1h,
               COUNT(*) FILTER (WHERE workflow='triage' AND created_at >= :h24) AS triage_24h
             FROM usage_log
+            WHERE created_at >= :month
         """), {"today": today, "month": month_ago, "h1": h1, "h24": h24})).mappings().one()
 
     # Свод по всем источникам (суммируем группы — без ещё одного скана)
@@ -175,7 +181,7 @@ async def get_sources_overview(force: bool = False) -> dict[str, dict[str, Any]]
 
 
 async def _compute_overview() -> dict[str, dict[str, Any]]:
-    now = datetime.utcnow()
+    now = utc_naive_now()
     async with get_session() as s:
         rows = (await s.execute(text("""
             SELECT source, COUNT(*) AS total,

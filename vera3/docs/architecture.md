@@ -53,7 +53,7 @@
 | `vera3-ingestor-trello` | Trello actions-фид всех досок + суточный дайджест сроков |
 | `vera3-ingestor-slack` | Slack: сообщения каналов, личек и тредов (треды опрашиваются отдельно — history их не отдаёт) |
 | `vera3-dashboard` | HTMX UI on :8003 |
-| `vera3-prune` | docker system prune --filter='until=72h' daily |
+| `vera3-prune` | daily `image prune -f` (dangling only) + `builder prune --filter until=72h`. Never `system prune -a` — the daemon is shared with aibroker/stepan2 and `-a` would delete their tagged images |
 
 ## Dashboard modules
 
@@ -91,8 +91,22 @@ this project's own "~200 lines, one responsibility per file" convention):
 
 ### Timezone display
 
-All DB datetime columns are **naive UTC** (ingestors write `datetime.utcnow()`;
-`received_at`/`created_at` use `server_default=func.now()`). The dashboard
+All DB datetime columns are **naive UTC**. Application code writes them via
+`vera_shared.timeutil.utc_naive_now()`; `received_at`/`created_at` use
+`server_default=func.now()`.
+
+That helper exists because "now" was spelled `datetime.utcnow()` in 53
+places, and it is deprecated as of Python 3.12 (which this project targets)
+and scheduled for removal. The literal replacement,
+`datetime.now(UTC).replace(tzinfo=None)`, is three calls on one line that
+drift the moment someone copies it — drop the `.replace()` and an aware
+datetime lands in a naive column, which is silent on a UTC host and wrong
+everywhere else. CI enforces the ban with ruff `DTZ003`; a test also greps
+the tree, because the one occurrence that mattered most was passed as a
+*callable* (`default_factory=datetime.utcnow`) and neither a `utcnow()` grep
+nor `DTZ003` can see that form.
+
+The dashboard
 never `strftime`s a wall-clock time straight into HTML — every displayed
 timestamp goes through `render.local_dt(dt, fmt)`, which emits
 `<time data-utc="…Z" data-fmt="…">UTC-fallback</time>`. A small script in the
@@ -144,8 +158,33 @@ until 2026-07-11 — split for the same reason as the dashboard above):
 | `triage_calls.py` | `triage_one()`/`triage_group_batch()` — the actual broker calls; raise on failure, don't catch |
 | `concurrency.py` | Semaphore-bounded wrappers normalizing single/group results to one shape |
 | `project_override.py` | `apply_project_override()` — the deterministic `project_membership` fixup (own transaction, see domain-model.md) |
-| `background_loops.py` | Watchdog (recover stuck `processing`) + retry-with-backoff (recover `error` → `dead`) |
+| `background_loops.py` | Watchdog (recover stuck `processing`) + retry-with-backoff (recover `error` → `dead`); `start_background_loops()` starts both, `track()` keeps every fire-and-forget task under a strong reference |
+| `heartbeat.py` | `beat()` / `is_alive()` / `seconds_since_beat()` — file-based liveness for the container `HEALTHCHECK`. `main_loop()` beats at the top of every iteration, so "alive" means "the loop is turning", including while the queue is empty or the circuit is open |
 | `worker.py` | `process_pending()` orchestration (claim → embed → dispatch → write, three deliberately-separate transactions) + `main_loop()` |
+
+## brain-search: модули
+
+`app.py` держал 530 строк и сразу всё: роутинг, свою копию проверки
+секрета, семь pydantic-моделей, ШЕСТЬ почти одинаковых `SELECT … FROM
+events LEFT JOIN event_embeddings`, скоринг, кэш самоописания со своим SQL
+и сборку промпта с русским текстом внутри.
+
+| Модуль | Ответственность |
+|---|---|
+| `app.py` | только маршруты и разбор запроса (170 строк) |
+| `models.py` | `SearchQuery` / `AnswerResponse` / `SearchResult` |
+| `retrieval.py` | `fetch_candidates()` — ОДНА форма запроса и явные режимы (`project`/`fts`/`time`/`vector`/`recent`) вместо шести копий |
+| `scoring.py` | `cosine()`, `score_rows()` |
+| `self_context.py` | «кто я и что подключено» + кэш (иначе `COUNT(*)` на каждый /search) |
+| `synthesis.py` | промпт и ответ — агентом или прямым синтезом |
+| `reports.py` | точная SQL-агрегация вместо пересказа top-N |
+
+Аргумент «сырой SQL читабельнее развёрнутым» тут не работал: WHERE и так
+собирался динамически, то есть код был не развёрнутый, а скопированный — и
+разъезжался. Ветка «есть вектор, нет слов» использовала INNER JOIN вместо
+LEFT, и понять, намеренно ли это, можно было только сравнив шесть блоков
+глазами. Намеренно: без эмбеддинга такую строку нечем ранжировать. Теперь
+это отдельный режим с тестом.
 
 ## DB connection pool sizing
 

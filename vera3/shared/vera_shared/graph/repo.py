@@ -1,12 +1,26 @@
 """Graph repository — sync/upsert API for entities/aliases/memberships/etc.
 
-This is the ONLY layer that touches graph tables directly. Future swap to
-Neo4j is a new implementation behind the same interface (DIP).
+**Границу этого слоя не пересекает ни один сервис.** Раньше докстринг
+утверждал «это ЕДИНСТВЕННЫЙ слой, который трогает графовые таблицы», а
+`gateway/query.py` джойнил `relationships` с `entities` прямо в
+route-функции, и `ingestor_telegram/roster_sync.py` — `entity_aliases` с
+`entities` в воркере. Оба переехали сюда (`list_relationships`,
+`find_project_chats`, `get_entity`).
+
+Что остаётся снаружи и почему: соседние модули пакета `graph/` —
+`dedup.py`, `identity.py`, `dossiers.py`, `avatars.py`, `clusters.py` —
+пишут по этим таблицам свой SQL. Это осознанно: `merge_entities`, разбор
+коллизий и досье — операции, которые репозиторным CRUD'ом не выражаются,
+и растаскивать их по обёрткам значило бы прятать транзакционную логику. Но
+это ОДИН пакет: замена хранилища — правка `graph/`, а не поиск по всему
+репозиторию. Формулировка «единственный слой» была про сервисы, и вот
+теперь она верна.
+
+Future swap to Neo4j is a new implementation behind the same interface (DIP).
 """
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any
 
 from sqlalchemy import bindparam, func, select, text, update
@@ -19,6 +33,7 @@ from vera_shared.db.models_graph import (
     MembershipRow,
     RelationshipRow,
 )
+from vera_shared.timeutil import utc_naive_now
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +70,7 @@ async def upsert_entity(
             # touch last_seen on entity
             await s.execute(
                 update(EntityRow).where(EntityRow.id == alias.entity_id)
-                .values(last_seen_at=datetime.utcnow())
+                .values(last_seen_at=utc_naive_now())
             )
             if attributes or name:
                 ent = (await s.execute(
@@ -151,7 +166,7 @@ async def upsert_entity_linked(
             ent = (await s.execute(
                 select(EntityRow).where(EntityRow.id == entity_id)
             )).scalar_one()
-            ent.last_seen_at = datetime.utcnow()
+            ent.last_seen_at = utc_naive_now()
             if attributes:
                 # Свои данные НЕ перетирают уже известные: профиль Slack —
                 # ещё один свидетель, а не истина в последней инстанции.
@@ -311,20 +326,37 @@ async def graph_snapshot(
         if not ids:
             return {"nodes": [], "edges": []}
 
+        # Степень — ОДНОЙ группировкой по набору узлов. Раньше это были два
+        # коррелированных подзапроса на КАЖДУЮ строку, то есть до 800×2 на
+        # показ страницы, причём половина по memberships.child_entity_id, у
+        # которой индекса не было вовсе (добавлен миграцией 028).
+        #
+        # Считается ПОЛНАЯ степень (все связи + все текущие членства), без
+        # фильтра по predicate — как и раньше. Это сознательно не то же, что
+        # `deg` из CTE выше: там степень В РАМКАХ фильтра, ею отбираются узлы,
+        # а показываем мы «сколько связей у человека вообще».
+        degree_by_id = dict((await s.execute(
+            text("""
+                SELECT eid, COUNT(*) AS deg FROM (
+                    SELECT subject_entity_id AS eid FROM relationships
+                    UNION ALL
+                    SELECT object_entity_id  AS eid FROM relationships
+                    UNION ALL
+                    SELECT parent_entity_id  AS eid FROM memberships WHERE is_current
+                    UNION ALL
+                    SELECT child_entity_id   AS eid FROM memberships WHERE is_current
+                ) u WHERE eid IN :ids GROUP BY eid
+            """).bindparams(bindparam("ids", expanding=True)),
+            {"ids": ids},
+        )).all())
+
         # Expanding bindparam for IN — portable across Postgres (prod) and
         # SQLite (tests); raw `= ANY(:ids)` is Postgres-only.
         node_rows = (await s.execute(
             text("""
                 SELECT e.id, e.name, e.type,
                        e.attributes->>'username' AS username,
-                       e.attributes->>'tg_id'    AS tg_id,
-                       (SELECT COUNT(*) FROM relationships r
-                          WHERE r.subject_entity_id = e.id
-                             OR r.object_entity_id = e.id)
-                     + (SELECT COUNT(*) FROM memberships m
-                          WHERE (m.parent_entity_id = e.id
-                                 OR m.child_entity_id = e.id)
-                            AND m.is_current) AS degree
+                       e.attributes->>'tg_id'    AS tg_id
                 FROM entities e WHERE e.id IN :ids
             """).bindparams(bindparam("ids", expanding=True)),
             {"ids": ids},
@@ -358,7 +390,8 @@ async def graph_snapshot(
     return {
         "nodes": [
             {"id": r["id"], "name": r["name"], "type": r["type"],
-             "degree": r["degree"], "username": r["username"], "tg_id": r["tg_id"]}
+             "degree": degree_by_id.get(r["id"], 0),
+             "username": r["username"], "tg_id": r["tg_id"]}
             for r in node_rows
         ],
         "edges": [
@@ -378,7 +411,7 @@ async def upsert_membership(
     attributes: dict[str, Any] | None = None,
 ) -> None:
     """Upsert membership. Touches last_seen_at."""
-    now = datetime.utcnow()
+    now = utc_naive_now()
     async with get_session() as s:
         existing = (await s.execute(
             select(MembershipRow).where(
@@ -425,6 +458,59 @@ async def list_members(parent_entity_id: int) -> list[dict[str, Any]]:
 # ─── Relationships (Graphiti-style facts) ────────────────────────────────────
 
 
+async def get_entity(entity_id: int) -> EntityRow | None:
+    """Сущность по id. Существует, чтобы вызывающему не приходилось открывать
+    свою сессию и трогать таблицу напрямую (gateway так и делал)."""
+    async with get_session() as s:
+        return (await s.execute(
+            select(EntityRow).where(EntityRow.id == entity_id)
+        )).scalar_one_or_none()
+
+
+async def list_relationships(entity_id: int, limit: int = 40) -> list[dict[str, Any]]:
+    """Связи сущности в обе стороны, с именем и типом второго конца.
+
+    Жила в `gateway/query.py` сырым SQL с двумя JOIN'ами по `entities` —
+    то есть route-модуль ходил в графовые таблицы мимо этого слоя.
+    """
+    async with get_session() as s:
+        rows = (await s.execute(text("""
+            SELECT r.predicate, r.fact, r.confidence,
+                   CASE WHEN r.subject_entity_id = :eid THEN 'out' ELSE 'in' END AS direction,
+                   CASE WHEN r.subject_entity_id = :eid THEN eo.name ELSE es.name END AS other_name,
+                   CASE WHEN r.subject_entity_id = :eid THEN eo.type ELSE es.type END AS other_type
+            FROM relationships r
+            JOIN entities es ON es.id = r.subject_entity_id
+            JOIN entities eo ON eo.id = r.object_entity_id
+            WHERE (r.subject_entity_id = :eid OR r.object_entity_id = :eid)
+              AND r.is_current
+            ORDER BY r.confidence DESC
+            LIMIT :limit
+        """), {"eid": entity_id, "limit": limit})).mappings().all()
+    return [dict(r) for r in rows]
+
+
+async def find_project_chats() -> list[dict[str, Any]]:
+    """Групповые чаты проектов: entity_id + tg_id + тип.
+
+    Источник — `project_membership` (kind='chat'), сматченный на граф через
+    alias `telegram:chat:<key>`. Жила в `ingestor_telegram/roster_sync.py`:
+    воркер ингестора джойнил `entity_aliases` и `entities` напрямую.
+    """
+    async with get_session() as s:
+        rows = (await s.execute(text("""
+            SELECT DISTINCT e.id AS entity_id, e.name, e.type,
+                   (e.attributes->>'tg_id') AS tg_id
+            FROM project_membership pm
+            JOIN entity_aliases a
+              ON a.source = 'telegram' AND a.identifier = 'chat:' || pm.key
+            JOIN entities e ON e.id = a.entity_id
+            WHERE pm.kind = 'chat'
+              AND e.type IN ('group', 'supergroup')
+        """))).mappings().all()
+    return [dict(r) for r in rows]
+
+
 async def upsert_relationship(
     *, subject_entity_id: int, object_entity_id: int,
     predicate: str, fact: str | None = None,
@@ -434,7 +520,7 @@ async def upsert_relationship(
     """Soft-upsert: if (subject, predicate, object) exists → touch last_seen
     and return False. Otherwise insert and return True (so callers like
     rel-extract can count genuinely new links)."""
-    now = datetime.utcnow()
+    now = utc_naive_now()
     async with get_session() as s:
         existing = (await s.execute(
             select(RelationshipRow).where(
@@ -484,7 +570,7 @@ async def upsert_identity_node(
             existing.confidence = confidence
             if derived_from:
                 existing.derived_from = derived_from
-            existing.updated_at = datetime.utcnow()
+            existing.updated_at = utc_naive_now()
             return existing.id
         node = IdentityNodeRow(
             type=type, label=label, payload=payload,

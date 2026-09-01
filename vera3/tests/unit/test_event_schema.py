@@ -11,6 +11,7 @@ from vera_shared.events.schema import (
     Signal,
     TriageMetadata,
 )
+from vera_shared.timeutil import utc_naive_now
 
 
 class TestRawEventBasic:
@@ -28,7 +29,7 @@ class TestRawEventBasic:
         e = RawEvent(
             source="GMAIL",
             source_event_id="x",
-            occurred_at=datetime.utcnow(),
+            occurred_at=utc_naive_now(),
         )
         assert e.source == "gmail"
 
@@ -36,7 +37,7 @@ class TestRawEventBasic:
         e = RawEvent(
             source="  telegram  ",
             source_event_id="x",
-            occurred_at=datetime.utcnow(),
+            occurred_at=utc_naive_now(),
         )
         assert e.source == "telegram"
 
@@ -44,7 +45,7 @@ class TestRawEventBasic:
         e = RawEvent(
             source="gmail",
             source_event_id="x",
-            occurred_at=datetime.utcnow(),
+            occurred_at=utc_naive_now(),
             content_text="hello\x00world",
         )
         assert e.content_text == "helloworld"
@@ -53,23 +54,23 @@ class TestRawEventBasic:
         e = RawEvent(
             source="gmail",
             source_event_id="x",
-            occurred_at=datetime.utcnow(),
+            occurred_at=utc_naive_now(),
             content_text="  hello  ",
         )
         assert e.content_text == "hello"
 
     def test_empty_source_rejected(self):
         with pytest.raises(ValidationError):
-            RawEvent(source="", source_event_id="x", occurred_at=datetime.utcnow())
+            RawEvent(source="", source_event_id="x", occurred_at=utc_naive_now())
 
     def test_empty_source_event_id_rejected(self):
         with pytest.raises(ValidationError):
-            RawEvent(source="gmail", source_event_id="", occurred_at=datetime.utcnow())
+            RawEvent(source="gmail", source_event_id="", occurred_at=utc_naive_now())
 
     def test_empty_content_allowed(self):
         # Иногда событие — это просто факт без текста (например fav button)
         e = RawEvent(
-            source="instagram", source_event_id="x", occurred_at=datetime.utcnow(),
+            source="instagram", source_event_id="x", occurred_at=utc_naive_now(),
             content_text="",
         )
         assert e.content_text == ""
@@ -77,29 +78,29 @@ class TestRawEventBasic:
 
 class TestDedupKey:
     def test_dedup_key_format(self):
-        e = RawEvent(source="gmail", source_event_id="msg_123", occurred_at=datetime.utcnow())
+        e = RawEvent(source="gmail", source_event_id="msg_123", occurred_at=utc_naive_now())
         assert e.dedup_key == "gmail:msg_123"
 
     def test_dedup_key_uses_normalized_source(self):
-        e = RawEvent(source="GMAIL", source_event_id="msg_123", occurred_at=datetime.utcnow())
+        e = RawEvent(source="GMAIL", source_event_id="msg_123", occurred_at=utc_naive_now())
         assert e.dedup_key == "gmail:msg_123"
 
 
 class TestOutboundDetection:
     def test_not_outbound_by_default(self):
-        e = RawEvent(source="gmail", source_event_id="x", occurred_at=datetime.utcnow())
+        e = RawEvent(source="gmail", source_event_id="x", occurred_at=utc_naive_now())
         assert e.is_outbound is False
 
     def test_outbound_via_direction(self):
         e = RawEvent(
-            source="gmail", source_event_id="x", occurred_at=datetime.utcnow(),
+            source="gmail", source_event_id="x", occurred_at=utc_naive_now(),
             metadata={"direction": "sent"},
         )
         assert e.is_outbound is True
 
     def test_outbound_via_from_me(self):
         e = RawEvent(
-            source="telegram", source_event_id="x", occurred_at=datetime.utcnow(),
+            source="telegram", source_event_id="x", occurred_at=utc_naive_now(),
             metadata={"from_me": True},
         )
         assert e.is_outbound is True

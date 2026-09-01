@@ -10,7 +10,6 @@ import base64
 import logging
 import os
 import re
-from datetime import datetime
 from email.utils import parsedate_to_datetime
 from typing import Any
 
@@ -22,6 +21,7 @@ from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import GmailAccountRow
 from vera_shared.graph.identity import entity_kind_for_email
 from vera_shared.ingest import AuthorExtractor, insert_events, sync_author_entities
+from vera_shared.timeutil import utc_naive_now
 
 log = logging.getLogger("gmail")
 
@@ -239,7 +239,7 @@ def _format_event(account_email: str, msg: dict) -> dict[str, Any]:
     try:
         occurred = parsedate_to_datetime(date_raw)
     except Exception:
-        occurred = datetime.utcnow()
+        occurred = utc_naive_now()
     if occurred.tzinfo:
         # Convert to UTC FIRST, then strip tz — иначе "11:22 +07:00" станет "11:22"
         # naive вместо корректного "04:22" UTC.
@@ -360,7 +360,7 @@ async def poll_account(acc: GmailAccountRow) -> int:
     await sync_author_entities(fresh, source="gmail",
                                author_of=_correspondent_entity_of(acc.email))
 
-    now = datetime.utcnow()
+    now = utc_naive_now()
     async with get_session() as s:
         # При truncated курсор НЕ двигаем: следующий прогон снова листит от
         # старой даты, пропускает уже забранное по БД и добирает хвост.

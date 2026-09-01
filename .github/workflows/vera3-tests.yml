@@ -16,6 +16,20 @@ jobs:
     defaults:
       run:
         working-directory: vera3
+    # Тот же живой Postgres, что в deploy.yml: без него tests/integration
+    # молча пропускаются, а именно там проверяется весь Postgres-only SQL
+    # (SKIP LOCKED, to_tsvector, FILTER, ->>). Образ как в проде.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: vera
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: vera_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U vera -d vera_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -54,21 +68,26 @@ jobs:
         run: pip install -e ./services/brain-search
 
       - name: Run all tests with coverage
+        env:
+          TELEGRAM_API_ID: "1"
+          TELEGRAM_API_HASH: "test"
+          TELEGRAM_PHONE: "+10000000000"
+          RUN_INTEGRATION_TESTS: "1"
+          TEST_DATABASE_URL: postgresql+asyncpg://vera:test@localhost:5432/vera_test
         run: |
           # PYTHONPATH здесь НЕ задаётся: tests/unit/conftest.py сам кладёт в
           # sys.path shared и все services/*/src. Раньше список жил в трёх
           # копиях в двух воркфлоу и разъехался — у шага diff-cover не было
           # brain-triage, сборка тестов падала, а деплой стоял молча.
+          # Пороги по пакетам, а не один процент — см. scripts/check_coverage.py.
           pytest tests/ \
-            --cov=vera_shared \
-            --cov=gateway \
-            --cov=media_worker \
+            --cov=vera_shared --cov=gateway --cov=media_worker \
+            --cov=brain_search --cov=brain_triage --cov=dashboard \
+            --cov=ingestor_gmail --cov=ingestor_slack --cov=ingestor_trello \
+            --cov=ingestor_telegram --cov=bot_telegram \
             --cov-report=term-missing \
-            --cov-report=xml \
-            --cov-fail-under=40
-            # NOTE: temporarily lowered from 80 while substrate (graph/tools/style/
-            # sources/models_graph — ~350 lines) is still untested. Each Checkpoint
-            # must add tests until we're back to >=70%.
+            --cov-report=xml:coverage.xml
+          python scripts/check_coverage.py coverage.xml
 
       - name: Lint with ruff
         run: |
@@ -82,18 +101,37 @@ jobs:
           mypy shared/vera_shared --ignore-missing-imports
         continue-on-error: true  # warning, not blocking yet
 
+  # На PR — единственное место, где образы вообще собираются: deploy.yml
+  # запускается только на master. Раньше здесь строился ровно один Dockerfile
+  # из одиннадцати (gateway), да ещё и под `if: master`, то есть на PR не
+  # собиралось НИЧЕГО, а на master — одно из одиннадцати.
   build-images:
     needs: test
-    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
+      fail-fast: false        # хотим видеть ВСЕ сломанные образы за прогон
       matrix:
-        service: [gateway]
+        service:
+          - bot-telegram
+          - brain-search
+          - brain-triage
+          - dashboard
+          - gateway
+          - ingestor-gmail
+          - ingestor-instagram
+          - ingestor-slack
+          - ingestor-telegram
+          - ingestor-trello
+          - media-worker
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
       - name: Build ${{ matrix.service }} image
-        run: |
-          docker build \
-            -f vera3/services/${{ matrix.service }}/Dockerfile \
-            -t vera3-${{ matrix.service }}:${{ github.sha }} \
-            vera3/
+        uses: docker/build-push-action@v6
+        with:
+          context: vera3
+          file: vera3/services/${{ matrix.service }}/Dockerfile
+          push: false
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,scope=${{ matrix.service }},mode=max

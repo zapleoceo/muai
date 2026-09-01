@@ -13,6 +13,7 @@ from sqlalchemy import select, update
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_sources import SlackConversationRow, SlackThreadRow
 from vera_shared.ingest import insert_events, sync_author_entities
+from vera_shared.timeutil import utc_naive_now
 
 log = logging.getLogger("slack")
 
@@ -66,7 +67,7 @@ async def upsert_conversations(
 
 
 async def save_cursor(conversation_id: str, cursor: str | None, error: str | None) -> None:
-    values: dict[str, Any] = {"last_polled_at": datetime.utcnow(), "last_error": error}
+    values: dict[str, Any] = {"last_polled_at": utc_naive_now(), "last_error": error}
     if cursor:
         values["last_ts"] = cursor
     async with get_session() as s:
@@ -102,7 +103,7 @@ async def due_threads(conversation_id: str, *, limit: int,
     каждые пять минут значило бы сотни лишних вызовов. Ответ в двухнедельном
     треде приходит с задержкой, а не теряется.
     """
-    since = datetime.utcnow() - timedelta(days=watch_days)
+    since = utc_naive_now() - timedelta(days=watch_days)
     async with get_session() as s:
         return list((await s.execute(
             select(SlackThreadRow)
@@ -115,7 +116,7 @@ async def due_threads(conversation_id: str, *, limit: int,
 
 async def save_thread_cursor(thread_id: int, last_reply_ts: str | None,
                              activity: datetime | None) -> None:
-    values: dict[str, Any] = {"last_polled_at": datetime.utcnow()}
+    values: dict[str, Any] = {"last_polled_at": utc_naive_now()}
     if last_reply_ts:
         values["last_reply_ts"] = last_reply_ts
     if activity is not None:

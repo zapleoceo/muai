@@ -21,7 +21,15 @@
 - `OWNER_TELEGRAM_ID` gates admin dashboard access; never accept user-supplied IDs.
 
 ## Docker / SSH
-- `docker.sock` is mounted only for the deploy endpoint — don't expose it further.
+- `docker.sock` is mounted in exactly one place: the `prune` housekeeping
+  container (`vera3/infra/docker-compose.yml`). Don't expose it further.
+  (There is no "deploy endpoint" — this rule used to name one, but deploy
+  runs over SSH via `/usr/local/bin/vera3-deploy`, not over HTTP.)
+- Anything running against that socket must stay scoped to vera3's own
+  artifacts: `docker image prune -f` **without `-a`** (dangling only) and
+  `builder prune --filter until=…`. Never `system prune -a` — the daemon is
+  shared with `aibroker-*` and `stepan2-*`, and `-a` deletes their tagged
+  images too.
 - SSH alias `hetzner-root` is for trusted operations only; no automated user-triggered SSH.
 - Never run `docker compose down -v` in production — it destroys the DB volume.
 

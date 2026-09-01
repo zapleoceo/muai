@@ -12,7 +12,6 @@ import asyncio
 import json
 import logging
 import os
-from datetime import datetime
 
 import httpx
 from instagrapi import Client
@@ -23,6 +22,7 @@ from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import InstagramSessionRow
 from vera_shared.graph.repo import upsert_entity
+from vera_shared.timeutil import utc_naive_now
 
 log = logging.getLogger("ig")
 
@@ -136,7 +136,7 @@ async def poll_once(cl: Client, username: str) -> int:
                 "account": username,
                 "category": "group" if is_group else "user",
                 "content_text": content,
-                "occurred_at": (m.timestamp or datetime.utcnow()).isoformat(),
+                "occurred_at": (m.timestamp or utc_naive_now()).isoformat(),
                 "metadata": {
                     "thread_id": str(t.id),
                     "thread_title": chat_title,
@@ -201,7 +201,7 @@ async def main():
                 await s.execute(
                     update(InstagramSessionRow)
                     .where(InstagramSessionRow.username == username)
-                    .values(last_polled_at=datetime.utcnow())
+                    .values(last_polled_at=utc_naive_now())
                 )
         except SessionDead as e:
             # Сессия мертва — помечаем неактивной (оператор увидит в UI) и

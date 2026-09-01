@@ -7,4 +7,11 @@ RUN pip install --no-cache-dir /tmp/shared && rm -rf /tmp/shared
 COPY services/bot-telegram/pyproject.toml ./
 COPY services/bot-telegram/src/ ./src/
 RUN pip install --no-cache-dir -e .
+# Непривилегированный пользователь. Раньше все контейнеры шли под root — на
+# хосте с общим демоном и смонтированным docker.sock (контейнер prune) это
+# лишняя ступень для эскалации. Ставится ПОСЛЕ pip install: установка пишет в
+# системный site-packages.
+RUN useradd --system --no-create-home --uid 10001 vera && chown -R vera /app
+USER vera
+
 CMD ["python", "-m", "bot_telegram.bot"]

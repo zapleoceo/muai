@@ -1,10 +1,9 @@
 """Home page (`/`) — top-line stats cards, live-progress shell, search box."""
 from __future__ import annotations
 
-from datetime import datetime
-
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
+from vera_shared.timeutil import utc_naive_now
 
 from dashboard.render import (
     _render,
@@ -44,7 +43,7 @@ async def home(request: Request):
     eta_txt = format_eta(pending, triage_1h)
 
     earliest_txt = local_dt(earliest, "date_human")
-    history_days = (datetime.utcnow() - earliest).days if earliest else 0
+    history_days = (utc_naive_now() - earliest).days if earliest else 0
 
     return HTMLResponse(_render(
         "home",

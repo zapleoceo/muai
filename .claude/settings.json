@@ -14,7 +14,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .claude/hooks/guard_bash.py",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard_bash.py",
             "timeout": 10
           }
         ]
@@ -24,12 +24,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .claude/hooks/guard_file.py",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/guard_file.py",
             "timeout": 5
           },
           {
             "type": "command",
-            "command": "python3 .claude/hooks/check_js_refs.py",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/check_js_refs.py",
             "timeout": 10
           }
         ]
@@ -40,7 +40,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python3 .claude/hooks/session_note.py",
+            "command": "python3 \"$CLAUDE_PROJECT_DIR\"/.claude/hooks/session_note.py",
             "timeout": 10
           }
         ]

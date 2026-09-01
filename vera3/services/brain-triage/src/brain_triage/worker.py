@@ -28,13 +28,13 @@ from sqlalchemy import text, update
 from vera_shared.control import is_backfill_paused, reserve_backfill_allowance
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
+from vera_shared.db.vectors import as_pg_vector, vector_column_available
 from vera_shared.media_policy import should_extract_relations
 
 from brain_triage.background_loops import (
-    _bg_tasks,
-    _retry_failed_loop,
     _safe_rel_extract,
-    _watchdog_loop,
+    start_background_loops,
+    track,
 )
 from brain_triage.claim import _chunk_group_rows, _claim_batch, chat_kind
 from brain_triage.concurrency import (
@@ -47,8 +47,10 @@ from brain_triage.config import (
     CONCURRENCY,
     PACE_BETWEEN_S,
     POLL_INTERVAL_S,
+    REL_EXTRACT_MIN_IMPORTANCE,
     WORKER_ID,
 )
+from brain_triage.heartbeat import beat
 from brain_triage.postprocess import NATURE_BY_SOURCE, SKIP_EMBED_SOURCES
 from brain_triage.project_override import apply_project_override
 from brain_triage.triage_calls import _embed_batch
@@ -81,7 +83,10 @@ async def process_pending() -> int:
     # (single_rows + group-chunks), positional zip() с embeddings был бы багом:
     # embedding события A мог бы приклеиться к triage-результату события B.
     embeddings_by_id: dict[int, list[float] | None] = {r.id: None for r in rows}
-    for pos, vec in zip(embed_idx, embed_vectors):
+    # strict=False сознательно: брокер может вернуть меньше векторов, чем
+    # запрошено. Тогда часть событий останется без эмбеддинга (None) и будет
+    # доэмбеждена позже — это лучше, чем уронить весь батч триажа.
+    for pos, vec in zip(embed_idx, embed_vectors, strict=False):
         embeddings_by_id[rows[pos].id] = vec
 
     # Групповые telegram-сообщения (супергруппы + легаси Chat) батчатся по
@@ -148,9 +153,11 @@ async def process_pending() -> int:
                 processed += 1
                 # Собираем кандидатов на rel-extract — запускаем ПОСЛЕ коммита
                 # триажа (иначе фоновая задача читает событие до записи nature/
-                # project). Только для high-signal событий и только если наш
-                # результат реально записался (не отфенсен).
-                if (res.rowcount or 0) > 0 and metadata and metadata.get("importance", 0) >= 3:
+                # project). Только для high-signal событий (шкала 0-100, порог
+                # в config.py) и только если наш результат реально записался
+                # (не отфенсен).
+                if ((res.rowcount or 0) > 0 and metadata
+                        and metadata.get("importance", 0) >= REL_EXTRACT_MIN_IMPORTANCE):
                     row = next((r for r in rows if r.id == event_id), None)
                     if row and row.content_text and should_extract_relations(row.metadata_):
                         rel_candidates.append((event_id, row.content_text))
@@ -176,24 +183,38 @@ async def process_pending() -> int:
     # событие в event_embeddings не должно откатывать triage_status всего батча
     # (иначе события зависают в processing до watchdog). Savepoint на строку.
     if emb_writes:
+        # Во ВСЕ колонки, что есть: пока идёт бэкфил на pgvector (миграция
+        # 030), новые события обязаны попадать и в vector, и в JSONB —
+        # иначе они окажутся в дыре, которую бэкфил уже прошёл.
+        to_vec = await vector_column_available()
+        sql = text("""
+            INSERT INTO event_embeddings (event_id, embedding, embedding_vec)
+            VALUES (:eid, CAST(:emb AS jsonb), CAST(:vec AS vector))
+            ON CONFLICT (event_id) DO UPDATE
+              SET embedding = EXCLUDED.embedding,
+                  embedding_vec = EXCLUDED.embedding_vec
+        """) if to_vec else text("""
+            INSERT INTO event_embeddings (event_id, embedding)
+            VALUES (:eid, CAST(:emb AS jsonb))
+            ON CONFLICT (event_id) DO UPDATE SET embedding = EXCLUDED.embedding
+        """)
         async with get_session() as s:
             for eid, emb in emb_writes:
+                params = {"eid": eid, "emb": json.dumps(emb)}
+                if to_vec:
+                    params["vec"] = as_pg_vector(emb)
                 try:
+                    # Savepoint на строку: одно битое событие не должно
+                    # откатывать весь батч эмбеддингов.
                     async with s.begin_nested():
-                        await s.execute(text("""
-                            INSERT INTO event_embeddings (event_id, embedding)
-                            VALUES (:eid, CAST(:emb AS jsonb))
-                            ON CONFLICT (event_id) DO UPDATE SET embedding = EXCLUDED.embedding
-                        """), {"eid": eid, "emb": json.dumps(emb)})
+                        await s.execute(sql, params)
                 except Exception as e:
                     log.warning("embedding upsert failed event=%s: %s", eid, e)
 
     # Rel-extract — после коммита триажа, со ссылкой в _bg_tasks (иначе задачу
     # может собрать GC и связи молча потеряются).
     for eid, body in rel_candidates:
-        t = asyncio.create_task(_safe_rel_extract(eid, body))
-        _bg_tasks.add(t)
-        t.add_done_callback(_bg_tasks.discard)
+        track(asyncio.create_task(_safe_rel_extract(eid, body)))
 
     # Детерминированный оверрайд project по папкам/аккаунтам — своя
     # транзакция, см. project_override.py.
@@ -214,8 +235,7 @@ async def main_loop() -> None:
     log.info("[%s] brain-triage worker started, poll=%ss batch=%s concurrency=%s",
              WORKER_ID, POLL_INTERVAL_S, BATCH_SIZE, CONCURRENCY)
 
-    asyncio.create_task(_watchdog_loop())
-    asyncio.create_task(_retry_failed_loop())
+    start_background_loops()
 
     from vera_shared.llm.circuit import llm_cooldown_remaining_s
 
@@ -225,6 +245,11 @@ async def main_loop() -> None:
     )
 
     while True:
+        # Отметка живости для HEALTHCHECK — в начале КАЖДОЙ итерации, до
+        # любых ветвлений: «жив» здесь значит «цикл крутится», в том числе
+        # когда очередь пуста или circuit открыт. Зависшая на пуле реплика
+        # сюда не возвращается, и это ровно то, что надо поймать.
+        beat()
         try:
             # Circuit breaker: не клеймим события, только если капнуты ОБЕ
             # triage-ёмкости (chat:fast и бесплатный фолбэк chat:smart) —
