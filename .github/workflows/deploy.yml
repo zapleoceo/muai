@@ -301,10 +301,52 @@ jobs:
           [ "$fail" -eq 0 ] && echo "docs name-sync passed"
           exit $fail
 
+  # ─── 3b. Build gate ──────────────────────────────────────────────────────
+  # Каждый образ должен собираться ДО того, как деплой начнёт их пересобирать
+  # на боевом хосте. Раньше в CI собирался ровно один Dockerfile из
+  # одиннадцати — gateway, и то в другом воркфлоу (vera3-tests.yml), которого
+  # нет в needs у деплоя. То есть сломанный Dockerfile или неразрешимая
+  # зависимость выяснялись уже на проде, в промежутке между «ворота зелёные»
+  # и «сервис не поднялся». Опрос /healthz после деплоя ловит только gateway.
+  #
+  # Пуша нет — только сборка. Образы всё равно собираются на хосте: цель
+  # гейта — отделить «код не собирается» от «код не работает».
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false          # хотим видеть ВСЕ сломанные образы за один прогон
+      matrix:
+        service:
+          - bot-telegram
+          - brain-search
+          - brain-triage
+          - dashboard
+          - gateway
+          - ingestor-gmail
+          - ingestor-instagram
+          - ingestor-slack
+          - ingestor-telegram
+          - ingestor-trello
+          - media-worker
+    steps:
+      - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
+      - name: Build ${{ matrix.service }}
+        uses: docker/build-push-action@v6
+        with:
+          context: vera3
+          file: vera3/services/${{ matrix.service }}/Dockerfile
+          push: false
+          # Кэш на слой GitHub Actions: без него одиннадцать pip install
+          # заново на каждый пуш — минуты, которые никому не нужны.
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,scope=${{ matrix.service }},mode=max
+
   # ─── 4. Deploy ───────────────────────────────────────────────────────────
-  # Hard-gated: docs + tests + quality must ALL pass.
+  # Hard-gated: docs + tests + quality + build must ALL pass.
   deploy:
-    needs: [docs, test, quality]
+    needs: [docs, test, quality, build]
     runs-on: ubuntu-latest
     # 25, а не 15: опрос занятого замка до десяти минут плюс сам деплой до
     # семи в прежний бюджет не влезали, а упор в таймаут даёт cancelled —
@@ -383,7 +425,7 @@ jobs:
   # PYTHONPATH, сборка тестов падала, деплой стоял на ЧЕТЫРЁХ коммитах, и
   # узналось это только когда кто-то заметил, что сервер отстал.
   notify:
-    needs: [docs, test, quality, deploy]
+    needs: [docs, test, quality, build, deploy]
     # cancelled обязателен наравне с failure: при упоре в timeout-minutes
     # GitHub помечает job как cancelled, и условие только на failure пропускало
     # бы ровно тот случай, от которого этот job и написан — «деплой встал, и
@@ -399,12 +441,13 @@ jobs:
           R_DOCS: ${{ needs.docs.result }}
           R_TEST: ${{ needs.test.result }}
           R_QUALITY: ${{ needs.quality.result }}
+          R_BUILD: ${{ needs.build.result }}
           R_DEPLOY: ${{ needs.deploy.result }}
         run: |
           [ -z "$BOT_TOKEN" ] && exit 0
           [ -z "$OWNER_ID" ] && exit 0
           FAILED=""
-          for pair in "docs:$R_DOCS" "test:$R_TEST" "quality:$R_QUALITY" "deploy:$R_DEPLOY"; do
+          for pair in "docs:$R_DOCS" "test:$R_TEST" "quality:$R_QUALITY" "build:$R_BUILD" "deploy:$R_DEPLOY"; do
             case "${pair#*:}" in failure) FAILED="$FAILED ${pair%%:*}";; esac
           done
           curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \

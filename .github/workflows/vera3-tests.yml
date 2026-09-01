@@ -82,18 +82,37 @@ jobs:
           mypy shared/vera_shared --ignore-missing-imports
         continue-on-error: true  # warning, not blocking yet
 
+  # На PR — единственное место, где образы вообще собираются: deploy.yml
+  # запускается только на master. Раньше здесь строился ровно один Dockerfile
+  # из одиннадцати (gateway), да ещё и под `if: master`, то есть на PR не
+  # собиралось НИЧЕГО, а на master — одно из одиннадцати.
   build-images:
     needs: test
-    if: github.ref == 'refs/heads/master'
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     strategy:
+      fail-fast: false        # хотим видеть ВСЕ сломанные образы за прогон
       matrix:
-        service: [gateway]
+        service:
+          - bot-telegram
+          - brain-search
+          - brain-triage
+          - dashboard
+          - gateway
+          - ingestor-gmail
+          - ingestor-instagram
+          - ingestor-slack
+          - ingestor-telegram
+          - ingestor-trello
+          - media-worker
     steps:
       - uses: actions/checkout@v4
+      - uses: docker/setup-buildx-action@v3
       - name: Build ${{ matrix.service }} image
-        run: |
-          docker build \
-            -f vera3/services/${{ matrix.service }}/Dockerfile \
-            -t vera3-${{ matrix.service }}:${{ github.sha }} \
-            vera3/
+        uses: docker/build-push-action@v6
+        with:
+          context: vera3
+          file: vera3/services/${{ matrix.service }}/Dockerfile
+          push: false
+          cache-from: type=gha,scope=${{ matrix.service }}
+          cache-to: type=gha,scope=${{ matrix.service }},mode=max
