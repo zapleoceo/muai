@@ -53,7 +53,7 @@
 | `vera3-ingestor-trello` | Trello actions-фид всех досок + суточный дайджест сроков |
 | `vera3-ingestor-slack` | Slack: сообщения каналов, личек и тредов (треды опрашиваются отдельно — history их не отдаёт) |
 | `vera3-dashboard` | HTMX UI on :8003 |
-| `vera3-prune` | docker system prune --filter='until=72h' daily |
+| `vera3-prune` | daily `image prune -f` (dangling only) + `builder prune --filter until=72h`. Never `system prune -a` — the daemon is shared with aibroker/stepan2 and `-a` would delete their tagged images |
 
 ## Dashboard modules
 

@@ -366,6 +366,20 @@ services:
     logging: *default-logging
 
   # ─── Housekeeping ───────────────────────────────────────────────────────
+  # Единственное место во всём стеке, где смонтирован docker.sock. Оправдание
+  # ровно одно: убирать за собственными сборками, иначе диск съедается —
+  # замер 2026-08-27 показал 4.76 ГБ невостребованных образов (82% всех).
+  #
+  # Раньше здесь стоял `docker system prune -af`, который чистит ВЕСЬ демон:
+  # `-a` сносит любой образ, на который сейчас не смотрит контейнер, включая
+  # тегированные образы aibroker и stepan2. То есть контейнер одного проекта
+  # мог удалить артефакты двух чужих. infra/deploy.sh про это уже рассуждает
+  # и сознательно выбирает безопасную пару — здесь теперь она же:
+  #
+  #   image prune -f (БЕЗ -a) — только висячие, без тега. Чужие проекты
+  #     держат свои образы под тегами и не задеваются.
+  #   builder prune --filter until=72h — кэш BuildKit общий на весь хост,
+  #     фильтр по возрасту тут единственная защита.
   prune:
     image: docker:cli
     container_name: vera3-prune
@@ -373,7 +387,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     entrypoint: >
       sh -c "while true; do
-        docker system prune -af --filter 'until=72h' || true;
+        docker image prune -f || true;
+        docker builder prune -f --filter until=72h || true;
         sleep 86400;
       done"
     # docker:cli, дёргает демон раз в сутки
