@@ -11,10 +11,27 @@ os.environ.setdefault("TELEGRAM_BOT_TOKEN", "1:test")
 os.environ.setdefault("OWNER_TELEGRAM_ID", "169510539")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
+import pytest  # noqa: E402
 from dashboard.app import app  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 client = TestClient(app)
+
+
+@pytest.fixture(autouse=True)
+def _no_clusters():
+    """Роут после graph_snapshot() зовёт ещё и get_clusters() — а он читает
+    app_control из НАСТОЯЩЕЙ базы, которую этот файл не поднимает.
+
+    Без заглушки тест зависел от окружения и падал по-разному: на SQLite —
+    «no such table: app_control», на Postgres — «Future attached to a
+    different loop» (глобальный asyncpg-engine чужого теста против петли
+    TestClient). В CI он проходил по случайности порядка, то есть охранял
+    не то, что заявлено. Здесь проверяется форма ответа и проброс query,
+    кластеры к этому отношения не имеют; None — штатная ветка «ещё не
+    считали»."""
+    with patch("dashboard.graph_routes.get_clusters", AsyncMock(return_value=None)):
+        yield
 
 
 def _owner_cookie():
