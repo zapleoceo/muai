@@ -4,14 +4,17 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+import os
 import re
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import Any, AsyncIterator
+from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy import select, text
+from vera_shared.auth import internal_secret_ok
 from vera_shared.db.engine import close_engine, get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import GmailAccountRow
@@ -64,10 +67,12 @@ app = FastAPI(title="Vera 3.0 Search", version="0.3.0", lifespan=lifespan)
 def check_internal_secret(provided: str | None) -> None:
     """Fail-closed, как gateway.auth: нет настроенного секрета = нет доступа.
     Порт 8002 опубликован на 127.0.0.1 хоста — /search не должен быть открыт
-    любому локальному процессу без секрета."""
-    import os
-    expected = os.environ.get("INTERNAL_SECRET", "")
-    if not expected or provided != expected:
+    любому локальному процессу без секрета.
+
+    Env читается на каждый вызов, а не на импорте: тесты подменяют его
+    monkeypatch'ем, а служба всё равно живёт в контейнере с фиксированным
+    окружением, так что дешевизна тут не важна."""
+    if not internal_secret_ok(provided, os.environ.get("INTERNAL_SECRET", "")):
         raise HTTPException(401, "invalid internal secret")
 
 
@@ -142,7 +147,8 @@ async def _fetch_conversation_history(chat_id: int, limit_pairs: int = 8) -> lis
 def _cosine(a: list[float], b: list[float]) -> float:
     if not a or not b or len(a) != len(b):
         return 0.0
-    s = sum(x * y for x, y in zip(a, b))
+    # strict=True безопасен: разная длина отсеяна строкой выше
+    s = sum(x * y for x, y in zip(a, b, strict=True))
     na = math.sqrt(sum(x * x for x in a))
     nb = math.sqrt(sum(y * y for y in b))
     if na == 0 or nb == 0:

@@ -27,17 +27,29 @@ endpoint serves webhooks and the bot's `vera_chat` writes.
 }
 ```
 
-### Internal auth (`gateway/auth.py::check_internal_secret`)
+### Internal auth (`vera_shared/auth.py::internal_secret_ok`)
 
 Every gateway route that reads or writes data (`/event/*`, `/v1/claude/*`,
 `/v1/search`, `/v1/events/*`, `/v1/entity/*`, `/api/events/{id}`) requires
-the `X-Internal-Secret` header, checked by the single shared
-`check_internal_secret()` helper. It is **fail-closed**: if
-`INTERNAL_SECRET` is unset/empty, every request is rejected (401) rather
-than let through. `docker-compose.yml` marks the var required
-(`INTERNAL_SECRET:?...`), so a misconfigured non-compose deploy locks down
-instead of exposing event bodies. `/healthz` is the only unauthenticated
-route.
+the `X-Internal-Secret` header, checked by
+`gateway/auth.py::check_internal_secret()`. `/healthz` is the only
+unauthenticated route.
+
+The comparison itself lives in **`vera_shared.auth.internal_secret_ok()`** —
+gateway and brain-search each keep a thin `check_internal_secret()` wrapper
+that turns `False` into their own `HTTPException(401)`, because the services
+don't import each other and `vera_shared` deliberately doesn't depend on
+FastAPI. Two properties are the reason it's one function:
+
+- **Fail-closed.** If `INTERNAL_SECRET` is unset/empty, every request is
+  rejected rather than let through. `docker-compose.yml` marks the var
+  required (`INTERNAL_SECRET:?...`), so a misconfigured non-compose deploy
+  locks down instead of exposing event bodies.
+- **Constant-time.** `hmac.compare_digest`, not `!=`. Both copies used to
+  compare with `!=`, whose runtime depends on the length of the matching
+  prefix — the ports are loopback-only so this was never practically
+  exploitable, but `dashboard/auth.py` already did it right and there was no
+  reason for these two to differ.
 
 ## Brain Search (`vera3-brain-search`, internal port 8000)
 
@@ -47,9 +59,10 @@ route.
 | `/search` | POST | `X-Internal-Secret` | Hybrid retrieval + agent loop |
 
 `/search` requires the same `X-Internal-Secret` header as the gateway,
-checked by brain-search's own fail-closed `check_internal_secret()` (the
-port is published on the host's 127.0.0.1, so any local process could
-otherwise query the whole memory). Callers — bot-telegram, dashboard
+checked by brain-search's fail-closed `check_internal_secret()` wrapper over
+the shared `internal_secret_ok()` (the port is published on the host's
+127.0.0.1, so any local process could otherwise query the whole memory).
+Callers — bot-telegram, dashboard
 `/search-ui`, gateway `/v1/search` proxy — all send the header.
 
 The gateway's `MaxBodySizeMiddleware` also rejects POST/PUT/PATCH without
