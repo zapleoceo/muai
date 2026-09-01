@@ -145,6 +145,7 @@ until 2026-07-11 — split for the same reason as the dashboard above):
 | `concurrency.py` | Semaphore-bounded wrappers normalizing single/group results to one shape |
 | `project_override.py` | `apply_project_override()` — the deterministic `project_membership` fixup (own transaction, see domain-model.md) |
 | `background_loops.py` | Watchdog (recover stuck `processing`) + retry-with-backoff (recover `error` → `dead`); `start_background_loops()` starts both, `track()` keeps every fire-and-forget task under a strong reference |
+| `heartbeat.py` | `beat()` / `is_alive()` / `seconds_since_beat()` — file-based liveness for the container `HEALTHCHECK`. `main_loop()` beats at the top of every iteration, so "alive" means "the loop is turning", including while the queue is empty or the circuit is open |
 | `worker.py` | `process_pending()` orchestration (claim → embed → dispatch → write, three deliberately-separate transactions) + `main_loop()` |
 
 ## DB connection pool sizing

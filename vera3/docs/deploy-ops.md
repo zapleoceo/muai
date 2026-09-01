@@ -250,6 +250,37 @@ Checks 12 dimensions:
 Alerts to `@Dimondra_Ai_Bot` DM to `OWNER_TELEGRAM_ID`. State-file
 throttle 30 min (or `monitor_throttle_min` setting — see below).
 
+### Container user and healthchecks
+
+All images ran as **root** until 2026-09-01. On a box whose daemon is shared
+with two other projects and where one container mounts `docker.sock`, that is
+an unnecessary rung on the escalation ladder. Ten of eleven now run as uid
+10001 (`USER vera`, added after `pip install` — installation writes to the
+system `site-packages`).
+
+`ingestor-telegram` is deliberately **still root**, and this is the one thing
+to finish by hand. It writes its StringSession into the `vera3_tg_sessions`
+volume; Docker only transfers ownership from the image onto an *empty*
+volume, and that volume already exists in production owned by root. Adding
+`USER` without fixing it would mean `Permission denied` on the session write
+— i.e. the main data source down immediately after a deploy that runs
+automatically on push to master. One-time fix on the host:
+
+```bash
+docker compose stop ingestor-telegram
+docker run --rm -v vera3_tg_sessions:/s alpine chown -R 10001 /s
+```
+
+then add the same two lines to its Dockerfile.
+
+`brain-triage` also gained a `HEALTHCHECK`. It was the only replicated
+service with a real "process alive, doing nothing" failure mode (pool
+exhaustion by background tasks) and no way to observe it: Docker and the
+monitor both count containers and restarts, not progress. Liveness is a
+file the worker touches at the top of every loop iteration — deliberately
+**not** a DB probe, since a brief Postgres outage would then take down all
+five replicas at once, and they are not what needs fixing.
+
 ### Memory ceilings (`mem_limit`)
 
 Until 2026-09-01 **no container had a memory limit at all**, and the monitor

@@ -18,6 +18,13 @@ RUN pip install --no-cache-dir -e .
 
 EXPOSE 8000
 
+# Непривилегированный пользователь. Раньше все контейнеры шли под root — на
+# хосте с общим демоном и смонтированным docker.sock (контейнер prune) это
+# лишняя ступень для эскалации. Ставится ПОСЛЕ pip install: установка пишет в
+# системный site-packages.
+RUN useradd --system --no-create-home --uid 10001 vera && chown -R vera /app
+USER vera
+
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
     CMD curl -fsS http://localhost:8000/healthz || exit 1
 

@@ -49,6 +49,7 @@ from brain_triage.config import (
     REL_EXTRACT_MIN_IMPORTANCE,
     WORKER_ID,
 )
+from brain_triage.heartbeat import beat
 from brain_triage.postprocess import NATURE_BY_SOURCE, SKIP_EMBED_SOURCES
 from brain_triage.project_override import apply_project_override
 from brain_triage.triage_calls import _embed_batch
@@ -227,6 +228,11 @@ async def main_loop() -> None:
     )
 
     while True:
+        # Отметка живости для HEALTHCHECK — в начале КАЖДОЙ итерации, до
+        # любых ветвлений: «жив» здесь значит «цикл крутится», в том числе
+        # когда очередь пуста или circuit открыт. Зависшая на пуле реплика
+        # сюда не возвращается, и это ровно то, что надо поймать.
+        beat()
         try:
             # Circuit breaker: не клеймим события, только если капнуты ОБЕ
             # triage-ёмкости (chat:fast и бесплатный фолбэк chat:smart) —
