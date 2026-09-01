@@ -1,5 +1,9 @@
 """Save Dmytro's career facts from CVs (CTO HTML + IT Director PDF)."""
-import asyncio, hashlib, os, httpx
+import asyncio
+import hashlib
+import os
+
+import httpx
 
 FACTS = [
     # ─── COLLECTIONS — главное ─────────────────────────────────────────

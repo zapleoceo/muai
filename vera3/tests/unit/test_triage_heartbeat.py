@@ -52,7 +52,7 @@ def test_beat_never_raises(monkeypatch, tmp_path):
 
 def test_garbage_in_file_is_not_alive_by_accident(tmp_path, monkeypatch):
     f = tmp_path / "beat"
-    f.write_text("не число")
+    f.write_text("не число", encoding="utf-8")
     monkeypatch.setattr(hb, "BEAT_FILE", f)
     assert hb.seconds_since_beat() is None
     assert hb.is_alive() is True   # как «отметки ещё нет» — не притворяемся мёртвыми

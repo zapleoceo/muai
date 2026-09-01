@@ -1,8 +1,6 @@
 """vera_shared.style — per-listener voice profile + prompt rendering."""
 from __future__ import annotations
 
-import pytest
-
 from vera_shared.style import (
     SampleMessage,
     StyleProfile,

@@ -22,7 +22,6 @@ from pathlib import Path
 
 import httpx
 
-
 GATEWAY_URL = os.environ.get("GATEWAY_URL", "http://gateway:8000")
 INTERNAL_SECRET = os.environ.get("INTERNAL_SECRET", "")
 IMPORT_DIR = os.environ.get("IMPORT_DIR", "/imports/perplexity")

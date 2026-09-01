@@ -13,7 +13,6 @@ import httpx
 
 from vera_shared.tools.base import Tool, ToolSpec
 
-
 INTERNAL_SECRET = os.environ.get("INTERNAL_SECRET", "")
 
 

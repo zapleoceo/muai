@@ -12,9 +12,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 from unittest.mock import AsyncMock, patch  # noqa: E402
 
-from fastapi.testclient import TestClient  # noqa: E402
-
 from dashboard.app import app  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
 
 client = TestClient(app)
 
@@ -36,9 +35,8 @@ def test_control_backfill_requires_action_field():
 def test_control_backfill_pause_sets_flag_when_authed():
     """With a valid owner session, pause calls set_backfill_paused(True)."""
     # Mint a session cookie the same way the app does.
-    from starlette.responses import Response
-
     from dashboard.auth_routes import _set_session_cookie
+    from starlette.responses import Response
     resp = Response()
     _set_session_cookie(resp)
     cookie_header = resp.headers.get("set-cookie", "")
@@ -59,9 +57,8 @@ def test_control_backfill_pause_sets_flag_when_authed():
 
 
 def test_control_backfill_resume_clears_flag_when_authed():
-    from starlette.responses import Response
-
     from dashboard.auth_routes import _set_session_cookie
+    from starlette.responses import Response
     resp = Response()
     _set_session_cookie(resp)
     cookie_header = resp.headers.get("set-cookie", "")
@@ -87,9 +84,8 @@ def test_control_rate_requires_auth():
 
 
 def test_control_rate_sets_cap_when_authed():
-    from starlette.responses import Response
-
     from dashboard.auth_routes import _set_session_cookie
+    from starlette.responses import Response
     resp = Response()
     _set_session_cookie(resp)
     ch = resp.headers.get("set-cookie", "")

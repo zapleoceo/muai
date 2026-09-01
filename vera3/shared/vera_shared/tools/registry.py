@@ -42,7 +42,7 @@ class ToolRegistry:
                     "available": self.all_names()[:20]}
         try:
             return await asyncio.wait_for(tool.exec(**params), timeout=timeout)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             return {"error": f"tool {name} timed out after {timeout}s"}
         except Exception as e:
             log.exception("tool %s failed", name)

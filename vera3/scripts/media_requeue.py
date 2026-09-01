@@ -29,7 +29,6 @@ import logging
 import os
 
 from sqlalchemy import select, text
-
 from vera_shared.chat_activity import min_own_messages, own_message_count
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow

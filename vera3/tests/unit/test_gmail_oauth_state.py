@@ -33,7 +33,8 @@ def test_state_tampered_rejected(auth):
 
 
 def test_state_wrong_prefix_rejected(auth):
-    import hashlib, hmac
+    import hashlib
+    import hmac
     bad = "session:" + str(int(time.time()))
     sig = hmac.new(b"oauth-state-test-secret", bad.encode(), hashlib.sha256).hexdigest()
     # подпись валидна, но префикс не gmailoauth → отказ (нельзя переиспользовать
@@ -42,7 +43,8 @@ def test_state_wrong_prefix_rejected(auth):
 
 
 def test_state_expired_rejected(auth):
-    import hashlib, hmac
+    import hashlib
+    import hmac
     old = f"gmailoauth:{int(time.time()) - 700}"  # > 600s TTL
     sig = hmac.new(b"oauth-state-test-secret", old.encode(), hashlib.sha256).hexdigest()
     assert auth.verify_oauth_state(f"{old}.{sig}") is False

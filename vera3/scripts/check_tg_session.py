@@ -10,6 +10,7 @@ schema = c.execute("SELECT sql FROM sqlite_master WHERE name='version'").fetchon
 print("schema:", schema)
 
 from telethon.sessions import SQLiteSession
+
 try:
     s = SQLiteSession(path)
     print("✓ Telethon can load this session")

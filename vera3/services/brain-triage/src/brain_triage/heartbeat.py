@@ -31,13 +31,13 @@ def beat(now: float | None = None) -> None:
     """Отметить, что цикл прошёл ещё раз. Никогда не бросает: сбой записи
     heartbeat'а не имеет права останавливать разбор очереди."""
     with contextlib.suppress(OSError):
-        BEAT_FILE.write_text(str(now if now is not None else time.time()))
+        BEAT_FILE.write_text(str(now if now is not None else time.time()), encoding="utf-8")
 
 
 def seconds_since_beat(now: float | None = None) -> float | None:
     """Сколько секунд назад был последний цикл. None — отметки ещё нет."""
     try:
-        raw = BEAT_FILE.read_text().strip()
+        raw = BEAT_FILE.read_text(encoding="utf-8").strip()
     except (OSError, ValueError):
         return None
     try:

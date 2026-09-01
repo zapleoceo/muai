@@ -43,7 +43,7 @@ def _limits() -> dict[str, int]:
     """{сервис: mem_limit в МБ} из compose. Без yaml — файл с якорями."""
     limits: dict[str, int] = {}
     service: str | None = None
-    for line in COMPOSE.read_text().splitlines():
+    for line in COMPOSE.read_text(encoding="utf-8").splitlines():
         if m := re.match(r"^  ([a-z0-9-]+):\s*$", line):
             service = m.group(1)
         elif (m := re.match(r"^\s+mem_limit:\s*(\d+)m", line)) and service:
@@ -68,7 +68,7 @@ def test_limit_clears_import_floor(service: str):
 def test_every_service_has_a_limit():
     """Сервис без лимита отдаёт выбор жертвы OOM-killer'у — в том числе на
     чужие стеки на том же боксе."""
-    body = COMPOSE.read_text()
+    body = COMPOSE.read_text(encoding="utf-8")
     declared = set(re.findall(r"^  ([a-z0-9-]+):\s*$", body, re.M))
     missing = declared - set(_limits())
     assert not missing, f"без mem_limit: {sorted(missing)}"

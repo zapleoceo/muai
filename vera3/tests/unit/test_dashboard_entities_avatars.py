@@ -16,7 +16,6 @@ os.environ.setdefault("OWNER_TELEGRAM_ID", "169510539")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 
 import pytest  # noqa: E402
-
 from dashboard.render import initials_avatar_svg, tg_link  # noqa: E402
 
 # ─── tg_link ────────────────────────────────────────────────────────────────
@@ -108,10 +107,9 @@ async def test_find_alias_collisions_groups_shared_username():
 
 
 def _owner_cookie() -> str:
-    from starlette.responses import Response
-
     from dashboard.auth import COOKIE_NAME
     from dashboard.auth_routes import _set_session_cookie
+    from starlette.responses import Response
     resp = Response()
     _set_session_cookie(resp)
     ch = resp.headers.get("set-cookie", "")
@@ -119,9 +117,8 @@ def _owner_cookie() -> str:
 
 
 def test_avatar_route_serves_stored_image():
-    from fastapi.testclient import TestClient
-
     from dashboard.app import app
+    from fastapi.testclient import TestClient
     name, val = _owner_cookie()
     with patch("dashboard.entities_routes.get_avatar",
                AsyncMock(return_value=(b"\xff\xd8jpegbytes", "image/jpeg"))):
@@ -132,9 +129,8 @@ def test_avatar_route_serves_stored_image():
 
 
 def test_avatar_route_falls_back_to_initials_svg():
-    from fastapi.testclient import TestClient
-
     from dashboard.app import app
+    from fastapi.testclient import TestClient
     name, val = _owner_cookie()
     with patch("dashboard.entities_routes.get_avatar", AsyncMock(return_value=None)), \
          patch("dashboard.entities_routes.get_entity_context",
@@ -146,8 +142,7 @@ def test_avatar_route_falls_back_to_initials_svg():
 
 
 def test_avatar_route_requires_auth():
-    from fastapi.testclient import TestClient
-
     from dashboard.app import app
+    from fastapi.testclient import TestClient
     r = TestClient(app).get("/entities/1/avatar")
     assert r.status_code in (401, 403)

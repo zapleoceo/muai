@@ -29,12 +29,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "services"
                        / "ingestor-slack" / "src"))
 
+from ingestor_slack import auth  # noqa: E402
+from ingestor_slack.client import SlackClient  # noqa: E402
 from sqlalchemy import select  # noqa: E402
 from vera_shared.db.engine import get_session, init_engine  # noqa: E402
 from vera_shared.db.models_graph import EntityAliasRow, EntityRow  # noqa: E402
-
-from ingestor_slack import auth  # noqa: E402
-from ingestor_slack.client import SlackClient  # noqa: E402
 
 log = logging.getLogger("slack-link")
 

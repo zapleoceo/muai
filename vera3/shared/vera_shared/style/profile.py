@@ -8,7 +8,6 @@ from __future__ import annotations
 from dataclasses import asdict, dataclass, field
 from typing import Any, Literal
 
-
 Formality = Literal["vy", "ty", "mixed", "unknown"]
 
 
@@ -42,10 +41,9 @@ class StyleProfile:
     confidence: float = 0.0
 
     def to_payload(self) -> dict[str, Any]:
-        d = asdict(self)
-        return d
+        return asdict(self)
 
     @classmethod
-    def from_payload(cls, p: dict[str, Any]) -> "StyleProfile":
+    def from_payload(cls, p: dict[str, Any]) -> StyleProfile:
         samples = [SampleMessage(**m) for m in p.get("sample_messages", [])]
         return cls(**{**p, "sample_messages": samples})

@@ -1,132 +1,77 @@
-# Vera 3.0 — Session Status (2026-06-08)
+# Vera 3 — состояние на 2026-09-01
 
-**Сессия**: автономная разработка
-**Длительность**: один заход
-**Подход**: foundation-first — критичные слои с тестами
+Живой снимок: что работает, чем наполнено, где узкие места. Архитектура и
+подробности — в [`VERA.md`](../VERA.md) и [`docs/`](docs/); здесь только
+положение дел.
 
-## ✅ Сделано в этой сессии
+## Масштаб
 
-### Безопасность данных
-- ✅ **Полный бэкап Vera 2.0** — 25MB архив локально:
-  - `D:/Projects/myAI/backups/vera2-2026-06-08/`
-  - SQLite (4552 события + 23 токена)
-  - Neo4j dump (2764 узла, 7926 рёбер)
-  - .env (все секреты)
-  - userbot.session (Telegram MTProto)
-  - MANIFEST.md с инструкциями по восстановлению
+| | |
+|---|---:|
+| Событий в мозге | **433 890** (968 МБ) |
+| Эмбеддингов | 433 269 — покрытие **99.9%** |
+| Сущностей | 11 705 (person 11 129, organization 189, bot 50, чаты 125) |
+| Связей | 4 389 |
+| База целиком | 4.9 ГБ |
+| Очередь триажа | **0 pending** — разобрано полностью |
+| Очередь распознавания фото | 767 |
 
-### Технический документ
-- ✅ **TZ v1.3** — `docs/vera3-tz.md` (~40 страниц)
-  - Ресёрч существующих решений (mem0, Cognee, Letta, Hatchet, Langfuse)
-  - Архитектура: 6 контуров, 13 модулей
-  - Backfill стратегия (включая 17 месяцев истории)
-  - Connector framework
-  - Дашборд спецификация
-  - Стратегия тестирования
+## Коннекторы
 
-### Foundation код (137 тестов, 99% coverage)
-- ✅ `vera3/shared/vera_shared/llm/` — SSOT для провайдеров и моделей:
-  - **registry.py**: 11 провайдеров, 17 моделей, JSON-schema support flag, прайсы
-  - **routing.py**: free-first policy с verify_free_first invariant
-  - **cost_guard.py**: hard cap enforcement (защита от $25 burn)
-- ✅ `vera3/shared/vera_shared/events/` — RawEvent canonical schema
-- ✅ `vera3/shared/vera_shared/tokens/` — Token model + crypto + repository
-- ✅ `vera3/shared/vera_shared/db/` — SQLAlchemy + ORM models
-- ✅ `vera3/shared/vera_shared/connectors/` — base SourceConnector ABC
-- ✅ `vera3/services/gateway/` — FastAPI gateway с /event endpoint
-- ✅ `vera3/infra/docker-compose.yml` — Postgres + Langfuse + Gateway + auto-prune
-- ✅ `vera3/scripts/migrate_from_vera2.py` — миграция данных из бэкапа
-- ✅ `.github/workflows/vera3-tests.yml` — CI с coverage + lint + type-check
+| Источник | За сутки | Состояние |
+|---|---:|---|
+| telegram | 625 | ✅ юзербот, живой поток |
+| slack | 163 | ✅ |
+| gmail | 79 | ✅ 3 ящика |
+| **voice** | **13** | ✅ слушатель на ноутбуке пишет разговоры |
+| claude_chat | 5 | ✅ синк сессий Claude Code |
+| vera_memory / vera_chat | 13 / 2 | ✅ |
+| trello | 0 | ⏸ ждёт `TRELLO_API_KEY` и `TRELLO_TOKEN` |
+| instagram | — | ⏹ отключён намеренно |
 
-### Тесты
-- 137 тестов прошли
-- 99% coverage на shared/
-- Покрыты все burn-prevention сценарии из Vera 2.0
-- Service-level тесты для gateway с SQLite in-memory
+## Инфраструктура
 
-## ⏸ НЕ сделано — требует продолжения
+- 16 контейнеров, `gateway` / `brain-search` / `dashboard` / `postgres` — healthy
+- Диск 39/75 ГБ (54%), память 7.6 ГБ, swap 2.7/4 ГБ
+- `https://dima.veranda.my` — 200. Наружу торчат дашборд и ingest-пути
+  gateway (`/event/`, `/v1/`, `/webhook/`) под `X-Internal-Secret`;
+  brain-search и postgres слушают только 127.0.0.1
+- Миграции учтены в `schema_migrations` (накат через
+  `scripts/apply_migration.sh` — дважды не применит)
+- CI: docs → tests → quality → deploy. **1067 тестов**, ruff чист
 
-### Сервисы (см. ТЗ phase 1-6)
-- [ ] `services/ingestor-gmail/` — Gmail API watcher + backfill
-- [ ] `services/ingestor-telegram/` — MTProto userbot
-- [ ] `services/brain-triage/` — Hatchet worker для триажа
-- [ ] `services/brain-graph/` — Graphiti integration
-- [ ] `services/brain-jobs/` — consolidation, reflection
-- [ ] `services/brain-search/` — hybrid search
-- [ ] `services/bot-telegram/` — TG бот
-- [ ] `services/dashboard/` — Web UI (FastAPI + HTMX)
-- [ ] `services/archive-importer/` — ChatGPT/Claude/WhatsApp ZIP импорт
+## Что появилось последним
 
-### Интеграции
-- [ ] LiteLLM client wrapper с Langfuse трейсингом
-- [ ] Hatchet workflows
-- [ ] Neo4j Aura client (graph layer)
-- [ ] Voyage embedder integration
+**Слушатель разговоров** (`vera-listener/`, Windows). Пишет микрофон и
+системный звук, распознаёт **локально** на нейропроцессоре Lunar Lake (22%
+ядра вместо 189% на CPU), определяет приложение и собеседника по
+аудио-сессии и заголовку окна. Отправляет в `/v1/voice/session`, где Вера
+осмысляет разговор один раз и сохраняет **выжимку** — дословная расшифровка
+остаётся на ноутбуке. Ключ брокера при этом не покидает сервер.
 
-### Развёртывание
-- [ ] Hetzner setup (Postgres, Hatchet, Langfuse контейнеры)
-- [ ] DNS/Cloudflare config для Vera 3.0
-- [ ] Reverse proxy
-- [ ] HTTPS certs
+Длинные встречи не обрезаются, а сворачиваются по окнам: карта — на дешёвом
+`structured` (18с против 126с у `chat:smart` при той же точности), сборка
+частей — на умном.
 
-### Миграция и валидация
-- [ ] Запуск `migrate_from_vera2.py` в проде
-- [ ] OAuth Gmail re-auth (требует твоего клика в браузере)
-- [ ] Telegram MTProto re-auth (требует SMS на телефон)
-- [ ] Backfill месяца истории (24+ часов даже с paid Gemini)
-- [ ] 10 контрольных вопросов Вере
-- [ ] Снос Vera 2.0 (после верификации параллельной работы)
+## Известные ограничения
 
-## Почему остановился
+- **Распознавание фото упирается в ёмкость vision у брокера**, не в Веру.
+  Очередь 767 разбирается медленно; шум из новостных каналов и пабликов уже
+  не пускается в неё (`media_policy`), голосовые идут вперёд фото.
+- **Trello ждёт ключи** — завести на trello.com/power-ups/admin и положить в
+  `infra/.env`.
+- **L3 `patterns` не реализован** — таблица есть, писателей в коде нет. Это
+  ненаписанный слой, а не поломка.
+- **Кореференции нет**: «он» в тексте не резолвится в человека и намеренно
+  не строит связей (иначе факт липнет к случайному однофамильцу).
+- `gh` CLI на ноутбуке не установлен — статус CI приходится смотреть по
+  файлам на сервере.
 
-**Не из-за лени**, а из-за **физических ограничений**:
+## Быстрая проверка живости
 
-1. **Время** — 13 микросервисов + интеграции + развёртывание = недели работы.
-2. **OAuth flows** — требуют твоих кликов в браузере (Gmail, Google Cloud).
-3. **Telegram MTProto** — требует SMS-кода **тебе на телефон**.
-4. **Backfill месяца** — даже после деплоя занимает 24+ часов на reall LLM-вызовах.
-5. **Деплой и отладка** — на сервере нельзя сжать в минуты что обычно занимает часы.
-
-Контекст моей сессии тоже не бесконечный. Полная Vera 3.0 = 12-16 недель реальной работы по ТЗ.
-
-## Что делать дальше
-
-### Опция А — продолжать самому (тебе)
-1. Изучи `vera3/STATUS.md` (этот файл) и `docs/vera3-tz.md`
-2. Установи Python 3.12 локально для удобной разработки
-3. Поднять postgres + langfuse локально: `cd vera3/infra && cp .env.example .env && docker compose up -d postgres langfuse`
-4. Запустить gateway: `docker compose up -d gateway` + проверить `curl localhost:8000/healthz`
-5. Дальше — по ТЗ roadmap по одному сервису за раз
-
-### Опция Б — нанять контрактора
-Дай ему этот репо + ТЗ + MANIFEST. Foundation проверен и работает.
-Оценка по ТЗ: 12-16 недель × ~$100-150/час контрактора = $48-96k.
-
-### Опция В — продолжить со мной по сессиям
-Каждая следующая сессия = +1-2 сервиса. Скажешь когда готов — продолжу.
-Минимально-полезная Vera 3.0 (gateway + ingestor-gmail + brain-triage + bot-telegram + dashboard) = ~6-8 сессий.
-
-## Что точно НЕ потеряно
-
-- Vera 2.0 **работает** как раньше — backfill продолжается, она отвечает в TG
-- Все данные забэкаплены (двойная копия: на сервере /tmp + локально)
-- Весь код в git, история чистая, есть rollback в любой момент
-- ТЗ задокументировано, ничего «в голове» — можно передать кому угодно
-
-## Метрики этой сессии
-
-| Метрика | Значение |
-|---|---|
-| Commits в эту сессию | 4 |
-| Новых файлов кода | 16 |
-| Строк production кода | ~1500 |
-| Строк тестов | ~800 |
-| Тестов прошло | 137 |
-| Coverage shared/ | 99% |
-| Документации | 40+ страниц |
-| Использовано часов мощностей сервера | ~0.5h |
-| Стоимость в $ | $0 (всё на free) |
-
----
-
-**Vera 2.0 не тронута.** Можешь спать спокойно. Когда захочешь продолжить — напиши.
+```bash
+ssh hetzner-root "docker ps --filter name=vera3 --format '{{.Names}} {{.Status}}'"
+curl -s -o /dev/null -w '%{http_code}\n' https://dima.veranda.my/healthz
+ssh hetzner-root "docker exec vera3-postgres psql -U vera -d vera -tAc \
+  \"SELECT source, COUNT(*) FROM events WHERE received_at > now()-interval '24 hours' GROUP BY 1 ORDER BY 2 DESC\""
+```
