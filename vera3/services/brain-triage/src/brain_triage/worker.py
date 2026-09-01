@@ -46,6 +46,7 @@ from brain_triage.config import (
     CONCURRENCY,
     PACE_BETWEEN_S,
     POLL_INTERVAL_S,
+    REL_EXTRACT_MIN_IMPORTANCE,
     WORKER_ID,
 )
 from brain_triage.postprocess import NATURE_BY_SOURCE, SKIP_EMBED_SOURCES
@@ -150,9 +151,11 @@ async def process_pending() -> int:
                 processed += 1
                 # Собираем кандидатов на rel-extract — запускаем ПОСЛЕ коммита
                 # триажа (иначе фоновая задача читает событие до записи nature/
-                # project). Только для high-signal событий и только если наш
-                # результат реально записался (не отфенсен).
-                if (res.rowcount or 0) > 0 and metadata and metadata.get("importance", 0) >= 3:
+                # project). Только для high-signal событий (шкала 0-100, порог
+                # в config.py) и только если наш результат реально записался
+                # (не отфенсен).
+                if ((res.rowcount or 0) > 0 and metadata
+                        and metadata.get("importance", 0) >= REL_EXTRACT_MIN_IMPORTANCE):
                     row = next((r for r in rows if r.id == event_id), None)
                     if row and row.content_text and should_extract_relations(row.metadata_):
                         rel_candidates.append((event_id, row.content_text))

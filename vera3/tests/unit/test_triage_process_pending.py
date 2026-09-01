@@ -15,21 +15,22 @@ from unittest.mock import AsyncMock
 import pytest
 from brain_triage import background_loops as bl
 from brain_triage import worker
+from brain_triage.config import REL_EXTRACT_MIN_IMPORTANCE
 from sqlalchemy import select
 from vera_shared.db.models import EventRow
 
 
 async def _seed(get_session, **over) -> EventRow:
-    spec = dict(
-        source="telegram", source_event_id="tg:1", account="userbot",
+    spec = {
+        "source": "telegram", "source_event_id": "tg:1", "account": "userbot",
         # chat_kind=private → одиночный путь. Групповые telegram-события
         # уходят в батч-ветку (см. group_ids в process_pending) и разбираются
         # другим вызовом — для проверки записи статусов это лишний слой.
-        category="private", content_text="Игорь работает в Sintegrum",
-        occurred_at=datetime(2026, 9, 1, 10, 0), triage_status="processing",
-        triage_started_at=datetime(2026, 9, 1, 10, 0, 5),
-        metadata_={"chat_kind": "private", "owner_participates": True},
-    )
+        "category": "private", "content_text": "Игорь работает в Sintegrum",
+        "occurred_at": datetime(2026, 9, 1, 10, 0), "triage_status": "processing",
+        "triage_started_at": datetime(2026, 9, 1, 10, 0, 5),
+        "metadata_": {"chat_kind": "private", "owner_participates": True},
+    }
     spec.update(over)
     async with get_session() as s:
         row = EventRow(**spec)
@@ -97,13 +98,40 @@ async def test_rel_extract_task_is_tracked_not_dangling(sqlite_db, monkeypatch):
     assert not bl._bg_tasks, "ссылка не снята после завершения"
 
 
+@pytest.mark.parametrize(("importance", "spawns"), [
+    (0, False),
+    (3, False),    # старый порог: пропускал ~весь поток
+    (59, False),
+    (60, True),    # ровно порог — включительно
+    (95, True),
+])
 @pytest.mark.asyncio
-async def test_low_importance_does_not_trigger_rel_extract(sqlite_db, monkeypatch):
+async def test_rel_extract_respects_importance_threshold(
+    sqlite_db, monkeypatch, importance, spawns,
+):
     """Порог importance — единственный фильтр между триажем и LLM-вызовом
-    rel-extract. Шкала 0-100 (см. brain_triage/schemas.py)."""
+    rel-extract. Шкала 0-100 (brain_triage/schemas.py, prompts.py)."""
+    assert REL_EXTRACT_MIN_IMPORTANCE == 60
     row = await _seed(sqlite_db)
     _wire(monkeypatch, row,
-          result=(row.id, "done", {"importance": 2, "nature": "world_event"}, None))
+          result=(row.id, "done", {"importance": importance, "nature": "world_event"}, None))
+    monkeypatch.setattr(worker, "_safe_rel_extract", AsyncMock())
+    bl._bg_tasks.clear()
+
+    await worker.process_pending()
+
+    assert bool(bl._bg_tasks) is spawns
+    for t in list(bl._bg_tasks):
+        t.cancel()
+
+
+@pytest.mark.asyncio
+async def test_channel_post_never_reaches_rel_extract(sqlite_db, monkeypatch):
+    """Второй фильтр: посты вещательных каналов графу не нужны, даже если
+    LLM выставила высокую важность (should_extract_relations)."""
+    row = await _seed(sqlite_db, metadata_={"chat_kind": "channel"})
+    _wire(monkeypatch, row,
+          result=(row.id, "done", {"importance": 95, "nature": "world_event"}, None))
     monkeypatch.setattr(worker, "_safe_rel_extract", AsyncMock())
     bl._bg_tasks.clear()
 

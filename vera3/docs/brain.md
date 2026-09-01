@@ -168,6 +168,28 @@ is skipped too.
 `rel_extract` is **not** batched (fires per-event, fire-and-forget,
 unaffected either way).
 
+### rel-extract admission threshold
+
+Two gates decide whether a triaged event gets a relationship-extraction
+call at all — it is the most expensive background work the worker does
+(one `structured` LLM call plus up to ~10 DB sessions resolving entity
+names, all outside `TRIAGE_CONCURRENCY`):
+
+1. `should_extract_relations(metadata)` (`vera_shared/media_policy.py`) —
+   drops broadcast-channel posts and groups the owner doesn't take part in.
+2. `importance >= REL_EXTRACT_MIN_IMPORTANCE` (`brain_triage/config.py`,
+   env `TRIAGE_REL_MIN_IMPORTANCE`, default **60**).
+
+**The importance scale is 0-100**, defined in `schemas.py` and restated in
+`prompts.py`. The threshold used to be a hardcoded `3`, which admits
+essentially the whole stream while the comment beside it promised "only
+high-signal events" — it reads like it was written against a 1-5 scale.
+At 60 the gate means what it says: rel-extract fires on events the model
+rated clearly above routine, not on every "ок, договорились".
+
+Set `TRIAGE_REL_MIN_IMPORTANCE=0` to restore the old build-the-graph-from-
+everything behaviour.
+
 ## Backfill pause + rate limit
 
 Two controls on the 📥 Live прогресс dashboard card, both stored in the
