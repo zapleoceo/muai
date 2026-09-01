@@ -31,6 +31,44 @@
 - Private (module-internal) prefixed `_`.
 - Service verbs: `get_`, `create_`, `update_`, `delete_`, `fetch_`, `record_`.
 
+## Tests: SQLite for logic, Postgres for SQL
+
+Unit tests run on `sqlite+aiosqlite` — fast, no service, and it is a *real*
+database, which is why the dedup path and the schema are exercised against
+it rather than a mock.
+
+What it cannot do is run this project's SQL. Production is Postgres and the
+hot paths are raw `text()`: `to_tsvector('russian')`, `FOR UPDATE SKIP
+LOCKED`, `COUNT(*) FILTER (WHERE …)`, `metadata->>`, `= ANY(:ids)`, `NOW()`.
+On SQLite most of those are a syntax or missing-function error, so the
+bodies of `brain_triage.claim._claim_batch`, `dashboard.stats._compute_stats`
+and `brain_search.search` were never executed by any test — coverage showed
+0% across their lines, and the "test" for the claim query compared
+`inspect.getsource()` against a string.
+
+So: **anything that writes raw SQL needs a test in `tests/integration/`**,
+which runs against a live Postgres (`pgvector/pgvector:pg16`, the production
+image) started as a service container in both workflows. Those tests skip
+themselves unless `RUN_INTEGRATION_TESTS=1` and `TEST_DATABASE_URL` are set,
+so a local `pytest tests/` still works with no Postgres — but CI sets both,
+and CI is the binding gate.
+
+They must call the **production function**, not a copy of its query. The old
+integration test inlined its own `UPDATE … SKIP LOCKED` that had drifted
+from the real one (no `content_text != ''`, `ORDER BY id` instead of
+`occurred_at DESC`, hardcoded `LIMIT 10`, `RETURNING id` instead of eleven
+columns) — it proved that Postgres implements SKIP LOCKED, not that this
+codebase uses it correctly.
+
+Local Postgres for the same run:
+
+```bash
+docker run --rm -p 5433:5432 -e POSTGRES_PASSWORD=test pgvector/pgvector:pg16
+RUN_INTEGRATION_TESTS=1 \
+TEST_DATABASE_URL=postgresql+asyncpg://postgres:test@localhost:5433/postgres \
+  pytest tests/integration
+```
+
 ## Tests
 
 - Mirror layout: `tests/unit/test_<module>.py` for a `src/.../<module>.py`.

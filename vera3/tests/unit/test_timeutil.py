@@ -44,7 +44,10 @@ def test_no_utcnow_left_in_the_tree():
     DTZ003; он нашёлся только по DeprecationWarning из pydantic."""
     hits = subprocess.run(
         ["git", "grep", "-n", "datetime.utcnow", "--",
-         "vera3/shared", "vera3/services", "vera3/scripts"],
+         "vera3/shared", "vera3/services", "vera3/scripts",
+         # сам timeutil объясняет, ПОЧЕМУ этот вызов запрещён, и обязан
+         # называть его по имени
+         ":!vera3/shared/vera_shared/timeutil.py"],
         cwd=VERA3.parent, capture_output=True, text=True,
     ).stdout.strip()
     assert not hits, f"datetime.utcnow вернулась:\n{hits}"

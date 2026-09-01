@@ -16,6 +16,20 @@ jobs:
     defaults:
       run:
         working-directory: vera3
+    # Тот же живой Postgres, что в deploy.yml: без него tests/integration
+    # молча пропускаются, а именно там проверяется весь Postgres-only SQL
+    # (SKIP LOCKED, to_tsvector, FILTER, ->>). Образ как в проде.
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: vera
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: vera_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U vera -d vera_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
 
@@ -54,6 +68,12 @@ jobs:
         run: pip install -e ./services/brain-search
 
       - name: Run all tests with coverage
+        env:
+          TELEGRAM_API_ID: "1"
+          TELEGRAM_API_HASH: "test"
+          TELEGRAM_PHONE: "+10000000000"
+          RUN_INTEGRATION_TESTS: "1"
+          TEST_DATABASE_URL: postgresql+asyncpg://vera:test@localhost:5432/vera_test
         run: |
           # PYTHONPATH здесь НЕ задаётся: tests/unit/conftest.py сам кладёт в
           # sys.path shared и все services/*/src. Раньше список жил в трёх

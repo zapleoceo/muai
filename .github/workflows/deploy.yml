@@ -53,10 +53,29 @@ jobs:
   # ─── 2. Test gate ────────────────────────────────────────────────────────
   test:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     defaults:
       run:
         working-directory: vera3
+    # Живой Postgres. Юнит-тесты идут на SQLite (быстро, без сервиса), но
+    # весь сырой SQL проекта — Postgres-only и на SQLite физически не
+    # исполняется: to_tsvector, FOR UPDATE SKIP LOCKED, FILTER (WHERE …),
+    # metadata->>, = ANY(:ids), NOW(). Из-за этого тела `_claim_batch`,
+    # `_compute_stats` и `brain_search.search` не исполнялись НИ ОДНИМ
+    # тестом — покрытие показывало 0% по их строкам, а «тест» на claim
+    # сравнивал inspect.getsource() со строкой.
+    # Образ тот же, что в проде (pgvector/pgvector:pg16).
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: vera
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: vera_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U vera -d vera_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -81,6 +100,10 @@ jobs:
           TELEGRAM_API_ID: "1"
           TELEGRAM_API_HASH: "test"
           TELEGRAM_PHONE: "+10000000000"
+          # Включает tests/pg и tests/integration. Без этих двух переменных
+          # они молча пропускаются — так они и простояли мёртвыми в CI.
+          RUN_INTEGRATION_TESTS: "1"
+          TEST_DATABASE_URL: postgresql+asyncpg://vera:test@localhost:5432/vera_test
         run: |
           # brain_search intentionally NOT in --cov here: repo-wide 70% gate
           # would retroactively fail on its pre-existing legacy coverage gap.
