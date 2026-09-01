@@ -190,6 +190,33 @@ rated clearly above routine, not on every "ок, договорились".
 Set `TRIAGE_REL_MIN_IMPORTANCE=0` to restore the old build-the-graph-from-
 everything behaviour.
 
+### rel-extract concurrency ceiling
+
+Admitted events are dispatched **fire-and-forget** (`_safe_rel_extract`,
+never awaited). The `asyncio.Semaphore` inside `process_pending()` does not
+bound them: it is recreated on every call and only wraps the foreground
+triage calls, so background tasks accumulated *between* calls. With
+`PACE_BETWEEN_S=0.5` and no sleep while there is work, `process_pending()`
+cycles every ~1-3s, while one rel-extract can run up to the broker's
+`BROKER_JOB_DEADLINE_S` (120s) — dozens of tasks in flight, each opening up
+to ~10 DB sessions against a 10-connection pool (`pool_size=3 +
+max_overflow=7`) that also serves the claim query, the status writes, the
+watchdog and the retry loop. Exhausting it stalls the foreground too.
+
+Two bounds, both in `brain_triage/config.py`:
+
+- `REL_EXTRACT_CONCURRENCY` (`TRIAGE_REL_CONCURRENCY`, default **3**) — a
+  module-level semaphore, deliberately *not* per-cycle.
+- `REL_EXTRACT_TIMEOUT_S` (`TRIAGE_REL_TIMEOUT_S`, default **180**) — the
+  foreground path has had an `asyncio.wait_for` all along
+  (`concurrency.py`); the background path had none and relied on the broker
+  client's own ceiling. Kept above `JOB_POLL_DEADLINE_S` so it cuts hung
+  calls, not healthy slow ones — a test asserts that ordering.
+
+`extract_and_store()` also memoises name→entity within a single event: the
+same person usually appears in several facts in a row, and each resolve is
+its own session.
+
 ## Backfill pause + rate limit
 
 Two controls on the 📥 Live прогресс dashboard card, both stored in the

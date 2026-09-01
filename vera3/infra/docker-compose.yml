@@ -87,6 +87,13 @@ services:
       # Итого 5×10 = 50 in-flight (было 15). Даёт ~10-14k triage/ч.
       TRIAGE_CONCURRENCY: ${TRIAGE_CONCURRENCY:-10}
       TRIAGE_PACE_S: ${TRIAGE_PACE_S:-0.5}
+      # rel-extract — фоновая работа МИМО TRIAGE_CONCURRENCY: задачи не
+      # ожидаются, а семафор в process_pending живёт один вызов. Свой потолок
+      # и свой таймаут, иначе фон выедает пул (10 соединений) у claim'а и
+      # записи статусов. Порог допуска — по шкале importance 0-100.
+      TRIAGE_REL_MIN_IMPORTANCE: ${TRIAGE_REL_MIN_IMPORTANCE:-60}
+      TRIAGE_REL_CONCURRENCY: ${TRIAGE_REL_CONCURRENCY:-3}
+      TRIAGE_REL_TIMEOUT_S: ${TRIAGE_REL_TIMEOUT_S:-180}
       VERA_DAILY_GLOBAL_CAP_USD: ${VERA_DAILY_GLOBAL_CAP_USD:-2.0}
       BROKER_URL: ${BROKER_URL:-}
       BROKER_PROJECT_KEY: ${BROKER_PROJECT_KEY:-}

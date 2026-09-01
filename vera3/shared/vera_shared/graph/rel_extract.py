@@ -209,6 +209,10 @@ async def extract_and_store(event_id: int, body: str) -> int:
 
     inserted = 0
     author_id: int | None | bool = False   # False = ещё не искали (lazy, 1 запрос)
+    # Один и тот же человек обычно встречается в нескольких фактах подряд
+    # («Игорь работает в X», «Игорь — начальник Y»). Каждый resolve — это своя
+    # сессия к БД, поэтому в пределах одного события помним, что уже искали.
+    resolved: dict[str, int | None] = {}
 
     async def _resolve(name: str) -> int | None:
         nonlocal author_id
@@ -220,7 +224,9 @@ async def extract_and_store(event_id: int, body: str) -> int:
         if not is_referential_name(name):
             log.debug("rel_extract: skip non-referential name %r", name)
             return None
-        return await resolve_entity_exact(name)
+        if low not in resolved:
+            resolved[low] = await resolve_entity_exact(name)
+        return resolved[low]
 
     for r in rels[:3]:
         if not isinstance(r, dict):
