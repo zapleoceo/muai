@@ -17,6 +17,32 @@ log = logging.getLogger(__name__)
 _bg_tasks: set[asyncio.Task] = set()
 
 
+def track(task: asyncio.Task) -> asyncio.Task:
+    """Взять фоновую задачу под ссылку и снять её по завершении.
+
+    Событийный цикл держит на задачу только СЛАБУЮ ссылку — без сильной её
+    может собрать GC на полпути. Приём применялся в пяти местах копипастой;
+    здесь он один, чтобы следующий вызов create_task не забыл про него.
+    """
+    _bg_tasks.add(task)
+    task.add_done_callback(_bg_tasks.discard)
+    return task
+
+
+def start_background_loops() -> list[asyncio.Task]:
+    """Поднять watchdog и retry-цикл ПОД ССЫЛКАМИ. Зовётся из main_loop().
+
+    Раньше обе задачи создавались голым `asyncio.create_task(...)` с
+    отброшенным результатом — единственные два таких места во всём vera3
+    (ruff RUF006), и притом самые важные: если watchdog исчезнет, события,
+    застрявшие в `processing`, не вернутся в `pending` никогда — другого
+    механизма восстановления нет, а монитор считает только очередь
+    `pending` и такой сбой скорее занизит видимый бэклог, чем покажет его.
+    """
+    return [track(asyncio.create_task(_watchdog_loop(), name="triage-watchdog")),
+            track(asyncio.create_task(_retry_failed_loop(), name="triage-retry"))]
+
+
 async def _safe_rel_extract(event_id: int, body: str) -> None:
     """Rel extraction в фоне; никогда не роняет триаж, но сбой виден в логах."""
     try:

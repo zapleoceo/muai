@@ -31,10 +31,9 @@ from vera_shared.db.models import EventRow
 from vera_shared.media_policy import should_extract_relations
 
 from brain_triage.background_loops import (
-    _bg_tasks,
-    _retry_failed_loop,
     _safe_rel_extract,
-    _watchdog_loop,
+    start_background_loops,
+    track,
 )
 from brain_triage.claim import _chunk_group_rows, _claim_batch, chat_kind
 from brain_triage.concurrency import (
@@ -81,7 +80,10 @@ async def process_pending() -> int:
     # (single_rows + group-chunks), positional zip() с embeddings был бы багом:
     # embedding события A мог бы приклеиться к triage-результату события B.
     embeddings_by_id: dict[int, list[float] | None] = {r.id: None for r in rows}
-    for pos, vec in zip(embed_idx, embed_vectors):
+    # strict=False сознательно: брокер может вернуть меньше векторов, чем
+    # запрошено. Тогда часть событий останется без эмбеддинга (None) и будет
+    # доэмбеждена позже — это лучше, чем уронить весь батч триажа.
+    for pos, vec in zip(embed_idx, embed_vectors, strict=False):
         embeddings_by_id[rows[pos].id] = vec
 
     # Групповые telegram-сообщения (супергруппы + легаси Chat) батчатся по
@@ -191,9 +193,7 @@ async def process_pending() -> int:
     # Rel-extract — после коммита триажа, со ссылкой в _bg_tasks (иначе задачу
     # может собрать GC и связи молча потеряются).
     for eid, body in rel_candidates:
-        t = asyncio.create_task(_safe_rel_extract(eid, body))
-        _bg_tasks.add(t)
-        t.add_done_callback(_bg_tasks.discard)
+        track(asyncio.create_task(_safe_rel_extract(eid, body)))
 
     # Детерминированный оверрайд project по папкам/аккаунтам — своя
     # транзакция, см. project_override.py.
@@ -214,8 +214,7 @@ async def main_loop() -> None:
     log.info("[%s] brain-triage worker started, poll=%ss batch=%s concurrency=%s",
              WORKER_ID, POLL_INTERVAL_S, BATCH_SIZE, CONCURRENCY)
 
-    asyncio.create_task(_watchdog_loop())
-    asyncio.create_task(_retry_failed_loop())
+    start_background_loops()
 
     from vera_shared.llm.circuit import llm_cooldown_remaining_s
 

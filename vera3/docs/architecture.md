@@ -144,7 +144,7 @@ until 2026-07-11 — split for the same reason as the dashboard above):
 | `triage_calls.py` | `triage_one()`/`triage_group_batch()` — the actual broker calls; raise on failure, don't catch |
 | `concurrency.py` | Semaphore-bounded wrappers normalizing single/group results to one shape |
 | `project_override.py` | `apply_project_override()` — the deterministic `project_membership` fixup (own transaction, see domain-model.md) |
-| `background_loops.py` | Watchdog (recover stuck `processing`) + retry-with-backoff (recover `error` → `dead`) |
+| `background_loops.py` | Watchdog (recover stuck `processing`) + retry-with-backoff (recover `error` → `dead`); `start_background_loops()` starts both, `track()` keeps every fire-and-forget task under a strong reference |
 | `worker.py` | `process_pending()` orchestration (claim → embed → dispatch → write, three deliberately-separate transactions) + `main_loop()` |
 
 ## DB connection pool sizing
