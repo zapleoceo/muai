@@ -162,6 +162,30 @@ until 2026-07-11 — split for the same reason as the dashboard above):
 | `heartbeat.py` | `beat()` / `is_alive()` / `seconds_since_beat()` — file-based liveness for the container `HEALTHCHECK`. `main_loop()` beats at the top of every iteration, so "alive" means "the loop is turning", including while the queue is empty or the circuit is open |
 | `worker.py` | `process_pending()` orchestration (claim → embed → dispatch → write, three deliberately-separate transactions) + `main_loop()` |
 
+## brain-search: модули
+
+`app.py` держал 530 строк и сразу всё: роутинг, свою копию проверки
+секрета, семь pydantic-моделей, ШЕСТЬ почти одинаковых `SELECT … FROM
+events LEFT JOIN event_embeddings`, скоринг, кэш самоописания со своим SQL
+и сборку промпта с русским текстом внутри.
+
+| Модуль | Ответственность |
+|---|---|
+| `app.py` | только маршруты и разбор запроса (170 строк) |
+| `models.py` | `SearchQuery` / `AnswerResponse` / `SearchResult` |
+| `retrieval.py` | `fetch_candidates()` — ОДНА форма запроса и явные режимы (`project`/`fts`/`time`/`vector`/`recent`) вместо шести копий |
+| `scoring.py` | `cosine()`, `score_rows()` |
+| `self_context.py` | «кто я и что подключено» + кэш (иначе `COUNT(*)` на каждый /search) |
+| `synthesis.py` | промпт и ответ — агентом или прямым синтезом |
+| `reports.py` | точная SQL-агрегация вместо пересказа top-N |
+
+Аргумент «сырой SQL читабельнее развёрнутым» тут не работал: WHERE и так
+собирался динамически, то есть код был не развёрнутый, а скопированный — и
+разъезжался. Ветка «есть вектор, нет слов» использовала INNER JOIN вместо
+LEFT, и понять, намеренно ли это, можно было только сравнив шесть блоков
+глазами. Намеренно: без эмбеддинга такую строку нечем ранжировать. Теперь
+это отдельный режим с тестом.
+
 ## DB connection pool sizing
 
 `vera_shared/db/engine._pool_kwargs()` — every service's Postgres pool is

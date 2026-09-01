@@ -111,6 +111,23 @@ async def test_usage_log_window_excludes_old_rows(pg_db):
 # ─── brain_search.search ────────────────────────────────────────────────────
 
 
+def _stub_llm(bs, monkeypatch):
+    """Брокера в тесте нет. Шов синтеза живёт в synthesis, а не в app —
+    после разбора app.py на модули подменять надо там."""
+    from brain_search import self_context, synthesis
+
+    async def _no_embed(_texts):
+        raise bs.LLMCallFailed("нет брокера в тесте")
+
+    async def _synth(**_kw):
+        return "ответ", {"provider": "test", "cost_usd": 0.0}
+
+    monkeypatch.setattr(bs, "embed", _no_embed)
+    monkeypatch.setattr(synthesis, "chat_async", _synth)
+    monkeypatch.setenv("INTERNAL_SECRET", SECRET)
+    self_context.forget()          # кэш переживает базу теста
+
+
 @pytest.mark.asyncio
 async def test_search_fts_branch_runs_on_russian_config(pg_db, monkeypatch):
     """`to_tsvector('russian') @@ to_tsquery('russian', …)` — на SQLite это
@@ -128,15 +145,7 @@ async def test_search_fts_branch_runs_on_russian_config(pg_db, monkeypatch):
                        content_text="Прогноз погоды на выходные",
                        occurred_at=now, received_at=now, triage_status="done"))
 
-    async def _no_embed(_texts):
-        raise bs.LLMCallFailed("нет брокера в тесте")
-
-    async def _synth(**_kw):
-        return "ответ", {"provider": "test", "cost_usd": 0.0}
-
-    monkeypatch.setattr(bs, "embed", _no_embed)
-    monkeypatch.setattr(bs, "chat_async", _synth)
-    monkeypatch.setenv("INTERNAL_SECRET", SECRET)
+    _stub_llm(bs, monkeypatch)
 
     res = await bs.search(bs.SearchQuery(q="встреча по проекту", use_agent=False),
                           x_internal_secret=SECRET)
@@ -167,15 +176,7 @@ async def test_search_time_window_branch(pg_db, monkeypatch):
                        occurred_at=now - timedelta(days=400),
                        received_at=now, triage_status="done"))
 
-    async def _no_embed(_texts):
-        raise bs.LLMCallFailed("нет брокера в тесте")
-
-    async def _synth(**_kw):
-        return "ответ", {"provider": "test", "cost_usd": 0.0}
-
-    monkeypatch.setattr(bs, "embed", _no_embed)
-    monkeypatch.setattr(bs, "chat_async", _synth)
-    monkeypatch.setenv("INTERNAL_SECRET", SECRET)
+    _stub_llm(bs, monkeypatch)
 
     res = await bs.search(bs.SearchQuery(q="что было сегодня", use_agent=False),
                           x_internal_secret=SECRET)
@@ -241,3 +242,52 @@ async def test_find_project_chats_matches_membership_to_graph(pg_db):
     assert [c["entity_id"] for c in chats] == [grp]
     assert chats[0]["tg_id"] == "-100777"
     assert chats[0]["type"] == "supergroup"
+
+
+@pytest.mark.parametrize(("question", "mode"), [
+    ("встреча по проекту", "fts"),          # есть слова → FTS
+    ("что было вчера", "time"),             # только окно
+    ("", "recent"),                         # ни слов, ни окна, ни вектора
+])
+@pytest.mark.asyncio
+async def test_retrieval_picks_the_expected_branch(pg_db, question, mode):
+    """Ветка выборки перестала быть неявной: раньше это были шесть похожих
+    SELECT'ов подряд, и понять, в какой ты, можно было только сравнив их."""
+    from brain_search.app import _ts_query
+    from brain_search.query_parse import parse_time_range
+    from brain_search.retrieval import fetch_candidates
+
+    ts, acc = _ts_query(question)
+    found = await fetch_candidates(
+        ts_query=ts, acc_words=acc, time_range=parse_time_range(question),
+        project=None, has_vector=False, limit=15,
+    )
+    assert found.mode == mode
+
+
+@pytest.mark.asyncio
+async def test_vector_branch_requires_embedding_via_inner_join(pg_db):
+    """Ветка «есть вектор, нет слов» берёт INNER JOIN намеренно: строка без
+    эмбеддинга там бесполезна, ранжировать её нечем. Единственное место, где
+    JOIN не LEFT, — раньше это отличие терялось среди шести копий."""
+    from brain_search.retrieval import fetch_candidates
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models import EventEmbeddingRow, EventRow
+
+    now = utc_naive_now()
+    async with get_session() as s:
+        with_emb = EventRow(source="telegram", source_event_id="has",
+                            content_text="с вектором", occurred_at=now,
+                            received_at=now, triage_status="done")
+        s.add(with_emb)
+        s.add(EventRow(source="telegram", source_event_id="none",
+                       content_text="без вектора", occurred_at=now,
+                       received_at=now, triage_status="done"))
+        await s.flush()
+        s.add(EventEmbeddingRow(event_id=with_emb.id, embedding=[0.1, 0.2]))
+
+    found = await fetch_candidates(ts_query="", acc_words=[], time_range=None,
+                                   project=None, has_vector=True, limit=15)
+
+    assert found.mode == "vector"
+    assert [r[2] for r in found.rows] == ["has"], "строка без эмбеддинга просочилась"
