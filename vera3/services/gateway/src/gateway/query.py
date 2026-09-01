@@ -6,7 +6,7 @@ These back the read-side tools in ~/.claude/mcp-servers/vera-mcp/server.py
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from typing import Any
 
 import httpx
@@ -18,6 +18,7 @@ from vera_shared.db.models import EventRow
 from vera_shared.db.models_graph import EntityRow
 from vera_shared.graph.dedup import get_entity_context
 from vera_shared.graph.repo import find_entity_by_name, list_members
+from vera_shared.timeutil import utc_naive_now
 
 from gateway.auth import check_internal_secret
 from gateway.config import get_settings
@@ -79,7 +80,7 @@ async def recent_events(
 ) -> dict[str, Any]:
     check_internal_secret(x_internal_secret)
 
-    since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=hours)
+    since = utc_naive_now() - timedelta(hours=hours)
     async with get_session() as s:
         q = select(EventRow).where(EventRow.occurred_at >= since)
         if source:

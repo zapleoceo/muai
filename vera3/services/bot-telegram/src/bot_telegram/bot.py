@@ -13,6 +13,7 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import Message
+from vera_shared.timeutil import utc_naive_now
 
 from bot_telegram.formatting import format_error, format_reply, plain_fallback
 
@@ -37,7 +38,7 @@ async def _save_event(chat_id: int, msg_id: int, role: str, content: str,
         "account": f"chat:{chat_id}",
         "category": role,
         "content_text": content[:8000],
-        "occurred_at": (occurred_at or datetime.utcnow()).isoformat(),
+        "occurred_at": (occurred_at or utc_naive_now()).isoformat(),
         "metadata": {
             "chat_id": chat_id,
             "sender_id": sender_id,

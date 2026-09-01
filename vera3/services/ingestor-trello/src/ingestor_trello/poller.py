@@ -9,11 +9,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from vera_shared.db.engine import init_engine
 from vera_shared.db.models_sources import TrelloBoardRow
 from vera_shared.ingest import poll_forever
+from vera_shared.timeutil import utc_naive_now
 
 from ingestor_trello import digest, store
 from ingestor_trello.client import ACTIONS_PAGE, TrelloAuthError, TrelloClient
@@ -47,7 +48,7 @@ async def poll_board(
     client: TrelloClient, row: TrelloBoardRow, me_id: str, me_username: str,
 ) -> int:
     since = row.last_action_id or (
-        datetime.utcnow() - timedelta(days=BOOTSTRAP_DAYS)
+        utc_naive_now() - timedelta(days=BOOTSTRAP_DAYS)
     ).isoformat()
 
     try:
@@ -83,7 +84,7 @@ async def poll_board(
 async def run_digest(
     client: TrelloClient, boards: list[TrelloBoardRow], me_username: str,
 ) -> None:
-    now = datetime.utcnow()
+    now = utc_naive_now()
     if not await digest.due_today(now):
         return
     per_board = []

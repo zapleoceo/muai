@@ -91,8 +91,22 @@ this project's own "~200 lines, one responsibility per file" convention):
 
 ### Timezone display
 
-All DB datetime columns are **naive UTC** (ingestors write `datetime.utcnow()`;
-`received_at`/`created_at` use `server_default=func.now()`). The dashboard
+All DB datetime columns are **naive UTC**. Application code writes them via
+`vera_shared.timeutil.utc_naive_now()`; `received_at`/`created_at` use
+`server_default=func.now()`.
+
+That helper exists because "now" was spelled `datetime.utcnow()` in 53
+places, and it is deprecated as of Python 3.12 (which this project targets)
+and scheduled for removal. The literal replacement,
+`datetime.now(UTC).replace(tzinfo=None)`, is three calls on one line that
+drift the moment someone copies it — drop the `.replace()` and an aware
+datetime lands in a naive column, which is silent on a UTC host and wrong
+everywhere else. CI enforces the ban with ruff `DTZ003`; a test also greps
+the tree, because the one occurrence that mattered most was passed as a
+*callable* (`default_factory=datetime.utcnow`) and neither a `utcnow()` grep
+nor `DTZ003` can see that form.
+
+The dashboard
 never `strftime`s a wall-clock time straight into HTML — every displayed
 timestamp goes through `render.local_dt(dt, fmt)`, which emits
 `<time data-utc="…Z" data-fmt="…">UTC-fallback</time>`. A small script in the

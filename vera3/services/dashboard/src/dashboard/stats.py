@@ -21,6 +21,7 @@ from typing import Any
 
 from sqlalchemy import text
 from vera_shared.db.engine import get_session
+from vera_shared.timeutil import utc_naive_now
 
 log = logging.getLogger(__name__)
 
@@ -78,7 +79,7 @@ async def get_stats(force: bool = False) -> dict[str, Any]:
 
 
 async def _compute_stats() -> dict[str, Any]:
-    now = datetime.utcnow()
+    now = utc_naive_now()
     h1 = now - timedelta(hours=1)
     h24 = now - timedelta(hours=24)
     today = now.date()
@@ -180,7 +181,7 @@ async def get_sources_overview(force: bool = False) -> dict[str, dict[str, Any]]
 
 
 async def _compute_overview() -> dict[str, dict[str, Any]]:
-    now = datetime.utcnow()
+    now = utc_naive_now()
     async with get_session() as s:
         rows = (await s.execute(text("""
             SELECT source, COUNT(*) AS total,

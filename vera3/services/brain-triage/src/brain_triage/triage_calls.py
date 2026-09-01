@@ -9,12 +9,12 @@ from __future__ import annotations
 import json
 import logging
 import re
-from datetime import datetime
 from typing import Any
 
 from vera_shared.db.models import EventRow
 from vera_shared.llm.circuit import llm_cooldown_remaining_s
 from vera_shared.llm.client import chat_async, embed
+from vera_shared.timeutil import utc_naive_now
 
 from brain_triage.postprocess import postprocess_triage
 from brain_triage.prompts import TRIAGE_PROMPT_TEMPLATE, build_batch_prompt
@@ -86,7 +86,7 @@ async def triage_one(event_row: EventRow) -> dict[str, Any] | None:
     parsed = postprocess_triage(parsed, event_row.source)
     parsed["triaged_by_provider"] = meta.get("provider")
     parsed["triaged_by_model"] = meta.get("model")
-    parsed["triaged_at"] = datetime.utcnow().isoformat()
+    parsed["triaged_at"] = utc_naive_now().isoformat()
     return parsed
 
 
@@ -131,7 +131,7 @@ async def triage_group_batch(rows: list[EventRow]) -> dict[int, dict[str, Any] |
         item = postprocess_triage(item, src_by_id[eid])
         item["triaged_by_provider"] = meta.get("provider")
         item["triaged_by_model"] = meta.get("model")
-        item["triaged_at"] = datetime.utcnow().isoformat()
+        item["triaged_at"] = utc_naive_now().isoformat()
         by_id[eid] = item
 
     # Событие, которое LLM не вернула (обрезка/пропуск) — None, вызывающий

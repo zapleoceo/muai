@@ -20,7 +20,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import timedelta
 from typing import Any, Literal
 
 from fastapi import APIRouter, Header
@@ -31,6 +31,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
 from vera_shared.llm.client import LLMCallFailed, embed
+from vera_shared.timeutil import utc_naive_now
 
 from gateway.auth import check_internal_secret
 
@@ -50,7 +51,8 @@ def _content_hash(text: str) -> str:
 def _cosine(a: list[float], b: list[float]) -> float:
     if not a or not b or len(a) != len(b):
         return 0.0
-    dot = sum(x * y for x, y in zip(a, b))
+    # strict=True безопасен: разная длина отсеяна строкой выше
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
     na = sum(x * x for x in a) ** 0.5
     nb = sum(y * y for y in b) ** 0.5
     return dot / (na * nb) if na and nb else 0.0
@@ -89,7 +91,7 @@ async def _find_semantic_neighbour(
         return None, None
     q_vec = vectors[0]
 
-    since = datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(
+    since = utc_naive_now() - timedelta(
         days=SEMANTIC_LOOKBACK_DAYS
     )
     # Эмбеддинги вынесены в event_embeddings (миграция 011) — джойним.
@@ -142,7 +144,7 @@ async def remember(
                 category=body.kind,
                 content_text=text,
                 metadata_=metadata,
-                occurred_at=datetime.now(timezone.utc).replace(tzinfo=None),
+                occurred_at=utc_naive_now(),
                 triage_status="pending",
             )
             .on_conflict_do_nothing(index_elements=["source", "source_event_id"])

@@ -10,6 +10,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from vera_shared.timeutil import utc_naive_now
+
 # Тип сигнала который Вера может найти внутри события
 SignalType = Literal[
     "task",     # требует действия
@@ -49,7 +51,10 @@ class TriageMetadata(BaseModel):
     signals: list[Signal] = Field(default_factory=list)
     active_topic_matches: list[dict[str, Any]] = Field(default_factory=list)
     needs_action: bool = False
-    triaged_at: datetime = Field(default_factory=datetime.utcnow)
+    # Единственное место, где utcnow передавалась как CALLABLE, а не вызывалась.
+    # Поэтому её не видел ни grep по `utcnow()`, ни ruff DTZ003 — нашлась она
+    # только по DeprecationWarning из pydantic в прогоне тестов.
+    triaged_at: datetime = Field(default_factory=utc_naive_now)
     triaged_by_provider: str | None = None
     triaged_by_model: str | None = None
 

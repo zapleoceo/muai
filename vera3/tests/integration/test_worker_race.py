@@ -14,6 +14,7 @@ import os
 
 import pytest
 import pytest_asyncio
+from vera_shared.timeutil import utc_naive_now
 
 TEST_DB_URL = os.environ.get(
     "TEST_DATABASE_URL",
@@ -30,7 +31,7 @@ pytestmark = pytest.mark.skipif(
 async def pg_db(monkeypatch):
     monkeypatch.setenv("TOKEN_SECRET", "test-secret-for-integration")
     monkeypatch.setenv("DATABASE_URL", TEST_DB_URL)
-    from vera_shared.db.engine import init_engine, close_engine, get_session, Base
+    from vera_shared.db.engine import Base, close_engine, get_session, init_engine
     engine = await init_engine(TEST_DB_URL)
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.drop_all)
@@ -43,7 +44,7 @@ async def pg_db(monkeypatch):
 async def test_three_workers_no_duplicate_claim(pg_db):
     """100 pending events + 3 concurrent claimers. Каждое событие захвачено
     ровно одним claimer'ом — нет дублей."""
-    from datetime import datetime
+
     from sqlalchemy import text
     from vera_shared.db.engine import get_session
     from vera_shared.db.models import EventRow
@@ -55,7 +56,7 @@ async def test_three_workers_no_duplicate_claim(pg_db):
                 source="test",
                 source_event_id=f"e{i}",
                 content_text=f"text {i}",
-                occurred_at=datetime.utcnow(),
+                occurred_at=utc_naive_now(),
                 triage_status="pending",
             ))
 
@@ -105,7 +106,8 @@ async def test_three_workers_no_duplicate_claim(pg_db):
 @pytest.mark.asyncio
 async def test_watchdog_returns_stuck_processing(pg_db):
     """processing старше STUCK_AFTER_S → watchdog возвращает в pending."""
-    from datetime import datetime, timedelta
+    from datetime import timedelta
+
     from sqlalchemy import text
     from vera_shared.db.engine import get_session
     from vera_shared.db.models import EventRow
@@ -114,16 +116,16 @@ async def test_watchdog_returns_stuck_processing(pg_db):
         # Событие в processing с triage_started_at 15 минут назад
         s.add(EventRow(
             source="test", source_event_id="stuck1",
-            content_text="x", occurred_at=datetime.utcnow(),
+            content_text="x", occurred_at=utc_naive_now(),
             triage_status="processing",
-            triage_started_at=datetime.utcnow() - timedelta(minutes=15),
+            triage_started_at=utc_naive_now() - timedelta(minutes=15),
         ))
         # И одно свежее (не trigger'ит watchdog)
         s.add(EventRow(
             source="test", source_event_id="fresh1",
-            content_text="x", occurred_at=datetime.utcnow(),
+            content_text="x", occurred_at=utc_naive_now(),
             triage_status="processing",
-            triage_started_at=datetime.utcnow(),
+            triage_started_at=utc_naive_now(),
         ))
 
     # watchdog: STUCK_AFTER_S=600

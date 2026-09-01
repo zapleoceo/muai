@@ -8,7 +8,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select
@@ -21,6 +20,7 @@ from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import TelegramSessionRow
 from vera_shared.ingest_policy import is_ignored_chat, is_ignored_sender
 from vera_shared.media_policy import classify_chat_kind, media_skip_reason
+from vera_shared.timeutil import utc_naive_now
 
 from ingestor_telegram.entity_sync import sync_message_entities
 from ingestor_telegram.tools_http import build_app
@@ -171,7 +171,7 @@ async def save_message(client: TelegramClient, msg) -> None:
             account="userbot",
             category=chat_type,
             content_text=content,
-            occurred_at=msg.date.replace(tzinfo=None) if msg.date else datetime.utcnow(),
+            occurred_at=msg.date.replace(tzinfo=None) if msg.date else utc_naive_now(),
             metadata_={
                 "chat_id": chat.id,
                 "chat_type": chat_type,

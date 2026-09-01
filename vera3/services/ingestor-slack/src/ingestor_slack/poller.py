@@ -15,12 +15,12 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
-from datetime import datetime
 
 from vera_shared.db.engine import init_engine
 from vera_shared.db.models_sources import SlackConversationRow
 from vera_shared.ingest import poll_forever
 from vera_shared.ingest_policy import is_ignored_slack_channel
+from vera_shared.timeutil import utc_naive_now
 
 from ingestor_slack import auth, store
 from ingestor_slack.client import SlackAuthError, SlackClient
@@ -43,7 +43,7 @@ DENY_CHANNELS = frozenset(
 
 
 def bootstrap_ts() -> str:
-    return f"{(datetime.utcnow().timestamp() - BOOTSTRAP_DAYS * 86400):.6f}"
+    return f"{(utc_naive_now().timestamp() - BOOTSTRAP_DAYS * 86400):.6f}"
 
 
 def newest_ts(messages: list[dict]) -> str | None:

@@ -190,8 +190,13 @@ jobs:
           # полпути. Проект защищается от этого руками в шести местах, и ровно
           # в двух самых важных (watchdog и retry-цикл триажа) забыл. Линтер
           # дешевле, чем ещё один такой пропуск.
+          #
+          # DTZ003 (datetime.utcnow): deprecated с 3.12, снята с плана
+          # поддержки. Вместо неё vera_shared.timeutil.utc_naive_now().
+          # Только DTZ003, а не весь DTZ: DTZ001 ругается на конструктор
+          # datetime(2026,...) в фикстурах тестов — там это ровно то, что надо.
           echo "$CHANGED" | xargs ruff check \
-            --select E,F,W,I,B,UP,SIM,C4,RET,RUF006 --ignore E501,E402,B008
+            --select E,F,W,I,B,UP,SIM,C4,RET,RUF006,DTZ003 --ignore E501,E402,B008
 
       - name: Vulture (dead-code on changed files)
         shell: bash

@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
 from sqlalchemy import case, select, update
 from sqlalchemy import true as sa_true
@@ -21,6 +21,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models import ClaudeSessionQueueRow
 from vera_shared.llm.circuit import llm_cooldown_remaining_s
 from vera_shared.llm.client import LLMCoolingDown
+from vera_shared.timeutil import utc_naive_now
 
 from gateway.claude_distill import SPEC, distill
 from gateway.claude_session import store_summary
@@ -44,7 +45,7 @@ MAX_COOLDOWN_SLEEP_S = 600.0
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc).replace(tzinfo=None)
+    return utc_naive_now()
 
 
 async def revive_stale(*, everything: bool = False) -> int:

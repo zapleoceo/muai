@@ -6,13 +6,13 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any
 
 from sqlalchemy import select, update
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_sources import TrelloBoardRow
 from vera_shared.ingest import insert_events, sync_author_entities
+from vera_shared.timeutil import utc_naive_now
 
 log = logging.getLogger("trello")
 
@@ -40,7 +40,7 @@ async def upsert_boards(boards: list[dict[str, Any]]) -> list[TrelloBoardRow]:
 
 
 async def save_cursor(board_id: str, cursor: str | None, error: str | None) -> None:
-    values: dict[str, Any] = {"last_polled_at": datetime.utcnow(), "last_error": error}
+    values: dict[str, Any] = {"last_polled_at": utc_naive_now(), "last_error": error}
     if cursor:
         values["last_action_id"] = cursor
     async with get_session() as s:

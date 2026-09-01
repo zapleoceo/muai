@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime
 
 from sqlalchemy import select, update
 from sqlalchemy.exc import ProgrammingError
 from vera_shared.crypto import decrypt
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_sources import SlackAuthRow
+from vera_shared.timeutil import utc_naive_now
 
 log = logging.getLogger("slack")
 
@@ -66,7 +66,7 @@ async def mark_ok(row_id: int | None) -> None:
     async with get_session() as s:
         await s.execute(
             update(SlackAuthRow).where(SlackAuthRow.id == row_id)
-            .values(last_ok_at=datetime.utcnow(), last_error=None)
+            .values(last_ok_at=utc_naive_now(), last_error=None)
         )
 
 

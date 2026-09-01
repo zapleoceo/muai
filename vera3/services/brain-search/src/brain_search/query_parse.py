@@ -14,6 +14,8 @@ import re
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 
+from vera_shared.timeutil import utc_naive_now
+
 TZ_OFFSET_H = int(os.environ.get("VERA_TZ_OFFSET_H", "7"))
 
 
@@ -167,7 +169,7 @@ def parse_time_range(q: str, *, now_utc: datetime | None = None) -> tuple[dateti
 
     Возвращает (start_utc, end_utc) полуинтервал [start, end).
     """
-    now_utc = now_utc or datetime.utcnow()
+    now_utc = now_utc or utc_naive_now()
     ql = q.lower()
 
     for pattern, days_ago in _RELATIVE_DAY:

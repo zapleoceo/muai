@@ -15,6 +15,7 @@ from datetime import datetime
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
+from vera_shared.timeutil import utc_naive_now
 
 from dashboard.render import _render, data_table, esc, local_dt, owner_or_redirect
 from dashboard.source_detail import Block, Html
@@ -147,7 +148,7 @@ async def sources_page(request: Request):
     if (resp := owner_or_redirect(request)) is not None:
         return resp
 
-    now = datetime.utcnow()
+    now = utc_naive_now()
     overview = await get_sources_overview()
     sources = _sources_in_order(overview)
     states = {s.key: await state_of(s.key) for s in sources}
@@ -211,7 +212,7 @@ async def source_page(key: str, request: Request):
     if (resp := owner_or_redirect(request)) is not None:
         return resp
 
-    now = datetime.utcnow()
+    now = utc_naive_now()
     src = resolve_source(key)
     stat = (await get_sources_overview()).get(key, {})
     state = await state_of(key)

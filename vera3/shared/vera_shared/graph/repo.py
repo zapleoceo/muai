@@ -6,7 +6,6 @@ Neo4j is a new implementation behind the same interface (DIP).
 from __future__ import annotations
 
 import logging
-from datetime import datetime
 from typing import Any
 
 from sqlalchemy import bindparam, func, select, text, update
@@ -19,6 +18,7 @@ from vera_shared.db.models_graph import (
     MembershipRow,
     RelationshipRow,
 )
+from vera_shared.timeutil import utc_naive_now
 
 log = logging.getLogger(__name__)
 
@@ -55,7 +55,7 @@ async def upsert_entity(
             # touch last_seen on entity
             await s.execute(
                 update(EntityRow).where(EntityRow.id == alias.entity_id)
-                .values(last_seen_at=datetime.utcnow())
+                .values(last_seen_at=utc_naive_now())
             )
             if attributes or name:
                 ent = (await s.execute(
@@ -151,7 +151,7 @@ async def upsert_entity_linked(
             ent = (await s.execute(
                 select(EntityRow).where(EntityRow.id == entity_id)
             )).scalar_one()
-            ent.last_seen_at = datetime.utcnow()
+            ent.last_seen_at = utc_naive_now()
             if attributes:
                 # Свои данные НЕ перетирают уже известные: профиль Slack —
                 # ещё один свидетель, а не истина в последней инстанции.
@@ -396,7 +396,7 @@ async def upsert_membership(
     attributes: dict[str, Any] | None = None,
 ) -> None:
     """Upsert membership. Touches last_seen_at."""
-    now = datetime.utcnow()
+    now = utc_naive_now()
     async with get_session() as s:
         existing = (await s.execute(
             select(MembershipRow).where(
@@ -452,7 +452,7 @@ async def upsert_relationship(
     """Soft-upsert: if (subject, predicate, object) exists → touch last_seen
     and return False. Otherwise insert and return True (so callers like
     rel-extract can count genuinely new links)."""
-    now = datetime.utcnow()
+    now = utc_naive_now()
     async with get_session() as s:
         existing = (await s.execute(
             select(RelationshipRow).where(
@@ -502,7 +502,7 @@ async def upsert_identity_node(
             existing.confidence = confidence
             if derived_from:
                 existing.derived_from = derived_from
-            existing.updated_at = datetime.utcnow()
+            existing.updated_at = utc_naive_now()
             return existing.id
         node = IdentityNodeRow(
             type=type, label=label, payload=payload,
