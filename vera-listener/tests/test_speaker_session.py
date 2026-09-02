@@ -72,6 +72,16 @@ class TestNaming:
             session.observe(at, _AUDIO)
         assert set(session.resolve(None).values()) == {"Собеседник 1", "Собеседник 2"}
 
+    def test_numbers_of_the_unnamed_run_in_a_row(self, tmp_path):
+        """Один голос узнан, два нет. Безымянные — «1» и «2», а не «2» и «3»:
+        пропуск в нумерации читается как потерянная реплика."""
+        session, registry = _session(tmp_path, [_vec(0), _vec(1), _vec(2)])
+        registry.remember("Виктор", _vec(0))
+        for at in (1.0, 2.0, 3.0, 4.0, 5.0, 6.0):
+            session.observe(at, _AUDIO)
+        assert set(session.resolve(None).values()) == {
+            "Виктор", "Собеседник 1", "Собеседник 2"}
+
     def test_window_name_is_refused_when_voices_are_many(self, tmp_path):
         """Заголовок обещает один-на-один. Голосов несколько — обещание
         нарушено, и приписать имя одному из них наугад нельзя."""

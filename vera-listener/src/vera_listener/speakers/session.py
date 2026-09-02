@@ -78,7 +78,8 @@ class SpeakerSession:
         names: list[str] = []
         taken: set[str] = set()
 
-        for index, cluster in enumerate(clusters, start=1):
+        unnamed = 0
+        for cluster in clusters:
             known = self._registry.match(cluster.centroid)
             if known and known not in taken:
                 names.append(known)
@@ -96,7 +97,11 @@ class SpeakerSession:
                     self._registry.remember(counterpart.name, cluster.centroid)
                     self._registry.save()
                 continue
-            names.append(f"{UNKNOWN_PREFIX} {index}")
+            # Нумеруем безымянных подряд, а не по месту в списке кластеров:
+            # «Собеседник 1, Собеседник 3» рядом с названным по имени читается
+            # как потерянная реплика, хотя не потеряно ничего.
+            unnamed += 1
+            names.append(f"{UNKNOWN_PREFIX} {unnamed}")
 
         mapping: dict[float, str] = {}
         for cluster, name in zip(clusters, names, strict=True):
