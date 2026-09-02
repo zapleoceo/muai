@@ -207,11 +207,22 @@ UPDATE events e SET
   triage_status='media_pending', triage_error=NULL,
   metadata = (e.metadata - 'media_recognition' - 'media_retry_count' - 'media_next_retry_at')
 WHERE e.metadata->>'media_recognition'='failed' AND e.triage_status='done'
-  AND COALESCE(e.triage_error,'') NOT LIKE '%Could not find the input entity%'
-  AND COALESCE(e.triage_error,'') NOT LIKE '%message not found%'
-  AND COALESCE(e.triage_error,'') NOT LIKE '%too large%'
-  AND COALESCE(e.triage_error,'') NOT LIKE '%413%';
+  AND COALESCE(e.metadata->>'media_permanent','false') <> 'true';
 ```
+
+**Почему признак живёт в метаданных, а не в `triage_error` (02.09.2026).**
+Раньше фильтр стоял на `triage_error LIKE`, и он не работал ни дня.
+Деградированное событие уходит в обычный триаж, а тот на успехе ставит
+`triage_error = NULL` ([`brain_triage/worker.py`](../services/brain-triage/src/brain_triage/worker.py)).
+К моменту доливки признака уже не было, фильтр видел пустую строку и
+пропускал всё. Замер за 12 часов: **468 событий**, файлов которых физически
+нет (сообщение удалено, пир не резолвится), брались по три попытки каждые три
+часа — бесконечно, съедая около четверти пропускной способности воркера.
+Теперь `_on_failure` пишет `metadata.media_permanent` по предикату
+`_is_unrecoverable` (шире, чем `_is_permanent`: тот решает «сдаваться ли
+сразу», этот — «возвращать ли потом»), а метаданные триаж не трогает.
+События, деградировавшие до правки, поля не имеют — они получат ещё один
+проход и будут помечены на нём.
 
 The bottleneck is **vision-pool capacity** — free-tier vision clears only
 ~130 photos/day, so the 72k photo tail drains over months. This is safe and
@@ -229,5 +240,18 @@ download is size-capped (no OOM). Крон на хосте раз в 3 часа 
    этом чате уже пишет: решение принимается по данным, а данные меняются.
 3. `top_up` — доливает из восстановимых провалов, голосовые вперёд, дальше
    свежие фото, и только то, что политика пропускает.
+4. `measure` — считает, сколько медиа политика пропускает ВСЕГО и сколько из
+   них ещё не распознано, и кладёт оба числа в `app_control`
+   (`media_backlog_total` / `media_backlog_left`). Дашборд читает их и только
+   их: политика «какие чаты вообще распознаём» живёт здесь, а на странице это
+   был бы второй скан `events` каждую минуту. Агрегация идёт по ЧАТУ, а не по
+   событию — политика решает по чату, поэтому это сотня строк, а не десятки
+   тысяч.
 
-`--dry-run` показывает все три шага, ничего не меняя.
+`--dry-run` показывает все четыре шага, ничего не меняя.
+
+**Очередь — это рабочее окно, а не остаток.** Число в `media_pending`
+пилит между ~235 и 800, потому что крон доливает его до цели каждые три
+часа. Настоящий остаток — `media_backlog_left` (замер 02.09.2026: 19 101
+фото при 442 в окне). Дашборд до этой правки показывал именно размер окна и
+подписывал его «В очереди на триаж» — см. [`deploy-ops.md`](deploy-ops.md).

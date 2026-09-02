@@ -20,6 +20,7 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
+from vera_shared.control import get_control
 from vera_shared.db.engine import get_session
 from vera_shared.timeutil import utc_naive_now
 
@@ -116,10 +117,18 @@ async def _compute_stats() -> dict[str, Any]:
               COUNT(*)               FILTER (WHERE created_at >= :today)     AS calls_today,
               COALESCE(SUM(cost_usd) FILTER (WHERE created_at >= :month), 0) AS cost_month,
               COUNT(*) FILTER (WHERE workflow='triage' AND created_at >= :h1)  AS triage_1h,
-              COUNT(*) FILTER (WHERE workflow='triage' AND created_at >= :h24) AS triage_24h
+              COUNT(*) FILTER (WHERE workflow='triage' AND created_at >= :h24) AS triage_24h,
+              COUNT(*) FILTER (WHERE workflow='media_vision' AND status='ok'
+                               AND created_at >= :h24) AS vision_24h
             FROM usage_log
             WHERE created_at >= :month
         """), {"today": today, "month": month_ago, "h1": h1, "h24": h24})).mappings().one()
+
+    # Настоящий остаток распознавания — замер от scripts/media_requeue.py
+    # (см. его measure()). Здесь его не считают: политика «какие чаты вообще
+    # распознаём» живёт там, а тут это был бы второй скан events каждую минуту.
+    media_total = int(await get_control("media_backlog_total", "0") or 0)
+    media_left = int(await get_control("media_backlog_left", "0") or 0)
 
     # Свод по всем источникам (суммируем группы — без ещё одного скана)
     agg = dict.fromkeys(("total", "done", "pending", "media_pending", "error", "dead", "ingest_1h", "ingest_24h"), 0)
@@ -150,6 +159,11 @@ async def _compute_stats() -> dict[str, Any]:
         "cost_month": float(ul["cost_month"]),
         "triage_1h": ul["triage_1h"],
         "triage_24h": ul["triage_24h"],
+        # Темп распознавания фото — за сутки, а не за час: локальная модель
+        # отдаёт ~12 картинок в час, и часовое окно шумит вдвое.
+        "vision_24h": ul["vision_24h"],
+        "media_backlog_total": media_total,
+        "media_backlog_left": media_left,
         "computed_at": now,
     }
 

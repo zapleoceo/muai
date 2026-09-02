@@ -39,7 +39,7 @@ def _clean_cache():
 
 async def _event(get_session, *, chat_id, chat_kind, media_kind, status,
                  direction="received", recognition=None, skip_reason=None,
-                 error=None, tag=""):
+                 error=None, permanent=None, tag=""):
     from vera_shared.db.models import EventRow
     meta = {"chat_id": chat_id, "chat_kind": chat_kind,
             "media_kind": media_kind, "direction": direction}
@@ -47,6 +47,8 @@ async def _event(get_session, *, chat_id, chat_kind, media_kind, status,
         meta["media_recognition"] = recognition
     if skip_reason:
         meta["media_skip_reason"] = skip_reason
+    if permanent is not None:
+        meta["media_permanent"] = "true" if permanent else "false"
     async with get_session() as s:
         row = EventRow(
             source="telegram",
@@ -180,12 +182,37 @@ class TestTopUp:
     @pytest.mark.asyncio
     async def test_permanent_failures_are_not_retried(self, sqlite_db, requeue):
         await _event(sqlite_db, chat_id=11, chat_kind="private", media_kind="photo",
-                     status="done", recognition="failed",
+                     status="done", recognition="failed", permanent=True,
                      error="Could not find the input entity for PeerUser")
         with pytest.MonkeyPatch.context() as mp:
             _wire(mp, requeue, sqlite_db)
             _was, added, _rejected = await requeue.top_up(min_own=5, dry_run=False)
         assert added == 0
+
+    @pytest.mark.asyncio
+    async def test_permanence_survives_triage_wiping_triage_error(self, sqlite_db, requeue):
+        """Ровно баг 02.09: метка жила в triage_error, а триаж на успехе
+        ставит его в NULL. К моменту доливки признака уже не было, и 468
+        событий с несуществующими файлами возвращались в очередь каждые три
+        часа — вечно. Признак обязан лежать там, где триаж не пишет."""
+        await _event(sqlite_db, chat_id=14, chat_kind="private", media_kind="photo",
+                     status="done", recognition="failed", permanent=True,
+                     error=None)          # триаж уже прошёл и стёр ошибку
+        with pytest.MonkeyPatch.context() as mp:
+            _wire(mp, requeue, sqlite_db)
+            _was, added, _rejected = await requeue.top_up(min_own=5, dry_run=False)
+        assert added == 0
+
+    @pytest.mark.asyncio
+    async def test_failure_without_the_flag_gets_one_more_pass(self, sqlite_db, requeue):
+        """События, деградировавшие ДО правки, поля не имеют — их берём ещё
+        раз, и на этом проходе media-worker пометит их сам."""
+        await _event(sqlite_db, chat_id=15, chat_kind="private", media_kind="photo",
+                     status="done", recognition="failed")
+        with pytest.MonkeyPatch.context() as mp:
+            _wire(mp, requeue, sqlite_db)
+            _was, added, _rejected = await requeue.top_up(min_own=5, dry_run=False)
+        assert added == 1
 
     @pytest.mark.asyncio
     async def test_full_queue_is_left_alone(self, sqlite_db, requeue):
@@ -199,3 +226,56 @@ class TestTopUp:
             mp.setattr(requeue, "TARGET", 2)
             was, added, _rejected = await requeue.top_up(min_own=5, dry_run=False)
         assert (was, added) == (3, 0)
+
+
+class TestMeasure:
+    """Настоящий остаток считает доливка, а не дашборд: политика «какие чаты
+    вообще распознаём» живёт здесь. До 02.09 сайт показывал размер рабочего
+    окна (442) и называл его очередью на триаж."""
+
+    @pytest.mark.asyncio
+    async def test_counts_only_what_policy_lets_through(self, sqlite_db, requeue):
+        await _event(sqlite_db, chat_id=20, chat_kind="private", media_kind="photo",
+                     status="done", recognition="failed", tag="a")
+        await _event(sqlite_db, chat_id=20, chat_kind="private", media_kind="photo",
+                     status="done", recognition="ok", tag="b")
+        # канал политика не пропускает — ни в общий объём, ни в остаток
+        await _event(sqlite_db, chat_id=21, chat_kind="channel", media_kind="photo",
+                     status="done", recognition="failed")
+        with pytest.MonkeyPatch.context() as mp:
+            _wire(mp, requeue, sqlite_db)
+            total, left = await requeue.measure(min_own=5, dry_run=True)
+        assert (total, left) == (2, 1)
+
+    @pytest.mark.asyncio
+    async def test_never_recognised_counts_as_left(self, sqlite_db, requeue):
+        await _event(sqlite_db, chat_id=22, chat_kind="private", media_kind="photo",
+                     status="media_pending")
+        with pytest.MonkeyPatch.context() as mp:
+            _wire(mp, requeue, sqlite_db)
+            total, left = await requeue.measure(min_own=5, dry_run=True)
+        assert (total, left) == (1, 1)
+
+    @pytest.mark.asyncio
+    async def test_writes_both_numbers_for_the_dashboard(self, sqlite_db, requeue):
+        # set_control пишет raw-SQL с now() (Postgres) — даём SQLite аналог
+        from datetime import datetime, timezone
+
+        import vera_shared.db.engine as engine_mod
+        from sqlalchemy import event
+        from vera_shared.control import get_control
+
+        @event.listens_for(engine_mod._engine.sync_engine, "connect")
+        def _register_now(dbapi_conn, _rec):
+            dbapi_conn.create_function(
+                "now", 0, lambda: datetime.now(timezone.utc).isoformat())
+
+        await engine_mod._engine.dispose()   # пул создан до регистрации
+
+        await _event(sqlite_db, chat_id=23, chat_kind="private", media_kind="photo",
+                     status="done", recognition="failed")
+        with pytest.MonkeyPatch.context() as mp:
+            _wire(mp, requeue, sqlite_db)
+            await requeue.measure(min_own=5, dry_run=False)
+        assert await get_control(requeue.BACKLOG_TOTAL_KEY, "") == "1"
+        assert await get_control(requeue.BACKLOG_LEFT_KEY, "") == "1"
