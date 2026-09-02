@@ -480,6 +480,39 @@ async def test_on_failure_degrade_branch_runs_sql():
     sql, params = sess.calls[0]
     assert "media_recognition" in sql
     assert params["id"] == 42
+    assert params["perm"] == "true"
+
+
+def test_unrecoverable_covers_what_the_refill_must_never_take_back():
+    """Файла нет — доливать нечего. Признак пишется в metadata, потому что
+    triage_error триаж обнуляет на успехе (баг 02.09: 468 событий крутились
+    по три попытки каждые три часа вечно)."""
+    for err in ("download: message not found",
+                "download: ValueError: Could not find the input entity for PeerUser(...)",
+                "download: too large: 90000000 bytes (>25MB)",
+                "broker vision HTTP 413: payload too large"):
+        assert repo._is_unrecoverable(err), err
+
+
+def test_transient_failures_stay_recoverable():
+    # 503/429 лечатся временем — такое доливать обратно НУЖНО
+    for err in ("vision: broker vision HTTP 503: no provider available",
+                "broker vision HTTP 429: rate limit",
+                "job still pending"):
+        assert not repo._is_unrecoverable(err), err
+
+
+@pytest.mark.asyncio
+async def test_on_failure_marks_transient_degrade_as_recoverable():
+    """Три провала подряд на 503 — событие деградирует, но пометить его
+    недостижимым нельзя: пул оживёт, и фото надо будет добрать."""
+    sess = _FakeSession()
+    with patch.object(repo, "get_session", lambda: sess):
+        action = await repo._on_failure(
+            43, {"media_retry_count": 2}, "vision: broker vision HTTP 503: no provider")
+    assert action == "degraded"
+    _sql, params = sess.calls[0]
+    assert params["perm"] == "false"
 
 
 @pytest.mark.asyncio

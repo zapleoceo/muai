@@ -47,6 +47,20 @@ async def control_backfill_rate(request: Request, max_per_hour: int = Form(0)):
     return HTMLResponse(await _build_progress_fragment())
 
 
+def _eta(remaining: int, per_hour: float) -> str:
+    """«Сколько ещё» — по темпу ИМЕННО этой очереди."""
+    if per_hour <= 0 or remaining <= 0:
+        return "—"
+    h = remaining / per_hour
+    if h < 2:
+        return f"~{int(h * 60)} мин"
+    return f"~{h:.1f} ч" if h < 48 else f"~{h / 24:.1f} дн"
+
+
+def _pct(done: int, total: int) -> int:
+    return min(100, int(100 * done / total)) if total > 0 else 0
+
+
 async def _build_progress_fragment() -> str:
     now = utc_naive_now()
     paused = await is_backfill_paused()
@@ -62,7 +76,6 @@ async def _build_progress_fragment() -> str:
     media_pending = st["media_pending"]
     errored = st["error"]
     dead = st["dead"]
-    backlog_total = st["backlog_total"]
     per_source_1h = st["per_source_1h"]
 
     async with get_session() as s:
@@ -71,14 +84,16 @@ async def _build_progress_fragment() -> str:
             select(GmailAccountRow).order_by(GmailAccountRow.id)
         )).scalars().all()
 
-    # ETA — по всему backlog, dead не считаем (там retry уже не помогает)
-    eta_basis = backlog_total - dead
-    if triage_1h > 0 and eta_basis > 0:
-        eta_h = eta_basis / triage_1h
-        eta = f"~{int(eta_h * 60)} мин" if eta_h < 2 else (
-              f"~{eta_h:.1f} ч" if eta_h < 48 else f"~{eta_h/24:.1f} дн")
-    else:
-        eta = "—"
+    # Две очереди, две скорости, два ETA. Раньше ETA был один и считался как
+    # `весь backlog / темп ТРИАЖА` — а backlog почти целиком состоит из фото,
+    # которые идут через vision в десять раз медленнее. 02.09 это дало «442
+    # события, ETA 3.3 ч» при настоящих 36 часах.
+    triage_queue = pending + errored          # dead не считаем: retry не поможет
+    eta_triage = _eta(triage_queue, triage_1h)
+    vision_per_h = st["vision_24h"] / 24
+    media_left = st["media_backlog_left"]
+    media_total = st["media_backlog_total"]
+    eta_media = _eta(media_left, vision_per_h)
 
     src_chips = "".join(
         f'<span class="chip">{esc(src)}: <b>+{cnt:,}</b></span>'
@@ -97,9 +112,12 @@ async def _build_progress_fragment() -> str:
             f'<span class="mute">last poll: {last}{ago}</span></div>'
         )
 
-    # Progress bar для триажа — теперь учитывает весь backlog, не только pending
-    total_events = backlog_total + (triage_24h if triage_24h else 1)
-    pct_pending = min(100, int(100 * backlog_total / max(total_events, 1)))
+    # Полоса меряет долю СДЕЛАННОГО от всего объёма. Раньше знаменателем была
+    # работа за последние сутки (`backlog + triage_24h`), поэтому полоса росла,
+    # когда Вера больше работала, и падала, когда крон доливал очередь, —
+    # чем угодно, только не прогрессом.
+    pct_triage = _pct(st["done"], st["done"] + triage_queue)
+    pct_media = _pct(media_total - media_left, media_total)
 
     if paused:
         pause_ui = (
@@ -148,22 +166,37 @@ async def _build_progress_fragment() -> str:
         </div>
         <div class="prog-cell">
           <div class="prog-label">В очереди на триаж</div>
-          <div class="prog-big">{backlog_total:,}</div>
-          <div class="mute" style="font-size:12px">ETA: {eta}</div>
+          <div class="prog-big">{triage_queue:,}</div>
+          <div class="mute" style="font-size:12px">ETA: {eta_triage}</div>
           <div class="mute" style="font-size:11px;margin-top:4px">
             ⏳ {pending:,} pending
-            {' · 🎬 ' + f'{media_pending:,} media' if media_pending else ''}
             {' · ❗ ' + f'{errored:,} retry-pending' if errored else ''}
             {' · 💀 ' + f'{dead:,} dead' if dead else ''}
+          </div>
+        </div>
+        <div class="prog-cell">
+          <div class="prog-label">Распознавание медиа</div>
+          <div class="prog-big">{media_left:,}<span class="prog-unit"> осталось</span></div>
+          <div class="mute" style="font-size:12px">ETA: {eta_media}</div>
+          <div class="mute" style="font-size:11px;margin-top:4px">
+            🎬 {media_pending:,} в работе · {vision_per_h:.0f}/час
           </div>
         </div>
       </div>
 
       <div style="margin:14px 0">
         <div class="mute" style="font-size:12px;margin-bottom:6px">
-          Прогресс триажа (обработано / весь backlog):
+          Триаж: разобрано {st['done']:,} из {st['done'] + triage_queue:,}
         </div>
-        <div class="bar"><div class="bar-fill" style="width:{100 - pct_pending}%"></div></div>
+        <div class="bar"><div class="bar-fill" style="width:{pct_triage}%"></div></div>
+      </div>
+
+      <div style="margin:14px 0">
+        <div class="mute" style="font-size:12px;margin-bottom:6px">
+          Распознавание: {media_total - media_left:,} из {media_total:,}
+          (в очереди держится рабочее окно, а не весь остаток)
+        </div>
+        <div class="bar"><div class="bar-fill" style="width:{pct_media}%"></div></div>
       </div>
 
       <div style="margin:18px 0 8px">

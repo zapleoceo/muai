@@ -44,6 +44,17 @@ def _is_permanent(err: str) -> bool:
     ))
 
 
+#: Провал, после которого медиа не достать НИКОГДА: сообщение удалено, пира
+#: не резолвит Telethon, файл больше лимита. Шире, чем `_is_permanent`: там
+#: решается «сдаваться ли сразу», здесь — «возвращать ли это в очередь потом».
+#: Две первые строки намеренно не в `_is_permanent`: разовая осечка Telethon
+#: мыслима, и три попытки внутри одного прохода стоят дёшево. А вот доливать
+#: такое обратно каждые три часа — нет.
+def _is_unrecoverable(err: str) -> bool:
+    e = err.lower()
+    return _is_permanent(err) or "message not found" in e         or "could not find the input entity" in e
+
+
 # Kinds recognised via the vision pool (chat_async capability="vision") vs the
 # separate whisper pool. When vision is circuit-broken we can still drain voice.
 _VOICE_KINDS = ("voice", "audio")
@@ -153,17 +164,29 @@ async def _on_failure(event_id: int, meta: dict, err: str) -> str:
     plan = _plan_failure(meta, err)
 
     if plan["degrade"]:
+        # media_permanent пишем В МЕТАДАННЫЕ, а не полагаемся на triage_error:
+        # после деградации событие уходит в обычный триаж, и тот на успехе
+        # ставит triage_error = NULL. Доливка очереди (scripts/media_requeue.py)
+        # отсеивала недостижимое медиа именно по triage_error — и метки к тому
+        # моменту уже не было. Итог: 468 событий, файлов которых физически нет
+        # (сообщение удалено, пир не резолвится), крутились по три попытки
+        # каждые три часа бесконечно, съедая четверть пропускной способности.
+        # Метаданные триаж не трогает.
         async with get_session() as s:
             await s.execute(text("""
                 UPDATE events
                 SET triage_status = 'pending',
                     triage_error = :err,
                     metadata = jsonb_set(
-                      COALESCE(metadata, '{}'::jsonb),
-                      '{media_recognition}', '"failed"'
+                      jsonb_set(
+                        COALESCE(metadata, '{}'::jsonb),
+                        '{media_recognition}', '"failed"'
+                      ),
+                      '{media_permanent}', CAST(:perm AS jsonb)
                     )
                 WHERE id = :id AND triage_status = 'media_pending'
-            """), {"err": err[:300], "id": event_id})
+            """), {"err": err[:300], "id": event_id,
+                   "perm": "true" if _is_unrecoverable(err) else "false"})
         return plan["action"]
 
     # Backoff retry. retry_count bound as text → cast to int inside to_jsonb

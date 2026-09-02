@@ -16,6 +16,10 @@
    меняются.
 3. **Доливка** до `VERA_MEDIA_QUEUE_TARGET` из восстановимых провалов —
    голосовые вперёд, дальше свежие фото, и только то, что политика пропускает.
+4. **Замер.** Сколько медиа политика вообще пропускает и сколько из них ещё не
+   распознано — в `app_control`, чтобы дашборд показывал настоящий остаток, а
+   не размер рабочего окна. Считается тут, а не в дашборде: политика живёт
+   здесь, а на дашборде это был бы второй скан events каждую минуту.
 
 Запуск (крон раз в 3 часа):
     docker exec vera3-gateway python /app/scripts/media_requeue.py
@@ -30,6 +34,7 @@ import os
 
 from sqlalchemy import select, text
 from vera_shared.chat_activity import min_own_messages, own_message_count
+from vera_shared.control import set_control
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.media_policy import SKIP_NO_PARTICIPATION, media_skip_reason
@@ -40,12 +45,18 @@ TARGET = int(os.environ.get("VERA_MEDIA_QUEUE_TARGET", "800"))
 
 #: Провал, после которого повторять бессмысленно: сообщение или файл больше не
 #: достать. Остальные провалы — транспортные, их и доливаем.
-PERMANENT = (
-    "%Could not find the input entity%",
-    "%message not found%",
-    "%too large%",
-    "%413%",
-)
+#:
+#: Решение принимает media-worker и пишет его в `metadata.media_permanent`.
+#: Раньше здесь стоял список LIKE-шаблонов по `triage_error` — и он не работал
+#: ни дня: деградированное событие уходит в обычный триаж, а тот на успехе
+#: ставит `triage_error = NULL`. К моменту доливки метки уже не было, фильтр
+#: видел пустую строку и пропускал всё. 468 событий, файлов которых физически
+#: нет, крутились по три попытки каждые три часа бесконечно.
+#:
+#: У событий, деградировавших ДО этой правки, поля нет — они получат ещё один
+#: проход и будут помечены на нём. Отсюда COALESCE, а не сравнение с false.
+#: Сравнение строкой, а не `::boolean`: очередь и её уборка обязаны
+#: проверяться тестами на SQLite, где такого каста нет.
 
 
 async def _rows(sql: str, **params) -> list[dict]:
@@ -140,11 +151,9 @@ async def top_up(min_own: int, dry_run: bool) -> tuple[int, int, int]:
     if need <= 0:
         return pending, 0, 0
 
-    not_permanent = " ".join(
-        f"AND COALESCE(triage_error,'') NOT LIKE '{p}'" for p in PERMANENT)
     # Берём с запасом: часть кандидатов политика отсеет, и добор одним
     # запросом дешевле, чем цикл «выбрал — проверил — не хватило».
-    candidates = await _rows(f"""
+    candidates = await _rows("""
         SELECT id,
                CAST(metadata->>'chat_id' AS TEXT) AS chat_id,
                metadata->>'chat_kind'  AS chat_kind,
@@ -152,7 +161,7 @@ async def top_up(min_own: int, dry_run: bool) -> tuple[int, int, int]:
         FROM events
         WHERE metadata->>'media_recognition' = 'failed'
           AND triage_status = 'done'
-          {not_permanent}
+          AND COALESCE(metadata->>'media_permanent', 'false') <> 'true'
         ORDER BY (metadata->>'media_kind' IN ('voice','audio')) DESC,
                  occurred_at DESC
         LIMIT :lim
@@ -167,6 +176,46 @@ async def top_up(min_own: int, dry_run: bool) -> tuple[int, int, int]:
                      set_meta={"needs_recognition": True})
     rejected = len(candidates) - len([1 for v in verdicts.values() if v is None])
     return pending, len(take), rejected
+
+
+#: Ключи замера. Дашборд читает их и только их — считать политику второй раз
+#: он не должен.
+BACKLOG_TOTAL_KEY = "media_backlog_total"
+BACKLOG_LEFT_KEY = "media_backlog_left"
+
+
+async def measure(min_own: int, dry_run: bool) -> tuple[int, int]:
+    """Шаг 4: сколько медиа политика пропускает всего и сколько ещё не сделано.
+
+    Агрегируем по ЧАТУ, а не по событию: политика решает по чату (тип + участие
+    владельца), поэтому сотня строк вместо десятков тысяч, и `own_message_count`
+    спрашивается по разу на чат.
+    """
+    rows = await _rows("""
+        SELECT CAST(metadata->>'chat_id' AS TEXT) AS chat_id,
+               metadata->>'chat_kind'  AS chat_kind,
+               metadata->>'media_kind' AS media_kind,
+               COUNT(*) AS n,
+               COUNT(*) FILTER (
+                 WHERE metadata->>'media_recognition' IS NULL
+                    OR metadata->>'media_recognition' = 'failed'
+               ) AS left_n
+        FROM events
+        WHERE metadata->>'media_kind' IS NOT NULL
+        GROUP BY 1, 2, 3
+    """)
+    total = left = 0
+    for row in rows:
+        own = await own_message_count(row["chat_id"])
+        if media_skip_reason(row["media_kind"], row["chat_kind"],
+                             own_messages=own, min_own_messages=min_own):
+            continue
+        total += row["n"]
+        left += row["left_n"]
+    if not dry_run:
+        await set_control(BACKLOG_TOTAL_KEY, str(total))
+        await set_control(BACKLOG_LEFT_KEY, str(left))
+    return total, left
 
 
 async def main(dry_run: bool) -> None:
@@ -187,6 +236,8 @@ async def main(dry_run: bool) -> None:
     if returned:
         log.info("%sвозвращено (участие появилось): %d", prefix, returned)
     log.info("%sдолито %d, из кандидатов отсеяно политикой %d", prefix, added, rejected)
+    total, left = await measure(min_own, dry_run)
+    log.info("%sполитика пропускает %d медиа, не распознано %d", prefix, total, left)
 
 
 if __name__ == "__main__":
