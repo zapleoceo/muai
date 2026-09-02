@@ -44,6 +44,12 @@ class Utterance(BaseModel):
     # попадает и эхо, и слова владельца. Старые слушатели поля не шлют — отсюда
     # дефолт, и от этого ничего не ломается.
     echo: bool = False
+    # Кто именно сказал. Дорожка `system` смешивает всех удалённых участников
+    # в один поток, и без этого поля в созвоне на пятерых видно только «не
+    # владелец». Слушатель разделяет их по голосу и, где приложение назвало
+    # собеседника, подставляет настоящее имя. None — имя не установлено:
+    # старый слушатель, дорожка микрофона или голос, который не с чем сверить.
+    speaker: str | None = None
 
 
 class VoiceSession(BaseModel):
@@ -67,6 +73,15 @@ class VoiceSessionResult(BaseModel):
     summary: str | None = None
 
 
+def voices_of(utterances: list[Utterance]) -> list[str]:
+    """Имена опознанных голосов, по одному разу и в устойчивом порядке.
+
+    Одно место на обоих потребителей — стенограмму и метаданные события:
+    две копии одного выражения разъехались бы при первой же правке.
+    """
+    return sorted({u.speaker for u in utterances if u.speaker})
+
+
 def transcript_record(utterances: list[Utterance]) -> dict[str, Any]:
     """Стенограмма для `events.content_extra` — дословно, с автором реплики.
 
@@ -78,11 +93,13 @@ def transcript_record(utterances: list[Utterance]) -> dict[str, Any]:
         "kind": "voice_transcript",
         "chars": sum(len(u.text) for u in utterances),
         "echoes": sum(1 for u in utterances if u.echo),
+        "speakers": voices_of(utterances),
         "utterances": [
-            # `echo` пишем только когда он есть: в записи их около десятой части,
-            # и ключ у каждой второй реплики раздувал бы jsonb без пользы.
+            # `echo` и `speaker` пишем только когда они есть: ключ у каждой
+            # реплики раздувал бы jsonb без пользы.
             {"at": round(u.at, 2), "stream": u.stream, "text": u.text,
-             **({"echo": True} if u.echo else {})}
+             **({"echo": True} if u.echo else {}),
+             **({"speaker": u.speaker} if u.speaker else {})}
             for u in utterances
         ],
     }
@@ -159,6 +176,10 @@ async def ingest_voice_session(
                     "duration_s": dur,
                     "utterances": len(body.utterances),
                     "utterances_echo": sum(1 for u in body.utterances if u.echo),
+                    # Имена говорящих — рядом с counterparts из выжимки, но
+                    # это РАЗНОЕ: там кого назвала модель по тексту, здесь
+                    # кого опознали по голосу.
+                    "voices": voices_of(body.utterances),
                     "counterparts": distilled.get("counterparts") or [],
                     "topics": distilled.get("topics") or [],
                     "meeting_id": body.meeting_id or src_id,

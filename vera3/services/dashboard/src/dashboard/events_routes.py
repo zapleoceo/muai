@@ -167,8 +167,11 @@ def transcript_html(extra: dict[str, Any] | None) -> str:
     for u in utterances:
         at = float(u.get("at") or 0.0)
         stamp = f"{int(at) // 60:02d}:{int(at) % 60:02d}"
-        who = STREAM_LABEL.get(str(u.get("stream")), str(u.get("stream") or "?"))
         cls = "self" if u.get("stream") == "mic" else "other"
+        # Имя, опознанное по голосу, вместо безликого «собеседник»: в созвоне
+        # на пятерых иначе не видно, кто что сказал.
+        who = (str(u.get("speaker")).strip() if u.get("speaker")
+               else STREAM_LABEL.get(str(u.get("stream")), str(u.get("stream") or "?")))
         # Помеченное эхо — это голос собеседника, пойманный микрофоном. Показать
         # его как речь владельца значит соврать об авторстве, а спрятать —
         # потерять слова: в том же куске бывают и его собственные.
@@ -179,6 +182,12 @@ def transcript_html(extra: dict[str, Any] | None) -> str:
             f'<td class="who {cls}">{esc(who)}</td>'
             f'<td>{esc(u.get("text") or "")}</td></tr>')
     echoes = sum(1 for u in utterances if u.get("echo"))
+    voices = sorted({str(u["speaker"]).strip() for u in utterances if u.get("speaker")})
+    voices_note = (
+        f'<p class="mute">Голоса опознаны: {esc(", ".join(voices))}. Реплики с '
+        f'одним именем сказал один человек. Имя берётся из заголовка окна в '
+        f'разговоре один на один и дальше узнаётся по голосу; «Собеседник N» — '
+        f'голос разделён, но назвать его неоткуда.</p>' if voices else "")
     echo_note = (
         f'<p class="mute">Помечено как эхо: {echoes}. Это речь собеседника, '
         f'пойманная микрофоном из динамиков. В выжимку такие реплики не '
@@ -190,6 +199,7 @@ def transcript_html(extra: dict[str, Any] | None) -> str:
       только выжимка выше — иначе обрывки перебивали бы её. Здесь текст лежит
       целиком: выжимка сжимает разговор примерно в тридцать раз, а звук не
       хранится вообще.</p>
+      {voices_note}
       {echo_note}
       <table class="data transcript"><tbody>{''.join(rows)}</tbody></table>
     """

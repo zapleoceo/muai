@@ -112,6 +112,20 @@ class Config:
         на всё состояние слушателя, чтобы переезд был копированием каталога."""
         return self.root / "models"
 
+    @property
+    def speaker_model_dir(self) -> Path:
+        """Модель опознания голоса — отдельной папкой внутри того же корня.
+
+        Не вперемешку с whisper: у той проверка полноты по своему списку
+        файлов, и чужой .onnx рядом сбивал бы её с толку."""
+        return self.model_dir / "speaker"
+
+    @property
+    def voiceprints_file(self) -> Path:
+        """Отпечатки голосов. Рядом с очередью, а не в моделях: это данные
+        владельца, а не скачанный артефакт — при переустановке их берегут."""
+        return self.root / "voiceprints.json"
+
 
 def load_config() -> Config:
     """Приоритет: переменные окружения > listener.env > vera_sync.env > дефолт."""
