@@ -108,3 +108,36 @@ class TestEchoIsVisible:
     def test_transcript_without_echo_says_nothing_about_it(self):
         """Лишний абзац у каждой записи без эха — шум."""
         assert "Помечено как эхо" not in transcript_html(_extra())
+
+
+class TestSpeakerNamesShown:
+    """Имя говорящего в карточке события — то место, где это читают глазами."""
+
+    @staticmethod
+    def _with_names():
+        return _extra(utterances=[
+            {"at": 0.0, "stream": "mic", "text": "я начну"},
+            {"at": 2.0, "stream": "system", "text": "давай", "speaker": "Вадим"},
+            {"at": 5.0, "stream": "system", "text": "я против", "speaker": "Виктор"},
+        ])
+
+    def test_names_replace_the_generic_label(self):
+        html = transcript_html(self._with_names())
+        assert "Вадим" in html and "Виктор" in html
+
+    def test_owner_keeps_the_stream_label(self):
+        html = transcript_html(self._with_names())
+        assert STREAM_LABEL["mic"] in html
+
+    def test_voices_are_summarised(self):
+        html = transcript_html(self._with_names())
+        assert "Голоса опознаны: Вадим, Виктор" in html
+
+    def test_nothing_about_voices_when_none_identified(self):
+        """Лишний абзац у каждой старой записи — шум."""
+        assert "Голоса опознаны" not in transcript_html(_extra())
+
+    def test_unnamed_remote_falls_back_to_the_stream_label(self):
+        html = transcript_html(_extra(utterances=[
+            {"at": 0.0, "stream": "system", "text": "аноним"}]))
+        assert STREAM_LABEL["system"] in html

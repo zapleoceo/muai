@@ -413,3 +413,43 @@ class TestEchoNotSummarized:
             await v.ingest_voice_session(body, x_internal_secret="ok")
 
         assert seen["n"] == 1
+
+
+class TestSpeakerLabels:
+    """Как реплики подписаны в тексте, который уходит в осмысление.
+
+    Имя вместо «собеседник» — не косметика: выжимка вытаскивает участников,
+    решения и договорённости, а в созвоне на пятерых без имён неразличимо,
+    кто на что согласился."""
+
+    def test_named_voice_is_labelled_by_name(self):
+        from gateway.voice_distill import render
+        lines = render([Utterance(at=0.0, stream="system", text="я сделаю",
+                                  speaker="Вадим")])
+        assert lines == ["[Вадим] я сделаю"]
+
+    def test_unnamed_remote_stays_generic(self):
+        from gateway.voice_distill import render
+        lines = render([Utterance(at=0.0, stream="system", text="ага")])
+        assert lines == ["[собеседник] ага"]
+
+    def test_microphone_is_always_me(self):
+        """Владельца опознавать незачем — он и так известен."""
+        from gateway.voice_distill import render
+        lines = render([Utterance(at=0.0, stream="mic", text="начнём",
+                                  speaker="Кто-то")])
+        assert lines == ["[я] начнём"]
+
+    def test_blank_name_falls_back_instead_of_empty_label(self):
+        """Пустая подпись `[]` сбила бы модель сильнее, чем «собеседник»."""
+        from gateway.voice_distill import speaker_label
+        assert speaker_label({"stream": "system", "speaker": "   "}) == "собеседник"
+
+    def test_group_call_keeps_voices_apart(self):
+        from gateway.voice_distill import render
+        lines = render([
+            Utterance(at=0.0, stream="system", text="первый", speaker="Вадим"),
+            Utterance(at=1.0, stream="system", text="второй", speaker="Виктор"),
+            Utterance(at=2.0, stream="system", text="третий", speaker="Вадим"),
+        ])
+        assert lines == ["[Вадим] первый", "[Виктор] второй", "[Вадим] третий"]

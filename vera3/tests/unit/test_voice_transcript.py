@@ -173,3 +173,44 @@ class TestEchoSplit:
         record = transcript_record([Utterance(at=0.0, stream="mic", text="привет")])
         assert record["echoes"] == 0
         assert "echo" not in record["utterances"][0]
+
+
+class TestSpeakerNames:
+    """Кто именно сказал реплику: дорожка `system` смешивает всех удалённых
+    участников, и без имени в созвоне на пятерых видно только «не владелец»."""
+
+    @staticmethod
+    def _utterances():
+        return [
+            Utterance(at=0.0, stream="mic", text="я начну"),
+            Utterance(at=2.0, stream="system", text="давай", speaker="Вадим"),
+            Utterance(at=5.0, stream="system", text="я против", speaker="Виктор"),
+            Utterance(at=8.0, stream="system", text="без имени"),
+        ]
+
+    def test_speaker_is_stored_per_utterance(self):
+        record = transcript_record(self._utterances())
+        by_at = {u["at"]: u for u in record["utterances"]}
+        assert by_at[2.0]["speaker"] == "Вадим"
+        assert by_at[5.0]["speaker"] == "Виктор"
+
+    def test_key_is_written_only_where_the_name_is_known(self):
+        """Ключ у каждой реплики раздувал бы jsonb: имя есть не всегда."""
+        record = transcript_record(self._utterances())
+        by_at = {u["at"]: u for u in record["utterances"]}
+        assert "speaker" not in by_at[0.0]
+        assert "speaker" not in by_at[8.0]
+
+    def test_distinct_voices_are_listed(self):
+        record = transcript_record(self._utterances())
+        assert record["speakers"] == ["Вадим", "Виктор"]
+
+    def test_no_names_gives_empty_list_not_missing_key(self):
+        record = transcript_record([Utterance(at=0.0, stream="mic", text="привет")])
+        assert record["speakers"] == []
+
+    def test_old_listener_without_the_field_still_works(self):
+        """Слушатель может быть старее сервера — деплой идёт в этом порядке."""
+        record = transcript_record([Utterance(at=0.0, stream="system", text="привет")])
+        assert record["speakers"] == []
+        assert "speaker" not in record["utterances"][0]

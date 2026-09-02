@@ -16,9 +16,11 @@ import pytest
 from vera_listener.config import Config, load_config
 from vera_listener.transcriber import (
     MIN_AUDIO_S,
+    Segment,
     Transcriber,
     device_chain,
     segments_of,
+    slice_seconds,
 )
 
 
@@ -58,29 +60,33 @@ class TestDeviceChain:
 class TestSegments:
     def test_timestamps_become_offsets(self):
         got = segments_of(_Result(chunks=[
-            _Chunk(0.0, " Давай сверим сроки"),
-            _Chunk(3.72, " Даша обещала отчёт"),
-        ]))
-        assert got == [(0.0, "Давай сверим сроки"), (3.72, "Даша обещала отчёт")]
+            _Chunk(0.0, " Давай сверим сроки", end_ts=3.0),
+            _Chunk(3.72, " Даша обещала отчёт", end_ts=7.0),
+        ]), duration_s=8.0)
+        assert [(s.at, s.text) for s in got] == [
+            (0.0, "Давай сверим сроки"), (3.72, "Даша обещала отчёт")]
 
     def test_empty_chunks_are_dropped(self):
         got = segments_of(_Result(chunks=[
             _Chunk(1.0, "   "), _Chunk(2.0, "есть"), _Chunk(3.0, ""),
-        ]))
-        assert got == [(2.0, "есть")]
+        ]), duration_s=4.0)
+        assert [(s.at, s.text) for s in got] == [(2.0, "есть")]
 
     def test_no_chunks_but_text_keeps_the_words(self):
         """Текст без таймкодов лучше, чем ничего: он уйдёт с нулевым смещением,
         и об этом пишется предупреждение — молча путать порядок нельзя."""
-        assert segments_of(_Result(text="  привет  ")) == [(0.0, "привет")]
+        got = segments_of(_Result(text="  привет  "), duration_s=5.0)
+        assert [(s.at, s.text) for s in got] == [(0.0, "привет")]
+        assert got[0].end == 5.0, "конец — длина куска, иначе нечего вырезать"
 
     def test_nothing_at_all(self):
         assert segments_of(_Result(text="")) == []
         assert segments_of(_Result(text="", chunks=[])) == []
 
     def test_offsets_are_floats(self):
-        got = segments_of(_Result(chunks=[_Chunk(5, "пять")]))
-        assert isinstance(got[0][0], float)
+        got = segments_of(_Result(chunks=[_Chunk(5, "пять")]), duration_s=6.0)
+        assert isinstance(got[0].at, float)
+        assert isinstance(got[0].end, float)
 
 
 class TestTooShort:
@@ -112,7 +118,7 @@ class TestTooShort:
 
         monkeypatch.setattr(t, "_load", lambda: _Pipe())
         pcm = np.zeros(int((MIN_AUDIO_S + 0.5) * 16_000), dtype=np.int16).tobytes()
-        assert t.transcribe(pcm) == [(0.5, "слышно")]
+        assert [(s.at, s.text) for s in t.transcribe(pcm)] == [(0.5, "слышно")]
         assert seen["samples"] == int((MIN_AUDIO_S + 0.5) * 16_000)
         # Язык уходит whisper-токеном, иначе модель его не поймёт.
         assert seen["kw"]["language"] == "<|ru|>"
@@ -163,7 +169,7 @@ class TestGlossary:
                 return _Result(chunks=[_Chunk(0.0, "LAMAS и Веранда")])
 
         monkeypatch.setattr(t, "_load", lambda: _Pipe())
-        assert t.transcribe(self._pcm()) == [(0.0, "LAMAS и Веранда")]
+        assert [s.text for s in t.transcribe(self._pcm())] == ["LAMAS и Веранда"]
         assert seen["kw"]["initial_prompt"] == "LAMAS, Веранда"
 
     def test_prompt_failure_falls_back_without_prompt_on_the_same_device(
@@ -182,7 +188,7 @@ class TestGlossary:
                 return _Result(chunks=[_Chunk(0.0, "без подсказки")])
 
         monkeypatch.setattr(t, "_load", lambda: _Pipe())
-        assert t.transcribe(self._pcm()) == [(0.0, "без подсказки")]
+        assert [s.text for s in t.transcribe(self._pcm())] == ["без подсказки"]
         assert len(calls) == 2
         assert t._pipe is not None, "пайплайн не должен сбрасываться"
         assert t.device == "NPU", "устройство не должно баниться"
@@ -418,3 +424,64 @@ class TestModelCompleteness:
         self._full(target)
         (target / "openvino_decoder_model.bin.incomplete").write_text("x", encoding="utf-8")
         assert model_is_complete(target) is False
+
+
+class TestSegmentBoundaries:
+    """Конец реплики нужен опознанию говорящего: по паре (начало, конец) из
+    куска вырезается речь, отпечаток которой снимаем. Пустая вырезка означала
+    бы реплику без имени."""
+
+    def test_end_comes_from_the_model(self):
+        got = segments_of(_Result(chunks=[_Chunk(1.0, "речь", end_ts=4.5)]),
+                          duration_s=10.0)
+        assert got[0].end == 4.5
+
+    def test_missing_end_falls_back_to_next_start(self):
+        """Модель не всегда проставляет конец; следующая реплика знает, где
+        закончилась предыдущая."""
+        got = segments_of(_Result(chunks=[
+            _Chunk(1.0, "первая", end_ts=0.0),
+            _Chunk(4.0, "вторая", end_ts=6.0),
+        ]), duration_s=8.0)
+        assert got[0].end == 4.0
+
+    def test_missing_end_on_last_falls_back_to_chunk_length(self):
+        got = segments_of(_Result(chunks=[_Chunk(1.0, "последняя", end_ts=0.0)]),
+                          duration_s=7.0)
+        assert got[0].end == 7.0
+
+    def test_end_never_precedes_start(self):
+        """Отрицательная длительность дала бы пустую вырезку — молча, без
+        единого признака в логе."""
+        got = segments_of(_Result(chunks=[_Chunk(5.0, "речь", end_ts=2.0)]),
+                          duration_s=3.0)
+        assert got[0].end >= got[0].at
+
+    def test_duration_property(self):
+        assert Segment(at=1.0, end=3.5, text="х").duration == 2.5
+
+    def test_duration_is_never_negative(self):
+        assert Segment(at=5.0, end=1.0, text="х").duration == 0.0
+
+
+class TestSliceSeconds:
+    """Вырезка звука по секундам — то, чем кормят опознание голоса."""
+
+    def _audio(self, seconds: float) -> np.ndarray:
+        return np.arange(int(seconds * 16_000), dtype=np.float32)
+
+    def test_takes_the_requested_span(self):
+        got = slice_seconds(self._audio(3.0), 1.0, 2.0)
+        assert len(got) == 16_000
+
+    def test_clamps_beyond_the_end(self):
+        """Конец реплики может выйти за кусок из-за округления таймкодов."""
+        got = slice_seconds(self._audio(1.0), 0.5, 99.0)
+        assert len(got) == 8_000
+
+    def test_clamps_before_the_start(self):
+        got = slice_seconds(self._audio(1.0), -5.0, 0.5)
+        assert len(got) == 8_000
+
+    def test_reversed_span_is_empty_not_an_error(self):
+        assert len(slice_seconds(self._audio(1.0), 0.8, 0.2)) == 0

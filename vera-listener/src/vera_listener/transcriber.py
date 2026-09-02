@@ -57,6 +57,7 @@ from __future__ import annotations
 
 import logging
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -84,6 +85,23 @@ REQUIRED_FILES = (
 )
 
 
+def pcm_to_float(pcm: bytes) -> np.ndarray:
+    """PCM16 → float32 в [-1, 1]. Одно место на весь слушатель.
+
+    Нужна и распознаванию, и опознанию голоса: обе модели ждут float32, а
+    захват отдаёт int16. Две копии этой строки разъехались бы по масштабу —
+    и одна из моделей молча получала бы вход не в том диапазоне.
+    """
+    return np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+
+
+def slice_seconds(audio: np.ndarray, start: float, end: float) -> np.ndarray:
+    """Кусок дорожки по секундам. Границы подрезаются по длине."""
+    first = max(0, int(start * SAMPLE_RATE))
+    last = min(len(audio), int(end * SAMPLE_RATE))
+    return audio[first:last] if last > first else audio[:0]
+
+
 def model_is_complete(target: Path) -> bool:
     """Все ли файлы модели на месте и не осталось ли обрывков загрузки.
 
@@ -107,6 +125,23 @@ def device_chain(preferred: str) -> list[str]:
     if "CPU" not in chain:
         chain.append("CPU")
     return chain
+
+
+@dataclass(frozen=True)
+class Segment:
+    """Одна распознанная реплика внутри куска.
+
+    `at` и `end` — секунды от начала КУСКА, не сессии: смещение куска
+    прибавляет вызывающий, он же один знает, где кусок стоит в разговоре.
+    """
+
+    at: float
+    end: float
+    text: str
+
+    @property
+    def duration(self) -> float:
+        return max(0.0, self.end - self.at)
 
 
 class Transcriber:
@@ -182,9 +217,9 @@ class Transcriber:
             return pipe
         raise RuntimeError("ни одно устройство не поднялось: " + "; ".join(errors))
 
-    def transcribe(self, pcm: bytes) -> list[tuple[float, str]]:
-        """PCM16 16 кГц → [(смещение от начала куска, текст)]."""
-        audio = np.frombuffer(pcm, dtype=np.int16).astype(np.float32) / 32768.0
+    def transcribe(self, pcm: bytes) -> list[Segment]:
+        """PCM16 16 кГц → реплики со смещением, концом и текстом."""
+        audio = pcm_to_float(pcm)
         if len(audio) < MIN_AUDIO_S * SAMPLE_RATE:
             return []
         pipe = self._load()
@@ -194,7 +229,7 @@ class Transcriber:
             try:
                 result = pipe.generate(audio, initial_prompt=", ".join(self.config.glossary),
                                        **kwargs)
-                return segments_of(result)
+                return segments_of(result, len(audio) / SAMPLE_RATE)
             except Exception as e:                      # noqa: BLE001
                 # НЕ отказ устройства — сам приём подсказки на нём не работает
                 # (см. докстринг модуля). Поэтому не трогаем _banned/_pipe:
@@ -217,27 +252,47 @@ class Transcriber:
                 self._banned.add(failed)
                 log.warning("%s отвалился в работе — дальше без него", failed)
             raise
-        return segments_of(result)
+        return segments_of(result, len(audio) / SAMPLE_RATE)
 
 
-def segments_of(result) -> list[tuple[float, str]]:
-    """Ответ пайплайна → [(смещение, текст)]. Пустые реплики выброшены.
+def segments_of(result, duration_s: float = 0.0) -> list[Segment]:
+    """Ответ пайплайна → реплики со смещением, концом и текстом.
 
     Таймкоды нужны буквально: смещение внутри куска складывается со смещением
     куска в сессии, и по этой сумме реплики выстраиваются в хронологию. Если
     `chunks` не пришли, отдавать текст без времени нельзя — он ляжет в начало
     разговора и перепутает порядок.
+
+    Конец реплики нужен опознанию говорящего: по паре (начало, конец) из
+    куска вырезается именно та речь, отпечаток которой снимаем. `duration_s`
+    — длина всего куска, ею закрывается конец последней реплики и случай без
+    таймкодов.
     """
     chunks = getattr(result, "chunks", None)
     if not chunks:
         text = str(result).strip()
         if text:
             log.warning("таймкодов нет — реплика уходит с нулевым смещением")
-            return [(0.0, text)]
+            return [Segment(at=0.0, end=duration_s, text=text)]
         return []
-    out: list[tuple[float, str]] = []
-    for chunk in chunks:
-        text = (chunk.text or "").strip()
-        if text:
-            out.append((float(chunk.start_ts), text))
+
+    raw = [(float(c.start_ts), _end_of(c), (c.text or "").strip()) for c in chunks]
+    out: list[Segment] = []
+    for index, (start, end, text) in enumerate(raw):
+        if not text:
+            continue
+        # Конца может не быть или он может быть нулевым: закрываем началом
+        # следующей реплики, а последнюю — длиной куска. Без этого вырезка
+        # звука для отпечатка была бы пустой.
+        if end <= start:
+            end = raw[index + 1][0] if index + 1 < len(raw) else duration_s
+        out.append(Segment(at=start, end=max(end, start), text=text))
     return out
+
+
+def _end_of(chunk) -> float:
+    value = getattr(chunk, "end_ts", 0.0)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0

@@ -17,6 +17,7 @@ from typing import Any
 
 from vera_listener.capture import MIC, SYSTEM, Capture, Frame
 from vera_listener.config import Config
+from vera_listener.counterpart import counterpart
 from vera_listener.dedup import mark_echo
 from vera_listener.gate import judge, system_audio_allowed
 from vera_listener.hold import BYTES_PER_S, Hold
@@ -24,8 +25,13 @@ from vera_listener.outbox import Outbox, read_payload
 from vera_listener.recorder import PAUSE_FLUSH_S, TrackRecorder
 from vera_listener.segmenter import Closed, Segmenter
 from vera_listener.sender import Sender
+from vera_listener.speakers import (
+    OpenVinoSpeakerEmbedder,
+    SpeakerSession,
+    VoiceprintRegistry,
+)
 from vera_listener.status import DEAF, IDLE, TALKING, Status
-from vera_listener.transcriber import Transcriber
+from vera_listener.transcriber import Transcriber, pcm_to_float, slice_seconds
 from vera_listener.vad import SpeechDetector
 from vera_listener.winctx import active_audio_app, foreground_window_title
 
@@ -51,6 +57,11 @@ class Listener:
         self.capture = Capture(self.frames)
         self.transcriber = Transcriber(config)
         self.sender = Sender(config, self.outbox)
+        # Опознание говорящих. Хранилище отпечатков — одно на всё время
+        # жизни слушателя, сессия опознания — своя на каждый разговор.
+        self.voiceprints = VoiceprintRegistry(config.voiceprints_file)
+        self._embedder = OpenVinoSpeakerEmbedder(config.speaker_model_dir)
+        self._speakers: SpeakerSession | None = None
         self.segmenter = Segmenter(silence_timeout_s=config.silence_timeout_s,
                                    max_session_s=config.max_session_s)
         self.detectors = {MIC: SpeechDetector(), SYSTEM: SpeechDetector()}
@@ -142,6 +153,9 @@ class Listener:
         meeting_id, part = self._continues or (session_id, 1)
         self._continues = None
         self._meeting = (meeting_id, part)
+        # Своя сессия опознания на каждый разговор: отпечатки одного
+        # созвона не должны смешиваться с соседним.
+        self._speakers = SpeakerSession(self._embedder, self.voiceprints)
         self.session = self.outbox.start(
             session_id, self._session_wall.isoformat(),
             app=session.app, window_title=session.window_title,
@@ -201,7 +215,7 @@ class Listener:
         if track == SYSTEM and not self._system_confirmed():
             self._held.add(offset, pcm)
             return
-        self.jobs.put(("chunk", self.session, track, offset, pcm))
+        self.jobs.put(("chunk", self.session, track, offset, pcm, self._speakers))
 
     def _system_confirmed(self) -> bool:
         """Прошла ли сессия ворота настолько, что системный звук уже ценен."""
@@ -218,7 +232,7 @@ class Listener:
         if self.session is None:
             return
         for offset, pcm in self._held.take():
-            self.jobs.put(("chunk", self.session, SYSTEM, offset, pcm))
+            self.jobs.put(("chunk", self.session, SYSTEM, offset, pcm, self._speakers))
 
     def _finish(self, closed: Closed) -> None:
         if self.session is None:
@@ -228,7 +242,7 @@ class Listener:
             self._queue_chunk(track)
         self.jobs.put(("close", self.session, closed, speech_s,
                        self._wall(closed.ended_at), self._held.take(),
-                       self._held.dropped_s))
+                       self._held.dropped_s, self._speakers))
         self._held.clear()
         # Разрез по предохранителю — не конец разговора: следующая сессия
         # продолжает ту же встречу. Тишина и смена приложения — конец.
@@ -240,11 +254,80 @@ class Listener:
         self.session = None
         self._session_wall = None
         self._meeting = None
+        self._speakers = None
         self.status.set_state(IDLE)
 
     def _wall(self, monotonic_at: float) -> datetime:
         return datetime.now().astimezone() - timedelta(
             seconds=max(0.0, time.monotonic() - monotonic_at))
+
+    def _transcribe_into(self, path: Path, track: str, offset: float, pcm: bytes,
+                         speakers: SpeakerSession | None) -> None:
+        """Распознать кусок, дописать реплики и снять отпечатки голосов.
+
+        Отпечатки только с дорожки приложения: на микрофоне владелец, его
+        опознавать незачем, а эхо из динамиков и так помечено отдельно.
+        """
+        # `is not None`, а НЕ `if speakers`: у сессии опознания есть
+        # `__len__`, и пустая — та, что только началась, — ложна по
+        # истинности. С проверкой на истинность отпечатки не снимались бы
+        # НИКОГДА: первый же кусок видит пустую сессию и пропускает её,
+        # а непустой она без него не станет. Поймано сквозным тестом.
+        audio = (pcm_to_float(pcm)
+                 if speakers is not None and track == SYSTEM else None)
+        for segment in self.transcriber.transcribe(pcm):
+            # Тем же условием, что и в `outbox.append`: пустую реплику очередь
+            # молча не пишет, и снятый с неё отпечаток остался бы висячим —
+            # реплики под него нет, а в кластеризации он участвует и способен
+            # занять слот говорящего тишиной. Нашло ревью.
+            if not segment.text.strip():
+                continue
+            self.outbox.append(path, offset + segment.at, track, segment.text)
+            if audio is not None and speakers is not None:
+                speakers.observe(
+                    offset + segment.at,
+                    slice_seconds(audio, segment.at, segment.end))
+
+    def _name_speakers(self, utterances: list[dict[str, Any]], closed: Closed,
+                       speakers: SpeakerSession | None) -> int:
+        """Проставить имена говорящих в репликах. → сколько реплик названо.
+
+        Имена меняются НА МЕСТЕ, потому что разметка говорящих — свойство
+        реплики, а не отдельный список: иначе их пришлось бы сводить по
+        смещению ещё раз, уже на сервере.
+        """
+        if speakers is None:
+            return 0
+        who = counterpart(closed.session.app, closed.session.window_title)
+        try:
+            names = speakers.resolve(who)
+        except Exception as e:                          # noqa: BLE001
+            # Разметка говорящих — надстройка над разговором. Текст уже
+            # распознан и ценнее её: сбой не имеет права утащить сессию.
+            log.warning("имена говорящих не проставились (%s)", type(e).__name__)
+            return 0
+        # Реплика без отпечатка (слишком короткий срез, сбой модели) осталась
+        # бы безымянной среди названных — и один человек выглядел бы как двое:
+        # часть его реплик «Вадим», часть «собеседник». Когда голос в разговоре
+        # ОДИН, догадываться не о чем: других кандидатов нет. Когда их
+        # несколько — оставляем без имени, приписать наугад хуже. Нашло ревью.
+        distinct = set(names.values())
+        fallback = next(iter(distinct)) if len(distinct) == 1 else None
+
+        named = missing = 0
+        for utterance in utterances:
+            if utterance.get("stream") != SYSTEM:
+                continue
+            name = names.get(round(float(utterance.get("at", 0.0)), 2)) or fallback
+            if name:
+                utterance["speaker"] = name
+                named += 1
+            else:
+                missing += 1
+        if missing:
+            log.info("реплик без опознанного голоса: %d из %d",
+                     missing, named + missing)
+        return named
 
     def _work(self) -> None:
         while not self._stop.is_set() or not self.jobs.empty():
@@ -260,11 +343,10 @@ class Listener:
     def _run_job(self, job: tuple) -> None:
         kind = job[0]
         if kind == "chunk":
-            _, path, track, offset, pcm = job
-            for at, text in self.transcriber.transcribe(pcm):
-                self.outbox.append(path, offset + at, track, text)
+            _, path, track, offset, pcm, speakers = job
+            self._transcribe_into(path, track, offset, pcm, speakers)
             return
-        _, path, closed, speech_s, ended_wall, held, held_lost_s = job
+        _, path, closed, speech_s, ended_wall, held, held_lost_s, speakers = job
         verdict = judge(speech_s, app=closed.session.app,
                         allow=self.config.allow_apps,
                         browsers=self.config.browser_apps,
@@ -283,8 +365,7 @@ class Listener:
             log.warning("придержанного звука не хватило памяти: забыто %.0fс",
                         held_lost_s)
         for offset, pcm in held:
-            for at, text in self.transcriber.transcribe(pcm):
-                self.outbox.append(path, offset + at, SYSTEM, text)
+            self._transcribe_into(path, SYSTEM, offset, pcm, speakers)
         payload = read_payload(path)
         if payload is None:
             self.outbox.drop(path)
@@ -297,9 +378,10 @@ class Listener:
         # только для осмысления; дословная стенограмма хранит всё.
         utterances: list[dict[str, Any]] = mark_echo(in_order)
         echoes = sum(1 for u in utterances if u.get("echo"))
+        named = self._name_speakers(utterances, closed, speakers)
         self.outbox.finish(path, ended_wall.isoformat(), utterances=utterances)
-        log.info("разговор сохранён: %s, реплик %d (из них эхо %d) (%s)",
-                 closed.reason, len(utterances), echoes, verdict.reason)
+        log.info("разговор сохранён: %s, реплик %d (из них эхо %d, с именем %d) (%s)",
+                 closed.reason, len(utterances), echoes, named, verdict.reason)
 
     def _send(self) -> None:
         while not self._stop.is_set():

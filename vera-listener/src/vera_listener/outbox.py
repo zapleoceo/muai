@@ -148,9 +148,16 @@ def read_payload(path: Path) -> dict[str, Any] | None:
             elif kind == "footer":
                 footer = rec
             elif kind == "u":
-                utterances.append({"at": rec.get("at", 0.0),
-                                   "stream": rec.get("stream", "mic"),
-                                   "text": rec.get("text", "")})
+                utterance = {"at": rec.get("at", 0.0),
+                             "stream": rec.get("stream", "mic"),
+                             "text": rec.get("text", "")}
+                # Имя говорящего и метка эха ставятся уже после чтения, при
+                # закрытии сессии. Но файл могли записать и раньше — при
+                # разборе очереди после падения; тогда они уже в строке.
+                for extra in ("speaker", "echo"):
+                    if rec.get(extra):
+                        utterance[extra] = rec[extra]
+                utterances.append(utterance)
     except OSError as e:
         log.error("не прочитал %s: %s", path, e)
         return None
