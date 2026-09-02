@@ -18,8 +18,8 @@
 # Конфиг — берётся из /var/www/vera3/infra/.env (TELEGRAM_BOT_TOKEN, OWNER_TELEGRAM_ID).
 set -u
 
-ENV_FILE="/var/www/vera3/infra/.env"
-STATE_DIR="/var/lib/vera3-monitor"
+ENV_FILE="${ENV_FILE:-/var/www/vera3/infra/.env}"
+STATE_DIR="${STATE_DIR:-/var/lib/vera3-monitor}"
 LOG_TAG="vera3-monitor"
 COMPOSE_DIR="${COMPOSE_DIR:-/var/www/vera3/infra}"
 
@@ -128,6 +128,14 @@ THROTTLE_MIN=$(setting monitor_throttle_min 30)
 # и так по кругу (recover стирает state-файл, поэтому throttle не спасал).
 FAIL_STREAK=$(setting monitor_fail_streak 2)
 
+# Сколько ПОДРЯД идущих УСПЕШНЫХ проверок нужно, чтобы объявить восстановление.
+# Симметрично FAIL_STREAK и по той же причине: 2026-09-02 память скакала
+# 31% <-> 95% каждые 10-20 минут (llama-server грузится, ловит OOM, грузится
+# снова), и на каждый скачок уходила пара сообщений — 14 штук за 5 часов.
+# Одна удачная выборка не значит, что авария кончилась; три подряд (15 мин)
+# уже значат.
+OK_STREAK=$(setting monitor_ok_streak 3)
+
 # ─── streak-счётчики подряд идущих провалов ─────────────────────────────────
 bump_streak() {   # key → печатает новое значение
     local f="$STATE_DIR/${1}.streak" n=0
@@ -137,6 +145,10 @@ bump_streak() {   # key → печатает новое значение
     echo "$n"
 }
 clear_streak() { rm -f "$STATE_DIR/${1}.streak"; }
+bump_ok()      { local f="$STATE_DIR/${1}.ok" n=0
+                 [ -f "$f" ] && n=$(cat "$f" 2>/dev/null || echo 0)
+                 n=$(( n + 1 )); echo "$n" > "$f"; echo "$n"; }
+clear_ok()     { rm -f "$STATE_DIR/${1}.ok"; }
 
 # ─── alert(key, message, [throttle_min], [min_streak]) ──────────────────────
 # Молчит пока провалов подряд меньше min_streak, и пока с прошлого алерта по
@@ -149,6 +161,7 @@ alert() {
     local state_file="$STATE_DIR/$key"
     local now streak
     streak=$(bump_streak "$key")
+    clear_ok "$key"           # авария продолжается — серия успехов прервана
     if [ "$streak" -lt "$min_streak" ]; then
         logger -t "$LOG_TAG" "ALERT held ($key, streak $streak/$min_streak): $msg"
         return
@@ -174,21 +187,45 @@ alert() {
 
 # ─── recover(key) ────────────────────────────────────────────────────────────
 # Если когда-то был алерт по key, а сейчас всё OK — шлём recovery и чистим.
+# `quiet` = не слать сообщение, только погасить алерт: для парных ключей
+# (mem_warn + mem_critical), где иначе уходят два одинаковых «recovered».
 recover() {
     local key="$1"
     local msg="$2"
+    local quiet="${3:-}"
     local state_file="$STATE_DIR/$key"
     clear_streak "$key"       # проверка прошла — серия провалов прервана
-    if [ -f "$state_file" ]; then
-        rm -f "$state_file"
-        logger -t "$LOG_TAG" "RECOVER $key: $msg"
-        curl -s -m 10 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
-             -d "chat_id=${OWNER_TELEGRAM_ID}" \
-             -d "parse_mode=HTML" \
-             --data-urlencode "text=✅ <b>Vera 3 recovered</b>%0A${msg}" \
-             -o /dev/null || true
+    [ -f "$state_file" ] || { clear_ok "$key"; return; }
+    local ok
+    ok=$(bump_ok "$key")
+    if [ "$ok" -lt "$OK_STREAK" ]; then
+        logger -t "$LOG_TAG" "RECOVER held ($key, ok $ok/$OK_STREAK): $msg"
+        return
     fi
+    rm -f "$state_file"; clear_ok "$key"
+    logger -t "$LOG_TAG" "RECOVER $key: $msg"
+    [ -n "$quiet" ] && return
+    curl -s -m 10 "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+         -d "chat_id=${OWNER_TELEGRAM_ID}" \
+         -d "parse_mode=HTML" \
+         --data-urlencode "text=✅ <b>Vera 3 recovered</b>%0A${msg}" \
+         -o /dev/null || true
 }
+
+# Тестовый вход, как и --check-containers: прогнать последовательность
+# проверок («fail»/«ok») через alert/recover и выйти. Антифлаппинг — это
+# конечный автомат на файлах состояния, и проверять его пересказом на Python
+# так же бессмысленно, как и подсчёт контейнеров.
+if [ "${1:-}" = "--selftest-notify" ]; then
+    shift
+    for step in "$@"; do
+        case "$step" in
+            fail) alert   "selftest" "RAM 95%" ;;
+            ok)   recover "selftest" "RAM back to 31%" ;;
+        esac
+    done
+    exit 0
+fi
 
 # ─── 1. Весь состав стека поднят ────────────────────────────────────────────
 # Сравнение идёт с объявленным числом реплик, поэтому отдельная проверка
@@ -245,7 +282,8 @@ if [ -n "$mem_total" ] && [ "$mem_total" -gt 0 ]; then
     elif [ "$mem_used_pct" -ge 87 ]; then
         alert "mem_warn" "RAM ${mem_used_pct}% занято, свободно ${mem_avail_mb} МБ."
     else
-        recover "mem_critical" "RAM back to ${mem_used_pct}%."
+        # Один ключ говорит, второй молчит: пороги парные, авария одна.
+        recover "mem_critical" "RAM back to ${mem_used_pct}%." quiet
         recover "mem_warn" "RAM back to ${mem_used_pct}%."
     fi
 fi

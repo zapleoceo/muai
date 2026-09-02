@@ -360,6 +360,19 @@ alert→recover→alert cycle — the owner got pairs of «⚠️ no telegram ev
 completely empty *hour* is normal (measured 2026-08-05: 22:00 UTC had 0,
 neighbours 2-5), while an empty three-hour stretch never occurred.
 
+**Anti-flapping, the recovery side (2026-09-02).** The 2026-08-06 fix only
+guarded the alert direction, and the same hole reopened from the other end:
+`recover()` fired on the FIRST good sample and deleted the state file, which
+doubles as the throttle timestamp — so an oscillating fault produced an
+alert/recover pair per swing with the throttle never engaging. Memory swung
+31% ↔ 95% every 10-20 minutes (the broker's local vision model loads ~5 GB,
+gets OOM-killed, reloads) and the owner got **14 messages in 5 hours** for
+one continuous fault. Recovery now needs `monitor_ok_streak` (default 3)
+consecutive good checks — symmetric with `monitor_fail_streak` — and
+`alert()` resets that counter. Paired thresholds (`mem_warn` +
+`mem_critical`) also used to send two identical «recovered» lines; the
+lower key now clears quietly via `recover ... quiet`.
+
 ### Disk hygiene
 
 Бокс 38 ГБ делится с aibroker/stepan2, поэтому Vera держит свой след
@@ -398,6 +411,7 @@ Bash monitor script reads them directly via `psql` on each tick.
 |---|---|---|
 | `monitor_throttle_min` | 30 min | Repeat-alert cooldown per alert key |
 | `monitor_fail_streak` | 2 проверки | Сколько провалов ПОДРЯД до алерта (монитор раз в 5 мин → авария видна через ~10 мин, моргнувшая проверка молчит) |
+| `monitor_ok_streak` | 3 проверки | Сколько успехов ПОДРЯД до «восстановлено» (симметрично fail_streak; без него мигающая авария давала пару сообщений на каждый скачок) |
 | `monitor_tg_silence_h` | 3 ч | Окно тишины telegram до алерта «userbot отвалился» |
 | `monitor_backlog_enabled` | on | Whether to alert on triage backlog size at all (turn off during a known-large backfill) |
 | `triage_backlog_warn` / `_huge` | 5000 / 10000 | Pending-event thresholds for the two backlog alert levels |
