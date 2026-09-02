@@ -92,6 +92,7 @@ async def reserve_backfill_allowance(want: int) -> int | None:
 
 MONITOR_THROTTLE_MIN = "monitor_throttle_min"
 MONITOR_FAIL_STREAK = "monitor_fail_streak"
+MONITOR_OK_STREAK = "monitor_ok_streak"
 MONITOR_TG_SILENCE_H = "monitor_tg_silence_h"
 TRIAGE_BACKLOG_WARN = "triage_backlog_warn"
 TRIAGE_BACKLOG_HUGE = "triage_backlog_huge"
@@ -127,6 +128,12 @@ SETTINGS: list[Setting] = [
             "Монитор крутится раз в 5 мин, поэтому 2 = авария видна через ~10 мин, "
             "а разовая моргнувшая проверка молчит. 1 = старое поведение (шумное: "
             "ночью шли пары «⚠️ нет событий» → «✅ восстановлено» по кругу)."),
+    Setting(MONITOR_OK_STREAK, "Успехов подряд до «восстановлено»", "3", "проверок",
+            "Сколько раз подряд проверка должна пройти, чтобы монитор объявил "
+            "восстановление. Без этого хватало одной удачной выборки: 02.09.2026 "
+            "память скакала 31% ↔ 95% каждые 10-20 минут, и на каждый скачок "
+            "уходила пара «⚠️ RAM 93%» → «✅ RAM back to 31%» — 14 сообщений за "
+            "5 часов при одной непрерывной аварии."),
     Setting(MONITOR_TG_SILENCE_H, "Окно тишины Telegram", "3", "ч",
             "За сколько часов должно не быть НИ ОДНОГО telegram-события, чтобы "
             "считать юзербот отвалившимся. Ночью поток падает до 1-6 сообщений "
