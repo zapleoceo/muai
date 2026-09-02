@@ -85,7 +85,7 @@ this project's own "~200 lines, one responsibility per file" convention):
 | `settings_routes.py` | `/settings`, `/control/settings` — SETTINGS registry |
 | `entities_routes.py` | `/entities/duplicates`, `/entities/merge` |
 | `gmail_oauth.py`, `instagram_login.py`, `telegram_login.py` | OAuth/login flows — the pattern the above split follows. `telegram_login.py` re-auths the userbot StringSession when a revoked session crash-loops the ingestor: `telegram_start_form` (GET `/api/telegram/start`) shows the phone form, `telegram_start` (POST) sends the code, `telegram_verify` (POST `/api/telegram/verify`) takes the code and — if cloud 2FA is on — the password, then saves the new encrypted session |
-| `stats.py` | Cached (TTL 60s) DB aggregation feeding home/progress/sources |
+| `stats.py` | Cached (TTL 60s) DB aggregation feeding home/progress/sources. Темп распознавания берётся из `usage_log` как `COUNT(*) FILTER (WHERE workflow='media_vision' AND success …)`. Колонка именно `success` (boolean): у Веры своя `usage_log`, а у брокера — своя, и там на этом месте текстовый `status`. Перепутанная схема ловится только интеграционным тестом на живом Postgres (`tests/integration/test_postgres_sql.py`), потому что весь этот SQL на SQLite не исполняется |
 | `auth.py` | Telegram Login Widget verification + signed session cookies |
 | `app.py` | Just `FastAPI()` + `lifespan` + favicon routes + `include_router()` for all of the above |
 
