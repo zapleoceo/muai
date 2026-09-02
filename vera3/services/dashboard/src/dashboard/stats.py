@@ -118,7 +118,7 @@ async def _compute_stats() -> dict[str, Any]:
               COALESCE(SUM(cost_usd) FILTER (WHERE created_at >= :month), 0) AS cost_month,
               COUNT(*) FILTER (WHERE workflow='triage' AND created_at >= :h1)  AS triage_1h,
               COUNT(*) FILTER (WHERE workflow='triage' AND created_at >= :h24) AS triage_24h,
-              COUNT(*) FILTER (WHERE workflow='media_vision' AND status='ok'
+              COUNT(*) FILTER (WHERE workflow='media_vision' AND success
                                AND created_at >= :h24) AS vision_24h
             FROM usage_log
             WHERE created_at >= :month
