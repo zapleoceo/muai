@@ -14,6 +14,7 @@ import queue
 import threading
 import time
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import soundcard as sc
@@ -22,9 +23,26 @@ from vera_listener.vad import FRAME_SAMPLES, SAMPLE_RATE
 
 log = logging.getLogger("listener.capture")
 
+#: `soundcard` не поставляет типов, а «объект с методом `recorder`»
+#: точнее, чем `object`: подставка в тестах реализует ровно его.
+Device = Any
+
 MIC = "mic"
 SYSTEM = "system"
 REOPEN_PAUSE_S = 5.0
+
+#: Как часто переспрашиваем, не сменилось ли устройство по умолчанию.
+#:
+#: Без этой проверки смена вывода — воткнули наушники, отключился Bluetooth —
+#: не даёт НИКАКОГО признака: старое устройство живо, запись идёт, ошибки нет,
+#: просто в него больше ничего не играет. Дорожка `system` молча превращается в
+#: тишину, и собеседник пропадает из разговора целиком. Поймано вживую 03.09:
+#: слушатель привязался к колонкам в 17:24, вечерний созвон шёл в наушниках, и
+#: от собеседника не осталось ни секунды при 99 распознанных репликах владельца.
+#:
+#: Вызов стоит около 3 мс, раз в две секунды это ничтожная доля потока, а
+#: двухсекундная задержка на фоне разговора незаметна.
+DEVICE_CHECK_S = 2.0
 
 #: Шаг опроса устройства, когда звука ещё нет. Своё значение soundcard берёт из
 #: минимального периода устройства и спит четверть от него — около 0.75 мс, то
@@ -113,23 +131,57 @@ class Capture:
         for thread in self._threads:
             thread.join(timeout=2.0)
 
-    def _open(self, track: str):
+    def _default_name(self, track: str) -> str:
+        """Имя устройства, которое Windows считает основным ПРЯМО СЕЙЧАС."""
+        device = sc.default_microphone() if track == MIC else sc.default_speaker()
+        return str(device.name)
+
+    def _current_default(self, track: str) -> str | None:
+        """Имя устройства по умолчанию, или None если спросить не удалось.
+
+        Опрос идёт ВНУТРИ работающей записи, поэтому его сбой не имеет права
+        её ронять: общий `except` ниже закрыл бы живой поток и увёл слушателя
+        в пятисекундную паузу из-за осечки вспомогательной проверки. Пропуск
+        одной проверки стоит две секунды, обрыв записи — кусок разговора.
+        """
+        try:
+            return self._default_name(track)
+        except Exception as e:                          # noqa: BLE001
+            log.warning("дорожка %s: не удалось спросить устройство (%s) — "
+                        "проверю через %.0fс", track, type(e).__name__,
+                        DEVICE_CHECK_S)
+            return None
+
+    def _open(self, track: str) -> tuple[Device, str]:
+        """Устройство и имя, к которому мы привязались. → (устройство, имя)."""
         if track == MIC:
-            return sc.default_microphone()
+            device = sc.default_microphone()
+            return device, str(device.name)
         speaker = sc.default_speaker()
         self.device_hint = str(speaker.name)
-        return sc.get_microphone(id=str(speaker.name), include_loopback=True)
+        return (sc.get_microphone(id=str(speaker.name), include_loopback=True),
+                str(speaker.name))
 
     def _run(self, track: str) -> None:
         while not self._stop.is_set():
             try:
-                device = self._open(track)
+                device, bound = self._open(track)
                 with device.recorder(samplerate=SAMPLE_RATE, channels=1,
                                      blocksize=FRAME_SAMPLES) as recorder:
                     log.info("дорожка %s: %s", track, device.name)
+                    due = time.monotonic() + DEVICE_CHECK_S
                     while not self._stop.is_set():
                         block = recorder.record(numframes=FRAME_SAMPLES)
                         self.frames.put(Frame(track, time.monotonic(), to_pcm16(block)))
+                        now = time.monotonic()
+                        if now < due:
+                            continue
+                        due = now + DEVICE_CHECK_S
+                        current = self._current_default(track)
+                        if current is not None and current != bound:
+                            log.info("дорожка %s: вывод переключился (%s → %s) — "
+                                     "переоткрываю", track, bound, current)
+                            break
             except Exception as e:
                 # Устройство пропало или занято чужой сессией Windows —
                 # ждём и пробуем снова, вместо того чтобы уронить слушателя.
