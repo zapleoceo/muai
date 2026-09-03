@@ -272,19 +272,60 @@ fi
 # жертву и она попадала в проверку 1 (счёт контейнеров) или 10 (рестарт-петля).
 # Считаем available, а не free: страничный кэш отдаётся под нагрузкой и в
 # free не виден.
+# 03.09.2026 пороги подняты с 87/93 на 94/97, и вот почему это НЕ глушение.
+# 31.08 на брокере появился локальный анализатор картинок (llama.cpp,
+# Qwen3-VL-4B): пока модель в работе, он законно держит 4–5 ГБ, и бокс
+# штатно уходит на 88–91%. Прежние пороги били по нормальной работе — за
+# 5 часов владелец получил 14 сообщений «занято 91%» / «RAM back to 81%».
+#
+# Опасным этот процент был, пока контейнеру была разрешена подкачка: он
+# оставался внутри своего лимита ОЗУ, добирал разницу из свопа хоста, выел
+# все 4 ГБ, и дальше память кончалась у ХОСТА — ядро выбирало жертву по всей
+# машине (global_oom, 27 убийств 02–03.09; postgres был кандидатом).
+# 03.09 в aibroker/docker-compose.yml добавлен memswap_limit == mem_limit:
+# подкачка контейнеру запрещена, и превышение теперь убивает его внутри
+# своего cgroup — одна картинка не распознана, остальное не задето.
+#
+# Поэтому высокий процент сам по себе перестал быть предвестником беды, а
+# то, что бедой было, ловится теперь двумя другими проверками: 3c (факт
+# OOM-kill за час) и 3d (подкачка, добавлена тем же числом).
+MEM_WARN_PCT=$(setting monitor_mem_warn_pct 94)
+MEM_CRIT_PCT=$(setting monitor_mem_crit_pct 97)
+
 mem_total=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
 mem_avail=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
 if [ -n "$mem_total" ] && [ "$mem_total" -gt 0 ]; then
     mem_used_pct=$(( (mem_total - mem_avail) * 100 / mem_total ))
     mem_avail_mb=$(( mem_avail / 1024 ))
-    if [ "$mem_used_pct" -ge 93 ]; then
+    if [ "$mem_used_pct" -ge "$MEM_CRIT_PCT" ]; then
         alert "mem_critical" "RAM <b>${mem_used_pct}%</b> занято, свободно ${mem_avail_mb} МБ. OOM-killer близко."
-    elif [ "$mem_used_pct" -ge 87 ]; then
+    elif [ "$mem_used_pct" -ge "$MEM_WARN_PCT" ]; then
         alert "mem_warn" "RAM ${mem_used_pct}% занято, свободно ${mem_avail_mb} МБ."
     else
         # Один ключ говорит, второй молчит: пороги парные, авария одна.
         recover "mem_critical" "RAM back to ${mem_used_pct}%." quiet
         recover "mem_warn" "RAM back to ${mem_used_pct}%."
+    fi
+fi
+
+# ─── 3d. Подкачка ────────────────────────────────────────────────────────────
+# Пробел, найденный 03.09.2026: свопа не смотрели ВООБЩЕ. А именно он и был
+# настоящим предвестником — 27 убийств OOM случились после того, как все 4 ГБ
+# подкачки ушли в ноль. Процент ОЗУ в тот момент выглядел так же, как при
+# обычной работе анализатора, и отличить одно от другого было нечем.
+#
+# Забитая подкачка опасна сама по себе: ядру некуда вытеснять страницы, и
+# следующий же скачок идёт сразу в OOM, минуя торможение.
+SWAP_WARN_PCT=$(setting monitor_swap_warn_pct 90)
+swap_total=$(awk '/^SwapTotal:/ {print $2}' /proc/meminfo)
+swap_free=$(awk '/^SwapFree:/ {print $2}' /proc/meminfo)
+if [ -n "$swap_total" ] && [ "$swap_total" -gt 0 ]; then
+    swap_used_pct=$(( (swap_total - swap_free) * 100 / swap_total ))
+    swap_used_mb=$(( (swap_total - swap_free) / 1024 ))
+    if [ "$swap_used_pct" -ge "$SWAP_WARN_PCT" ]; then
+        alert "swap_full" "Подкачка ${swap_used_pct}% занята (${swap_used_mb} МБ из $(( swap_total / 1024 ))). Ядру некуда вытеснять — следующий скачок пойдёт сразу в OOM."
+    else
+        recover "swap_full" "Подкачка ${swap_used_pct}%."
     fi
 fi
 

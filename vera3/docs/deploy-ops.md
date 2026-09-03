@@ -235,11 +235,15 @@ Checks 12 dimensions:
 2. `/healthz` on gateway, brain-search, dashboard
 3. HTTPS dashboard reachable through Cloudflare
 4. Disk usage <85% (warn) / <92% (critical)
-4b. **Host RAM** <87% (warn) / <93% (critical), measured as
-   `MemAvailable` — page cache is reclaimable and doesn't show in `free`
+4b. **Host RAM** <94% (warn) / <97% (critical), measured as
+   `MemAvailable` — page cache is reclaimable and doesn't show in `free`.
+   Raised from 87/93 on 2026-09-03 (see «Пороги памяти» below)
 4c. **OOM-kills in the last hour** (`journalctl -k`), reported separately:
    by the time a percentage check runs the memory is free again, so the
    kill itself is invisible to dimension 4b
+4d. **Swap** <90% used. Added 2026-09-03: swap was not watched at all, and
+   exhausted swap — not the RAM percentage — was what actually preceded
+   the 27 host-wide OOM kills of 02–03.09
 5. Postgres `pg_isready`
 6. Gmail accounts polled in last 30 min
 7. Telegram events flowing in last 1h (userbot disconnected detection)
@@ -350,6 +354,28 @@ compose, нет `jq`) — это тревога, а не тишина: пром�
   `gateway brain-search dashboard`. Живой контейнер с повисшим приложением
   внутри нового сервиса она не заметит — тот же класс, отдельная задача.
 
+**Пороги памяти (2026-09-03).** Подняты с 87/93 на 94/97, и это не глушение.
+31.08 на брокере появился локальный анализатор картинок (llama.cpp,
+Qwen3-VL-4B): пока модель в работе, он законно держит 4–5 ГБ, и бокс штатно
+уходит на 88–91%. Прежние пороги били по нормальной работе — за пять часов
+владелец получил 14 сообщений «RAM 91%» / «RAM back to 81%».
+
+Опасным этот процент был, пока контейнеру была разрешена подкачка. Docker без
+`memswap_limit` даёт вдвое от лимита памяти, поэтому анализатор оставался
+внутри своих 5600 МБ ОЗУ, добирал разницу из свопа хоста и выел все 4 ГБ.
+Дальше память кончалась у ХОСТА, и ядро выбирало жертву по всей машине
+(`global_oom`, 27 убийств за 02–03.09; postgres был кандидатом наравне с
+llama-server). 03.09 в `aibroker/docker-compose.yml` добавлен
+`memswap_limit == mem_limit`: подкачка контейнеру запрещена, превышение
+убивает его внутри своего cgroup — одна картинка не распознана, остальное
+не задето.
+
+Поэтому высокий процент ОЗУ перестал быть предвестником беды. То, что бедой
+было, ловят две другие проверки: 4c (факт OOM-kill) и новая 4d (занятость
+подкачки). Мера сместилась с предсказания по проценту на два признака,
+каждый из которых означает ровно то, что означает.
+
+
 **Anti-flapping (2026-08-06).** An alert now needs `monitor_fail_streak`
 (default 2) consecutive failed checks; `recover()` resets the streak.
 Before that a single bad check alerted immediately and the recovery wiped
@@ -415,6 +441,8 @@ Bash monitor script reads them directly via `psql` on each tick.
 | `monitor_tg_silence_h` | 3 ч | Окно тишины telegram до алерта «userbot отвалился» |
 | `monitor_backlog_enabled` | on | Whether to alert on triage backlog size at all (turn off during a known-large backfill) |
 | `triage_backlog_warn` / `_huge` | 5000 / 10000 | Pending-event thresholds for the two backlog alert levels |
+| `monitor_mem_warn_pct` / `_crit_pct` | 94 / 97 % | Пороги памяти хоста (по `MemAvailable`). До 03.09.2026 были 87/93 |
+| `monitor_swap_warn_pct` | 90 % | Порог занятости подкачки — настоящий предвестник глобального OOM |
 | `backfill_max_per_hour` | 0 (unlimited) | Even-tempo cap on triage+media LLM requests/hour, shared globally across all replicas — see `brain.md` |
 | `cluster_label_deadline_s` | 240 с | Сколько ждать free-пул на подпись кластера графа (фоновая задача может ждать дольше интерактивных 120с) |
 | `cluster_label_retries` | 2 | Повторы запроса ярлыка при таймауте, потом фолбэк «кластер N» |
