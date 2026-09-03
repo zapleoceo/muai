@@ -1,7 +1,13 @@
--- Ретенция usage_log. Ставится в root-крон рядом с vera-backup.sh:
+-- Ретенция usage_log. Стоит в root-кроне рядом с vera-backup.sh:
 --
---   15 4 * * *  docker exec -i vera3-postgres psql -qU vera -d vera \
+--   40 4 * * *  docker exec -i vera3-postgres psql -qU vera -d vera
 --                 < /var/www/vera3/scripts/prune_usage_log.sql
+--                 >> /var/log/vera-usage-prune.log 2>&1
+--
+-- Строка заведена 04.09.2026. С 01.09 по 04.09 этот файл утверждал, что она
+-- есть, — а её не было нигде на машине, и ретенция не работала ни дня.
+-- Признак живой чистки — её лог, а не отсутствие старых строк:
+--   tail /var/log/vera-usage-prune.log
 --
 -- Зачем: таблица растёт на строку с каждого LLM-вызова и раньше не чистилась
 -- ничем. Сырые строки нужны для разбора инцидента и сверки с биллингом

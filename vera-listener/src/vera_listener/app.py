@@ -118,11 +118,19 @@ class Listener:
                 if self.segmenter.current is None:
                     self.status.set_state(IDLE)
 
+            speech = self.detectors[frame.track].is_speech(frame.pcm)
             now = time.monotonic()
-            if now - polled >= CONTEXT_POLL_S:
+            # Спрашиваем «кто сейчас звучит», только когда ответ кому-то нужен.
+            # Перебор звуковых сессий Windows стоит 28 мс процессора на вызов
+            # (замер 04.09) — раз в две секунды это 1.4% ядра НЕПРЕРЫВНО, то
+            # есть десятая часть всего расхода слушателя. В тишине без открытой
+            # сессии контекст не читает никто: он нужен сегментатору, а тот
+            # спрашивает его с первой же речевой рамки. К ней и опрашиваем —
+            # `polled` к тому моменту давно просрочен, так что свежесть та же.
+            if ((speech or self.segmenter.current is not None)
+                    and now - polled >= CONTEXT_POLL_S):
                 app, title, polled = active_audio_app(), foreground_window_title(), now
 
-            speech = self.detectors[frame.track].is_speech(frame.pcm)
             closed = self.segmenter.feed(frame.at, frame.track, speech,
                                          app=app, window_title=title)
             if closed:
