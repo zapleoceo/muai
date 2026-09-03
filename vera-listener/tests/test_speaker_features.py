@@ -7,12 +7,17 @@
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
+from vera_listener.speakers.embedder import OpenVinoSpeakerEmbedder
 from vera_listener.speakers.features import (
     FRAME_LEN,
     FRAME_SHIFT,
+    MIN_FRAMES,
+    MIN_VOICEPRINT_S,
     NUM_MEL,
     PREEMPHASIS,
     SAMPLE_RATE,
@@ -145,3 +150,35 @@ class TestAgainstKaldiFormulas:
         audio = np.zeros(samples, dtype=np.float32)
         audio[::3] = 0.1
         assert fbank(audio).shape[0] == 1 + (samples - FRAME_LEN) // FRAME_SHIFT
+
+class TestSpeechFloor:
+    """Отпечаток снимается только с куска, которому можно верить.
+
+    Замер лежит в `features.MIN_VOICEPRINT_S`: два коротких куска одного и
+    того же голоса сходятся слабее порога слияния, пока кусок короче трёх
+    секунд. Такой кусок разводит одного человека на нескольких — ровно это и
+    случилось вживую 03.09.
+    """
+
+    def test_floor_matches_the_declared_seconds(self):
+        seconds = ((MIN_FRAMES - 1) * FRAME_SHIFT + FRAME_LEN) / SAMPLE_RATE
+        assert seconds == pytest.approx(MIN_VOICEPRINT_S, abs=0.01)
+
+    def test_short_piece_gives_no_fingerprint(self):
+        """Полторы секунды — отказ, и модель ради этого даже не грузится."""
+        embedder = OpenVinoSpeakerEmbedder(Path("нет такого каталога"))
+        assert embedder.embed(np.zeros(int(1.5 * SAMPLE_RATE), np.float32)) is None
+
+    def test_floor_clears_the_merge_threshold_with_room(self):
+        """Порог должен стоять там, где свой голос уверенно сходится сам с собой.
+
+        На 2.0с замер даёт 0.537 при пороге слияния 0.65 — то есть floor,
+        поставленный «почти правильно», дефект бы не закрыл. Держим три
+        секунды: 0.759.
+        """
+        assert MIN_VOICEPRINT_S >= 3.0
+
+    def test_short_piece_is_refused_below_the_floor(self):
+        """Две с половиной секунды всё ещё коротко — отпечатка быть не должно."""
+        embedder = OpenVinoSpeakerEmbedder(Path("нет такого каталога"))
+        assert embedder.embed(np.zeros(int(2.5 * SAMPLE_RATE), np.float32)) is None
