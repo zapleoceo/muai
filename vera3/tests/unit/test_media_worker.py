@@ -484,23 +484,41 @@ async def test_on_failure_degrade_branch_runs_sql():
     assert params["perm"] == "true"
 
 
-def test_unrecoverable_covers_what_the_refill_must_never_take_back():
-    """Файла нет — доливать нечего. Признак пишется в metadata, потому что
-    triage_error триаж обнуляет на успехе (баг 02.09: 468 событий крутились
-    по три попытки каждые три часа вечно)."""
+def test_download_failures_are_permanent_and_degrade_at_once():
+    """Файла нет — ни ретраить, ни доливать. 12.09.2026: 307 попыток за 4 часа
+    на «Could not find the input entity», ноль успехов — три круга на каждое
+    такое фото это чистый простой очереди. Один предикат на оба решения."""
     for err in ("download: message not found",
-                "download: ValueError: Could not find the input entity for PeerUser(...)",
+                "download: no media on this message",
+                "download: download returned None (deleted?)",
                 "download: too large: 90000000 bytes (>25MB)",
                 "broker vision HTTP 413: payload too large"):
-        assert repo._is_unrecoverable(err), err
+        assert repo._is_permanent(err), err
+        plan = repo._plan_failure({}, err)
+        assert plan["degrade"] is True and plan["action"] == "degraded(permanent)", err
+
+
+def test_missing_entity_gets_exactly_one_retry_for_a_cold_cache():
+    """warm_entity_cache — best-effort: если ингестор ещё грузится, воркер
+    через 5 минут идёт клеймить с холодным кэшем, и «нет пира» в этом окне —
+    не приговор. Первая осечка → ретрай через 2 мин, вторая → permanent."""
+    err = "download: ValueError: Could not find the input entity for PeerUser(1)"
+    first = repo._plan_failure({}, err)
+    assert first["degrade"] is False
+    assert first["action"] == "retry#1 in 2m"
+    second = repo._plan_failure({"media_retry_count": 1}, err)
+    assert second["degrade"] is True
+    assert second["action"] == "degraded(permanent)"
+    # удалённое сообщение кэшем не лечится — permanent сразу
+    assert repo._plan_failure({}, "download: message not found")["degrade"] is True
 
 
 def test_transient_failures_stay_recoverable():
-    # 503/429 лечатся временем — такое доливать обратно НУЖНО
+    # 503/429 лечатся временем — такое ретраим и доливаем обратно
     for err in ("vision: broker vision HTTP 503: no provider available",
                 "broker vision HTTP 429: rate limit",
-                "job still pending"):
-        assert not repo._is_unrecoverable(err), err
+                "job still pending after 900s"):
+        assert not repo._is_permanent(err), err
 
 
 @pytest.mark.asyncio
