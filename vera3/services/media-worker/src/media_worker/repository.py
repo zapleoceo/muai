@@ -131,7 +131,8 @@ async def _on_success(event_id: int, append: str, extra_meta: dict | None = None
             SET content_text = content_text || :app,
                 triage_status = 'pending',
                 triage_error = NULL,
-                metadata = COALESCE(metadata, '{}'::jsonb) || CAST(:extra AS jsonb)
+                metadata = (COALESCE(metadata, '{}'::jsonb) || CAST(:extra AS jsonb))
+                           - 'media_job_id'
             WHERE id = :id AND triage_status = 'media_pending'
         """), {"app": append, "extra": json.dumps(extra_meta or {}),
                "id": event_id})
@@ -171,10 +172,13 @@ def _plan_failure(meta: dict | None, err: str) -> dict:
     }
 
 
-async def _on_failure(event_id: int, meta: dict, err: str) -> str:
+async def _on_failure(event_id: int, meta: dict, err: str,
+                      carry_meta: dict | None = None) -> str:
     """Apply the failure plan. Degraded events keep their placeholder
     ([photo]/[voice: Ns]) and go to 'pending' so they still enter the brain —
-    recognition is best-effort. Returns the action taken for logging."""
+    recognition is best-effort. Returns the action taken for logging.
+    `carry_meta` — что попытка хочет передать следующей (media_job_id
+    недосчитанной брокером джобы); пишется только на ветке ретрая."""
     plan = _plan_failure(meta, err)
 
     if plan["degrade"]:
@@ -212,7 +216,7 @@ async def _on_failure(event_id: int, meta: dict, err: str) -> str:
             SET triage_error = :err,
                 metadata = jsonb_set(
                   jsonb_set(
-                    COALESCE(metadata, '{}'::jsonb),
+                    COALESCE(metadata, '{}'::jsonb) || CAST(:carry AS jsonb),
                     '{media_retry_count}', to_jsonb(CAST(:cnt AS integer))
                   ),
                   '{media_next_retry_at}',
@@ -222,7 +226,8 @@ async def _on_failure(event_id: int, meta: dict, err: str) -> str:
                 )
             WHERE id = :id AND triage_status = 'media_pending'
         """), {"err": err[:300], "cnt": plan["retry_count"],
-               "backoff": plan["backoff_min"], "id": event_id})
+               "backoff": plan["backoff_min"], "id": event_id,
+               "carry": json.dumps(carry_meta or {})})
     return plan["action"]
 
 

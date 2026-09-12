@@ -15,6 +15,7 @@ from typing import Any
 
 from vera_shared.llm.broker_client import (
     BrokerCallFailed,
+    BrokerJobPending,
     broker_enabled,
     chat_async_via_broker,
     chat_via_broker,
@@ -27,6 +28,16 @@ log = logging.getLogger(__name__)
 
 class LLMCallFailed(Exception):
     """Broker не ответил или вернул не-2xx после всех попыток."""
+
+
+class LLMJobPending(LLMCallFailed):
+    """Дедлайн опроса вышел, а брокер джобу ещё считает. `job_id` — чтобы
+    вызывающий на следующей попытке вернулся за результатом, а не отправил
+    тот же payload заново."""
+
+    def __init__(self, job_id: int | str, message: str):
+        self.job_id = job_id
+        super().__init__(message)
 
 
 class LLMCoolingDown(LLMCallFailed):
@@ -120,12 +131,15 @@ async def chat_async(
     workflow: str | None = None,
     event_id: int | None = None,
     poll_deadline_s: float | None = None,
+    resume_job_id: int | str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Same contract as chat(), submit+poll (/v1/jobs) instead of holding a
     connection open — a slow provider delays the poll loop, not the caller.
     Additive: chat() keeps working unchanged. See docs/llm-broker.md.
     `poll_deadline_s` — per-call ожидание очереди (фоновые задачи, напр.
     ярлыки кластеров, могут ждать занятый free-пул дольше дефолтных 120с).
+    `resume_job_id` — вернуться за результатом джобы из прошлого
+    LLMJobPending вместо повторной отправки.
     При открытом circuit breaker — мгновенный LLMCoolingDown."""
     _require_broker()
     await _circuit_precheck(capability)
@@ -139,7 +153,12 @@ async def chat_async(
             workflow=workflow,
             event_id=event_id,
             poll_deadline_s=poll_deadline_s,
+            resume_job_id=resume_job_id,
         )
+    except BrokerJobPending as e:
+        # Не авария пула — брокер работает, просто медленно. Circuit не
+        # трогаем (иначе один долгий vision закрывал бы capability на 30 мин).
+        raise LLMJobPending(e.job_id, f"broker async call failed: {e}") from e
     except BrokerCallFailed as e:
         await _circuit_note(capability, e)
         raise LLMCallFailed(f"broker async call failed: {e}") from e

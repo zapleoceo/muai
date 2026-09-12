@@ -39,6 +39,24 @@ class BrokerCallFailed(Exception):
     """Broker returned non-2xx or all providers exhausted."""
 
 
+class BrokerJobPending(BrokerCallFailed):
+    """The client's poll ceiling passed while the broker still works the job.
+    Carries `job_id` so the caller can come back for the result instead of
+    resubmitting the same payload."""
+
+    def __init__(self, job_id: int | str, ceiling: float) -> None:
+        super().__init__(f"job {job_id} still pending after {ceiling:.0f}s")
+        self.job_id = job_id
+
+
+class BrokerJobGone(BrokerCallFailed):
+    """The broker no longer knows this job (404): retention purged it."""
+
+    def __init__(self, job_id: int | str) -> None:
+        super().__init__(f"job {job_id} not found on broker")
+        self.job_id = job_id
+
+
 # Shared httpx client — TLS handshake reuse for performance
 _http: httpx.AsyncClient | None = None
 _http_lock = asyncio.Lock()
@@ -146,6 +164,7 @@ async def chat_async_via_broker(
     event_id: int | None = None,
     model: str | None = None,
     poll_deadline_s: float | None = None,
+    resume_job_id: int | str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Submit+poll against /v1/jobs — same request/response contract as
     chat_via_broker, but never holds the connection open. A slow provider can
@@ -154,6 +173,8 @@ async def chat_async_via_broker(
     `poll_deadline_s` — per-call ceiling override (default env
     BROKER_JOB_DEADLINE_S): фоновые задачи (ярлыки кластеров) могут ждать
     занятый free-пул дольше интерактивных.
+    `resume_job_id` — джоба, оставшаяся у брокера после прошлого
+    BrokerJobPending: опросить её, а не отправлять payload заново.
     """
     payload: dict[str, Any] = {
         "messages": messages,
@@ -166,7 +187,22 @@ async def chat_async_via_broker(
     if response_format:
         payload["response_format"] = response_format
 
+    ceiling = poll_deadline_s if poll_deadline_s else JOB_POLL_DEADLINE_S
     c = await _client()
+
+    # Возобновление: джоба уже была отправлена в прошлый раз, и клиент
+    # сдался по своему дедлайну, а брокер её досчитывал. Опрашиваем ЕЁ, а не
+    # шлём заново — иначе модель считает то же самое второй раз (12.09.2026:
+    # три vision-джобы по 25 минут в очереди брокера, все три пересчитаны).
+    # 404 = брокер уже удалил результат (ретенция) — тогда честная переотправка.
+    if resume_job_id is not None:
+        try:
+            return await _poll_job(c, resume_job_id, ceiling=ceiling, poll_after_s=2.0,
+                                   workflow=workflow, event_id=event_id,
+                                   capability=capability)
+        except BrokerJobGone:
+            log.info("job %s gone on broker — resubmitting", resume_job_id)
+
     try:
         r = await c.post(
             f"{BROKER_URL}/v1/jobs", params={"capability": capability}, json=payload,
@@ -177,17 +213,24 @@ async def chat_async_via_broker(
         raise BrokerCallFailed(f"broker {r.status_code}: {r.text[:200]}")
 
     job = r.json()
-    job_id = job["job_id"]
-    poll_after_s = float(job.get("poll_after_s") or 2)
-    ceiling = poll_deadline_s if poll_deadline_s else JOB_POLL_DEADLINE_S
-    deadline = time.monotonic() + ceiling
+    return await _poll_job(c, job["job_id"], ceiling=ceiling,
+                           poll_after_s=float(job.get("poll_after_s") or 2),
+                           workflow=workflow, event_id=event_id, capability=capability)
 
+
+async def _poll_job(c: httpx.AsyncClient, job_id: int | str, *, ceiling: float,
+                    poll_after_s: float, workflow: str | None, event_id: int | None,
+                    capability: str) -> tuple[str, dict[str, Any]]:
+    """Poll one job to a terminal state or until `ceiling` seconds pass."""
+    deadline = time.monotonic() + ceiling
     while True:
         await asyncio.sleep(poll_after_s)
         try:
             r = await c.get(f"{BROKER_URL}/v1/jobs/{job_id}")
         except Exception as e:
             raise BrokerCallFailed(f"broker poll network: {e}") from e
+        if r.status_code == 404:
+            raise BrokerJobGone(job_id)
         if r.status_code >= 400:
             raise BrokerCallFailed(f"broker poll {r.status_code}: {r.text[:200]}")
 
@@ -195,9 +238,7 @@ async def chat_async_via_broker(
         status = data.get("status")
         if status == "pending":
             if time.monotonic() > deadline:
-                raise BrokerCallFailed(
-                    f"job {job_id} still pending after {ceiling:.0f}s"
-                )
+                raise BrokerJobPending(job_id, ceiling)
             poll_after_s = float(data.get("poll_after_s") or poll_after_s)
             continue
         if status == "error":
