@@ -24,36 +24,44 @@ MAX_MEDIA_RETRIES = 3
 BACKOFF_MIN = [2, 15, 60]   # minutes for retry 1, 2, 3
 
 
+#: Подстроки ошибок, после которых повторять бессмысленно. Один список на
+#: оба решения — «сдаваться ли сразу» (`_plan_failure`) и «возвращать ли в
+#: очередь потом» (`media_permanent` → `media_requeue.top_up`). До 12.09.2026
+#: ошибки скачивания намеренно не были permanent («разовая осечка Telethon
+#: мыслима»): замер за 4 часа после доливки дал 307 попыток на «Could not
+#: find the input entity» и ноль успехов среди них — три круга на каждое
+#: такое фото это чистый простой очереди. Пир, которого нет в сессии, не
+#: появится в ней через 2 минуты; удалённое сообщение не вернётся.
+_PERMANENT_MARKERS: tuple[str, ...] = (
+    "broker_url",                         # брокер не сконфигурирован
+    "empty text",                         # vision safety-block / пустой ответ
+    "too large",                          # больше лимита — не влезет никогда
+    "timed out",                          # зависший файл зависнет снова
+    "could not find the input entity",    # пира нет в сессии Telethon
+    "message not found",                  # сообщение удалено
+    "no media on this message",           # медиа в сообщении уже нет
+    "download returned none",             # ингестор не отдал файл (удалён)
+    # Брокер/клиент 4xx = плохой запрос / скоуп / слишком большой payload.
+    # 429 и 5xx — транзиентные, остаются на ретрае. 503 «no provider» —
+    # тоже транзиентный: ключи выходят из кулдауна за минуты.
+    "http 400", "http 401", "http 403", "http 404", "http 413",
+)
+
+
 def _is_permanent(err: str) -> bool:
-    """Errors where retrying won't help — degrade immediately instead of
-    burning the backoff budget."""
+    """Retrying won't help: degrade now and never re-queue."""
     e = err.lower()
-    if "broker_url" in e:                        # broker not configured
-        return True
-    if "empty text" in e:                        # vision safety-block / blank
-        return True
-    if "too large" in e or "timed out" in e:     # oversize never fits; a file
-        return True                              # that hangs will hang again
-    # NOTE: 503 "no provider available" is TRANSIENT, not permanent — it
-    # happens when all gemini keys are momentarily in cooldown (free-tier
-    # rate-limit churn). They recover within minutes, so the backoff retry
-    # (2m/15m/60m) catches a live key. Degrading here would lose the image.
-    # Broker/client 4xx = bad request / scope / payload-too-large.
-    # 429 (rate-limit) and 5xx (broker/provider down) stay transient → retry.
-    return any(c in e for c in (
-        "http 400", "http 401", "http 403", "http 404", "http 413",
-    ))
+    return any(marker in e for marker in _PERMANENT_MARKERS)
 
 
-#: Провал, после которого медиа не достать НИКОГДА: сообщение удалено, пира
-#: не резолвит Telethon, файл больше лимита. Шире, чем `_is_permanent`: там
-#: решается «сдаваться ли сразу», здесь — «возвращать ли это в очередь потом».
-#: Две первые строки намеренно не в `_is_permanent`: разовая осечка Telethon
-#: мыслима, и три попытки внутри одного прохода стоят дёшево. А вот доливать
-#: такое обратно каждые три часа — нет.
-def _is_unrecoverable(err: str) -> bool:
+#: Постоянные ошибки, которые на ХОЛОДНОМ кэше Telethon выглядят так же, как
+#: на удалённом сообщении. См. `_plan_failure`: одна повторная попытка.
+_COLD_CACHE_MARKERS: tuple[str, ...] = ("could not find the input entity",)
+
+
+def _is_cold_cache(err: str) -> bool:
     e = err.lower()
-    return _is_permanent(err) or "message not found" in e         or "could not find the input entity" in e
+    return any(marker in e for marker in _COLD_CACHE_MARKERS)
 
 
 # Kinds recognised via the vision pool (chat_async capability="vision") vs the
@@ -141,7 +149,12 @@ def _plan_failure(meta: dict | None, err: str) -> dict:
     Degrade when the error is permanent OR the next attempt would be the
     Nth (MAX_MEDIA_RETRIES)."""
     retries = int((meta or {}).get("media_retry_count", 0))
-    permanent = _is_permanent(err)
+    # Ошибка холодного кэша получает РОВНО одну повторную попытку: воркер
+    # греет кэш пиров Telethon на старте (warm_entity_cache), но best-effort —
+    # если ингестор ещё грузится, он сдаётся через 5 минут и идёт клеймить.
+    # Пометить фото вечно-недостижимым по первой же осечке в этом окне —
+    # потеря; вторая осечка через 2 минуты — уже факт.
+    permanent = _is_permanent(err) and not (_is_cold_cache(err) and retries == 0)
     if permanent or retries + 1 >= MAX_MEDIA_RETRIES:
         return {
             "degrade": True,
@@ -187,7 +200,7 @@ async def _on_failure(event_id: int, meta: dict, err: str) -> str:
                     )
                 WHERE id = :id AND triage_status = 'media_pending'
             """), {"err": err[:300], "id": event_id,
-                   "perm": "true" if _is_unrecoverable(err) else "false"})
+                   "perm": "true" if _is_permanent(err) else "false"})
         return plan["action"]
 
     # Backoff retry. retry_count bound as text → cast to int inside to_jsonb
