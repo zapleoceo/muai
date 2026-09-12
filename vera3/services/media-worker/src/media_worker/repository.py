@@ -14,11 +14,12 @@ log = logging.getLogger("media-worker")
 BATCH = int(os.environ.get("MEDIA_BATCH", "3"))
 # Лиз на захват должен покрывать ХУДШИЙ случай всего батча: фото идут
 # последовательно, а одно фото на локальном vision ждёт до
-# MEDIA_VISION_DEADLINE_S (420с). При батче 3 это ~21 мин, тогда как лиз
+# MEDIA_VISION_DEADLINE_S (900с). При батче 3 это 45 мин; лиз изначально
 # стоял на 10 — третье фото начиналось уже с протухшим лизом, и его
 # подхватывала соседняя реплика. Двойного текста не будет (finalize
-# сверяет triage_status), но работа сгорала бы дважды.
-LEASE_MIN = int(os.environ.get("MEDIA_LEASE_MIN", "25"))
+# сверяет triage_status), но работа сгорала бы дважды. Инвариант
+# лиз >= BATCH * дедлайн закреплён тестом.
+LEASE_MIN = int(os.environ.get("MEDIA_LEASE_MIN", "50"))
 MAX_MEDIA_RETRIES = 3
 BACKOFF_MIN = [2, 15, 60]   # minutes for retry 1, 2, 3
 
@@ -111,8 +112,8 @@ async def _claim_batch(limit: int = BATCH, *, voice_only: bool = False) -> list[
 
 
 async def _on_success(event_id: int, append: str, extra_meta: dict | None = None) -> None:
-    """Append recognized text + merge extra metadata (e.g. how the voice
-    was recognized: media_recognition=ok_local|ok_broker).
+    """Append recognized text + merge extra metadata (how the media was
+    recognized: media_recognition=ok_local|ok_broker — voice AND photo).
 
     Guard triage_status: воркер, переживший lease (другой инстанс уже
     обработал и перевёл в pending), не должен приклеить текст ВТОРОЙ раз."""

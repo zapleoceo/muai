@@ -31,7 +31,7 @@ Code layout (one responsibility per file):
    keep transcribing through the separate whisper pool (which isn't capped), so
    a vision cap no longer stalls speech. `_claim_batch`
    does the claim as ONE atomic `UPDATE ... FOR UPDATE SKIP LOCKED ...
-   RETURNING` that stamps a `MEDIA_LEASE_MIN`-minute (default 25)
+   RETURNING` that stamps a `MEDIA_LEASE_MIN`-minute (default 50)
    `media_next_retry_at` lease on the
    selected rows — a plain `SELECT ... FOR UPDATE` in its own transaction
    released the lock the moment the `SELECT` closed, before the row was
@@ -57,12 +57,16 @@ Code layout (one responsibility per file):
    `Текст:` if readable). The broker picks a vision key (gemini →
    anthropic → openai) — no provider keys live in media-worker.
    The poll deadline for one photo is `MEDIA_VISION_DEADLINE_S`
-   (default 420 s), not the client-wide 120 s: the broker can serve vision
+   (default 900 s), not the client-wide 120 s: the broker can serve vision
    from a **local** model (`local/qwen3vl`), which is unlimited but slow —
-   measured 42 s min / 117 s avg / 222 s max, so 5 of 8 local jobs used to
-   overrun the 120 s ceiling. The broker still finished them; Vera had
-   already given up, and the photo burned a retry and degraded after three
-   rounds. **Invariant:** `MEDIA_LEASE_MIN * 60 >= MEDIA_BATCH *
+   measured 42 s min / 117 s avg / 222 s max on 2026-09-01, so 5 of 8 local
+   jobs used to overrun the 120 s ceiling. The broker still finished them;
+   Vera had already given up, and the photo burned a retry and degraded
+   after three rounds. The 420 s ceiling set that day stopped fitting within
+   a week: by 2026-09-12 the model's median was 120–180 s and **57 jobs a
+   day (16% of the work) hit 420 s and were abandoned** — 6.6 worker-hours
+   thrown away. An abandoned job is worse than a slow one, hence 900 s.
+   **Invariant:** `MEDIA_LEASE_MIN * 60 >= MEDIA_BATCH *
    MEDIA_VISION_DEADLINE_S` — the batch is processed sequentially, so a
    shorter lease would let a sibling replica re-claim the last row while
    it is still being recognised (`test_lease_covers_worst_case_batch`).
@@ -112,8 +116,8 @@ lost. When keys are added later, re-seed degraded events if desired.
 - `BROKER_PROJECT_KEY` — `aib_prj_…`; project must hold `llm:vision` +
   `llm:audio` scopes (set on the `vera` project)
 - `MEDIA_POLL_S` (default 10), `MEDIA_BATCH` (default 3)
-- `MEDIA_VISION_DEADLINE_S` (default 420) — per-photo broker poll ceiling
-- `MEDIA_LEASE_MIN` (default 25) — claim lease; must cover
+- `MEDIA_VISION_DEADLINE_S` (default 900) — per-photo broker poll ceiling
+- `MEDIA_LEASE_MIN` (default 50) — claim lease; must cover
   `MEDIA_BATCH * MEDIA_VISION_DEADLINE_S`
 
 No provider keys here — vision/whisper keys live in the broker. Whisper
@@ -239,7 +243,20 @@ download is size-capped (no OOM). Крон на хосте раз в 3 часа 
 2. `revisit` — возвращает пропущенное по `no_participation`, если владелец в
    этом чате уже пишет: решение принимается по данным, а данные меняются.
 3. `top_up` — доливает из восстановимых провалов, голосовые вперёд, дальше
-   свежие фото, и только то, что политика пропускает.
+   свежие фото, и только то, что политика пропускает. Политика стоит уже
+   **в SQL** кандидатов (тип чата + участие владельца через тот же предикат,
+   что `chat_activity.own_message_count`), а `_verdicts` остаётся
+   окончательным судьёй. До 12.09.2026 запрос брал самые свежие провалы без
+   разбора, а свежие — почти сплошь из чатов, где владелец не пишет: из
+   2 184 кандидатов отсеивалось 2 149, доливалось 11–35 вместо 546, очередь
+   стояла на ~250 при цели 800, воркер простаивал — при 8 457 подходящих
+   провалах глубже окна.
+   Успех у фото теперь тоже помечается `media_recognition=ok_broker` (раньше
+   только у голосовых): по этой метке `top_up` отличает провал от
+   сделанного, а `measure` считает прогресс. Без неё распознанное фото
+   навсегда числилось несделанным — сайт показывал 20 612 при настоящих
+   10 517. Исторические 9 130 фото с текстом, но без метки, добиты одним
+   UPDATE по маркеру `--- recognized photo ---`.
 4. `measure` — считает, сколько медиа политика пропускает ВСЕГО и сколько из
    них ещё не распознано, и кладёт оба числа в `app_control`
    (`media_backlog_total` / `media_backlog_left`). Дашборд читает их и только
