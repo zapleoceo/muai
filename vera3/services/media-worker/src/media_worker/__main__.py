@@ -62,24 +62,34 @@ async def main_loop() -> None:  # pragma: no cover — glue, pieces unit-tested
             await asyncio.sleep(min(vision_cd, 60) if vision_cd > 0 else POLL_S)
             continue
 
-        for r in rows:
-            try:
-                append, extra_meta, err = await _process_one(r)
-            except Exception as e:
-                append, extra_meta, err = "", {}, f"unexpected: {type(e).__name__}: {e}"
+        # Весь захваченный батч — параллельно. Последовательная обработка
+        # упирала темп в ОДНО фото за раз: 145с на снимок → потолок 24 в час,
+        # при том что локальная модель брокера (единственный слот, 150с) была
+        # занята лишь 12% времени, а gemini отвечал за 3.3с (замер 12.09.2026,
+        # 5 часов: local 75 ok, gemini 27 ok). Очередь ждала не брокера, а нас.
+        await asyncio.gather(*(_handle_row(r) for r in rows))
 
-            try:
-                if err:
-                    action = await _on_failure(r["id"], r.get("metadata") or {}, err,
-                                               carry_meta=extra_meta)
-                    log.warning("event %s: %s → %s", r["id"], err, action)
-                else:
-                    await _on_success(r["id"], append, extra_meta)
-                    log.info("event %s: recognized %d chars (%s) → pending",
-                             r["id"], len(append),
-                             extra_meta.get("media_recognition", "ok"))
-            except Exception as e:
-                log.exception("finalize event %s failed: %s", r["id"], e)
+
+async def _handle_row(row: dict) -> None:
+    """Распознать одно событие и записать итог. Свои исключения не выпускает:
+    в gather соседние строки батча не должны страдать друг за друга."""
+    try:
+        append, extra_meta, err = await _process_one(row)
+    except Exception as e:
+        append, extra_meta, err = "", {}, f"unexpected: {type(e).__name__}: {e}"
+
+    try:
+        if err:
+            action = await _on_failure(row["id"], row.get("metadata") or {}, err,
+                                       carry_meta=extra_meta)
+            log.warning("event %s: %s → %s", row["id"], err, action)
+        else:
+            await _on_success(row["id"], append, extra_meta)
+            log.info("event %s: recognized %d chars (%s) → pending",
+                     row["id"], len(append),
+                     extra_meta.get("media_recognition", "ok"))
+    except Exception as e:
+        log.exception("finalize event %s failed: %s", row["id"], e)
 
 
 if __name__ == "__main__":

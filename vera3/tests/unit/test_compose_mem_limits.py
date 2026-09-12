@@ -72,3 +72,32 @@ def test_every_service_has_a_limit():
     declared = set(re.findall(r"^  ([a-z0-9-]+):\s*$", body, re.M))
     missing = declared - set(_limits())
     assert not missing, f"без mem_limit: {sorted(missing)}"
+
+
+# ─── media-worker: батч = параллелизм, значит и множитель памяти ────────────
+
+#: Пик RSS на ОДНО фото в полёте, МБ: raw 25 (потолок скачивания) + base64 33
+#: + data-URI внутри JSON 33 + сериализация тела httpx 33.
+PHOTO_PEAK_MB = 124
+#: Рантайм поверх пика: пул SQLAlchemy, буферы httpx, сам интерпретатор.
+MEDIA_RUNTIME_MB = 50
+
+
+def _media_batch() -> int:
+    """MEDIA_BATCH из compose — он же предел параллелизма media-worker."""
+    body = COMPOSE.read_text(encoding="utf-8")
+    m = re.search(r'^\s+MEDIA_BATCH:\s*"?(\d+)"?', body, re.M)
+    assert m, "MEDIA_BATCH исчез из compose — параллелизм стал неявным"
+    return int(m.group(1))
+
+
+def test_batch_fits_the_container_memory_ceiling():
+    """С 12.09.2026 батч идёт параллельно, и пик памяти умножается на его
+    размер. Раньше это ничего не значило (фото шли по одному), поэтому
+    поднять MEDIA_BATCH было безобидной правкой — теперь нет."""
+    need = _media_batch() * PHOTO_PEAK_MB + MEDIA_RUNTIME_MB
+    limit = _limits()["media-worker"]
+    assert need <= limit, (
+        f"media-worker: MEDIA_BATCH={_media_batch()} требует ~{need} МБ пика "
+        f"при mem_limit {limit}m — либо меньше батч, либо выше потолок"
+    )

@@ -38,7 +38,27 @@ Code layout (one responsibility per file):
    actually processed, so a second worker instance (or the next poll
    tick, if finalize crashed) could re-claim and double-process the same
    event.
-4. For each: POST to ingestor-telegram `/media/download` → bytes + mime.
+4. The claimed batch is processed **concurrently** (`asyncio.gather` over
+   `_handle_row`), not row by row. Sequential processing capped throughput at
+   one photo at a time — 145 s each, so 24/hour — while the broker's single
+   local-vision slot sat idle 88% of the time (measured 2026-09-12 over 5 h:
+   local 75 ok @150 s, gemini 27 ok @3.3 s, openrouter 0 ok / 42
+   rate-limited). The queue was waiting on us, not on the broker.
+   `_handle_row` swallows its own exceptions so one bad row cannot sink its
+   neighbours and leave them claimed until the lease expires.
+   **`MEDIA_BATCH` is therefore also the concurrency limit**, and it was
+   lowered 3 → 2 when concurrency landed, for two independent reasons:
+   *memory* — the per-photo peak (raw 25 + b64 33 + data-URI in the JSON 33 +
+   httpx body 33 ≈ 124 MB at the 25 MB download cap) is now simultaneous, so
+   `BATCH × 124 + 50 MB runtime` must fit `mem_limit` (2 × 124 + 50 = 298 MB
+   under 384m; three would be 422 MB, over it — asserted by
+   `test_batch_fits_the_container_memory_ceiling`); and *pressure* — the
+   broker has ONE local-vision slot, so a third stream would only queue
+   behind the other two and then spill onto cloud keys that already answered
+   429 even under one-at-a-time submission. Two streams are what it takes to
+   keep the local slot from idling. The lease also stops scaling with the
+   batch: it now only has to cover the worst single row.
+5. For each: POST to ingestor-telegram `/media/download` → bytes + mime.
    That endpoint downloads through `ingestor_telegram.media_download.
    download_capped()`, which enforces the 25 MB cap **before** any bytes
    move (via `msg.file.size` from message metadata, raising `MediaTooLarge`)
@@ -51,7 +71,7 @@ Code layout (one responsibility per file):
    / timeout now come back as errors classified **permanent** by
    `_is_permanent`, so the event degrades immediately instead of burning
    three pointless retries.
-5. Photo → **broker `POST /v1/chat?capability=vision`** with OpenAI-style
+6. Photo → **broker `POST /v1/chat?capability=vision`** with OpenAI-style
    multimodal content (`text` block + `image_url` data-URI) and an
    OCR/caption prompt (Russian, 1-3 sentences + verbatim text under
    `Текст:` if readable). The broker picks a vision key (gemini →
@@ -80,13 +100,13 @@ Code layout (one responsibility per file):
    MEDIA_VISION_DEADLINE_S` — the batch is processed sequentially, so a
    shorter lease would let a sibling replica re-claim the last row while
    it is still being recognised (`test_lease_covers_worst_case_batch`).
-6. Voice/audio → **broker `POST /v1/transcribe`** (multipart upload).
+7. Voice/audio → **broker `POST /v1/transcribe`** (multipart upload).
    Whisper is hosted broker-side since 2026-07-18 (the local `asr-local`
    experiment was removed the same day — the backlog of ~3.3k failed
    voices had been cleared by a one-off local faster-whisper run,
    `media_recognition=ok_local`). Empty transcription (silence) becomes
    `(тишина/неразборчиво)`.
-7. On success: append `\n--- recognized photo ---\n<text>` (or
+8. On success: append `\n--- recognized photo ---\n<text>` (or
    `voice transcription` / `audio transcription`) to `content_text`,
    set `triage_status='pending'` so normal triage takes over. For
    voice/audio the source is recorded in
