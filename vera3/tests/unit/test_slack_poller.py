@@ -351,3 +351,77 @@ class TestAuthResilience:
         monkeypatch.setattr(poller, "SlackClient", _C)
         await session.connect()
         assert seen == ["xoxp-from-dashboard"]
+
+
+# ─── нечитаемые каналы ─────────────────────────────────────────────────────
+
+
+def test_slack_unreadable_marks_permanent_refusals():
+    from vera_shared.ingest_policy import slack_channel_unreadable
+    for err in ("conversations.history: channel_not_found",
+                "conversations.history: not_in_channel",
+                "Channel IS_ARCHIVED"):
+        assert slack_channel_unreadable(err), err
+
+
+def test_slack_unreadable_ignores_transient_refusals():
+    from vera_shared.ingest_policy import slack_channel_unreadable
+    for err in (None, "", "ratelimited", "conversations.history: fatal_error",
+                "Connection reset by peer"):
+        assert not slack_channel_unreadable(err), err
+
+
+def test_unreadable_channel_is_skipped_until_the_probe_window_passes():
+    """Slackbot читается никогда: опрос раз в 6 минут давал 240 ERROR в сутки.
+    Пробуем раз в UNREADABLE_RETRY_H — вдруг канал вернули."""
+    from datetime import datetime, timedelta
+
+    from ingestor_slack.poller import UNREADABLE_RETRY_H, skip_unreadable
+    now = datetime(2026, 9, 12, 12, 0)
+    err = "conversations.history: channel_not_found"
+    assert skip_unreadable(err, now - timedelta(minutes=6), now) is True
+    assert skip_unreadable(err, now - timedelta(hours=UNREADABLE_RETRY_H + 1), now) is False
+    # здоровый канал не пропускаем никогда
+    assert skip_unreadable(None, now - timedelta(minutes=1), now) is False
+    # ни разу не опрошенный — пробуем
+    assert skip_unreadable(err, None, now) is False
+
+
+@pytest.mark.asyncio
+async def test_poll_once_skips_the_unreadable_channel_and_polls_the_rest():
+    """Проводка, а не только предикат: именно этот `continue` стоит между
+    воркспейсом и 240 ERROR в сутки, и он не должен тихо потеряться при
+    следующем рефакторинге цикла."""
+    from datetime import datetime, timedelta
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, patch
+
+    from ingestor_slack import poller
+
+    fresh = datetime(2026, 9, 12, 12, 0)
+    rows = [
+        SimpleNamespace(conversation_id="D1", name="Slackbot", kind="im",
+                        last_error="conversations.history: channel_not_found",
+                        last_polled_at=fresh - timedelta(minutes=5)),
+        SimpleNamespace(conversation_id="C2", name="general", kind="channel",
+                        last_error=None, last_polled_at=fresh),
+        SimpleNamespace(conversation_id="C3", name="old", kind="channel",
+                        last_error="conversations.history: channel_not_found",
+                        last_polled_at=fresh - timedelta(hours=48)),
+    ]
+    session = SimpleNamespace(
+        me_id="U1", account="w/me",
+        connect=AsyncMock(return_value=(
+            SimpleNamespace(list_conversations=AsyncMock(return_value=[])),
+            SimpleNamespace(resolve=AsyncMock(), known={}))),
+        auth_row=None, reset=lambda: None)
+
+    polled = AsyncMock(return_value=0)
+    with patch.object(poller.store, "upsert_conversations", AsyncMock(return_value=rows)), \
+         patch.object(poller, "poll_conversation", polled), \
+         patch.object(poller, "utc_naive_now", lambda: fresh), \
+         patch.object(poller.asyncio, "sleep", AsyncMock()):
+        await poller.poll_once(session)
+
+    names = [c.args[1].name for c in polled.await_args_list]
+    assert names == ["general", "old"], "Slackbot должен быть пропущен, «old» — перепробован"

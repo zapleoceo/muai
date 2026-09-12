@@ -80,3 +80,17 @@ def is_ignored_slack_channel(name: str | None, extra: frozenset[str] | None = No
     if clean in _IGNORED_SLACK_CHANNELS:
         return True
     return bool(extra and clean in extra)
+
+
+#: Отказы Slack, после которых канал не читается вовсе, а не «сейчас занят».
+#: `Slackbot` — псевдо-личка: Slack отдаёт её в `conversations.list`, но
+#: истории у неё нет НИКОГДА, и опрос раз в 6 минут давал 240 ERROR в сутки.
+_SLACK_UNREADABLE_MARKERS = ("channel_not_found", "not_in_channel", "is_archived")
+
+
+def slack_channel_unreadable(last_error: str | None) -> bool:
+    """True — прошлый отказ означает «канала для нас нет», а не «попробуй ещё»."""
+    if not last_error:
+        return False
+    low = last_error.lower()
+    return any(marker in low for marker in _SLACK_UNREADABLE_MARKERS)

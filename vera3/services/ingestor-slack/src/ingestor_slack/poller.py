@@ -15,11 +15,15 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+from datetime import datetime, timedelta
 
 from vera_shared.db.engine import init_engine
 from vera_shared.db.models_sources import SlackConversationRow
 from vera_shared.ingest import poll_forever
-from vera_shared.ingest_policy import is_ignored_slack_channel
+from vera_shared.ingest_policy import (
+    is_ignored_slack_channel,
+    slack_channel_unreadable,
+)
 from vera_shared.timeutil import utc_naive_now
 
 from ingestor_slack import auth, store
@@ -40,6 +44,21 @@ DENY_CHANNELS = frozenset(
     x.strip().lstrip("#").lower()
     for x in os.environ.get("SLACK_DENY_CHANNELS", "").split(",") if x.strip()
 )
+# Как часто перепроверять канал, который в прошлый раз оказался нечитаемым.
+# Не «никогда»: в канал могут вернуть, и тогда он должен ожить сам.
+UNREADABLE_RETRY_H = int(os.environ.get("SLACK_UNREADABLE_RETRY_H", "24"))
+
+
+def skip_unreadable(last_error: str | None, last_polled_at: datetime | None,
+                    now: datetime, retry_after_h: int = UNREADABLE_RETRY_H) -> bool:
+    """Пропустить канал в этом прогоне, потому что он не читается?
+
+    Чистая функция — решение принимается по строке прошлой ошибки и времени
+    последней попытки, без БД и часов.
+    """
+    if not slack_channel_unreadable(last_error) or last_polled_at is None:
+        return False
+    return (now - last_polled_at) < timedelta(hours=retry_after_h)
 
 
 def bootstrap_ts() -> str:
@@ -156,7 +175,11 @@ async def poll_conversation(client: SlackClient, row: SlackConversationRow,
     except SlackAuthError:
         raise
     except Exception as e:  # noqa: BLE001 — канал мог быть удалён под нами
-        log.error("slack/%s: не забрал историю: %s", row.name, e)
+        # Нечитаемый канал — ожидаемое состояние, а не авария: `Slackbot`
+        # отдаётся списком, но истории у него нет никогда. ERROR раз в опрос
+        # давал 240 записей в сутки и прятал настоящие сбои.
+        say = log.warning if slack_channel_unreadable(str(e)) else log.error
+        say("slack/%s: не забрал историю: %s", row.name, e)
         await store.save_cursor(row.conversation_id, None, str(e)[:500])
         return 0
 
@@ -213,33 +236,41 @@ class _Session:
         self.names = None
 
 
+async def poll_once(session: _Session) -> None:
+    """Один прогон: список каналов, отсев, опрос каждого оставшегося.
+
+    Модульная функция, а не замыкание внутри main_loop: отсев — единственное,
+    что стоит между воркспейсом и 240 ERROR в сутки, и он обязан проверяться
+    тестом, а замыкание для теста недостижимо.
+    """
+    try:
+        client, names = await session.connect()
+        raw = await client.list_conversations()
+        await names.resolve({str(c.get("user") or "") for c in raw if c.get("is_im")})
+        for row in await store.upsert_conversations(raw, names.known):
+            # Личку денай-лист не касается: он про шумные служебные каналы.
+            if row.kind != "im" and is_ignored_slack_channel(row.name, DENY_CHANNELS):
+                continue
+            if skip_unreadable(row.last_error, row.last_polled_at, utc_naive_now()):
+                continue
+            await poll_conversation(client, row, session.me_id,
+                                    session.account, names)
+            await asyncio.sleep(1)
+    except SlackAuthError as e:
+        # Токен отозван или прав не хватает — гасим строку, чтобы дашборд
+        # показывал «переподключить», а не «подключено» при мёртвом токене.
+        await auth.mark_dead(session.auth_row, str(e))
+        session.reset()
+        raise
+
+
 async def main_loop() -> None:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     await init_engine()
     session = _Session()
-
-    async def poll_once() -> None:
-        try:
-            client, names = await session.connect()
-            raw = await client.list_conversations()
-            await names.resolve({str(c.get("user") or "") for c in raw if c.get("is_im")})
-            for row in await store.upsert_conversations(raw, names.known):
-                # Личку денай-лист не касается: он про шумные служебные каналы.
-                if row.kind != "im" and is_ignored_slack_channel(row.name, DENY_CHANNELS):
-                    continue
-                await poll_conversation(client, row, session.me_id,
-                                        session.account, names)
-                await asyncio.sleep(1)
-        except SlackAuthError as e:
-            # Токен отозван или прав не хватает — гасим строку, чтобы дашборд
-            # показывал «переподключить», а не «подключено» при мёртвом токене.
-            await auth.mark_dead(session.auth_row, str(e))
-            session.reset()
-            raise
-
-    await poll_forever(name="slack", poll_once=poll_once, interval_s=POLL_S,
-                       auth_error=SlackAuthError, log=log)
+    await poll_forever(name="slack", poll_once=lambda: poll_once(session),
+                       interval_s=POLL_S, auth_error=SlackAuthError, log=log)
 
 
 if __name__ == "__main__":
