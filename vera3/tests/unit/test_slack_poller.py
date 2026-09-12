@@ -351,3 +351,37 @@ class TestAuthResilience:
         monkeypatch.setattr(poller, "SlackClient", _C)
         await session.connect()
         assert seen == ["xoxp-from-dashboard"]
+
+
+# ─── нечитаемые каналы ─────────────────────────────────────────────────────
+
+
+def test_slack_unreadable_marks_permanent_refusals():
+    from vera_shared.ingest_policy import slack_channel_unreadable
+    for err in ("conversations.history: channel_not_found",
+                "conversations.history: not_in_channel",
+                "Channel IS_ARCHIVED"):
+        assert slack_channel_unreadable(err), err
+
+
+def test_slack_unreadable_ignores_transient_refusals():
+    from vera_shared.ingest_policy import slack_channel_unreadable
+    for err in (None, "", "ratelimited", "conversations.history: fatal_error",
+                "Connection reset by peer"):
+        assert not slack_channel_unreadable(err), err
+
+
+def test_unreadable_channel_is_skipped_until_the_probe_window_passes():
+    """Slackbot читается никогда: опрос раз в 6 минут давал 240 ERROR в сутки.
+    Пробуем раз в UNREADABLE_RETRY_H — вдруг канал вернули."""
+    from datetime import datetime, timedelta
+
+    from ingestor_slack.poller import UNREADABLE_RETRY_H, skip_unreadable
+    now = datetime(2026, 9, 12, 12, 0)
+    err = "conversations.history: channel_not_found"
+    assert skip_unreadable(err, now - timedelta(minutes=6), now) is True
+    assert skip_unreadable(err, now - timedelta(hours=UNREADABLE_RETRY_H + 1), now) is False
+    # здоровый канал не пропускаем никогда
+    assert skip_unreadable(None, now - timedelta(minutes=1), now) is False
+    # ни разу не опрошенный — пробуем
+    assert skip_unreadable(err, None, now) is False
