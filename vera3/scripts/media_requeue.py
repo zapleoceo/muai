@@ -151,21 +151,42 @@ async def top_up(min_own: int, dry_run: bool) -> tuple[int, int, int]:
     if need <= 0:
         return pending, 0, 0
 
-    # Берём с запасом: часть кандидатов политика отсеет, и добор одним
-    # запросом дешевле, чем цикл «выбрал — проверил — не хватило».
+    # Политика — уже В ЗАПРОСЕ, а не только после него. Раньше окно LIMIT
+    # брало самые свежие провалы, а свежие — почти сплошь из чатов, где
+    # владелец не пишет: 12.09.2026 из 2 184 кандидатов политика отсеивала
+    # 2 149, доливка добирала 11–35 из нужных 546, очередь стояла на ~250
+    # вместо 800, и воркер простаивал, хотя подходящих провалов было 8 457 —
+    # просто глубже окна. `_verdicts` остаётся окончательным судьёй (там
+    # живёт настоящая политика и кэш участия); SQL лишь не тратит окно на
+    # заведомый брак. Предикат участия — тот же, что в
+    # chat_activity.own_message_count, включая CAST для SQLite.
     candidates = await _rows("""
-        SELECT id,
-               CAST(metadata->>'chat_id' AS TEXT) AS chat_id,
-               metadata->>'chat_kind'  AS chat_kind,
-               metadata->>'media_kind' AS media_kind
-        FROM events
-        WHERE metadata->>'media_recognition' = 'failed'
-          AND triage_status = 'done'
-          AND COALESCE(metadata->>'media_permanent', 'false') <> 'true'
-        ORDER BY (metadata->>'media_kind' IN ('voice','audio')) DESC,
-                 occurred_at DESC
+        WITH own AS (
+            SELECT CAST(metadata->>'chat_id' AS TEXT) AS chat_id, COUNT(*) AS n
+            FROM events
+            WHERE source = 'telegram'
+              AND CAST(metadata->>'direction' AS TEXT) = 'sent'
+            GROUP BY 1
+        )
+        SELECT e.id,
+               CAST(e.metadata->>'chat_id' AS TEXT) AS chat_id,
+               e.metadata->>'chat_kind'  AS chat_kind,
+               e.metadata->>'media_kind' AS media_kind
+        FROM events e
+        LEFT JOIN own ON own.chat_id = CAST(e.metadata->>'chat_id' AS TEXT)
+        WHERE e.metadata->>'media_recognition' = 'failed'
+          AND e.triage_status = 'done'
+          AND COALESCE(e.metadata->>'media_permanent', 'false') <> 'true'
+          AND COALESCE(e.metadata->>'chat_kind', '') <> 'channel'
+          AND (
+                e.metadata->>'media_kind' IN ('voice', 'audio')
+             OR e.metadata->>'chat_kind' = 'private'
+             OR COALESCE(own.n, 0) >= :min_own
+          )
+        ORDER BY (e.metadata->>'media_kind' IN ('voice','audio')) DESC,
+                 e.occurred_at DESC
         LIMIT :lim
-    """, lim=need * 4)
+    """, lim=need * 2, min_own=min_own)
     verdicts = await _verdicts(candidates, min_own)
     # Порядок из SQL сохраняем: голосовые вперёд, дальше свежие.
     take = [row["id"] for row in candidates if verdicts[row["id"]] is None][:need]

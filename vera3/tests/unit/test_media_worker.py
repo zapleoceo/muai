@@ -356,7 +356,8 @@ async def test_process_one_photo_happy():
                       AsyncMock(return_value="кот на диване")):
         seg, extra, err = await rec._process_one(row)
     assert err is None
-    assert extra == {}
+    # метка успеха — иначе замер остатка считает фото несделанным вечно
+    assert extra == {"media_recognition": "ok_broker"}
     assert "кот на диване" in seg
 
 

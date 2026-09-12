@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import importlib.util
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -39,7 +39,7 @@ def _clean_cache():
 
 async def _event(get_session, *, chat_id, chat_kind, media_kind, status,
                  direction="received", recognition=None, skip_reason=None,
-                 error=None, permanent=None, tag=""):
+                 error=None, permanent=None, tag="", occurred_at=None):
     from vera_shared.db.models import EventRow
     meta = {"chat_id": chat_id, "chat_kind": chat_kind,
             "media_kind": media_kind, "direction": direction}
@@ -53,7 +53,8 @@ async def _event(get_session, *, chat_id, chat_kind, media_kind, status,
         row = EventRow(
             source="telegram",
             source_event_id=f"tg:{chat_id}:{media_kind}:{status}:{tag}",
-            category="message", content_text="[photo]", occurred_at=_T0,
+            category="message", content_text="[photo]",
+            occurred_at=occurred_at or _T0,
             metadata_=meta, triage_status=status, triage_error=error,
         )
         s.add(row)
@@ -175,9 +176,30 @@ class TestTopUp:
         with pytest.MonkeyPatch.context() as mp:
             _wire(mp, requeue, sqlite_db)
             was, added, rejected = await requeue.top_up(min_own=5, dry_run=False)
-        assert (was, added, rejected) == (0, 1, 1)
+        # rejected=0, а не 1: канал теперь отсекается ещё в SQL и до
+        # `_verdicts` не доходит — окно LIMIT на него не тратится
+        assert (was, added, rejected) == (0, 1, 0)
         assert (await _status(sqlite_db, "tg:10:photo:done:"))[0] == "media_pending"
         assert (await _status(sqlite_db, "tg:9:photo:done:"))[0] == "done"
+
+    @pytest.mark.asyncio
+    async def test_eligible_failure_is_found_behind_a_wall_of_rejects(self, sqlite_db, requeue):
+        """Ровно голодание 12.09.2026: окно LIMIT забито свежими провалами из
+        чатов без участия владельца, а подходящий провал старше и лежит за
+        окном. Доливка добирала 11 из 546, очередь стояла на ~250."""
+        old = _T0 - timedelta(days=30)
+        await _event(sqlite_db, chat_id=30, chat_kind="private", media_kind="photo",
+                     status="done", recognition="failed", occurred_at=old)
+        for i in range(6):      # свежие, без участия — раньше съедали всё окно
+            await _event(sqlite_db, chat_id=31, chat_kind="group", media_kind="photo",
+                         status="done", recognition="failed", tag=str(i))
+        with pytest.MonkeyPatch.context() as mp:
+            _wire(mp, requeue, sqlite_db)
+            mp.setattr(requeue, "TARGET", 1)      # need=1 → окно на 2 строки
+            _was, added, rejected = await requeue.top_up(min_own=5, dry_run=False)
+        assert added == 1
+        assert rejected == 0
+        assert (await _status(sqlite_db, "tg:30:photo:done:"))[0] == "media_pending"
 
     @pytest.mark.asyncio
     async def test_permanent_failures_are_not_retried(self, sqlite_db, requeue):
