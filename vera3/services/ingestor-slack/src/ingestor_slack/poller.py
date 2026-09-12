@@ -236,35 +236,41 @@ class _Session:
         self.names = None
 
 
+async def poll_once(session: _Session) -> None:
+    """Один прогон: список каналов, отсев, опрос каждого оставшегося.
+
+    Модульная функция, а не замыкание внутри main_loop: отсев — единственное,
+    что стоит между воркспейсом и 240 ERROR в сутки, и он обязан проверяться
+    тестом, а замыкание для теста недостижимо.
+    """
+    try:
+        client, names = await session.connect()
+        raw = await client.list_conversations()
+        await names.resolve({str(c.get("user") or "") for c in raw if c.get("is_im")})
+        for row in await store.upsert_conversations(raw, names.known):
+            # Личку денай-лист не касается: он про шумные служебные каналы.
+            if row.kind != "im" and is_ignored_slack_channel(row.name, DENY_CHANNELS):
+                continue
+            if skip_unreadable(row.last_error, row.last_polled_at, utc_naive_now()):
+                continue
+            await poll_conversation(client, row, session.me_id,
+                                    session.account, names)
+            await asyncio.sleep(1)
+    except SlackAuthError as e:
+        # Токен отозван или прав не хватает — гасим строку, чтобы дашборд
+        # показывал «переподключить», а не «подключено» при мёртвом токене.
+        await auth.mark_dead(session.auth_row, str(e))
+        session.reset()
+        raise
+
+
 async def main_loop() -> None:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     await init_engine()
     session = _Session()
-
-    async def poll_once() -> None:
-        try:
-            client, names = await session.connect()
-            raw = await client.list_conversations()
-            await names.resolve({str(c.get("user") or "") for c in raw if c.get("is_im")})
-            for row in await store.upsert_conversations(raw, names.known):
-                # Личку денай-лист не касается: он про шумные служебные каналы.
-                if row.kind != "im" and is_ignored_slack_channel(row.name, DENY_CHANNELS):
-                    continue
-                if skip_unreadable(row.last_error, row.last_polled_at, utc_naive_now()):
-                    continue
-                await poll_conversation(client, row, session.me_id,
-                                        session.account, names)
-                await asyncio.sleep(1)
-        except SlackAuthError as e:
-            # Токен отозван или прав не хватает — гасим строку, чтобы дашборд
-            # показывал «переподключить», а не «подключено» при мёртвом токене.
-            await auth.mark_dead(session.auth_row, str(e))
-            session.reset()
-            raise
-
-    await poll_forever(name="slack", poll_once=poll_once, interval_s=POLL_S,
-                       auth_error=SlackAuthError, log=log)
+    await poll_forever(name="slack", poll_once=lambda: poll_once(session),
+                       interval_s=POLL_S, auth_error=SlackAuthError, log=log)
 
 
 if __name__ == "__main__":
