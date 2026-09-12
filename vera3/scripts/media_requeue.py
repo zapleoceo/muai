@@ -193,7 +193,8 @@ async def top_up(min_own: int, dry_run: bool) -> tuple[int, int, int]:
     if take and not dry_run:
         await _retag(take, status="media_pending",
                      drop_keys=("media_recognition", "media_retry_count",
-                                "media_next_retry_at", "media_skip_reason"),
+                                "media_next_retry_at", "media_skip_reason",
+                                "media_job_id"),
                      set_meta={"needs_recognition": True})
     rejected = len(candidates) - len([1 for v in verdicts.values() if v is None])
     return pending, len(take), rejected

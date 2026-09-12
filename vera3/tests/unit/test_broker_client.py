@@ -237,3 +237,77 @@ async def test_chat_async_via_broker_raises_after_deadline(monkeypatch):
         await bc.chat_async_via_broker(
             messages=[{"role": "user", "content": "x"}], capability="chat:fast",
         )
+
+
+# ─── возобновление джобы (resume_job_id) ───────────────────────────────────
+# 12.09.2026: три vision-джобы простояли у брокера по 25 минут в очереди, Вера
+# сдалась по своему дедлайну и на следующей попытке отправила фото ЗАНОВО —
+# модель посчитала каждое дважды. Теперь клиент отдаёт job_id в исключении, а
+# следующая попытка возвращается за результатом.
+
+
+@pytest.mark.asyncio
+async def test_deadline_raises_pending_with_job_id(monkeypatch):
+    monkeypatch.setattr(bc, "BROKER_URL", "https://aib.zapleo.com")
+    monkeypatch.setattr(bc, "BROKER_PROJECT_KEY", "aib_prj_xxx")
+    monkeypatch.setattr(bc, "_http", None)
+    times = iter([0.0, 100.0, 100.0])
+    monkeypatch.setattr(bc.time, "monotonic", lambda: next(times, 100.0))
+
+    with patch.object(httpx.AsyncClient, "post", AsyncMock(return_value=_fake_submit())), \
+         patch.object(httpx.AsyncClient, "get",
+                       AsyncMock(return_value=_fake_poll("pending", poll_after_s=2))), \
+         patch.object(bc.asyncio, "sleep", AsyncMock()), \
+         pytest.raises(bc.BrokerJobPending) as exc:
+        await bc.chat_async_via_broker(
+            messages=[{"role": "user", "content": "x"}], capability="vision",
+            poll_deadline_s=10.0,
+        )
+    assert exc.value.job_id == 1
+    assert isinstance(exc.value, bc.BrokerCallFailed)      # старые except-ветки ловят
+    assert "still pending after 10s" in str(exc.value)
+
+
+@pytest.mark.asyncio
+async def test_resume_polls_existing_job_without_resubmitting(monkeypatch):
+    monkeypatch.setattr(bc, "BROKER_URL", "https://aib.zapleo.com")
+    monkeypatch.setattr(bc, "BROKER_PROJECT_KEY", "aib_prj_xxx")
+    monkeypatch.setattr(bc, "_http", None)
+
+    done = _fake_poll("done", text="кот", provider="local", model="qwen3vl",
+                      tokens_in=1, tokens_out=1, cost_usd=0.0, latency_ms=5)
+    with patch.object(httpx.AsyncClient, "post", AsyncMock()) as post, \
+         patch.object(httpx.AsyncClient, "get", AsyncMock(return_value=done)) as get, \
+         patch.object(bc.asyncio, "sleep", AsyncMock()), \
+         patch.object(bc, "_log_usage", AsyncMock()):
+        text, _meta = await bc.chat_async_via_broker(
+            messages=[{"role": "user", "content": "x"}], capability="vision",
+            resume_job_id=482778,
+        )
+    assert text == "кот"
+    post.assert_not_awaited()                              # payload не ушёл второй раз
+    assert get.await_args.args[0].endswith("/v1/jobs/482778")
+
+
+@pytest.mark.asyncio
+async def test_resume_of_purged_job_falls_back_to_a_fresh_submit(monkeypatch):
+    """Ретенция брокера — 7 дней; 404 на старую джобу = честная переотправка."""
+    monkeypatch.setattr(bc, "BROKER_URL", "https://aib.zapleo.com")
+    monkeypatch.setattr(bc, "BROKER_PROJECT_KEY", "aib_prj_xxx")
+    monkeypatch.setattr(bc, "_http", None)
+
+    gone = AsyncMock()
+    gone.status_code = 404
+    gone.text = "job not found"
+    done = _fake_poll("done", text="ok", provider="p", model="m",
+                      tokens_in=1, tokens_out=1, cost_usd=0.0, latency_ms=5)
+    with patch.object(httpx.AsyncClient, "post", AsyncMock(return_value=_fake_submit())) as post, \
+         patch.object(httpx.AsyncClient, "get", AsyncMock(side_effect=[gone, done])), \
+         patch.object(bc.asyncio, "sleep", AsyncMock()), \
+         patch.object(bc, "_log_usage", AsyncMock()):
+        text, _meta = await bc.chat_async_via_broker(
+            messages=[{"role": "user", "content": "x"}], capability="vision",
+            resume_job_id=999,
+        )
+    assert text == "ok"
+    post.assert_awaited_once()

@@ -12,7 +12,7 @@ import logging
 import os
 
 import httpx
-from vera_shared.llm.client import LLMCallFailed, chat_async
+from vera_shared.llm.client import LLMCallFailed, LLMJobPending, chat_async
 
 log = logging.getLogger("media-worker")
 
@@ -96,10 +96,14 @@ def _broker_headers() -> dict[str, str]:
     return {"X-Project-Key": BROKER_PROJECT_KEY}
 
 
-async def _recognize_photo(image_b64: str, mime: str, event_id: int | None = None) -> str:
+async def _recognize_photo(image_b64: str, mime: str, event_id: int | None = None,
+                           resume_job_id: int | str | None = None) -> str:
     """Vision via broker — async job (submit+poll /v1/jobs), multimodal content.
     Routed through the shared client so it's covered by usage_log mirroring
-    like every other capability (vision calls used to bypass it entirely)."""
+    like every other capability (vision calls used to bypass it entirely).
+    `resume_job_id` — джоба прошлой попытки, которую брокер ещё считал, когда
+    мы сдались по дедлайну: возвращаемся за ней. LLMJobPending пробрасывается
+    как есть — в нём job_id для следующей попытки."""
     messages = [{
         "role": "user",
         "content": [
@@ -112,8 +116,10 @@ async def _recognize_photo(image_b64: str, mime: str, event_id: int | None = Non
         txt, _meta = await chat_async(
             messages=messages, capability="vision", max_tokens=400,
             temperature=0.1, workflow="media_vision", event_id=event_id,
-            poll_deadline_s=VISION_DEADLINE_S,
+            poll_deadline_s=VISION_DEADLINE_S, resume_job_id=resume_job_id,
         )
+    except LLMJobPending:
+        raise
     except LLMCallFailed as e:
         raise RuntimeError(f"broker vision: {e}") from e
     txt = txt.strip()
@@ -154,7 +160,12 @@ async def _process_one(row: dict) -> tuple[str, dict, str | None]:
     if kind in {"photo", "sticker"}:
         try:
             txt = await _recognize_photo(base64.b64encode(raw).decode("ascii"),
-                                         mime or "image/jpeg", event_id=row.get("id"))
+                                         mime or "image/jpeg", event_id=row.get("id"),
+                                         resume_job_id=meta.get("media_job_id"))
+        except LLMJobPending as e:
+            # Брокер ещё считает — запоминаем джобу, следующая попытка
+            # вернётся за результатом, а не отправит фото заново.
+            return "", {"media_job_id": e.job_id}, f"vision: {e}"
         except Exception as e:
             return "", {}, f"vision: {e}"
         label = "recognized photo" if kind == "photo" else "recognized sticker"

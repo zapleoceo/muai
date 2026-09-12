@@ -66,6 +66,16 @@ Code layout (one responsibility per file):
    a week: by 2026-09-12 the model's median was 120–180 s and **57 jobs a
    day (16% of the work) hit 420 s and were abandoned** — 6.6 worker-hours
    thrown away. An abandoned job is worse than a slow one, hence 900 s.
+   And even past 900 s the job is no longer lost: the deadline surfaces as
+   `LLMJobPending(job_id)`, `_process_one` hands the id back as
+   `carry_meta={"media_job_id": …}`, `_on_failure` persists it on the retry
+   path, and the next attempt calls `_recognize_photo(resume_job_id=…)` —
+   which polls the *same* broker job instead of resubmitting the image
+   (`chat_async(resume_job_id=)`, see [`llm-broker.md`](llm-broker.md)).
+   `_on_success` strips the key; the requeue's `top_up` drops it too, so a
+   stale id can never leak into a refilled event. Measured 2026-09-12: three
+   jobs waited 1 500 s in the broker's queue, were abandoned at 900 s and
+   recomputed from scratch on retry.
    **Invariant:** `MEDIA_LEASE_MIN * 60 >= MEDIA_BATCH *
    MEDIA_VISION_DEADLINE_S` — the batch is processed sequentially, so a
    shorter lease would let a sibling replica re-claim the last row while

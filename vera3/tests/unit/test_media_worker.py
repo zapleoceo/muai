@@ -546,3 +546,73 @@ async def test_on_failure_retry_branch_runs_sql():
     assert params["cnt"] == 1
     assert params["backoff"] == repo.BACKOFF_MIN[0]
     assert params["id"] == 7
+
+
+# ─── возобновление джобы брокера (media_job_id) ────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_process_one_carries_job_id_when_broker_is_still_working():
+    """Дедлайн вышел, брокер считает — job_id уезжает в carry_meta, а не
+    теряется: следующая попытка вернётся за результатом."""
+    from vera_shared.llm.client import LLMJobPending
+    row = {"id": 1, "content_text": "[photo]",
+           "metadata": {"chat_id": 1, "msg_id": 2, "media_kind": "photo"}}
+    with patch.object(rec, "_download",
+                      AsyncMock(return_value=(b"img", "image/jpeg", None))), \
+         patch.object(rec, "_recognize_photo",
+                      AsyncMock(side_effect=LLMJobPending(482778, "job 482778 still pending"))):
+        seg, extra, err = await rec._process_one(row)
+    assert seg == ""
+    assert extra == {"media_job_id": 482778}
+    assert "still pending" in err
+    assert not repo._is_permanent(err)
+
+
+@pytest.mark.asyncio
+async def test_process_one_resumes_the_remembered_job():
+    row = {"id": 1, "content_text": "[photo]",
+           "metadata": {"chat_id": 1, "msg_id": 2, "media_kind": "photo",
+                        "media_job_id": 482778}}
+    with patch.object(rec, "_download",
+                      AsyncMock(return_value=(b"img", "image/jpeg", None))), \
+         patch.object(rec, "_recognize_photo",
+                      AsyncMock(return_value="кот")) as vision:
+        _seg, _extra, err = await rec._process_one(row)
+    assert err is None
+    assert vision.await_args.kwargs["resume_job_id"] == 482778
+
+
+@pytest.mark.asyncio
+async def test_recognize_photo_forwards_resume_id_and_lets_pending_through():
+    from vera_shared.llm.client import LLMJobPending
+    captured = {}
+
+    async def fake_chat_async(**kw):
+        captured.update(kw)
+        raise LLMJobPending(5, "job 5 still pending")
+
+    with patch.object(rec, "chat_async", AsyncMock(side_effect=fake_chat_async)), \
+         pytest.raises(LLMJobPending):
+        await rec._recognize_photo("b64", "image/jpeg", resume_job_id=5)
+    assert captured["resume_job_id"] == 5
+
+
+@pytest.mark.asyncio
+async def test_on_failure_retry_persists_carry_meta():
+    sess = _FakeSession()
+    with patch.object(repo, "get_session", lambda: sess):
+        await repo._on_failure(7, {}, "vision: job 5 still pending after 900s",
+                               carry_meta={"media_job_id": 5})
+    sql, params = sess.calls[0]
+    assert "CAST(:carry AS jsonb)" in sql
+    assert params["carry"] == '{"media_job_id": 5}'
+
+
+@pytest.mark.asyncio
+async def test_on_success_forgets_the_job_id():
+    sess = _FakeSession()
+    with patch.object(repo, "get_session", lambda: sess):
+        await repo._on_success(9, "text", {"media_recognition": "ok_broker"})
+    sql, _params = sess.calls[0]
+    assert "- 'media_job_id'" in sql

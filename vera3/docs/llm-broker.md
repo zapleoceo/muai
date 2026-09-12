@@ -81,6 +81,27 @@ Vera bug) sailed straight through as `None` into `usage_log`'s `NOT NULL`
 columns and crashed the insert. Fixed via `meta.get(...) or fallback`,
 which catches both "missing" and "present but null/empty".
 
+### Resuming a job the broker is still working on (2026-09-12)
+
+When the client's poll ceiling (`poll_deadline_s`) passes while the job is
+still `pending`, `chat_async_via_broker` raises **`BrokerJobPending`** — a
+`BrokerCallFailed` subclass carrying `job_id` — and `client.chat_async`
+maps it to **`LLMJobPending(job_id)`** (also an `LLMCallFailed`, so every
+existing `except` keeps working). It does **not** touch the circuit
+breaker: a slow broker is not a dead pool, and one long vision job must
+not close the capability for 30 minutes.
+
+The caller may pass `resume_job_id=` on its next attempt: the client then
+polls `GET /v1/jobs/{id}` instead of `POST`-ing the same payload again. A
+`404` (`BrokerJobGone` — the broker's 7-day retention purged it) falls back
+to a fresh submit. Both paths share one `_poll_job` loop.
+
+Why: 2026-09-12 three of Vera's vision jobs sat **1 500 s** in the broker's
+queue (its stale-running sweep) before finishing in 93–139 s. Vera gave up
+at 900 s, retried 2 minutes later with a fresh `POST`, and the broker
+computed each image twice. media-worker stores the id as
+`metadata.media_job_id` on the retry path and forgets it on success.
+
 ## Circuit breaker (2026-07-17)
 
 Broker logs showed 75% of Vera's `chat:fast` jobs over 48h dying on

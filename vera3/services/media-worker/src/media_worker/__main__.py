@@ -70,7 +70,8 @@ async def main_loop() -> None:  # pragma: no cover — glue, pieces unit-tested
 
             try:
                 if err:
-                    action = await _on_failure(r["id"], r.get("metadata") or {}, err)
+                    action = await _on_failure(r["id"], r.get("metadata") or {}, err,
+                                               carry_meta=extra_meta)
                     log.warning("event %s: %s → %s", r["id"], err, action)
                 else:
                     await _on_success(r["id"], append, extra_meta)
