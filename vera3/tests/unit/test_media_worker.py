@@ -171,10 +171,13 @@ async def test_claim_batch_builds_kind_filter_only_when_voice_only():
 
 
 def test_lease_covers_worst_case_batch():
-    """Фото в батче распознаются ПОСЛЕДОВАТЕЛЬНО, и одно локальное vision
-    ждёт до MEDIA_VISION_DEADLINE_S. Если лиз короче BATCH*дедлайна,
-    последняя строка стартует с протухшим лизом и её подхватывает соседняя
-    реплика — работа сгорает дважды."""
+    """Строка не должна дожить до конца обработки с протухшим лизом — иначе её
+    подхватит соседняя реплика и работа сгорит дважды (двойного текста не
+    будет, finalize сверяет triage_status). Батч идёт параллельно, поэтому его
+    длительность — максимум по строкам: дедлайн vision плюс скачивание."""
+    worst_row_s = rec.VISION_DEADLINE_S + 60      # + скачивание (таймаут 55с)
+    assert worst_row_s <= repo.LEASE_MIN * 60
+    # Запас держим и на случай возврата к последовательной обработке.
     assert repo.LEASE_MIN * 60 >= repo.BATCH * rec.VISION_DEADLINE_S
 
 
@@ -616,3 +619,59 @@ async def test_on_success_forgets_the_job_id():
         await repo._on_success(9, "text", {"media_recognition": "ok_broker"})
     sql, _params = sess.calls[0]
     assert "- 'media_job_id'" in sql
+
+
+# ─── параллельная обработка батча ──────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_batch_rows_are_processed_concurrently():
+    """Последовательный батч упирал темп в одно фото за раз (145с → потолок
+    24 в час), при том что локальный слот брокера простаивал 88% времени.
+    Проверяем именно ОДНОВРЕМЕННОСТЬ: второй ряд стартует, не дожидаясь
+    первого."""
+    import asyncio
+
+    started: list[int] = []
+    release = asyncio.Event()
+
+    async def slow_process(row):
+        started.append(row["id"])
+        if row["id"] == 1:
+            await release.wait()          # первый «зависает» на распознавании
+        return "txt", {}, None
+
+    with patch.object(mw, "_process_one", slow_process), \
+         patch.object(mw, "_on_success", AsyncMock()), \
+         patch.object(mw, "_on_failure", AsyncMock()):
+        gathered = asyncio.gather(
+            *(mw._handle_row({"id": i, "metadata": {}}) for i in (1, 2, 3)))
+        await asyncio.sleep(0)            # дать очереди событий провернуться
+        await asyncio.sleep(0)
+        assert started == [1, 2, 3], "строки 2 и 3 ждут первую — обработка последовательная"
+        release.set()
+        await gathered
+
+
+@pytest.mark.asyncio
+async def test_one_bad_row_does_not_sink_its_neighbours():
+    """gather без изоляции уронил бы весь батч на одном исключении, и соседние
+    строки остались бы захваченными до истечения лиза."""
+    import asyncio
+
+    async def boom_for_two(row):
+        if row["id"] == 2:
+            raise RuntimeError("нежданное")
+        return "txt", {}, None
+
+    ok = AsyncMock()
+    fail = AsyncMock(return_value="degraded")
+    with patch.object(mw, "_process_one", boom_for_two), \
+         patch.object(mw, "_on_success", ok), \
+         patch.object(mw, "_on_failure", fail):
+        await asyncio.gather(
+            *(mw._handle_row({"id": i, "metadata": {}}) for i in (1, 2, 3)))
+
+    assert {c.args[0] for c in ok.await_args_list} == {1, 3}
+    assert fail.await_args.args[0] == 2
+    assert "unexpected: RuntimeError" in fail.await_args.args[2]

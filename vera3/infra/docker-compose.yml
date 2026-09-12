@@ -352,8 +352,14 @@ services:
       BROKER_URL: ${BROKER_URL:-}
       BROKER_PROJECT_KEY: ${BROKER_PROJECT_KEY:-}
       MEDIA_POLL_S: "10"
-      MEDIA_BATCH: "3"
-    # приём того же медиа обратно: текст 33 + dict 33 + raw 25 + b64 33
+      MEDIA_BATCH: "2"
+    # Пик на ОДНО фото: raw 25 + b64 33 + data-URI в JSON 33 + сериализация
+    # тела httpx 33 = ~124 МБ (25 МБ — потолок скачивания, обычное фото из
+    # Telegram на два порядка меньше). С 12.09.2026 батч обрабатывается
+    # ПАРАЛЛЕЛЬНО, поэтому пик умножается на MEDIA_BATCH: 2 × 124 = 248 плюс
+    # ~50 МБ рантайма = ~300 МБ. Отсюда и MEDIA_BATCH=2, а не 3: при трёх
+    # потоках 372+50 упирались бы в этот потолок вплотную. Инвариант
+    # «batch × 124 + 50 <= mem_limit» закреплён тестом.
     mem_limit: 384m
     restart: unless-stopped
     logging: *default-logging
