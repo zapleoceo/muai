@@ -42,7 +42,7 @@
 
 | Container | Purpose |
 |---|---|
-| `vera3-postgres` | All state. pgvector for embeddings. |
+| `vera3-postgres` | All state. pgvector 0.8.2: embeddings as `halfvec(1024)` (migration 030) next to the legacy JSONB column; ANN via HNSW over binary quantization, rerank by halfvec (see `brain.md`). |
 | `vera3-gateway` | `POST /event/<source>` — single ingest endpoint with X-Internal-Secret |
 | `vera3-brain-triage-N` | Scalable workers (`docker compose up -d --scale brain-triage=3`). SELECT FOR UPDATE SKIP LOCKED → atomic claim. |
 | `vera3-brain-search` | FastAPI `/search` — ReAct agent loop, calls AIbroker. |
@@ -175,7 +175,8 @@ events LEFT JOIN event_embeddings`, скоринг, кэш самоописан�
 | `app.py` | только маршруты и разбор запроса (170 строк) |
 | `models.py` | `SearchQuery` / `AnswerResponse` / `SearchResult` |
 | `retrieval.py` | `fetch_candidates()` — ОДНА форма запроса и явные режимы (`project`/`fts`/`time`/`vector`/`recent`) вместо шести копий |
-| `scoring.py` | `cosine()`, `score_rows()` |
+| `ann.py` | смысловые кандидаты из всего корпуса: HNSW по битам → точный пересчёт по halfvec, объединение с основным режимом (`fetch_ann_rows`, `merge_candidates`); включается только при валидном индексе — см. `brain.md`, «pgvector и смысловой поиск» |
+| `scoring.py` | `cosine()`, `row_similarity()` (косинус из БД `vec_sim`, JSONB — только у неперелитых строк), `score_rows()` |
 | `self_context.py` | «кто я и что подключено» + кэш (иначе `COUNT(*)` на каждый /search) |
 | `synthesis.py` | промпт и ответ — агентом или прямым синтезом |
 | `reports.py` | точная SQL-агрегация вместо пересказа top-N |

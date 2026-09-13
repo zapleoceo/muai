@@ -1,12 +1,14 @@
 """Ранжирование кандидатов.
 
-Косинус считается циклом на Python, потому что эмбеддинги лежат в JSONB, а
-не в колонке `vector` — расширение pgvector есть в образе, но не включено
-(см. docs/brain.md). Когда включится, `_cosine` уйдёт целиком: ближайшие
-будут отбираться индексом, а не перебором двухсот строк на запрос.
+Косинус приходит двумя путями. Когда эмбеддинги в колонке halfvec
+(миграция 030), его считает Postgres и отдаёт колонкой `vec_sim` — JSONB не
+разбирается. Строке, до которой бэкфил ещё не дошёл, и всем строкам на базе
+без колонки (SQLite в тестах, прод до наката) косинус считается на Python
+из JSONB — штатная ветка, а не заглушка.
 """
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from brain_search.query_parse import source_weight
@@ -24,6 +26,21 @@ def cosine(a: list[float] | None, b: list[float] | None) -> float:
     return dot / (na * nb)
 
 
+def row_similarity(row: Any, q_vec: list[float] | None) -> float:
+    """Сходство из БД, если оно есть, иначе косинус по JSONB."""
+    if not q_vec:
+        return 0.0
+    db_sim = getattr(row, "vec_sim", None)
+    if db_sim is not None:
+        return float(db_sim)
+    emb = row[6]
+    # asyncpg-диалект SQLAlchemy разбирает JSONB в list сам, SQLite отдаёт
+    # текстом — без разбора косинус молча выходил бы 0 на разнице длин
+    if isinstance(emb, str):
+        emb = json.loads(emb)
+    return cosine(q_vec, emb) if emb else 0.0
+
+
 def score_rows(rows, q_vec: list[float] | None,
                acc_words: list[str]) -> list[tuple[float, dict[str, Any]]]:
     """(score, превью) по убыванию. Слагаемые намеренно разной величины:
@@ -33,10 +50,7 @@ def score_rows(rows, q_vec: list[float] | None,
     out: list[tuple[float, dict[str, Any]]] = []
     for r in rows:
         ts_rank = float(r[7]) if r[7] is not None else 0.0
-        score = ts_rank * 2.0
-        emb = r[6]
-        if q_vec and emb:
-            score += cosine(q_vec, emb)
+        score = ts_rank * 2.0 + row_similarity(r, q_vec)
         if r[5]:
             score += r[5] / 200.0
         account_l = (r[8] or "").lower() if len(r) > 8 else ""

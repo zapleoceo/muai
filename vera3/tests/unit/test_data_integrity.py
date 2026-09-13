@@ -95,4 +95,7 @@ def test_remember_writes_embedding_immediately():
 
     from gateway import claude
     src = inspect.getsource(claude.remember)
-    assert "INSERT INTO event_embeddings" in src
+    # общая с триажем запись во все колонки (см. vectors.embedding_upsert)
+    assert "embedding_upsert(" in src
+    stmt, _ = claude.embedding_upsert(1, [0.1], True)
+    assert "INSERT INTO event_embeddings" in str(stmt)

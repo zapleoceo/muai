@@ -160,7 +160,7 @@ async def search(
 
     found = await fetch_candidates(
         ts_query=ts, acc_words=acc_words, time_range=time_range,
-        project=project, has_vector=q_vec is not None, limit=eff_limit,
+        project=project, q_vec=q_vec, limit=eff_limit,
     )
 
     return await synthesize(
