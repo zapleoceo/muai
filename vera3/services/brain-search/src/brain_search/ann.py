@@ -13,12 +13,16 @@ villa»), не находился никогда — до косинуса он 
 """
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 from vera_shared.db import vectors
 from vera_shared.db.vectors import VEC_TYPE, as_pg_vector
+
+log = logging.getLogger(__name__)
 
 #: Сколько грубых кандидатов берём из индекса по Хэммингу перед точным
 #: пересчётом. Замер на случайной выборке прода 2026-09-13 (voyage-4,
@@ -69,11 +73,23 @@ def ann_params(q_vec: list[float]) -> dict[str, Any]:
 
 async def fetch_ann_rows(session: AsyncSession, q_vec: list[float],
                          where: str, params: dict[str, Any]) -> list[Any]:
-    """`where` — тот же фильтр, что у основной выборки (без FTS-условия)."""
-    await session.execute(vectors.ANN_SETTINGS_SQL,
-                          vectors.ann_settings_params(ANN_OVERSAMPLE))
-    stmt = ann_rows_sql(where)
-    return list((await session.execute(stmt, {**params, **ann_params(q_vec)})).all())
+    """`where` — тот же фильтр, что у основной выборки (без FTS-условия).
+
+    Внутри точки сохранения: смысловой шаг — добавка к основной выборке, и его
+    отказ (прежде всего statement_timeout, если индекс снесли без рестарта) не
+    должен ронять поиск целиком. Откат к точке сохранения заодно снимает
+    транзакционные настройки hnsw/statement_timeout."""
+    try:
+        async with session.begin_nested():
+            await session.execute(vectors.ANN_SETTINGS_SQL,
+                                  vectors.ann_settings_params(ANN_OVERSAMPLE))
+            stmt = ann_rows_sql(where)
+            return list((await session.execute(
+                stmt, {**params, **ann_params(q_vec)})).all())
+    except DBAPIError as e:
+        log.warning("ann: смысловой шаг пропущен (%s) — поиск без него",
+                    type(e.orig).__name__ if e.orig is not None else type(e).__name__)
+        return []
 
 
 def merge_candidates(primary: list[Any], semantic: list[Any]) -> list[Any]:

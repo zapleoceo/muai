@@ -28,8 +28,10 @@ from vera_shared.db.engine import get_session
 log = logging.getLogger(__name__)
 
 #: Размерность voyage-4 (scripts/reembed_voyage4.py). В выражении индекса
-#: она зашита (`::bit(1024)`), и запрос обязан повторить выражение дословно,
-#: иначе планировщик индекс не узнает. Интеграционные тесты подменяют на 3.
+#: она зашита (`::bit(1024)`), и запрос обязан повторить то же выражение по
+#: смыслу (колонка, функция, тип, размерность; квалификация таблицей не мешает —
+#: планировщик сравнивает разобранное выражение, а не текст), иначе индекс не
+#: будет использован. Интеграционные тесты подменяют на 3.
 VEC_DIMS = 1024
 #: halfvec, а не vector: float16 вдвое компактнее (2 КБ против 4 КБ на
 #: строку), а ошибка косинуса на выборке прода — 4e-5 (замер 2026-09-13),
@@ -141,13 +143,21 @@ def ann_candidates_sql(*, dims: int, where: str = "TRUE",
 #: не наберётся; порядок внутри грубого шага не важен, его чинит пересчёт.
 ANN_SETTINGS_SQL = text(
     "SELECT set_config('hnsw.ef_search', :ef, true),"
-    " set_config('hnsw.iterative_scan', 'relaxed_order', true)"
+    " set_config('hnsw.iterative_scan', 'relaxed_order', true),"
+    " set_config('statement_timeout', :timeout, true)"
 )
+#: Потолок одного смыслового запроса. Штатно HNSW отвечает за доли секунды;
+#: если индекс снесли, а brain-search не перезапустили, процесс по кэшу думает,
+#: что индекс есть, и запрос ушёл бы seq scan'ом по ~1 ГБ halfvec в контейнере
+#: на 768m — минуты на КАЖДЫЙ поиск (ревью 13.09.2026). Все настройки — только
+#: на транзакцию (третий аргумент set_config = true), в пул не утекают.
+ANN_STATEMENT_TIMEOUT_MS = 5000
 
 
 def ann_settings_params(ann_k: int) -> dict[str, str]:
     """ef_search в пределах pgvector: 1..1000."""
-    return {"ef": str(min(max(ann_k, 40), 1000))}
+    return {"ef": str(min(max(ann_k, 40), 1000)),
+            "timeout": str(ANN_STATEMENT_TIMEOUT_MS)}
 
 
 def embedding_upsert(event_id: int, embedding: list[float],

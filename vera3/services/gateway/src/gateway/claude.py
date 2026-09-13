@@ -30,6 +30,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
 from vera_shared.db.vectors import (
+    VEC_DIMS,
     VEC_TYPE,
     as_pg_vector,
     embedding_upsert,
@@ -107,12 +108,12 @@ async def _find_semantic_neighbour(
             # Индекс здесь не нужен: claude-событий за 7 дней десятки (259 за
             # всё время на 2026-09-13), Postgres переберёт их сам без JSON.
             row = (await s.execute(sa_text(f"""
-                SELECT e.id, 1 - (ee.embedding_vec <=> CAST(:q AS {VEC_TYPE})) AS sim
+                SELECT e.id, 1 - (ee.embedding_vec <=> CAST(:q AS {VEC_TYPE}({VEC_DIMS}))) AS sim
                 FROM events e
                 JOIN event_embeddings ee ON ee.event_id = e.id
                 WHERE e.source = 'claude' AND e.received_at >= :since
                   AND ee.embedding_vec IS NOT NULL
-                ORDER BY ee.embedding_vec <=> CAST(:q AS {VEC_TYPE})
+                ORDER BY ee.embedding_vec <=> CAST(:q AS {VEC_TYPE}({VEC_DIMS}))
                 LIMIT 1
             """), {"since": since, "q": as_pg_vector(q_vec)})).first()
             if row is not None:

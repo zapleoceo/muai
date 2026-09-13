@@ -63,7 +63,17 @@ def test_filters_on_events_need_the_join():
 @pytest.mark.parametrize(("ann_k", "ef"), [(1000, "1000"), (5000, "1000"), (10, "40")])
 def test_ef_search_never_below_limit_and_within_pgvector_bounds(ann_k, ef):
     """ef_search < LIMIT — HNSW молча отдаёт ef_search строк вместо LIMIT."""
-    assert vectors.ann_settings_params(ann_k) == {"ef": ef}
+    assert vectors.ann_settings_params(ann_k)["ef"] == ef
+
+
+def test_ann_query_has_a_transaction_scoped_timeout():
+    """Снесённый индекс без рестарта превращал бы поиск в минутный seq scan по
+    всему корпусу — у смыслового запроса свой потолок, и только на транзакцию,
+    чтобы не утечь в пул соединений."""
+    sql = str(vectors.ANN_SETTINGS_SQL)
+    assert "set_config('statement_timeout', :timeout, true)" in sql
+    assert vectors.ann_settings_params(1000)["timeout"] == str(vectors.ANN_STATEMENT_TIMEOUT_MS)
+    assert 0 < vectors.ANN_STATEMENT_TIMEOUT_MS <= 10_000
 
 
 def test_similarity_column_goes_last_so_positions_hold():
@@ -254,3 +264,56 @@ def test_unfillable_rows_are_guarded_by_case_not_and():
     """AND в SQL не гарантирует порядок: jsonb_array_length на JSON null
     уронил бы всю порцию (на проде таких строк 2496)."""
     assert _backfill()._FILLABLE.startswith("CASE WHEN jsonb_typeof(embedding) = 'array'")
+
+
+class _NestedSession:
+    """Сессия, у которой смысловой запрос падает по таймауту."""
+
+    def __init__(self, fail: bool):
+        self.fail = fail
+        self.nested_entered = 0
+        self.calls = 0
+
+    def begin_nested(self):
+        session = self
+
+        class _Ctx:
+            async def __aenter__(self):
+                session.nested_entered += 1
+                return self
+
+            async def __aexit__(self, *exc):
+                return False       # исключение идёт наружу — savepoint откатится
+
+        return _Ctx()
+
+    async def execute(self, stmt, params=None):
+        self.calls += 1
+        if self.fail and self.calls == 2:     # 1-й — настройки, 2-й — сам ANN
+            from sqlalchemy.exc import OperationalError
+            raise OperationalError("SELECT …", {}, Exception("canceling statement due to statement timeout"))
+        from unittest.mock import MagicMock
+        res = MagicMock()
+        res.all.return_value = [("row",)]
+        return res
+
+
+@pytest.mark.asyncio
+async def test_ann_timeout_degrades_to_no_semantic_rows_instead_of_failing_search():
+    """Ревью 13.09: без точки сохранения таймаут смыслового шага оборвал бы
+    транзакцию, и поиск упал бы целиком вместо того, чтобы вернуть основную
+    выборку."""
+    from brain_search import ann
+    s = _NestedSession(fail=True)
+    rows = await ann.fetch_ann_rows(s, [0.1, 0.2, 0.3], "TRUE", {})
+    assert rows == []
+    assert s.nested_entered == 1
+
+
+@pytest.mark.asyncio
+async def test_ann_success_runs_inside_a_savepoint():
+    from brain_search import ann
+    s = _NestedSession(fail=False)
+    rows = await ann.fetch_ann_rows(s, [0.1, 0.2, 0.3], "TRUE", {})
+    assert rows == [("row",)]
+    assert s.nested_entered == 1
