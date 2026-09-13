@@ -32,7 +32,7 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest_asyncio.fixture
-async def pg_db(monkeypatch):
+async def pg_db(monkeypatch, pg_schema_reset):
     monkeypatch.setenv("TOKEN_SECRET", "test-secret-for-integration")
     monkeypatch.setenv("DATABASE_URL", TEST_DB_URL)
     import vera_shared.db.engine as engine_mod
@@ -41,18 +41,13 @@ async def pg_db(monkeypatch):
     # про те таблицы, чьи классы уже импортированы. Без models_graph
     # create_all молча не создаёт entities/entity_aliases/memberships.
     from vera_shared.db import models, models_graph, models_sources  # noqa: F401
-    from vera_shared.db.engine import Base, close_engine, get_session, init_engine
+    from vera_shared.db.engine import close_engine, get_session, init_engine
 
     if engine_mod._engine is not None:
         await close_engine()
     engine = await init_engine(TEST_DB_URL)
     async with engine.begin() as conn:
-        # Таблица кусков (032) не в ORM-метаданных, но ссылается на events —
-        # без неё drop_all упал бы на зависимости.
-        from sqlalchemy import text as sa_text
-        await conn.execute(sa_text("DROP TABLE IF EXISTS event_chunk_embeddings"))
-        await conn.run_sync(Base.metadata.drop_all)
-        await conn.run_sync(Base.metadata.create_all)
+        await pg_schema_reset(conn)
     yield get_session
     await close_engine()
 
