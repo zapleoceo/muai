@@ -61,7 +61,8 @@ _MARKERS = (
     r"супруг", r"мам[аыеуо]й?\b", r"мат(ь|ер)", r"пап[аыеуо]й?\b", r"от(е|)ц",
     r"сын\w{0,2}\b", r"доч", r"брат\w{0,2}\b", r"сестр", r"друг(а|у|ом)?\b",
     r"друзь", r"подруг", r"жив[её]т в\b", r"живу в\b", r"переехал",
-    r"зарплат", r"зп\b", r"оклад", r"менеджер", r"тимлид",
+    r"зарплат", r"зп\b", r"оклад", r"менеджер", r"тимлид", r"команд[аеуы]",
+    r"присоедин",
     # uk
     r"працю", r"керівни", r"колег", r"співробітни", r"засновни", r"дружин",
     r"чолові", r"батьк", r"донь", r"клієнт", r"замовни", r"живе в\b",
@@ -72,10 +73,10 @@ _MARKERS = (
     r"client", r"customer", r"vendor", r"supplier", r"contractor", r"wife",
     r"husband", r"spouse", r"mother", r"father", r"mom\b", r"dad\b", r"son\b",
     r"daughter", r"brother", r"sister", r"friend", r"girlfriend", r"boyfriend",
-    r"lives? in\b", r"moved to\b",
+    r"lives? in\b", r"moved to\b", r"joined\b", r"team\b",
     # id
     r"bekerja", r"kerja di\b", r"atasan", r"rekan", r"istri", r"suami",
-    r"teman", r"klien", r"pelanggan", r"bergabung", r"tim",
+    r"teman", r"klien", r"pelanggan", r"bergabung", r"tim\b", r"bergabung", r"tim",
 )
 _MARKER_RE = re.compile(r"\b(?:" + "|".join(_MARKERS) + ")", re.IGNORECASE)
 
