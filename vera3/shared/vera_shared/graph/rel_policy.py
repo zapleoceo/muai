@@ -75,7 +75,7 @@ _MARKERS = (
     r"lives? in\b", r"moved to\b",
     # id
     r"bekerja", r"kerja di\b", r"atasan", r"rekan", r"istri", r"suami",
-    r"teman", r"klien", r"pelanggan",
+    r"teman", r"klien", r"pelanggan", r"bergabung", r"tim",
 )
 _MARKER_RE = re.compile(r"\b(?:" + "|".join(_MARKERS) + ")", re.IGNORECASE)
 

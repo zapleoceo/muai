@@ -104,6 +104,9 @@ class TestText:
         "Игорь работает в Sintegrum", "мой начальник уехал", "з дружиною",
         "вона працює в IT STEP", "she works at Google", "my wife said",
         "suami saya bekerja di Jakarta", "ЗП Оля 500 000", "мой друг Паша",
+        # ревью 13.09: вступление в команду гейт раньше отсекал
+        "Ruslan joined our team", "Олег присоединился к команде",
+        "dia bergabung dengan tim kami",
     ])
     def test_markers_found(self, text):
         assert has_relation_marker(text) is True
