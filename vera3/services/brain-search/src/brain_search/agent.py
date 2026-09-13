@@ -165,6 +165,7 @@ async def _exec_search_events(q: str, source: str = "any",
     from sqlalchemy import text
     from vera_shared.db.engine import get_session
 
+    from brain_search.fts import build_ts_query, fts_match_sql, fts_rank_sql
     from brain_search.query_parse import TZ_OFFSET_H
 
     STOPWORDS = {"что", "как", "и", "в", "на", "о", "по", "у", "для", "это",
@@ -173,7 +174,7 @@ async def _exec_search_events(q: str, source: str = "any",
                  "ты", "я", "мне", "мы", "вы", "он", "она", "они"}
     raw_words = re.findall(r"[\wа-яА-ЯёЁ]+", q)
     words = [w for w in raw_words if len(w) >= 2 and w.lower() not in STOPWORDS]
-    ts_query = " | ".join(f"{w}:*" for w in words) if words else ""
+    ts_query = build_ts_query(words)
 
     params: dict[str, Any] = {"tsq": ts_query, "lim": limit}
     where_extra = ""
@@ -200,10 +201,8 @@ async def _exec_search_events(q: str, source: str = "any",
                        metadata->>'author_label' AS author_label,
                        metadata->>'chat_title'   AS chat_title
                 FROM events
-                WHERE to_tsvector('russian', content_text)
-                      @@ to_tsquery('russian', :tsq) {where_extra}
-                ORDER BY ts_rank(to_tsvector('russian', content_text),
-                                  to_tsquery('russian', :tsq)) DESC,
+                WHERE {fts_match_sql()} {where_extra}
+                ORDER BY {fts_rank_sql()} DESC,
                          occurred_at DESC
                 LIMIT :lim
             """)

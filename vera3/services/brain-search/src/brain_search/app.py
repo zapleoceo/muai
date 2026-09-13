@@ -28,6 +28,7 @@ from vera_shared.auth import internal_secret_ok
 from vera_shared.db.engine import close_engine, init_engine
 from vera_shared.llm.client import LLMCallFailed, embed
 
+from brain_search.fts import build_ts_query
 from brain_search.models import AnswerResponse, SearchQuery
 from brain_search.query_parse import (
     extract_account_terms,
@@ -92,12 +93,11 @@ async def healthz():
 
 
 def _ts_query(question: str) -> tuple[str, list[str]]:
-    """Postgres FTS с русским стеммером + имена собственные для матча по
+    """Postgres FTS (конфигурации — fts.py) + имена собственные для матча по
     account. Возвращает (tsquery, слова-кандидаты в account)."""
     raw = _WORD_RE.findall(question)
     words = [w for w in raw if len(w) >= 2 and w.lower() not in STOPWORDS]
-    ts = " | ".join(f"{w}:*" for w in words) if words else ""
-    return ts, extract_account_terms(words)
+    return build_ts_query(words), extract_account_terms(words)
 
 
 async def _embed_query(question: str) -> list[float] | None:

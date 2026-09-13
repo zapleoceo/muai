@@ -26,6 +26,7 @@ from vera_shared.db.vectors import (
 )
 
 from brain_search.ann import fetch_ann_rows, merge_candidates, vec_columns
+from brain_search.fts import fts_match_sql, fts_rank_sql
 
 log = logging.getLogger(__name__)
 
@@ -155,12 +156,9 @@ async def _primary(s, *, ts_query: str, acc_words: list[str], time_range,
     if ts_query:
         acc_where, acc_match, acc_params = account_clause(acc_words)
         stmt = _select(
-            extra_cols="ts_rank(to_tsvector('russian', content_text),"
-                       " to_tsquery('russian', :tsq)) AS rank,"
-                       f" account, {acc_match} AS acc_match",
+            extra_cols=f"{fts_rank_sql()} AS rank, account, {acc_match} AS acc_match",
             join="LEFT JOIN",
-            where=(f"(to_tsvector('russian', content_text)"
-                   f" @@ to_tsquery('russian', :tsq){acc_where})"
+            where=(f"({fts_match_sql()}{acc_where})"
                    f"{time_where}{_NOT_A_WORLD_EVENT}"),
             # acc_match первым: иначе account-совпадения с rank=0 (англ.
             # письма) отрезаются лимитом в пользу FTS-матчей.
