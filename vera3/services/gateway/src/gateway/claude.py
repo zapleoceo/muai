@@ -27,10 +27,10 @@ from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from vera_shared.db import vectors as vec_store
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
 from vera_shared.db.vectors import (
-    VEC_DIMS,
     VEC_TYPE,
     as_pg_vector,
     embedding_upsert,
@@ -107,13 +107,18 @@ async def _find_semantic_neighbour(
             # Оператор <=> — косинусное РАССТОЯНИЕ, сходство = 1 - расстояние.
             # Индекс здесь не нужен: claude-событий за 7 дней десятки (259 за
             # всё время на 2026-09-13), Postgres переберёт их сам без JSON.
+            # Размерность — через модуль в момент вызова, а не импортом имени:
+            # импортированная константа замораживается при загрузке, и подмена
+            # vec_store.VEC_DIMS (интеграционные тесты, будущая смена модели)
+            # её не видит — 13.09.2026 это уронило CI на «expected 1024, not 3».
+            dims = vec_store.VEC_DIMS
             row = (await s.execute(sa_text(f"""
-                SELECT e.id, 1 - (ee.embedding_vec <=> CAST(:q AS {VEC_TYPE}({VEC_DIMS}))) AS sim
+                SELECT e.id, 1 - (ee.embedding_vec <=> CAST(:q AS {VEC_TYPE}({dims}))) AS sim
                 FROM events e
                 JOIN event_embeddings ee ON ee.event_id = e.id
                 WHERE e.source = 'claude' AND e.received_at >= :since
                   AND ee.embedding_vec IS NOT NULL
-                ORDER BY ee.embedding_vec <=> CAST(:q AS {VEC_TYPE}({VEC_DIMS}))
+                ORDER BY ee.embedding_vec <=> CAST(:q AS {VEC_TYPE}({dims}))
                 LIMIT 1
             """), {"since": since, "q": as_pg_vector(q_vec)})).first()
             if row is not None:

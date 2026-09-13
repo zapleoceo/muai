@@ -250,3 +250,16 @@ async def test_semantic_dedup_takes_the_database_cosine_when_it_is_best():
     _q, match = await _neighbour_with_column(session)
     assert match == (1, pytest.approx(0.97))
     assert "halfvec" in str(session.execute.await_args_list[0].args[0])
+
+
+@pytest.mark.asyncio
+async def test_semantic_dedup_reads_the_dimension_at_call_time(monkeypatch):
+    """13.09.2026: размерность импортировалась именем и замерзала при загрузке —
+    подмена vectors.VEC_DIMS её не видела, и CI упал на «expected 1024, not 3».
+    Каст обязан брать текущее значение модуля."""
+    from vera_shared.db import vectors
+    monkeypatch.setattr(vectors, "VEC_DIMS", 3)
+    session = _vec_session(db_best=(1, 0.97), unfilled_rows=[])
+    await _neighbour_with_column(session)
+    sql = str(session.execute.await_args_list[0].args[0])
+    assert "halfvec(3)" in sql and "halfvec(1024)" not in sql
