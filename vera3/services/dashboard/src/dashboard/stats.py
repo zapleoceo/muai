@@ -153,6 +153,9 @@ async def _compute_stats() -> dict[str, Any]:
         "earliest": earliest,
         "backlog_total": agg["pending"] + agg["media_pending"] + agg["error"] + agg["dead"],
         "sources_top": per_source_total[:8],
+        # Весь список — для фильтра журнала событий: тот же GROUP BY, без
+        # отдельного скана 4-гигабайтной таблицы на каждую загрузку страницы.
+        "sources_all": per_source_total,
         "per_source_1h": per_source_1h,
         "cost_today": float(ul["cost_today"]),
         "calls_today": ul["calls_today"],
