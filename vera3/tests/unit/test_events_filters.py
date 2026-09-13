@@ -56,3 +56,11 @@ def test_thousands_separator_does_not_touch_the_label_itself():
     html = source_options([("a,b", 1234567)], None)
     assert "(a,b)" in html
     assert "1 234 567" in html
+
+
+def test_unknown_selected_status_stays_selected():
+    """Ревью: у источников выбранное не выпадало, у статусов — выпадало, и
+    список показывал «любой статус», хотя запрос фильтровал по нему."""
+    html = status_options(TRIAGE_STATUS_INFO, "archived")
+    assert '<option value="archived" selected>' in html
+    assert '<option value="" selected>' not in html

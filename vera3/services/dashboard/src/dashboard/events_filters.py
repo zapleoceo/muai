@@ -43,6 +43,11 @@ def source_options(present: Iterable[tuple[str, int]], selected: str | None) -> 
 
 
 def status_options(statuses: Iterable[str], selected: str | None) -> str:
+    """Как и у источников, выбранный статус не выпадает из списка: запрос его
+    уже применил, и выпадающий список не должен показывать «любой»."""
+    values = list(statuses)
+    if selected and selected not in values:
+        values.append(selected)
     options = [_option("", "— любой статус —", not selected)]
-    options += [_option(s, s, s == selected) for s in statuses]
+    options += [_option(s, s, s == selected) for s in values]
     return "".join(options)
