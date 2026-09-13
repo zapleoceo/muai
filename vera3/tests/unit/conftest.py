@@ -28,7 +28,21 @@ os.environ.setdefault("TOKEN_SECRET", "0" * 44)
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "1:test")
 os.environ.setdefault("OWNER_TELEGRAM_ID", "169510539")
 
+import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402
+
+
+@pytest.fixture(autouse=True)
+def _fresh_vector_capability():
+    """Кэш «есть ли halfvec-колонка / ANN-индекс» живёт на процесс. В CI
+    интеграционные тесты идут раньше юнит-тестов в том же процессе и оставляют
+    в нём «колонка есть» — юнит-тест дедупа без собственной базы молча уходил
+    в ветку с колонкой и падал (13.09.2026). Сбрасываем до и после каждого
+    теста, а не только в фикстуре sqlite_db: многие тесты базу не берут."""
+    from vera_shared.db.vectors import forget_capability
+    forget_capability()
+    yield
+    forget_capability()
 
 
 @pytest_asyncio.fixture

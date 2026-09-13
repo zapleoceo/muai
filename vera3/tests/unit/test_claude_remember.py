@@ -250,3 +250,14 @@ async def test_semantic_dedup_takes_the_database_cosine_when_it_is_best():
     _q, match = await _neighbour_with_column(session)
     assert match == (1, pytest.approx(0.97))
     assert "halfvec" in str(session.execute.await_args_list[0].args[0])
+
+
+@pytest.mark.asyncio
+async def test_semantic_dedup_casts_without_a_fixed_dimension():
+    """Каст запроса без размерности: pgvector сверяет её с колонкой при
+    сравнении. 13.09.2026 зашитая `halfvec(1024)` уронила CI — интеграционный
+    тест держит колонку `halfvec(3)`, и сравнение отказалось работать."""
+    session = _vec_session(db_best=(1, 0.97), unfilled_rows=[])
+    await _neighbour_with_column(session)
+    sql = str(session.execute.await_args_list[0].args[0])
+    assert "CAST(:q AS halfvec)" in sql and "halfvec(" not in sql
