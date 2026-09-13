@@ -13,6 +13,7 @@ in the commit message (for cosmetic refactors only).
 | [media-worker.md](./media-worker.md) | Photo/voice recognition worker, retry/degrade policy |
 | [sources.md](./sources.md) | Each ingestor (telegram, gmail, instagram, trello, voice, vera_chat) — what it pulls, how, when |
 | [listener.md](./listener.md) | vera-listener — слушатель разговоров на ноутбуке: захват, отсев, очередь, автозапуск |
+| [model-pilots.md](./model-pilots.md) | Замер 09.2026: PaddleOCR-VL против vision-моделей, parakeet против whisper — цифры, выводы, скрипты пилота |
 | [brain.md](./brain.md) | Triage worker, agent loop, search synthesis, memory |
 | [api.md](./api.md) | Gateway endpoints, dashboard routes |
 | [deploy-ops.md](./deploy-ops.md) | rsync deploy, secrets, monitor, runbook |
