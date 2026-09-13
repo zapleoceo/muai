@@ -641,6 +641,69 @@ Systemd-юнит `vera-backfill.service` звал `docker exec … vera-vera-cor
 systemd-юнитами, поэтому падающий юнит для него невидим. Признак — растущий
 лог без ротации и `systemctl list-units --all | grep activating`.
 
+## pgvector: накат и откат
+
+Что и почему — `brain.md`, «Эмбеддинги: pgvector и смысловой поиск». Здесь
+только порядок. Каждый шаг обратим, код работает в любой промежуточной
+точке (без колонки/индекса — прежний поиск). Оценки — по замерам 2026-09-13
+(444 тыс. строк, pgvector 0.8.2, `mem_limit` postgres 768m, 4 vCPU).
+
+Обозначения: `PSQL='docker exec -i vera3-postgres psql -U vera -d vera -v ON_ERROR_STOP=1'`,
+`BF='docker exec -i vera3-brain-search python - '` с
+`< /var/www/vera3/scripts/backfill_pgvector.py` в конце команды.
+
+0. **Проверки.** `SELECT extversion FROM pg_extension WHERE extname='vector'`
+   ≥ 0.8 (iterative scan); `df -h /` — нужно ≥ 3 ГБ; свежий ночной бэкап.
+1. **Деплой кода** обычным пушем — ДО миграции. Старый код, увидев колонку
+   после рестарта, сравнивал бы halfvec с `CAST(:q AS vector)`.
+2. **Миграция 030.** `docker exec -i -e PGOPTIONS='-c lock_timeout=5s' vera3-postgres psql -U vera -d vera -v ON_ERROR_STOP=1 < infra/migrations/030_event_embeddings_pgvector.sql`.
+   Nullable-колонка без DEFAULT и `SET STORAGE` — только каталог, < 1 с, но
+   берут ACCESS EXCLUSIVE: `lock_timeout` не даст повиснуть за долгой
+   транзакцией и заблокировать всех за собой (упало — повторить).
+   Откат: `ALTER TABLE event_embeddings DROP COLUMN embedding_vec;
+   DELETE FROM schema_migrations WHERE version='030_event_embeddings_pgvector';`
+3. **Рестарт** `vera3-gateway vera3-brain-triage-1 vera3-brain-triage-2
+   vera3-brain-search` — «колонка есть» кэшируется на процесс; до рестарта
+   триаж пишет только JSONB (безвредно: бэкфил подберёт).
+4. **Бэкфил** в фоне: `nohup sh -c 'docker exec -i vera3-brain-search python - --batch 1000 < /var/www/vera3/scripts/backfill_pgvector.py' >> /var/log/vera-backfill-pgvector.log 2>&1 &`.
+   Чтение+разбор на проде ~1800 строк/с, с записью и паузой 0.2 с между
+   порциями ожидаемо **10–20 мин**. Память — порция 1000 строк, в пределах
+   shared_buffers. Диск: heap таблицы +~1 ГБ (строки ~2.1 КБ в строке,
+   PLAIN), WAL временно до `max_wal_size` 1 ГБ; старые версии строк —
+   автовакуум, после окончания желательно `VACUUM (PARALLEL 0, ANALYZE)
+   event_embeddings`. Прервался — запустить снова, продолжит. Итог —
+   `$BF --status`: `remaining` 0, `unfillable` ~2496 (JSON null — норма).
+   Ночной дамп станет больше на ~1 ГБ (float16 почти не сжимается).
+   Откат: как в шаге 2 (DROP COLUMN — каталог; место вернёт только
+   VACUUM FULL в окно обслуживания).
+5. **Индекс:** `$BF --index`. HNSW по битам, `CONCURRENTLY` — запись не
+   блокируется, но ждёт завершения старых транзакций. Ожидаемо **5–15 мин**
+   (два прохода по таблице + вставка 444 тыс. узлов, один воркер),
+   `maintenance_work_mem` 192 МБ → пик контейнера ~600 МБ из 768 — смотреть
+   `docker stats vera3-postgres`; NOTICE «graph no longer fits» значит только
+   «медленнее». Размер ~0.2 ГБ (`--status`). Прерванная постройка
+   оставляет невалидный индекс — повторный `--index` его пересоздаст.
+   Откат: `DROP INDEX CONCURRENTLY ix_event_embeddings_vec_bq`.
+6. **Проверка качества:** `$BF --recall 30` — точный перебор ~1 ГБ на
+   запрос, **1–5 мин**. Приёмка: recall@10 ≥ 0.90. Ниже — не включать,
+   принести цифру на разбор (варианты — в brain.md). Плюс `EXPLAIN` без
+   исполнения: `BEGIN; SELECT set_config('hnsw.ef_search','1000',true);
+   EXPLAIN SELECT event_id FROM event_embeddings ee WHERE ee.embedding_vec IS
+   NOT NULL ORDER BY (binary_quantize(ee.embedding_vec)::bit(1024)) <~>
+   (SELECT binary_quantize(embedding_vec)::bit(1024) FROM event_embeddings
+   WHERE embedding_vec IS NOT NULL LIMIT 1) LIMIT 1000; ROLLBACK;` — должно
+   быть `Index Scan using ix_event_embeddings_vec_bq`.
+7. **Включение:** `docker restart vera3-brain-search`; в логе
+   «ANN-индекс доступен», на запросах — `retrieval=fts+ann: N → M`.
+   Откат: `DROP INDEX CONCURRENTLY …` **и** рестарт brain-search (без
+   рестарта процесс помнит «индекс есть» и гнал бы seq scan по всему корпусу).
+   Если рестарт забыт, поиск не ложится: смысловой шаг идёт в точке
+   сохранения с `statement_timeout` на транзакцию
+   (`vectors.ANN_STATEMENT_TIMEOUT_MS`, 5 с) и при таймауте пропускается —
+   выдача остаётся полнотекстовой, в логе `ann: смысловой шаг пропущен`.
+8. `DROP COLUMN embedding` (JSONB) — отдельной миграцией, не раньше чем
+   через неделю спокойной работы.
+
 ## Backup
 
 Ночной cron `30 3 * * * /usr/local/bin/vera-backup.sh` (исходник —

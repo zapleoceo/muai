@@ -209,3 +209,44 @@ def test_dedup_threshold_is_strict():
 
 def test_lookback_window_one_week():
     assert SEMANTIC_LOOKBACK_DAYS == 7
+
+
+# ─── halfvec-колонка во время бэкфила ──────────────────────────────────────
+
+
+def _vec_session(db_best, unfilled_rows):
+    """Первый execute — ближайший по halfvec (.first()), второй — строки,
+    до которых бэкфил ещё не дошёл (.all())."""
+    first, second = MagicMock(), MagicMock()
+    first.first.return_value = db_best
+    second.all.return_value = unfilled_rows
+    session = MagicMock()
+    session.execute = AsyncMock(side_effect=[first, second])
+    return session
+
+
+async def _neighbour_with_column(session):
+    with patch("gateway.claude.embed", AsyncMock(return_value=[[1.0, 0.0]])), \
+         patch("gateway.claude.vector_column_available", AsyncMock(return_value=True)), \
+         patch("gateway.claude.get_session",
+               MagicMock(return_value=_FakeSessionCtx(session))):
+        return await _find_semantic_neighbour("hello")
+
+
+@pytest.mark.asyncio
+async def test_semantic_dedup_sees_rows_the_backfill_has_not_reached():
+    """Колонка есть, но залита частично: почти-дубль лежит ещё только в JSONB.
+    Раньше ветка с колонкой смотрела лишь на `embedding_vec IS NOT NULL` и
+    такой дубль молча пропускала."""
+    session = _vec_session(db_best=(1, 0.10), unfilled_rows=[(2, [1.0, 0.0])])
+    _q, match = await _neighbour_with_column(session)
+    assert match == (2, pytest.approx(1.0))
+    assert "embedding_vec IS NULL" in str(session.execute.await_args_list[1].args[0])
+
+
+@pytest.mark.asyncio
+async def test_semantic_dedup_takes_the_database_cosine_when_it_is_best():
+    session = _vec_session(db_best=(1, 0.97), unfilled_rows=[(2, [0.0, 1.0])])
+    _q, match = await _neighbour_with_column(session)
+    assert match == (1, pytest.approx(0.97))
+    assert "halfvec" in str(session.execute.await_args_list[0].args[0])

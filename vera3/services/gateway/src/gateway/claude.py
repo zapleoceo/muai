@@ -18,7 +18,6 @@ this to Claude so it knows whether to mention 'already known' in chat.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 from datetime import timedelta
 from typing import Any, Literal
@@ -30,7 +29,13 @@ from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
-from vera_shared.db.vectors import as_pg_vector, vector_column_available
+from vera_shared.db.vectors import (
+    VEC_DIMS,
+    VEC_TYPE,
+    as_pg_vector,
+    embedding_upsert,
+    vector_column_available,
+)
 from vera_shared.llm.client import LLMCallFailed, embed
 from vera_shared.timeutil import utc_naive_now
 
@@ -95,47 +100,43 @@ async def _find_semantic_neighbour(
     since = utc_naive_now() - timedelta(
         days=SEMANTIC_LOOKBACK_DAYS
     )
-    # Эмбеддинги вынесены в event_embeddings (миграция 011) — джойним.
-    if await vector_column_available():
-        # Ближайшего ищет Postgres по индексу. Оператор <=> — косинусное
-        # РАССТОЯНИЕ, поэтому сходство = 1 - расстояние.
-        async with get_session() as s:
-            row = (await s.execute(sa_text("""
-                SELECT e.id, 1 - (ee.embedding_vec <=> CAST(:q AS vector)) AS sim
+    has_vec = await vector_column_available()
+    best: tuple[int, float] | None = None
+    async with get_session() as s:
+        if has_vec:
+            # Оператор <=> — косинусное РАССТОЯНИЕ, сходство = 1 - расстояние.
+            # Индекс здесь не нужен: claude-событий за 7 дней десятки (259 за
+            # всё время на 2026-09-13), Postgres переберёт их сам без JSON.
+            row = (await s.execute(sa_text(f"""
+                SELECT e.id, 1 - (ee.embedding_vec <=> CAST(:q AS {VEC_TYPE}({VEC_DIMS}))) AS sim
                 FROM events e
                 JOIN event_embeddings ee ON ee.event_id = e.id
                 WHERE e.source = 'claude' AND e.received_at >= :since
                   AND ee.embedding_vec IS NOT NULL
-                ORDER BY ee.embedding_vec <=> CAST(:q AS vector)
+                ORDER BY ee.embedding_vec <=> CAST(:q AS {VEC_TYPE}({VEC_DIMS}))
                 LIMIT 1
             """), {"since": since, "q": as_pg_vector(q_vec)})).first()
-        if row is not None and row[1] >= SEMANTIC_DEDUP_THRESHOLD:
-            return q_vec, (row[0], float(row[1]))
-        return q_vec, None
+            if row is not None:
+                best = (row[0], float(row[1]))
+        # Без колонки — все строки; с колонкой — только те, до которых бэкфил
+        # ещё не дошёл. Иначе частично залитая колонка молча сужала бы дедуп
+        # до уже перелитых фактов.
+        unfilled = " AND ee.embedding_vec IS NULL" if has_vec else ""
+        rows = (await s.execute(sa_text(f"""
+            SELECT e.id, ee.embedding
+            FROM events e
+            JOIN event_embeddings ee ON ee.event_id = e.id
+            WHERE e.source = 'claude' AND e.received_at >= :since{unfilled}
+            ORDER BY e.received_at DESC
+            LIMIT 500
+        """), {"since": since})).all()
 
-    # Пока бэкфил не прошёл: 500 векторов по 1024 float разбираются из
-    # JSON-текста и перебираются в Python. Это и есть та цена, ради которой
-    # делалась миграция 030.
-    async with get_session() as s:
-        rows = (
-            await s.execute(sa_text("""
-                SELECT e.id, ee.embedding
-                FROM events e
-                JOIN event_embeddings ee ON ee.event_id = e.id
-                WHERE e.source = 'claude' AND e.received_at >= :since
-                ORDER BY e.received_at DESC
-                LIMIT 500
-            """), {"since": since})
-        ).all()
-
-    best_id: int | None = None
-    best_sim = 0.0
     for row in rows:
         sim = _cosine(q_vec, row[1])
-        if sim > best_sim:
-            best_sim, best_id = sim, row[0]
-    if best_id is not None and best_sim >= SEMANTIC_DEDUP_THRESHOLD:
-        return q_vec, (best_id, best_sim)
+        if sim > (best[1] if best else 0.0):
+            best = (row[0], sim)
+    if best is not None and best[1] >= SEMANTIC_DEDUP_THRESHOLD:
+        return q_vec, best
     return q_vec, None
 
 
@@ -215,12 +216,10 @@ async def remember(
     # (следующий remember() с похожим текстом увидит это событие, не дожидаясь
     # триажа). Триаж потом перезапишет тем же вектором — безвредно.
     if q_vec is not None:
+        stmt, params = embedding_upsert(event_id, q_vec,
+                                        await vector_column_available())
         async with get_session() as s:
-            await s.execute(sa_text("""
-                INSERT INTO event_embeddings (event_id, embedding)
-                VALUES (:eid, CAST(:emb AS jsonb))
-                ON CONFLICT (event_id) DO UPDATE SET embedding = EXCLUDED.embedding
-            """), {"eid": event_id, "emb": json.dumps(q_vec)})
+            await s.execute(stmt, params)
 
     log.info("remember: new event=%s kind=%s", event_id, body.kind)
     return RememberResponse(ok=True, event_id=event_id, deduped=False)
