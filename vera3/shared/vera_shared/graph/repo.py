@@ -276,10 +276,10 @@ async def graph_snapshot(
 
     rel_nb = f"""
         SELECT object_entity_id AS nb FROM relationships r
-          WHERE r.subject_entity_id = :fid {pred_clause}
+          WHERE r.subject_entity_id = :fid AND r.is_current {pred_clause}
         UNION
         SELECT subject_entity_id AS nb FROM relationships r
-          WHERE r.object_entity_id = :fid {pred_clause}
+          WHERE r.object_entity_id = :fid AND r.is_current {pred_clause}
     """
     mem_nb = """
         SELECT parent_entity_id AS nb FROM memberships
@@ -290,10 +290,10 @@ async def graph_snapshot(
     """
     rel_deg = f"""
         SELECT r.subject_entity_id AS eid FROM relationships r
-          WHERE TRUE {pred_clause}
+          WHERE r.is_current {pred_clause}
         UNION ALL
         SELECT r.object_entity_id AS eid FROM relationships r
-          WHERE TRUE {pred_clause}
+          WHERE r.is_current {pred_clause}
     """
     mem_deg = """
         SELECT parent_entity_id AS eid FROM memberships WHERE is_current
@@ -338,9 +338,9 @@ async def graph_snapshot(
         degree_by_id = dict((await s.execute(
             text("""
                 SELECT eid, COUNT(*) AS deg FROM (
-                    SELECT subject_entity_id AS eid FROM relationships
+                    SELECT subject_entity_id AS eid FROM relationships WHERE is_current
                     UNION ALL
-                    SELECT object_entity_id  AS eid FROM relationships
+                    SELECT object_entity_id  AS eid FROM relationships WHERE is_current
                     UNION ALL
                     SELECT parent_entity_id  AS eid FROM memberships WHERE is_current
                     UNION ALL
@@ -370,7 +370,7 @@ async def graph_snapshot(
                            r.predicate, r.confidence
                     FROM relationships r
                     WHERE r.subject_entity_id IN :ids
-                      AND r.object_entity_id IN :ids {pred_clause}
+                      AND r.object_entity_id IN :ids AND r.is_current {pred_clause}
                 """).bindparams(bindparam("ids", expanding=True)),
                 {"ids": ids, **({"pred": predicate} if pred_clause else {})},
             )).mappings().all())
