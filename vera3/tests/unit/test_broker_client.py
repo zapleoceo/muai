@@ -311,3 +311,45 @@ async def test_resume_of_purged_job_falls_back_to_a_fresh_submit(monkeypatch):
         )
     assert text == "ok"
     post.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_resume_of_errored_job_resubmits_instead_of_replaying_the_failure(monkeypatch):
+    """13.09.2026: джоба 484699 упала у брокера «no provider», её id остался у
+    фото, и каждая повторная попытка «возобновляла» мёртвую джобу — мгновенный
+    error, circuit vision открыт на 30 минут для всех. Упавшую джобу не
+    возобновляем: отправляем заново, вердикт выносит свежая."""
+    monkeypatch.setattr(bc, "BROKER_URL", "https://aib.zapleo.com")
+    monkeypatch.setattr(bc, "BROKER_PROJECT_KEY", "aib_prj_xxx")
+    monkeypatch.setattr(bc, "_http", None)
+
+    dead = _fake_poll("error", error="no provider available for vision (gave up after 8 retries)")
+    done = _fake_poll("done", text="кот", provider="local", model="m",
+                      tokens_in=1, tokens_out=1, cost_usd=0.0, latency_ms=5)
+    with patch.object(httpx.AsyncClient, "post", AsyncMock(return_value=_fake_submit())) as post, \
+         patch.object(httpx.AsyncClient, "get", AsyncMock(side_effect=[dead, done])), \
+         patch.object(bc.asyncio, "sleep", AsyncMock()), \
+         patch.object(bc, "_log_usage", AsyncMock()):
+        text, _meta = await bc.chat_async_via_broker(
+            messages=[{"role": "user", "content": "x"}], capability="vision",
+            resume_job_id=484699,
+        )
+    assert text == "кот"
+    post.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_fresh_job_error_is_still_a_broker_call_failure(monkeypatch):
+    """Без возобновления error — обычный провал: старые except-ветки и
+    circuit breaker видят его как раньше."""
+    monkeypatch.setattr(bc, "BROKER_URL", "https://aib.zapleo.com")
+    monkeypatch.setattr(bc, "BROKER_PROJECT_KEY", "aib_prj_xxx")
+    monkeypatch.setattr(bc, "_http", None)
+    with patch.object(httpx.AsyncClient, "post", AsyncMock(return_value=_fake_submit())), \
+         patch.object(httpx.AsyncClient, "get",
+                       AsyncMock(return_value=_fake_poll("error", error="no provider"))), \
+         patch.object(bc.asyncio, "sleep", AsyncMock()), \
+         pytest.raises(bc.BrokerCallFailed, match="job 1 failed: no provider") as exc:
+        await bc.chat_async_via_broker(
+            messages=[{"role": "user", "content": "x"}], capability="vision")
+    assert isinstance(exc.value, bc.BrokerJobErrored)

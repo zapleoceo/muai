@@ -610,6 +610,8 @@ async def test_on_failure_retry_persists_carry_meta():
     sql, params = sess.calls[0]
     assert "CAST(:carry AS jsonb)" in sql
     assert params["carry"] == '{"media_job_id": 5}'
+    # старая ссылка стирается до слияния: жива, только если carry принёс её заново
+    assert "- 'media_job_id') || CAST(:carry AS jsonb)" in sql
 
 
 @pytest.mark.asyncio

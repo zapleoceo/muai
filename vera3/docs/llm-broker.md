@@ -96,6 +96,16 @@ polls `GET /v1/jobs/{id}` instead of `POST`-ing the same payload again. A
 `404` (`BrokerJobGone` — the broker's 7-day retention purged it) falls back
 to a fresh submit. Both paths share one `_poll_job` loop.
 
+A resumed job that already reached **`error`** (`BrokerJobErrored`) is also
+resubmitted rather than replayed (2026-09-13). Replaying it returned the old
+failure instantly on every retry — one dead vision job (484699, "no provider
+… gave up after 8 retries") opened Vera's vision circuit for 30 minutes
+twice in 45 minutes, stalling every photo. Its failure was already counted
+when it happened; the fresh job decides. On the media-worker side the retry
+path now strips `media_job_id` before merging `carry_meta`, so the id lives
+only while the broker job is alive (carry re-supplies it for "still
+pending", any other failure clears it).
+
 Why: 2026-09-12 three of Vera's vision jobs sat **1 500 s** in the broker's
 queue (its stale-running sweep) before finishing in 93–139 s. Vera gave up
 at 900 s, retried 2 minutes later with a fresh `POST`, and the broker
