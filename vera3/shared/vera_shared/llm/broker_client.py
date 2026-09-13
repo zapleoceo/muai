@@ -143,7 +143,7 @@ async def chat_via_broker(
         raise BrokerCallFailed(f"broker network: {e}") from e
 
     if r.status_code >= 400:
-        raise BrokerCallFailed(f"broker {r.status_code}: {r.text[:200]}")
+        raise BrokerCallFailed(f"broker {r.status_code}: {_short(r.text)}")
 
     data = r.json()
     text = data.get("text", "")
@@ -222,7 +222,7 @@ async def chat_async_via_broker(
     except Exception as e:
         raise BrokerCallFailed(f"broker network: {e}") from e
     if r.status_code >= 400:
-        raise BrokerCallFailed(f"broker {r.status_code}: {r.text[:200]}")
+        raise BrokerCallFailed(f"broker {r.status_code}: {_short(r.text)}")
 
     job = r.json()
     return await _poll_job(c, job["job_id"], ceiling=ceiling,
@@ -230,21 +230,47 @@ async def chat_async_via_broker(
                            workflow=workflow, event_id=event_id, capability=capability)
 
 
+#: Ответы на ОПРОС, после которых джоба у брокера, скорее всего, жива: прокси
+#: или сам API на мгновение недоступен. 429 — тоже «подожди», не «упало».
+_POLL_TRANSIENT = frozenset({429, 500, 502, 503, 504})
+
+
+def _short(body: str, limit: int = 200) -> str:
+    """Тело ошибки для сообщения: одна строка. HTML-страница Cloudflare
+    иначе растекалась многострочником по логам и triage_error."""
+    return " ".join(body.split())[:limit]
+
+
 async def _poll_job(c: httpx.AsyncClient, job_id: int | str, *, ceiling: float,
                     poll_after_s: float, workflow: str | None, event_id: int | None,
                     capability: str) -> tuple[str, dict[str, Any]]:
-    """Poll one job to a terminal state or until `ceiling` seconds pass."""
+    """Poll one job to a terminal state or until `ceiling` seconds pass.
+
+    Сбой самого ОПРОСА (сеть, 5xx прокси) — не сбой джобы: брокер её считает
+    дальше. До 13.09.2026 один 502 от Cloudflare на GET бросал ожидание, id
+    джобы терялся, и следующая попытка отправляла фото заново — двойной счёт
+    модели. Теперь такой ответ = «ещё не знаю», опрос продолжается до
+    дедлайна, а по дедлайну уходит BrokerJobPending с id — как у обычной
+    долгой джобы.
+    """
     deadline = time.monotonic() + ceiling
     while True:
         await asyncio.sleep(poll_after_s)
         try:
             r = await c.get(f"{BROKER_URL}/v1/jobs/{job_id}")
-        except Exception as e:
-            raise BrokerCallFailed(f"broker poll network: {e}") from e
-        if r.status_code == 404:
+        except Exception as e:  # noqa: BLE001 — сеть мигнула, джоба жива
+            log.warning("job %s poll network error (%s) — keep polling", job_id, e)
+            r = None
+        if r is not None and r.status_code == 404:
             raise BrokerJobGone(job_id)
+        if r is None or r.status_code in _POLL_TRANSIENT:
+            if r is not None:
+                log.warning("job %s poll %s — keep polling", job_id, r.status_code)
+            if time.monotonic() > deadline:
+                raise BrokerJobPending(job_id, ceiling)
+            continue
         if r.status_code >= 400:
-            raise BrokerCallFailed(f"broker poll {r.status_code}: {r.text[:200]}")
+            raise BrokerCallFailed(f"broker poll {r.status_code}: {_short(r.text)}")
 
         data = r.json()
         status = data.get("status")
@@ -289,7 +315,7 @@ async def embed_via_broker(texts: str | list[str]) -> list[list[float]]:
     except Exception as e:
         raise BrokerCallFailed(f"broker network: {e}") from e
     if r.status_code >= 400:
-        raise BrokerCallFailed(f"broker {r.status_code}: {r.text[:200]}")
+        raise BrokerCallFailed(f"broker {r.status_code}: {_short(r.text)}")
     data = r.json()
     meta = {
         "provider": "voyage",

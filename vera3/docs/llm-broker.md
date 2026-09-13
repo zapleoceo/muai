@@ -112,6 +112,18 @@ at 900 s, retried 2 minutes later with a fresh `POST`, and the broker
 computed each image twice. media-worker stores the id as
 `metadata.media_job_id` on the retry path and forgets it on success.
 
+### A failed POLL is not a failed job (2026-09-13)
+
+`_poll_job` treats network errors and `429/500/502/503/504` on
+`GET /v1/jobs/{id}` as "don't know yet": it logs a warning and keeps polling
+until the ceiling, and at the ceiling raises `BrokerJobPending(job_id)` like
+any slow job — so the caller can resume it. Before, one Cloudflare 502 on a
+poll raised a plain `BrokerCallFailed`, the job id was lost, and media-worker
+resubmitted the photo on retry while the broker was still computing the
+first copy. Other 4xx still fail (404 stays `BrokerJobGone`). Error bodies
+are squashed to one line (`_short`): the Cloudflare HTML page used to spill
+multi-line into logs and `triage_error`.
+
 ## Circuit breaker (2026-07-17)
 
 Broker logs showed 75% of Vera's `chat:fast` jobs over 48h dying on

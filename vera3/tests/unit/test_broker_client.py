@@ -353,3 +353,83 @@ async def test_fresh_job_error_is_still_a_broker_call_failure(monkeypatch):
         await bc.chat_async_via_broker(
             messages=[{"role": "user", "content": "x"}], capability="vision")
     assert isinstance(exc.value, bc.BrokerJobErrored)
+
+
+# ─── сбой ОПРОСА — не сбой джобы ───────────────────────────────────────────
+
+
+def _fake_status(code, text="<html>\n<!--[if lt IE 7]> cloudflare\n</html>"):
+    r = AsyncMock()
+    r.status_code = code
+    r.text = text
+    return r
+
+
+@pytest.mark.asyncio
+async def test_poll_502_keeps_polling_until_the_job_is_done(monkeypatch):
+    """13.09.2026: один 502 от Cloudflare на GET бросал ожидание, id джобы
+    терялся, и фото уходило к модели второй раз."""
+    monkeypatch.setattr(bc, "BROKER_URL", "https://aib.zapleo.com")
+    monkeypatch.setattr(bc, "BROKER_PROJECT_KEY", "aib_prj_xxx")
+    monkeypatch.setattr(bc, "_http", None)
+    done = _fake_poll("done", text="кот", provider="local", model="m",
+                      tokens_in=1, tokens_out=1, cost_usd=0.0, latency_ms=5)
+    polls = [_fake_status(502), httpx.ConnectError("reset"), _fake_status(429), done]
+    with patch.object(httpx.AsyncClient, "post", AsyncMock(return_value=_fake_submit())), \
+         patch.object(httpx.AsyncClient, "get", AsyncMock(side_effect=polls)), \
+         patch.object(bc.asyncio, "sleep", AsyncMock()), \
+         patch.object(bc, "_log_usage", AsyncMock()):
+        text, _meta = await bc.chat_async_via_broker(
+            messages=[{"role": "user", "content": "x"}], capability="vision")
+    assert text == "кот"
+
+
+@pytest.mark.asyncio
+async def test_poll_errors_past_the_deadline_surface_as_pending_with_job_id(monkeypatch):
+    """Если прокси лежит до самого дедлайна — это «ещё не знаю», а не провал:
+    id уезжает дальше, и следующая попытка вернётся за результатом."""
+    monkeypatch.setattr(bc, "BROKER_URL", "https://aib.zapleo.com")
+    monkeypatch.setattr(bc, "BROKER_PROJECT_KEY", "aib_prj_xxx")
+    monkeypatch.setattr(bc, "_http", None)
+    times = iter([0.0, 100.0, 100.0])
+    monkeypatch.setattr(bc.time, "monotonic", lambda: next(times, 100.0))
+    with patch.object(httpx.AsyncClient, "post", AsyncMock(return_value=_fake_submit(job_id=7))), \
+         patch.object(httpx.AsyncClient, "get", AsyncMock(return_value=_fake_status(502))), \
+         patch.object(bc.asyncio, "sleep", AsyncMock()), \
+         pytest.raises(bc.BrokerJobPending) as exc:
+        await bc.chat_async_via_broker(
+            messages=[{"role": "user", "content": "x"}], capability="vision",
+            poll_deadline_s=10.0)
+    assert exc.value.job_id == 7
+
+
+@pytest.mark.asyncio
+async def test_poll_client_error_still_fails_on_one_line(monkeypatch):
+    """4xx на опросе — не транзиент (кроме 404 и 429). Тело — одной строкой:
+    HTML Cloudflare растекался многострочником по логам и triage_error."""
+    monkeypatch.setattr(bc, "BROKER_URL", "https://aib.zapleo.com")
+    monkeypatch.setattr(bc, "BROKER_PROJECT_KEY", "aib_prj_xxx")
+    monkeypatch.setattr(bc, "_http", None)
+    with patch.object(httpx.AsyncClient, "post", AsyncMock(return_value=_fake_submit())), \
+         patch.object(httpx.AsyncClient, "get", AsyncMock(return_value=_fake_status(403))), \
+         patch.object(bc.asyncio, "sleep", AsyncMock()), \
+         pytest.raises(bc.BrokerCallFailed) as exc:
+        await bc.chat_async_via_broker(
+            messages=[{"role": "user", "content": "x"}], capability="vision")
+    assert "broker poll 403" in str(exc.value)
+    assert "\n" not in str(exc.value)
+    assert not isinstance(exc.value, bc.BrokerJobPending)
+
+
+@pytest.mark.asyncio
+async def test_submit_error_body_is_one_line_too(monkeypatch):
+    """Страница Cloudflare на POST растекалась так же, как на опросе."""
+    monkeypatch.setattr(bc, "BROKER_URL", "https://aib.zapleo.com")
+    monkeypatch.setattr(bc, "BROKER_PROJECT_KEY", "aib_prj_xxx")
+    monkeypatch.setattr(bc, "_http", None)
+    with patch.object(httpx.AsyncClient, "post", AsyncMock(return_value=_fake_status(502))), \
+         pytest.raises(bc.BrokerCallFailed) as exc:
+        await bc.chat_async_via_broker(
+            messages=[{"role": "user", "content": "x"}], capability="vision")
+    assert "broker 502" in str(exc.value)
+    assert "\n" not in str(exc.value)
