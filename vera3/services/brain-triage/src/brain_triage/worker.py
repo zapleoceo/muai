@@ -23,13 +23,14 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from collections import Counter
 
 from sqlalchemy import text, update
 from vera_shared.control import is_backfill_paused, reserve_backfill_allowance
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.db.vectors import as_pg_vector, vector_column_available
-from vera_shared.media_policy import should_extract_relations
+from vera_shared.graph.rel_policy import rel_extract_skip_reason
 
 from brain_triage.background_loops import (
     _safe_rel_extract,
@@ -119,6 +120,7 @@ async def process_pending() -> int:
     fenced_out = 0
     emb_writes: list[tuple[int, list[float]]] = []  # → event_embeddings upsert
     rel_candidates: list[tuple[int, str]] = []       # → rel-extract после коммита триажа
+    rel_skipped: Counter[str] = Counter()
     async with get_session() as s:
         for event_id, status, metadata, error in results:
             fence = (EventRow.id == event_id,
@@ -159,7 +161,11 @@ async def process_pending() -> int:
                 if ((res.rowcount or 0) > 0 and metadata
                         and metadata.get("importance", 0) >= REL_EXTRACT_MIN_IMPORTANCE):
                     row = next((r for r in rows if r.id == event_id), None)
-                    if row and row.content_text and should_extract_relations(row.metadata_):
+                    skip = rel_extract_skip_reason(row.source, row.metadata_,
+                                                   row.content_text) if row else "missing"
+                    if skip:
+                        rel_skipped[skip] += 1
+                    else:
                         rel_candidates.append((event_id, row.content_text))
             else:  # error
                 # nature детерминируема по source даже без LLM
@@ -213,6 +219,9 @@ async def process_pending() -> int:
 
     # Rel-extract — после коммита триажа, со ссылкой в _bg_tasks (иначе задачу
     # может собрать GC и связи молча потеряются).
+    if rel_candidates or rel_skipped:
+        log.info("[%s] rel-extract: в работу %d, отсеяно гейтом %s",
+                 WORKER_ID, len(rel_candidates), dict(rel_skipped))
     for eid, body in rel_candidates:
         track(asyncio.create_task(_safe_rel_extract(eid, body)))
 

@@ -1,4 +1,4 @@
-"""vera_shared.media_policy — что идёт на распознавание и в граф связей.
+"""vera_shared.media_policy — что идёт на распознавание.
 
 Правило по участию владельца заменило денилист названий чатов (2026-08-27).
 Главный регресс, который тесты обязаны держать: группа-обсуждение публичного
@@ -15,7 +15,6 @@ from vera_shared.media_policy import (
     SKIP_NO_PARTICIPATION,
     classify_chat_kind,
     media_skip_reason,
-    should_extract_relations,
     should_recognize_media,
 )
 
@@ -102,30 +101,3 @@ class TestClassifyChatKind:
         assert classify_chat_kind("bot", False) == "other"
         assert classify_chat_kind("unknown", True) == "other"
 
-
-class TestRelations:
-    def test_channel_posts_never_feed_the_graph(self):
-        """Инцидент 2026-08-06: из рекламы SUP-тура в канале родилось
-        `Дима -[client_of]-> T2T`, хотя имени в тексте не было вовсе."""
-        assert should_extract_relations({"chat_kind": "channel"}) is False
-        assert should_extract_relations(
-            {"chat_kind": "channel", "chat_title": "T2T | Афиша Нячанга"}) is False
-
-    def test_group_without_participation_never_feeds_the_graph(self):
-        """Чужая публичная болтовня личных фактов о владельце не несёт."""
-        assert should_extract_relations(
-            {"chat_kind": "group", "owner_participates": False}) is False
-
-    @pytest.mark.parametrize("meta", [
-        {"chat_kind": "group", "owner_participates": True},
-        {"chat_kind": "private"},
-        {"chat_kind": "supergroup", "owner_participates": True},
-        {},      # метаданных нет — не наказываем, строим
-        None,
-    ])
-    def test_real_correspondence_feeds_the_graph(self, meta):
-        assert should_extract_relations(meta) is True
-
-    def test_legacy_event_without_the_field(self):
-        """У событий до 2026-08-27 поля нет — остаётся только проверка канала."""
-        assert should_extract_relations({"chat_kind": "group"}) is True

@@ -8,6 +8,7 @@ strict=True + predicate-enum прямо в схеме исключает как 
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -80,17 +81,18 @@ async def test_extract_and_store_passes_schema_not_json_object():
     with patch("vera_shared.graph.rel_extract.chat_async", AsyncMock(side_effect=fake_chat)):
         n = await extract_and_store(1, "текст события длиннее тридцати символов точно")
 
-    assert n == 0   # пустой relationships список — ничего не вставлено
+    assert n.inserted == 0   # пустой relationships список — ничего не вставлено
     assert captured["response_format"] == REL_EXTRACT_JSON_SCHEMA
     assert captured["response_format"]["type"] != "json_object"
 
 
 @pytest.mark.asyncio
-async def test_extract_and_store_skips_short_body_without_calling_chat():
-    """Короткий текст (<30 chars) не должен вообще звонить в LLM — no-op guard."""
+async def test_extract_and_store_skips_blank_body_without_calling_chat():
+    """Пустой текст не звонит в LLM. Короткий отсекает раньше гейт
+    `rel_policy` (SKIP_SHORT) — по телу без шапки ингестора."""
     with patch("vera_shared.graph.rel_extract.chat_async", AsyncMock()) as m:
-        n = await extract_and_store(1, "коротко")
-    assert n == 0
+        n = await extract_and_store(1, "  ")
+    assert n.inserted == 0
     m.assert_not_called()
 
 
@@ -109,11 +111,13 @@ async def test_extract_and_store_upserts_resolved_relationship():
                AsyncMock(side_effect=fake_chat)), \
          patch("vera_shared.graph.rel_extract.resolve_entity_exact",
                AsyncMock(side_effect=[1, 2])), \
-         patch("vera_shared.graph.rel_extract.upsert_relationship",
+         patch("vera_shared.graph.rel_extract.get_entity",
+               AsyncMock(side_effect=[SimpleNamespace(name="Дима", type="person"),
+                                      SimpleNamespace(name="ITStep", type="organization")])),          patch("vera_shared.graph.rel_extract.upsert_relationship",
                AsyncMock(return_value=True)) as up:
         n = await extract_and_store(7, "текст события длиннее тридцати символов точно")
 
-    assert n == 1
+    assert n.inserted == 1
     up.assert_awaited_once()
     kw = up.await_args.kwargs
     assert kw["subject_entity_id"] == 1
@@ -139,5 +143,5 @@ async def test_extract_and_store_skips_unresolved_entity():
                AsyncMock()) as up:
         n = await extract_and_store(7, "текст события длиннее тридцати символов точно")
 
-    assert n == 0
+    assert n.inserted == 0 and n.unresolved == 1
     up.assert_not_awaited()

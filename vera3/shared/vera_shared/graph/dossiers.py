@@ -26,6 +26,7 @@ import logging
 from sqlalchemy import bindparam, text
 
 from vera_shared.db.engine import get_session
+from vera_shared.ingest.envelope import message_body
 
 log = logging.getLogger(__name__)
 
@@ -38,10 +39,7 @@ _BY_SENDER_ID = ("telegram", "slack", "instagram")
 
 def _snippet(content_text: str | None) -> str:
     """Отрезать шапку «Author:/Where:/From:…\\n---\\n», оставить тело."""
-    if not content_text:
-        return ""
-    body = content_text.split("\n---\n", 1)[-1]
-    return " ".join(body.split())[:160]
+    return " ".join(message_body(content_text).split())[:160]
 
 
 def empty(entity_id: int, name: str | None = None,

@@ -342,7 +342,7 @@ async def test_extract_and_store_self_token_goes_to_author(db):
 
     imposter = await _person("Я", "user:333", tg_id=333)      # чужой «Я»
     sender = await _person("Vasya", "user:555", tg_id=555)
-    org = await repo.upsert_entity(type="person", name="Acme",
+    org = await repo.upsert_entity(type="organization", name="Acme",
                                    source="telegram", identifier="chat:-9")
 
     async with get_session() as s:
@@ -357,7 +357,7 @@ async def test_extract_and_store_self_token_goes_to_author(db):
     with patch("vera_shared.graph.rel_extract.chat_async",
                AsyncMock(return_value=(reply, {}))):
         n = await extract_and_store(10, "я работаю в Acme уже три года, это моя основная работа")
-    assert n == 1
+    assert n.inserted == 1
 
     from sqlalchemy import text as _t
     async with get_session() as s:

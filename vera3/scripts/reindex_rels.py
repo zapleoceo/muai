@@ -18,6 +18,7 @@ import os
 from sqlalchemy import text
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.graph.rel_extract import extract_and_store
+from vera_shared.graph.rel_policy import should_extract_relations
 from vera_shared.llm.broker_client import BrokerCallFailed
 
 logging.basicConfig(level=logging.INFO,
@@ -30,10 +31,10 @@ PAGE = 500
 MAX_BACKOFF_S = 120.0
 
 
-async def _fetch_page(after_id: int) -> list[tuple[int, str]]:
+async def _fetch_page(after_id: int) -> tuple[list[tuple[int, str]], int | None]:
     async with get_session() as s:
         rows = (await s.execute(text("""
-            SELECT e.id, e.content_text
+            SELECT e.id, e.content_text, e.source, e.metadata
             FROM events e
             WHERE e.triage_status = 'done'
               AND COALESCE(e.importance, 0) >= :thr
@@ -45,7 +46,14 @@ async def _fetch_page(after_id: int) -> list[tuple[int, str]]:
             ORDER BY e.id
             LIMIT :page
         """), {"thr": THRESHOLD, "after": after_id, "page": PAGE})).all()
-    return [(r[0], r[1]) for r in rows]
+    # Тот же гейт, что у живого триажа: иначе бэкфилл жжёт вызовы на
+    # новостях и уведомлениях, где связей быть не может.
+    # Последний id страницы отдаём отдельно: страница, целиком отсеянная
+    # гейтом, — не конец выборки.
+    last_id = rows[-1][0] if rows else None
+    return [(r[0], r[1]) for r in rows
+            if should_extract_relations(r[2], r[3] if isinstance(r[3], dict) else None,
+                                        r[1])], last_id
 
 
 async def _process_one(sem: asyncio.Semaphore, eid: int, body: str, stats: dict) -> None:
@@ -78,10 +86,10 @@ async def main() -> None:
     after_id = 0
     total = 0
     while True:
-        page = await _fetch_page(after_id)
-        if not page:
+        page, last_id = await _fetch_page(after_id)
+        if last_id is None:
             break
-        after_id = page[-1][0]
+        after_id = last_id
         await asyncio.gather(*(_process_one(sem, eid, body, stats)
                               for eid, body in page))
         total += len(page)
