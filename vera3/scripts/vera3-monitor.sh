@@ -86,6 +86,14 @@ check_containers() (
     [ "$problems" -eq 0 ]
 )
 
+# Сверка миграций живёт отдельным скриптом: её же зовёт deploy.sh.
+check_migrations() { bash "$(dirname "$0")/check_migrations.sh"; }
+
+if [ "${1:-}" = "--check-migrations" ]; then
+    check_migrations
+    exit $?
+fi
+
 if [ "${1:-}" = "--check-containers" ]; then
     check_containers
     exit $?
@@ -474,6 +482,19 @@ global_cap=$(grep ^VERA_DAILY_GLOBAL_CAP_USD "$ENV_FILE" 2>/dev/null | cut -d= -
 threshold=$(echo "$global_cap * 0.9" | bc 2>/dev/null || echo "1.8")
 if awk "BEGIN { exit !($spent_today >= $threshold) }"; then
     alert "llm_cap_warn" "LLM spend today: \$${spent_today} (cap \$${global_cap})."
+fi
+
+# ─── 12. Учёт миграций сходится с репозиторием ─────────────────────────────
+# 13.09.2026 учёт кончался на 025 при файлах до 030, и две миграции, нужные
+# уже работающему коду, не были накатаны вовсе. Деплой миграции не катит
+# (см. docs/deploy-ops.md), поэтому расхождение обязано быть громким.
+# Throttle 720 мин: это не авария минуты, а долг, который напоминает о себе
+# дважды в сутки, пока его не закроют.
+migrations_bad=$(check_migrations | paste -sd ';' - | sed 's/;/; /g')
+if [ -n "$migrations_bad" ]; then
+    alert "migrations_drift" "Миграции расходятся с учётом: ${migrations_bad}%0AНакат: scripts/apply_migration.sh" 720
+else
+    recover "migrations_drift" "Учёт миграций сходится с репозиторием."
 fi
 
 exit 0
