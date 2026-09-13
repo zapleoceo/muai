@@ -5,8 +5,8 @@ import asyncio
 import contextlib
 import logging
 import os
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from fastapi import FastAPI, Request
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -21,7 +21,8 @@ from gateway.voice import router as voice_router
 
 log = logging.getLogger(__name__)
 
-# Защита от 100MB JSON атаки. Реальные события: gmail max 8000 chars text +
+# Защита от 100MB JSON атаки. Реальные события: gmail max 32000 chars text
+# (text_chunks.MAX_CONTENT_CHARS) +
 # metadata ~ 50KB. 2MB более чем достаточно.
 MAX_BODY_BYTES = int(os.environ.get("GATEWAY_MAX_BODY_BYTES", str(2 * 1024 * 1024)))
 

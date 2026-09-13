@@ -47,6 +47,10 @@ async def pg_db(monkeypatch):
         await close_engine()
     engine = await init_engine(TEST_DB_URL)
     async with engine.begin() as conn:
+        # Таблица кусков (032) не в ORM-метаданных, но ссылается на events —
+        # без неё drop_all упал бы на зависимости.
+        from sqlalchemy import text as sa_text
+        await conn.execute(sa_text("DROP TABLE IF EXISTS event_chunk_embeddings"))
         await conn.run_sync(Base.metadata.drop_all)
         await conn.run_sync(Base.metadata.create_all)
     yield get_session
@@ -753,3 +757,92 @@ async def test_triage_writes_both_columns_during_migration(pg_db, monkeypatch):
             " WHERE event_id = :e"), {"e": ev.id})).one()
     assert row[0] == [0.1, 0.2, 0.3], "JSONB не записан"
     assert row[1] is True, "колонка vector не записана — событие выпадет из дедупа"
+
+
+# ─── куски длинных событий: миграция 032 ────────────────────────────────────
+
+
+async def _apply_chunk_migration() -> None:
+    from sqlalchemy import text as sa_text
+    from vera_shared.db.chunk_vectors import chunk_schema_sql, forget_chunk_capability
+    from vera_shared.db.engine import get_session
+
+    async with get_session() as s:
+        for stmt in chunk_schema_sql(3):
+            await s.execute(sa_text(stmt))
+    forget_chunk_capability()
+
+
+@pytest.mark.asyncio
+async def test_long_event_is_found_through_its_chunk_once(pg_db, monkeypatch):
+    """Вектор письма целиком далёк от вопроса, а его кусок близок: ANN по
+    кускам находит событие, в выдаче оно ОДНО и с косинусом куска."""
+    from brain_search.retrieval import fetch_candidates
+    from sqlalchemy import text as sa_text
+    from vera_shared.db import chunk_vectors
+
+    if not await _apply_pgvector_migration():
+        pytest.skip("расширение vector недоступно в этой сборке Postgres")
+    await _apply_chunk_migration()
+    mod = _backfill_module()
+    ids = await _insert_jsonb_embeddings(
+        ['[0, 1, 0]', '[0.9, 0.1, 0]'],
+        content={0: "длинное письмо про всё подряд", 1: "другое"})
+    await mod.backfill(100, 3, 0)
+    await _build_ann_index(monkeypatch, mod)
+    await chunk_vectors.replace_event_chunks(ids[0], [[0, 0, 1], [0, 0.5, 1], [0, 1, 1]])
+    await chunk_vectors.replace_event_chunks(ids[0], [[0, 0.2, 1], [1, 0.01, 0]])
+
+    assert await chunk_vectors.chunk_ann_available() is True
+    found = await fetch_candidates(ts_query="", acc_words=[], time_range=None,
+                                   project=None, q_vec=[1.0, 0.0, 0.0], limit=15)
+    got = [r[0] for r in found.rows]
+    assert got.count(ids[0]) == 1, "событие задвоилось из-за кусков"
+    best = next(r for r in found.rows if r[0] == ids[0])
+    assert best.vec_sim == pytest.approx(0.99995, abs=1e-3)
+    async with pg_db() as s:
+        n = (await s.execute(sa_text(
+            "SELECT COUNT(*) FROM event_chunk_embeddings WHERE event_id = :e"),
+            {"e": ids[0]})).scalar_one()
+    assert n == 2, "замена кусков оставила старые"
+
+
+@pytest.mark.asyncio
+async def test_triage_writes_chunks_only_for_long_events(pg_db, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    from brain_triage import chunks
+    from sqlalchemy import text as sa_text
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models import EventRow
+    from vera_shared.text_chunks import split_chunks
+
+    if not await _apply_pgvector_migration():
+        pytest.skip("расширение vector недоступно в этой сборке Postgres")
+    await _apply_chunk_migration()
+    now = utc_naive_now()
+    long_text = "Абзац про аренду виллы. " * 400
+    async with get_session() as s:
+        evs = [EventRow(source="gmail", source_event_id=f"m{i}", content_text=t,
+                        occurred_at=now, received_at=now)
+               for i, t in enumerate(["коротко", long_text])]
+        s.add_all(evs)
+        await s.flush()
+        short_id, long_id = evs[0].id, evs[1].id
+    monkeypatch.setattr(chunks, "_embed_batch",
+                        AsyncMock(side_effect=lambda t: [[0.1, 0.2, 0.3]] * len(t)))
+
+    assert await chunks.embed_event_chunks(
+        [(short_id, "коротко"), (long_id, long_text)]) == 1
+    async with get_session() as s:
+        rows = dict((await s.execute(sa_text(
+            "SELECT event_id, COUNT(*) FROM event_chunk_embeddings GROUP BY event_id"
+        ))).all())
+    assert rows == {long_id: len(split_chunks(long_text))}
+
+    # выжимку перезаписали короткой — куски снимаются
+    assert await chunks.embed_event_chunks([(long_id, "теперь коротко")]) == 0
+    async with get_session() as s:
+        left = (await s.execute(sa_text(
+            "SELECT COUNT(*) FROM event_chunk_embeddings"))).scalar_one()
+    assert left == 0

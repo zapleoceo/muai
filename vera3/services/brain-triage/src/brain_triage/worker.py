@@ -30,12 +30,14 @@ from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.db.vectors import embedding_upsert, vector_column_available
 from vera_shared.graph.rel_policy import rel_extract_skip_reason
+from vera_shared.text_chunks import llm_excerpt
 
 from brain_triage.background_loops import (
     _safe_rel_extract,
     start_background_loops,
     track,
 )
+from brain_triage.chunks import embed_event_chunks
 from brain_triage.claim import _chunk_group_rows, _claim_batch, chat_kind
 from brain_triage.concurrency import (
     BATCH_MISS_ERROR,
@@ -77,7 +79,7 @@ async def process_pending() -> int:
     # Источники-намерения (vera_chat, perplexity) не эмбеддим — их вектора
     # засоряют семантический поиск. Эмбеддим только события мира.
     embed_idx = [i for i, r in enumerate(rows) if r.source not in SKIP_EMBED_SOURCES]
-    embed_texts = [(rows[i].content_text or "")[:8000] for i in embed_idx]
+    embed_texts = [llm_excerpt(rows[i].content_text or "") for i in embed_idx]
     embed_vectors = await _embed_batch(embed_texts)
     # by event_id, НЕ by position — группировка ниже переупорядочивает rows
     # (single_rows + group-chunks), positional zip() с embeddings был бы багом:
@@ -200,6 +202,9 @@ async def process_pending() -> int:
                         await s.execute(sql, params)
                 except Exception as e:
                     log.warning("embedding upsert failed event=%s: %s", eid, e)
+        # Куски длинных — после вектора события (см. chunks.py).
+        body_by_id = {r.id: r.content_text or "" for r in rows}
+        await embed_event_chunks([(eid, body_by_id[eid]) for eid, _ in emb_writes])
 
     # Rel-extract — после коммита триажа, со ссылкой в _bg_tasks (иначе задачу
     # может собрать GC и связи молча потеряются).

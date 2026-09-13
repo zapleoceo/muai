@@ -737,6 +737,36 @@ parallel seq scan (замер 13.09: 7.7 с на одну конфигураци
    ix_events_fts_indonesian` и `DELETE FROM schema_migrations WHERE
    version='031_events_fts_multilingual'`, **только после** отката кода.
 
+## Куски длинных событий (032): накат
+
+Что и почему — `brain.md`, «Длинные тексты». Номер 031 зарезервирован под
+многоязычный FTS (параллельная ветка); 032 от 031 не зависит, от 030 —
+только расширением `vector` (повторено в самой миграции).
+
+1. **Деплой кода** обычным пушем. Без таблицы код работает как раньше; потолок
+   входа 32 тыс. включается сразу — новые письма/сессии уже не теряют хвост.
+2. **Миграция:** `docker exec -i -e PGOPTIONS='-c lock_timeout=5s' vera3-postgres psql -U vera -d vera -v ON_ERROR_STOP=1 < infra/migrations/032_event_chunk_embeddings.sql`.
+   Новая пустая таблица + индекс на пустой таблице — < 1 с; блокировка
+   на `events` — только SHARE ROW EXCLUSIVE под внешний ключ, мгновенно.
+3. **Рестарт** `vera3-brain-triage-1 vera3-brain-triage-2 vera3-brain-search` —
+   наличие таблицы и индекса кэшируется на процесс. В логе триажа
+   «куски длинных событий доступны».
+4. **Опционально, бэкфил:** `docker exec -i vera3-brain-triage-1 python - --estimate < /var/www/vera3/scripts/backfill_chunks.py`
+   (ожидаемо ~1.7 тыс. событий, ~10 тыс. кусков, ~5 млн токенов), затем без
+   `--estimate` в фоне через `nohup`. Перезапуск безопасен. Расход идёт из
+   того же пула ключей voyage, что и триаж.
+5. **Проверка:** `SELECT COUNT(DISTINCT event_id), COUNT(*),
+   pg_size_pretty(pg_total_relation_size('event_chunk_embeddings')) FROM
+   event_chunk_embeddings`; на поиске — отсутствие `ann: смысловой шаг пропущен`.
+
+Откат: `DROP TABLE event_chunk_embeddings; DELETE FROM schema_migrations
+WHERE version='032_event_chunk_embeddings';` **и** рестарт brain-search и
+brain-triage (иначе процессы по кэшу обращаются к таблице: поиск пропустит
+смысловой шаг по таймауту/ошибке в точке сохранения, триаж залогирует
+отказ записи кусков). Потолок 32 тыс. откатывается только кодом.
+Таблица воспроизводима из `events` — в ночной дамп её можно не брать
+(`VERA_EXCLUDE`), но при ~25 МБ это не срочно.
+
 ## Backup
 
 Ночной cron `30 3 * * * /usr/local/bin/vera-backup.sh` (исходник —

@@ -86,15 +86,20 @@ async def ann_index_available() -> bool:
     if not await vector_column_available():
         _has_ann = False
         return False
+    _has_ann = await index_is_valid(ANN_INDEX)
+    log.info("эмбеддинги: ANN-индекс %s", "доступен" if _has_ann else "не построен")
+    return _has_ann
+
+
+async def index_is_valid(name: str) -> bool:
+    """Есть ли индекс и валиден ли он (недостроенный CONCURRENTLY — нет)."""
     async with get_session() as s:
         found = (await s.execute(text("""
             SELECT i.indisvalid FROM pg_index i
             JOIN pg_class c ON c.oid = i.indexrelid
             WHERE c.relname = :name
-        """), {"name": ANN_INDEX})).scalar_one_or_none()
-    _has_ann = bool(found)
-    log.info("эмбеддинги: ANN-индекс %s", "доступен" if _has_ann else "не построен")
-    return _has_ann
+        """), {"name": name})).scalar_one_or_none()
+    return bool(found)
 
 
 def bq(expr: str, dims: int) -> str:
@@ -102,32 +107,36 @@ def bq(expr: str, dims: int) -> str:
     return f"(binary_quantize({expr})::bit({dims}))"
 
 
-def ann_index_sql(dims: int) -> str:
+def ann_index_sql(dims: int, *, table: str = "event_embeddings",
+                  index: str = ANN_INDEX, concurrently: bool = True) -> str:
     """HNSW по знаку каждого измерения: 128 байт на строку вместо 2 КБ
     halfvec — индекс ~0.2 ГБ помещается в память контейнера 768m, а
     полноразмерный HNSW на halfvec был бы ~1 ГБ. Точность возвращает
     пересчёт кандидатов по halfvec в `ann_candidates_sql`."""
-    return (f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {ANN_INDEX}"
-            f" ON event_embeddings USING hnsw"
+    how = " CONCURRENTLY" if concurrently else ""
+    return (f"CREATE INDEX{how} IF NOT EXISTS {index}"
+            f" ON {table} USING hnsw"
             f" ({bq('embedding_vec', dims)} bit_hamming_ops)")
 
 
 def ann_candidates_sql(*, dims: int, where: str = "TRUE",
-                       join_events: bool = False) -> str:
+                       join_events: bool = False,
+                       table: str = "event_embeddings") -> str:
     """(event_id, sim) ближайших к :q. Параметры: :q (литерал as_pg_vector),
     :ann_k (сколько взять из индекса), :ann_top (сколько вернуть).
 
     Два шага: индекс по Хэммингу отдаёт :ann_k грубых кандидатов, затем они
     пересчитываются точным косинусом по halfvec. `where` стоит внутри
     индексного шага — вместе с hnsw.iterative_scan (`ANN_SETTINGS_SQL`)
-    фильтр по времени/проекту не опустошает выдачу."""
+    фильтр по времени/проекту не опустошает выдачу. `table` — любая таблица
+    с (event_id, embedding_vec): у кусков (chunk_vectors) event_id повторяется."""
     join = "JOIN events ON events.id = ee.event_id" if join_events else ""
     q = f"CAST(:q AS {VEC_TYPE}({dims}))"
     return f"""
         SELECT c.event_id, 1 - (c.embedding_vec <=> {q}) AS sim
         FROM (
             SELECT ee.event_id, ee.embedding_vec
-            FROM event_embeddings ee {join}
+            FROM {table} ee {join}
             WHERE ee.embedding_vec IS NOT NULL AND ({where})
             ORDER BY {bq('ee.embedding_vec', dims)} <~> {bq(q, dims)}
             LIMIT :ann_k

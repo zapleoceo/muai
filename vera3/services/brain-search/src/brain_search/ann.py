@@ -9,7 +9,8 @@ villa»), не находился никогда — до косинуса он 
 Здесь кандидаты берутся из ANN-индекса (`vectors.ann_candidates_sql`) с теми
 же фильтрами проекта/времени, что у основной выборки, и ОБЪЕДИНЯЮТСЯ с ней:
 режимы fts/time/project не теряются, смысловые строки добавляются сверху.
-Косинус приходит из БД колонкой `vec_sim` — JSONB не разбирается.
+Косинус приходит из БД колонкой `vec_sim` — JSONB не разбирается. Длинные
+события ищутся ещё и по кускам (vera_shared.db.chunk_vectors, миграция 032).
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 from vera_shared.db import vectors
+from vera_shared.db.chunk_vectors import chunk_ann_available, chunk_candidates_sql
 from vera_shared.db.vectors import VEC_TYPE, as_pg_vector
 
 log = logging.getLogger(__name__)
@@ -51,19 +53,28 @@ def vec_columns() -> tuple[str, str]:
             f", 1 - (ee.embedding_vec <=> {q_cast()}) AS vec_sim")
 
 
-def ann_rows_sql(where: str) -> Any:
+def ann_rows_sql(where: str, with_chunks: bool = False) -> Any:
     """Строки той же формы, что у retrieval._select: id…importance, embedding,
-    rank, account, acc_match — плюс vec_sim."""
-    inner = vectors.ann_candidates_sql(dims=vectors.VEC_DIMS, where=where,
-                                       join_events=True)
+    rank, account, acc_match — плюс vec_sim.
+
+    С кусками (миграция 032) кандидаты берутся из двух индексов, и событие
+    получает лучший косинус из своего вектора и векторов своих кусков —
+    одна строка на событие, показ — событие, не кусок."""
+    parts = [vectors.ann_candidates_sql(dims=vectors.VEC_DIMS, where=where,
+                                        join_events=True)]
+    if with_chunks:
+        parts.append(chunk_candidates_sql(dims=vectors.VEC_DIMS, where=where))
+    inner = " UNION ALL ".join(f"({p})" for p in parts)
     return text(f"""
-        WITH ann AS ({inner})
+        WITH ann AS ({inner}),
+        best AS (SELECT event_id, MAX(sim) AS sim FROM ann GROUP BY event_id)
         SELECT events.id, events.source, events.source_event_id,
                events.occurred_at, events.content_text, events.importance,
                NULL AS embedding, 0.0 AS rank, events.account,
-               FALSE AS acc_match, ann.sim AS vec_sim
-        FROM ann JOIN events ON events.id = ann.event_id
-        ORDER BY ann.sim DESC
+               FALSE AS acc_match, best.sim AS vec_sim
+        FROM best JOIN events ON events.id = best.event_id
+        ORDER BY best.sim DESC
+        LIMIT :ann_top
     """)
 
 
@@ -79,11 +90,12 @@ async def fetch_ann_rows(session: AsyncSession, q_vec: list[float],
     отказ (прежде всего statement_timeout, если индекс снесли без рестарта) не
     должен ронять поиск целиком. Откат к точке сохранения заодно снимает
     транзакционные настройки hnsw/statement_timeout."""
+    with_chunks = await chunk_ann_available()
     try:
         async with session.begin_nested():
             await session.execute(vectors.ANN_SETTINGS_SQL,
                                   vectors.ann_settings_params(ANN_OVERSAMPLE))
-            stmt = ann_rows_sql(where)
+            stmt = ann_rows_sql(where, with_chunks=with_chunks)
             return list((await session.execute(
                 stmt, {**params, **ann_params(q_vec)})).all())
     except DBAPIError as e:
@@ -92,8 +104,34 @@ async def fetch_ann_rows(session: AsyncSession, q_vec: list[float],
         return []
 
 
+class _SimRow(tuple):
+    """Строка основной выборки с поднятым vec_sim: scoring читает и позиции,
+    и атрибут `vec_sim`, а sqlalchemy Row неизменяем."""
+
+    vec_sim: float
+
+
+def _with_sim(row: Any, sim: float) -> Any:
+    out = _SimRow(tuple(row))
+    out.vec_sim = sim
+    return out
+
+
 def merge_candidates(primary: list[Any], semantic: list[Any]) -> list[Any]:
     """Основная выборка первой, смысловые — только новые id. Порядок тут
-    ничего не решает (переранжирует scoring), важна полнота без дублей."""
+    ничего не решает (переранжирует scoring), важна полнота без дублей.
+
+    Событие, найденное обоими путями, остаётся строкой основной выборки (там
+    ts_rank и acc_match), но берёт лучшее сходство: из ANN оно могло прийти
+    через кусок, а основная выборка знает только вектор события целиком."""
+    ann_sim = {r[0]: getattr(r, "vec_sim", None) for r in semantic}
+    merged: list[Any] = []
+    for r in primary:
+        own = getattr(r, "vec_sim", None)
+        best = ann_sim.get(r[0])
+        if best is not None and (own is None or best > own):
+            merged.append(_with_sim(r, best))
+        else:
+            merged.append(r)
     seen = {r[0] for r in primary}
-    return list(primary) + [r for r in semantic if r[0] not in seen]
+    return merged + [r for r in semantic if r[0] not in seen]
