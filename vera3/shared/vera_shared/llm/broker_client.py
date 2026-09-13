@@ -143,7 +143,7 @@ async def chat_via_broker(
         raise BrokerCallFailed(f"broker network: {e}") from e
 
     if r.status_code >= 400:
-        raise BrokerCallFailed(f"broker {r.status_code}: {r.text[:200]}")
+        raise BrokerCallFailed(f"broker {r.status_code}: {_short(r.text)}")
 
     data = r.json()
     text = data.get("text", "")
@@ -222,7 +222,7 @@ async def chat_async_via_broker(
     except Exception as e:
         raise BrokerCallFailed(f"broker network: {e}") from e
     if r.status_code >= 400:
-        raise BrokerCallFailed(f"broker {r.status_code}: {r.text[:200]}")
+        raise BrokerCallFailed(f"broker {r.status_code}: {_short(r.text)}")
 
     job = r.json()
     return await _poll_job(c, job["job_id"], ceiling=ceiling,
@@ -315,7 +315,7 @@ async def embed_via_broker(texts: str | list[str]) -> list[list[float]]:
     except Exception as e:
         raise BrokerCallFailed(f"broker network: {e}") from e
     if r.status_code >= 400:
-        raise BrokerCallFailed(f"broker {r.status_code}: {r.text[:200]}")
+        raise BrokerCallFailed(f"broker {r.status_code}: {_short(r.text)}")
     data = r.json()
     meta = {
         "provider": "voyage",

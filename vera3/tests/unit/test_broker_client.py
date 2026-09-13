@@ -419,3 +419,17 @@ async def test_poll_client_error_still_fails_on_one_line(monkeypatch):
     assert "broker poll 403" in str(exc.value)
     assert "\n" not in str(exc.value)
     assert not isinstance(exc.value, bc.BrokerJobPending)
+
+
+@pytest.mark.asyncio
+async def test_submit_error_body_is_one_line_too(monkeypatch):
+    """Страница Cloudflare на POST растекалась так же, как на опросе."""
+    monkeypatch.setattr(bc, "BROKER_URL", "https://aib.zapleo.com")
+    monkeypatch.setattr(bc, "BROKER_PROJECT_KEY", "aib_prj_xxx")
+    monkeypatch.setattr(bc, "_http", None)
+    with patch.object(httpx.AsyncClient, "post", AsyncMock(return_value=_fake_status(502))), \
+         pytest.raises(bc.BrokerCallFailed) as exc:
+        await bc.chat_async_via_broker(
+            messages=[{"role": "user", "content": "x"}], capability="vision")
+    assert "broker 502" in str(exc.value)
+    assert "\n" not in str(exc.value)
