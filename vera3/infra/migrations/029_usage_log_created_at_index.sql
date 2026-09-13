@@ -19,12 +19,19 @@
 -- удаление внутри миграции сделало бы её неидемпотентной по времени и
 -- заблокировало бы таблицу на неопределённый срок.
 
-BEGIN;
+-- CONCURRENTLY и без BEGIN/COMMIT (13.09.2026, до наката): в usage_log
+-- 1.15 млн строк / 336 МБ, и обычный CREATE INDEX держал бы SHARE-блокировку,
+-- то есть стопорил бы запись КАЖДОГО LLM-вызова на всё время построения.
+-- CONCURRENTLY внутри транзакции запрещён, поэтому транзакции нет; psql без
+-- -1 (apply_migration.sh) шлёт команды по одной.
+--
+-- Ловушка IF NOT EXISTS: упавшее посреди построения CONCURRENTLY оставляет
+-- индекс INVALID, и повторный накат его молча пропустит. Проверка после:
+--   SELECT indisvalid FROM pg_index WHERE indexrelid = 'ix_usage_created_at'::regclass;
+-- f → DROP INDEX CONCURRENTLY ix_usage_created_at и накатить заново.
 
-CREATE INDEX IF NOT EXISTS ix_usage_created_at ON usage_log (created_at);
+CREATE INDEX CONCURRENTLY IF NOT EXISTS ix_usage_created_at ON usage_log (created_at);
 
 INSERT INTO schema_migrations (version, note)
 VALUES ('029_usage_log_created_at_index', 'ix_usage_created_at + окно в агрегате дашборда')
 ON CONFLICT (version) DO NOTHING;
-
-COMMIT;
