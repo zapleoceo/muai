@@ -175,10 +175,56 @@ call at all — it is the most expensive background work the worker does
 (one `structured` LLM call plus up to ~10 DB sessions resolving entity
 names, all outside `TRIAGE_CONCURRENCY`):
 
-1. `should_extract_relations(metadata)` (`vera_shared/media_policy.py`) —
-   drops broadcast-channel posts and groups the owner doesn't take part in.
-2. `importance >= REL_EXTRACT_MIN_IMPORTANCE` (`brain_triage/config.py`,
+1. `importance >= REL_EXTRACT_MIN_IMPORTANCE` (`brain_triage/config.py`,
    env `TRIAGE_REL_MIN_IMPORTANCE`, default **60**).
+2. `rel_extract_skip_reason(source, metadata, content_text)`
+   (`vera_shared/graph/rel_policy.py`, bool form `should_extract_relations`)
+   — no LLM, decided from the event itself. The worker logs one INFO line
+   per batch: `rel-extract: в работу N, отсеяно гейтом {reason: count}`.
+   `scripts/reindex_rels.py` goes through the same gate.
+
+#### Gate by data, not only by importance (2026-09-13)
+
+Measured on prod: rel-extract made ~855 LLM calls a week and produced
+**zero** relationships since 2026-09-04. On 12 real importance>=60 events
+every model (gemini-3.5-flash-lite, gpt-oss-120b) honestly answered `[]` —
+channel news, bot notifications, announcements, chatter without any
+relationship in it; on control sentences with explicit relationships the
+same models extract 2-3 correctly. The calls were burned where no
+relationship could exist.
+
+Skip reasons, in order. Measured on the 30-day candidate pool
+(importance>=60, 8963 events); in brackets — how many of those events had
+ever produced a relationship:
+
+| reason | what | events (had rels) |
+|---|---|---|
+| `source` | `claude_chat`, `vera_chat` — transcripts with assistants about code | 3778 (10, all junk: «Дима works_at GitHub») |
+| `channel` | broadcast-channel post | 450 (0) |
+| `no_participation` | group where the owner never writes (`owner_participates`) | 149 (0) |
+| `machine_sender` | `is_machine_sender`: JIRA/calendar/newsletter mail («(JIRA)» in the name, `jira@`, service mailbox per `identity.entity_kind_for_email`), Telegram `...bot` usernames | 1304 (19: «Ольга Крячко (JIRA) works_at Artem Belov») |
+| `short` | message body (ingestor header cut by `ingest/envelope.message_body`) under 30 chars | 721 (3) |
+| `no_marker` | `has_relation_marker`: not a single relationship word (ru/uk/en/id stems: работает, начальник, жена, колега, works at, wife, istri...) in the body | 2068 (30) |
+
+What passes: **493 of 8963 (5.5%)** — telegram 340, voice 51, slack 50,
+gmail 45, vera_memory 6. The header is excluded from the marker search on
+purpose: the chat title «Веранда сотрудники» made every member a
+«сотрудник». The events dropped by the gate that had produced edges were
+the same junk classes the validator below rejects.
+
+Rejected ideas: counting capitalised words as «two named entities» — news
+(«Киев», «БПЛА», «Иран») pass it just as well; an LLM pre-classifier —
+that is the very call we are trying to save.
+
+#### Validation before writing and run counters
+
+`extract_and_store` returns `RelExtractOutcome` (`returned`, `unresolved`,
+`rejected` by reason, `inserted`, `llm_failed`) and logs it at INFO for
+every run — a zero output is visible, not buried in DEBUG. LLM failure and
+an off-schema answer are WARNING (the raw answer is not logged: it carries
+facts from private correspondence). Each resolved tuple goes through
+`relationship_reject_reason` before `upsert_relationship` — see
+`graph-dedup.md`.
 
 **The importance scale is 0-100**, defined in `schemas.py` and restated in
 `prompts.py`. The threshold used to be a hardcoded `3`, which admits

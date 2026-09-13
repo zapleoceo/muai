@@ -61,8 +61,9 @@ async def list_entities_needing_avatar(
                e.attributes->>'username' AS username,
                e.attributes->>'tg_id'    AS tg_id,
                (SELECT COUNT(*) FROM relationships r
-                  WHERE r.subject_entity_id = e.id
-                     OR r.object_entity_id = e.id) AS degree
+                  WHERE r.is_current
+                    AND (r.subject_entity_id = e.id
+                         OR r.object_entity_id = e.id)) AS degree
         FROM entities e
         LEFT JOIN entity_avatars av ON av.entity_id = e.id
         WHERE e.type IN ('person', 'channel', 'supergroup', 'group')

@@ -22,5 +22,17 @@ fi
 
 echo "накатываю $VERSION…"
 "${PSQL[@]}" -v ON_ERROR_STOP=1 < "$FILE"
+
+# Невалидный индекс — не «применено». CREATE INDEX CONCURRENTLY, прерванный
+# снаружи (OOM, Ctrl-C, обрыв ssh), оставляет INVALID-индекс; повторный накат
+# с IF NOT EXISTS молча его пропускает, и без этой проверки миграция попала бы
+# в учёт как успешная — с индексом, которым планировщик не пользуется.
+INVALID="$("${PSQL[@]}" -tAc "SELECT string_agg(indexrelid::regclass::text, ', ') FROM pg_index WHERE NOT indisvalid")"
+if [ -n "$INVALID" ]; then
+    echo "в базе невалидные индексы: $INVALID — в учёт НЕ записываю." >&2
+    echo "Удали их (DROP INDEX CONCURRENTLY …) и накати $VERSION заново." >&2
+    exit 1
+fi
+
 "${PSQL[@]}" -tAc "INSERT INTO schema_migrations (version, note) VALUES ('$VERSION','applied via apply_migration.sh') ON CONFLICT DO NOTHING" >/dev/null
 echo "готово: $VERSION"

@@ -15,12 +15,20 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import Counter
+from dataclasses import dataclass, field
 
 from sqlalchemy import text
 
 from vera_shared.db.engine import get_session
+from vera_shared.graph.rel_validate import (
+    REJECT_SELF,
+    is_referential_name,
+    relationship_reject_reason,
+)
 from vera_shared.graph.repo import (
     find_entity_by_alias,
+    get_entity,
     resolve_entity_exact,
     upsert_relationship,
 )
@@ -34,41 +42,6 @@ log = logging.getLogger(__name__)
 # случайный аккаунт, чей first_name = «Я» (найдено вживую: 221 ребро от 6+
 # разных авторов на одном чужом человеке).
 SELF_TOKENS = {"я", "i", "me", "myself"}
-
-# Слова, которые НИКОГДА не обозначают конкретного человека — даже если в
-# графе есть аккаунт ровно с таким именем профиля.
-#
-# Инцидент 2026-08-20: у телеграм-аккаунта 942121006 имя профиля буквально
-# «он». LLM исправно доставала факты из фраз вроде «Нормально он написал»,
-# `resolve_entity_exact("он")` находила ровно одно совпадение — и факт
-# прилипал к постороннему человеку. Так набралось 55 связей вида
-# «Ли — coworker_of — он», «You never walk alone — reports_to — он».
-# Местоимение неразрешимо без кореференции, поэтому такие связи не строим
-# вовсе: пропустить факт дешевле, чем приписать его случайному человеку.
-_NON_REFERENTIAL = {
-    "он", "она", "оно", "они", "ты", "вы", "мы", "его", "её", "ее", "их",
-    "им", "ему", "ей", "них", "нас", "вас", "этот", "эта", "тот", "та",
-    "кто", "что", "все", "всё", "кое-кто", "некто",
-    "he", "she", "it", "they", "them", "him", "her", "you", "we", "us",
-    "this", "that", "who", "someone", "somebody", "everyone",
-}
-
-def is_referential_name(name: str | None) -> bool:
-    """Может ли строка вообще обозначать конкретного человека.
-
-    Отсекает местоимения и огрызки (одна буква, только знаки препинания) ДО
-    похода в базу — иначе они резолвятся в случайный аккаунт с таким же
-    именем профиля.
-    """
-    if not name:
-        return False
-    low = name.strip().lower()
-    if len(low) < 2:
-        return False
-    if low in _NON_REFERENTIAL:
-        return False
-    return any(ch.isalnum() for ch in low)
-
 
 PREDICATES = [
     "boss_of",          # X is boss of Y
@@ -181,10 +154,33 @@ async def author_entity_of_event(event_id: int) -> int | None:
     return await find_entity_by_alias(*author)
 
 
-async def extract_and_store(event_id: int, body: str) -> int:
-    """Returns number of relationships inserted."""
-    if not body or len(body) < 30:
-        return 0
+@dataclass
+class RelExtractOutcome:
+    """Итог одного прогона — чтобы нулевой выход был виден в логе, а не в DEBUG."""
+
+    llm_failed: bool = False
+    returned: int = 0
+    unresolved: int = 0
+    rejected: Counter[str] = field(default_factory=Counter)
+    inserted: int = 0
+
+
+def _parse_relationships(raw: str) -> list[dict] | None:
+    try:
+        data = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return None
+    rels = data.get("relationships") if isinstance(data, dict) else None
+    if not isinstance(rels, list):
+        return None
+    return [r for r in rels[:3] if isinstance(r, dict)]
+
+
+async def extract_and_store(event_id: int, body: str) -> RelExtractOutcome:
+    """LLM → проверка → запись. Решение, звать ли вообще, — `rel_policy`."""
+    out = RelExtractOutcome()
+    if not body or not body.strip():
+        return out
     prompt = PROMPT.format(preds=", ".join(PREDICATES), body=body[:2000])
     try:
         raw, _meta = await chat_async(
@@ -196,23 +192,25 @@ async def extract_and_store(event_id: int, body: str) -> int:
             workflow="rel_extract",
         )
     except LLMCallFailed as e:
-        log.debug("rel_extract LLM fail event=%s: %s", event_id, e)
-        return 0
+        out.llm_failed = True
+        log.warning("rel_extract event=%s: LLM не ответила: %s", event_id, e)
+        return out
 
-    try:
-        data = json.loads(raw)
-        rels = data.get("relationships", [])
-        if not isinstance(rels, list):
-            return 0
-    except json.JSONDecodeError:
-        return 0
+    rels = _parse_relationships(raw)
+    if rels is None:
+        out.llm_failed = True
+        # Сам ответ в лог не пишем — в нём факты из личной переписки.
+        log.warning("rel_extract event=%s: ответ не по схеме (%d символов)",
+                    event_id, len(raw or ""))
+        return out
+    out.returned = len(rels)
 
-    inserted = 0
     author_id: int | None | bool = False   # False = ещё не искали (lazy, 1 запрос)
     # Один и тот же человек обычно встречается в нескольких фактах подряд
     # («Игорь работает в X», «Игорь — начальник Y»). Каждый resolve — это своя
     # сессия к БД, поэтому в пределах одного события помним, что уже искали.
     resolved: dict[str, int | None] = {}
+    described: dict[int, tuple[str, str]] = {}
 
     async def _resolve(name: str) -> int | None:
         nonlocal author_id
@@ -222,42 +220,52 @@ async def extract_and_store(event_id: int, body: str) -> int:
                 author_id = await author_entity_of_event(event_id)
             return author_id
         if not is_referential_name(name):
-            log.debug("rel_extract: skip non-referential name %r", name)
             return None
         if low not in resolved:
             resolved[low] = await resolve_entity_exact(name)
         return resolved[low]
 
-    for r in rels[:3]:
-        if not isinstance(r, dict):
-            continue
+    async def _describe(entity_id: int) -> tuple[str, str]:
+        if entity_id not in described:
+            row = await get_entity(entity_id)
+            described[entity_id] = (row.name, row.type) if row else ("", "")
+        return described[entity_id]
+
+    for r in rels:
         subj = (r.get("subject") or "").strip()
         obj = (r.get("object") or "").strip()
         pred = (r.get("predicate") or "").strip().lower()
         if not subj or not obj or pred not in PREDICATES:
+            out.rejected["malformed"] += 1
             continue
-        if subj == obj:
-            continue
-
         subj_id = await _resolve(subj)
         obj_id = await _resolve(obj)
-        if not subj_id or not obj_id or subj_id == obj_id:
-            log.debug("rel_extract: skip — entity not found (%s | %s)", subj, obj)
+        if not subj_id or not obj_id:
+            out.unresolved += 1
             continue
-
         conf = float(r.get("confidence", 0.6))
-        fact = (r.get("fact") or "")[:500]
-
+        # Проверяем сущности из графа, а не строки модели: «Я» резолвится в
+        # автора, а тип конца (person/organization/…) есть только у сущности.
+        subj_name, subj_type = await _describe(subj_id)
+        obj_name, obj_type = await _describe(obj_id)
+        reason = REJECT_SELF if subj_id == obj_id else relationship_reject_reason(
+            subject_name=subj_name, subject_type=subj_type, predicate=pred,
+            object_name=obj_name, object_type=obj_type, confidence=conf,
+        )
+        if reason:
+            out.rejected[reason] += 1
+            continue
         # Canonical upsert lives in repo.py — single source of truth for the
-        # (subject, predicate, object) soft-upsert (was duplicated raw SQL
-        # here that, unlike repo, never back-filled a missing `fact`).
+        # (subject, predicate, object) soft-upsert.
         if await upsert_relationship(
             subject_entity_id=subj_id, object_entity_id=obj_id,
-            predicate=pred, fact=fact, confidence=conf,
+            predicate=pred, fact=(r.get("fact") or "")[:500], confidence=conf,
             derived_from_event_id=event_id,
         ):
-            inserted += 1
+            out.inserted += 1
 
-    if inserted:
-        log.info("rel_extract event=%s inserted=%d", event_id, inserted)
-    return inserted
+    log.info("rel_extract event=%s: вернула=%d не_найдено=%d отсеяно=%d %s записано=%d",
+             event_id, out.returned, out.unresolved, sum(out.rejected.values()),
+             dict(out.rejected), out.inserted)
+    return out
+

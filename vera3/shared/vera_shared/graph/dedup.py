@@ -29,6 +29,7 @@ from sqlalchemy import bindparam, text, update
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_graph import EntityRow
+from vera_shared.ingest.envelope import message_body
 
 
 def _as_dict(attrs) -> dict:
@@ -121,10 +122,7 @@ async def find_alias_collisions(min_group: int = 2) -> list[dict]:
 def _msg_snippet(content_text: str | None) -> str:
     """Strip the 'Author:/From:/Chat:/Date:/Direction:\n---\n' header the
     ingestor prepends, leaving just the message body for a preview."""
-    if not content_text:
-        return ""
-    body = content_text.split("\n---\n", 1)[-1]
-    return " ".join(body.split())[:160]
+    return " ".join(message_body(content_text).split())[:160]
 
 
 def _empty_dossier(entity_id: int, name=None, type_=None, username=None,

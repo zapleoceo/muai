@@ -70,6 +70,25 @@ async def test_list_entities_needing_avatar_excludes_fetched(db):
 
 
 @pytest.mark.asyncio
+async def test_needing_avatar_degree_ignores_quarantined_relationships(db):
+    """Связь, помеченная is_current=false (scripts/quarantine_junk_rels.py),
+    не должна поднимать сущность в очереди аватаров."""
+    from vera_shared.graph import repo
+    from vera_shared.graph.avatars import list_entities_needing_avatar
+    from vera_shared.graph.repo_relationships import set_relationships_current
+    a = await _seed_person("A", "user:1", "a_u", 1)
+    b = await _seed_person("B", "user:2", "b_u", 2)
+    await repo.upsert_relationship(subject_entity_id=a, object_entity_id=b,
+                                   predicate="friend_of")
+    degree = {r["id"]: r["degree"] for r in await list_entities_needing_avatar(limit=10)}
+    assert degree[a] == 1
+
+    await set_relationships_current([1], current=False)
+    degree = {r["id"]: r["degree"] for r in await list_entities_needing_avatar(limit=10)}
+    assert degree[a] == 0
+
+
+@pytest.mark.asyncio
 async def test_list_needing_avatar_ids_filter(db):
     from vera_shared.graph.avatars import list_entities_needing_avatar
     e1 = await _seed_person("A", "user:1", "a_u", 1)

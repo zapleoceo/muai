@@ -26,7 +26,7 @@ async def _seed(get_session, **over) -> EventRow:
         # chat_kind=private → одиночный путь. Групповые telegram-события
         # уходят в батч-ветку (см. group_ids в process_pending) и разбираются
         # другим вызовом — для проверки записи статусов это лишний слой.
-        "category": "private", "content_text": "Игорь работает в Sintegrum",
+        "category": "private", "content_text": "Игорь работает в Sintegrum тимлидом с весны",
         "occurred_at": datetime(2026, 9, 1, 10, 0), "triage_status": "processing",
         "triage_started_at": datetime(2026, 9, 1, 10, 0, 5),
         "metadata_": {"chat_kind": "private", "owner_participates": True},
@@ -138,6 +138,33 @@ async def test_channel_post_never_reaches_rel_extract(sqlite_db, monkeypatch):
     await worker.process_pending()
 
     assert not bl._bg_tasks
+
+
+@pytest.mark.parametrize("over", [
+    # Транскрипт разговора с ассистентом: 3776 кандидатов за 30 дней → 10
+    # событий со связями, все выдуманные («Дима works_at GitHub»).
+    {"source": "claude_chat", "source_event_id": "cc:1", "metadata_": {}},
+    # Нет ни одного слова про отношения — модель возвращала [] (замер 2026-09-13).
+    {"content_text": "Киев под атакой БПЛА, оставайтесь в укрытиях до отбоя"},
+    # Уведомление JIRA: «Ольга Крячко (JIRA) works_at Artem Belov».
+    {"source": "gmail", "source_event_id": "gm:1",
+     "metadata_": {"from": '"Olga Kryachko (JIRA)" <jira@itstep.atlassian.net>'}},
+])
+@pytest.mark.asyncio
+async def test_rel_gate_skips_events_without_relations(sqlite_db, monkeypatch, caplog, over):
+    """Гейт до LLM: такие события раньше жгли ~855 вызовов в неделю впустую,
+    и отсев виден в логе счётчиком, а не молча."""
+    row = await _seed(sqlite_db, **over)
+    _wire(monkeypatch, row,
+          result=(row.id, "done", {"importance": 95, "nature": "world_event"}, None))
+    monkeypatch.setattr(worker, "_safe_rel_extract", AsyncMock())
+    bl._bg_tasks.clear()
+
+    with caplog.at_level("INFO"):
+        await worker.process_pending()
+
+    assert not bl._bg_tasks
+    assert "отсеяно гейтом" in caplog.text
 
 
 @pytest.mark.parametrize(("source", "nature"), [

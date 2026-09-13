@@ -183,7 +183,7 @@ min_own_messages=…)`; `should_recognize_media` — та же проверка 
 
 Отфильтрованное всё равно попадает в мозг: событие сохраняется с заглушкой,
 причина пишется в `media_skip_reason`, а признак участия — в
-`owner_participates` (его же читает `should_extract_relations`, чтобы не
+`owner_participates` (его же читает `should_extract_relations` из `graph/rel_policy.py`, чтобы не
 строить граф связей по чужой публичной болтовне).
 
 ### Почему участие, а не список названий (2026-08-27)
