@@ -160,6 +160,74 @@ async def test_search_fts_branch_runs_on_russian_config(pg_db, monkeypatch):
     assert ids["s1"] in found, "русский стеммер не нашёл прямое совпадение"
 
 
+async def _fts_found(texts: dict[str, str], ts_query: str) -> list[str]:
+    """source_event_id строк, отобранных FTS-веткой retrieval, в её порядке."""
+    from brain_search import retrieval
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models import EventRow
+
+    now = utc_naive_now()
+    async with get_session() as s:
+        # разное время: равный ts_rank (0.0608 у r1 и r3) рвётся по occurred_at
+        for i, (sid, body) in enumerate(texts.items()):
+            s.add(EventRow(source="gmail", source_event_id=sid, content_text=body,
+                           occurred_at=now - timedelta(minutes=i), received_at=now,
+                           triage_status="done"))
+    found = await retrieval.fetch_candidates(
+        ts_query=ts_query, acc_words=[], time_range=None, project=None,
+        q_vec=None, limit=50)
+    async with get_session() as s:
+        from sqlalchemy import select
+        by_id = {r.id: r.source_event_id
+                 for r in (await s.execute(select(EventRow))).scalars().all()}
+    return [by_id[r[0]] for r in found.rows]
+
+
+@pytest.mark.asyncio
+async def test_fts_english_morphology(pg_db):
+    got = await _fts_found({"en": "Your payment was received", "x": "погода"},
+                           "payments:*")
+    assert got == ["en"]
+
+
+@pytest.mark.asyncio
+async def test_fts_indonesian_morphology(pg_db):
+    """`russian` не стеммит индонезийский: pembayaran → bayar даёт только
+    вторая конфигурация (fts.FTS_CONFIGS)."""
+    got = await _fts_found({"id": "Orang tua sudah membayar uang sekolah",
+                            "x": "Прогноз погоды"}, "pembayaran:*")
+    assert got == ["id"]
+
+
+@pytest.mark.asyncio
+async def test_fts_ukrainian_exact_token(pg_db):
+    got = await _fts_found({"uk": "Зустріч перенесли на п'ятницю", "x": "погода"},
+                           "зустріч:*")
+    assert got == ["uk"]
+
+
+@pytest.mark.asyncio
+async def test_fts_russian_stemming_and_order_unchanged(pg_db):
+    """Русские совпадения ранжируются ровно как при одной `russian`:
+    сравниваем порядок с эталонным ORDER BY ts_rank(russian)."""
+    from sqlalchemy import text
+    from vera_shared.db.engine import get_session
+
+    texts = {"r1": "Оплатой занялся бухгалтер",
+             "r2": "оплата оплаты оплатой — снова про оплату счёта",
+             "r3": "Счёт на оплату за сентябрь и ещё немного слов вокруг",
+             "x": "Прогноз погоды"}
+    got = await _fts_found(texts, "оплата:*")
+    async with get_session() as s:
+        ref = (await s.execute(text(
+            "SELECT source_event_id FROM events"
+            " WHERE to_tsvector('russian', content_text) @@ to_tsquery('russian', :q)"
+            " ORDER BY ts_rank(to_tsvector('russian', content_text),"
+            " to_tsquery('russian', :q)) DESC, occurred_at DESC"), {"q": "оплата:*"})).scalars().all()
+    assert set(got) == {"r1", "r2", "r3"}
+    assert got == list(ref)
+
+
 @pytest.mark.asyncio
 async def test_search_time_window_branch(pg_db, monkeypatch):
     """Темпоральная ветка: события вне окна не попадают в выдачу."""

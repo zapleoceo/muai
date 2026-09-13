@@ -406,7 +406,68 @@ processing is paused/paced.
 `services/brain-search/src/brain_search/app.py`
 
 - `POST /search` — entry point for the Telegram bot and dashboard.
-- Hybrid retrieval: FTS (`to_tsvector('russian')` + ts_rank) AND cosine similarity over Voyage embeddings.
+- Hybrid retrieval: FTS (`russian` OR `indonesian`, ts_rank — see below) AND cosine similarity over Voyage embeddings.
+
+### Полнотекст на нескольких языках (`fts.py`, миграция 031)
+
+Все FTS-выражения — в `brain_search/fts.py`: `FTS_CONFIGS`,
+`build_ts_query` (слова → `w1:* | w2:*`, общая для `app._ts_query` и
+агентского `search_events`), `fts_match_sql` (OR по конфигурациям) и
+`fts_rank_sql`. retrieval.py и agent.py только подставляют их.
+
+**Проблема (замер 2026-09-13).** Поиск стоял на одной `russian`. В базе 445
+тыс. событий: ~115 тыс. с украинскими буквами, ~31 тыс. без кириллицы
+(IT STEP Jakarta, EN/ID). На 5% выборке (22 тыс.) выяснилось:
+
+| слово | `russian` | `indonesian` |
+|---|---|---|
+| pendaftaran:* | 2 | 15 |
+| pembayaran:* | 4 | 9 |
+| зустріч:* | 55 | 55 |
+
+Английский `russian` стеммит сама — латиница там идёт в `english_stem`
+(payments → payment), стоп-слова английские тоже. Украинский ловится
+префиксом русского стема. Не ловится индонезийский.
+
+**Решение.** Вторая конфигурация `indonesian` (snowball, есть в pg16):
+латиницу стеммит по-индонезийски (membayar/pembayaran → bayar), кириллицу
+оставляет точным токеном — то есть для украинского это `simple` (лексем на
+выборке 991 449 против 991 559 у `simple`). Hunspell uk в образе
+`pgvector/pgvector:pg16` нет, так что точный токен — лучшее доступное.
+
+Рассмотрено и отвергнуто:
+- **(а) объединённый вектор `russian || indonesian (|| simple)`** в одном
+  индексе — лексем 1.58× от русского (~196 МБ против 124 МБ), индекс
+  строился бы заново рядом со старым; `simple` сверх `indonesian` ничего не
+  добавляет.
+- **(б) язык события + per-event конфигурация** — нужна колонка с языком и
+  бэкфил по горячей таблице (700 МБ heap), а смешанные письма (RU+EN) всё
+  равно теряли бы вторую половину.
+- **generated column** — переписывает таблицу; только индекс по выражению.
+
+**Ранжирование.** `COALESCE(NULLIF(ts_rank(russian), 0), ts_rank(indonesian), 0)`:
+запрос — всегда OR префиксов, и несовпавший документ даёт ровно 0 (проверено
+на проде), поэтому строки, которые `russian` находила раньше, получают тот
+же rank и тот же взаимный порядок (интеграционный тест сравнивает с
+эталонным `ORDER BY ts_rank(russian)`). Найденные только `indonesian`
+встают по своему rank — и ранги двух конфигураций между собой **не
+откалиброваны**: индонезийское совпадение может встать выше слабого русского
+в смешанной выдаче. Это цена покрытия второго языка, а не нарушение
+инварианта (порядок внутри русских совпадений сохранён); окончательный порядок
+всё равно задаёт скоринг brain-search поверх кандидатов, а не голый `ts_rank`. У `indonesian` в Postgres нет стоп-листа —
+английские/индонезийские служебные слова (`the`, `yang`, `dan`…)
+выкидываются в `build_ts_query`, иначе `the:*` матчил бы почти все
+английские письма.
+
+**Индексы.** `ix_events_fts_russian` (стоял на проде давно, ставился руками;
+031 фиксирует его для чистых баз) и новый `ix_events_fts_indonesian`, оба
+GIN по выражению, план — `BitmapOr`. Выражение в запросе обязано совпадать
+с индексом дословно (тест `test_search_fts.py` сверяет с файлом миграции).
+Замер до: FTS-запрос `оплата:* | счет:*` по индексу — 3.5 с (14 тыс.
+кандидатов, основное время — heap и пересчёт to_tsvector для ts_rank);
+любой другой конфигурации без индекса — parallel seq scan 7.7 с. После —
+ожидается BitmapOr, время того же порядка + доля строк второй
+конфигурации. Накат — `deploy-ops.md`, «Многоязычный полнотекст».
 - ReAct agent loop (`agent.py`):
   - LLM emits strict JSON each step: `{action: 'tool', name, params}` or `{action: 'answer', text}`.
   - Tools available: `search_events`, `memory.remember`, plus everything from `ingestor-telegram` via `/tools/spec` HTTP discovery.

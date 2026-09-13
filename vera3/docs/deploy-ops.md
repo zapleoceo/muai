@@ -704,6 +704,39 @@ systemd-юнитами, поэтому падающий юнит для него
 8. `DROP COLUMN embedding` (JSONB) — отдельной миграцией, не раньше чем
    через неделю спокойной работы.
 
+## Многоязычный полнотекст: накат 031
+
+Что и почему — `brain.md`, «Полнотекст на нескольких языках». Порядок
+**обратный** pgvector: сначала индекс, потом код. Новый код ищет
+`russian OR indonesian`; без второго индекса вся FTS-выборка уходит в
+parallel seq scan (замер 13.09: 7.7 с на одну конфигурацию против 3.5 с по
+индексу).
+
+0. **Проверки.** `df -h /` — нужно ≥ 1 ГБ (индекс ~150 МБ + WAL);
+   `SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid` — пусто
+   (иначе `apply_migration.sh` откажется писать учёт по чужой причине).
+1. **Миграция:** `scripts/apply_migration.sh infra/migrations/031_events_fts_multilingual.sql`.
+   `ix_events_fts_russian` уже есть — no-op. `ix_events_fts_indonesian` —
+   `CONCURRENTLY`, запись в `events` не блокируется, ждёт старых транзакций
+   (длинная транзакция триажа задержит старт — это не зависание).
+   Оценка: to_tsvector на 445 тыс. строк ~1 мин CPU на проход, два прохода
+   + сортировка GIN при `maintenance_work_mem` 64 МБ (сливает на диск, в
+   `mem_limit` 768m укладывается) — **3–10 мин**. Размер ~150 МБ
+   (`SELECT pg_size_pretty(pg_relation_size('ix_events_fts_indonesian'))`).
+   Поток NOTICE «word is too long to be indexed» — норма (base64 в письмах).
+   Упало/прервано → `DROP INDEX CONCURRENTLY IF EXISTS ix_events_fts_indonesian`
+   и шаг 1 заново.
+2. **Проверка плана** (только чтение): `BEGIN READ ONLY; EXPLAIN SELECT id
+   FROM events WHERE (to_tsvector('russian', content_text) @@
+   to_tsquery('russian','pembayaran:*') OR to_tsvector('indonesian',
+   content_text) @@ to_tsquery('indonesian','pembayaran:*')); ROLLBACK;` —
+   ожидается `BitmapOr` над `Bitmap Index Scan on ix_events_fts_russian` и
+   `… ix_events_fts_indonesian`, не `Seq Scan`.
+3. **Деплой кода** обычным мерджем. Рестарт не нужен сверх деплоя.
+   Откат кода — revert; откат индекса — `DROP INDEX CONCURRENTLY
+   ix_events_fts_indonesian` и `DELETE FROM schema_migrations WHERE
+   version='031_events_fts_multilingual'`, **только после** отката кода.
+
 ## Backup
 
 Ночной cron `30 3 * * * /usr/local/bin/vera-backup.sh` (исходник —
