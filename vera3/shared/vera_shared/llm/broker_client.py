@@ -57,6 +57,14 @@ class BrokerJobGone(BrokerCallFailed):
         self.job_id = job_id
 
 
+class BrokerJobErrored(BrokerCallFailed):
+    """The job reached the terminal `error` state on the broker."""
+
+    def __init__(self, job_id: int | str, error: object) -> None:
+        super().__init__(f"job {job_id} failed: {error}")
+        self.job_id = job_id
+
+
 # Shared httpx client — TLS handshake reuse for performance
 _http: httpx.AsyncClient | None = None
 _http_lock = asyncio.Lock()
@@ -195,13 +203,17 @@ async def chat_async_via_broker(
     # шлём заново — иначе модель считает то же самое второй раз (12.09.2026:
     # три vision-джобы по 25 минут в очереди брокера, все три пересчитаны).
     # 404 = брокер уже удалил результат (ретенция) — тогда честная переотправка.
+    # Так же и `error`: возобновлять стоит только живую джобу. Упавшая
+    # старая джоба отдавала бы свой давний «no provider» мгновенно и на КАЖДОЙ
+    # попытке — 13.09.2026 одна такая (484699) дважды открыла circuit vision
+    # на 30 минут для всех фото. Её провал уже учтён, вердикт выносит свежая.
     if resume_job_id is not None:
         try:
             return await _poll_job(c, resume_job_id, ceiling=ceiling, poll_after_s=2.0,
                                    workflow=workflow, event_id=event_id,
                                    capability=capability)
-        except BrokerJobGone:
-            log.info("job %s gone on broker — resubmitting", resume_job_id)
+        except (BrokerJobGone, BrokerJobErrored) as e:
+            log.info("job %s not resumable (%s) — resubmitting", resume_job_id, e)
 
     try:
         r = await c.post(
@@ -242,7 +254,7 @@ async def _poll_job(c: httpx.AsyncClient, job_id: int | str, *, ceiling: float,
             poll_after_s = float(data.get("poll_after_s") or poll_after_s)
             continue
         if status == "error":
-            raise BrokerCallFailed(f"job {job_id} failed: {data.get('error')}")
+            raise BrokerJobErrored(job_id, data.get("error"))
         if status != "done":
             # Malformed/unexpected response (bad JSON, new status we don't
             # know about) must NOT be treated as a silent success with an

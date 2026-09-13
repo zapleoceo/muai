@@ -224,7 +224,10 @@ async def _on_failure(event_id: int, meta: dict, err: str,
             SET triage_error = :err,
                 metadata = jsonb_set(
                   jsonb_set(
-                    COALESCE(metadata, '{}'::jsonb) || CAST(:carry AS jsonb),
+                    -- media_job_id живёт, пока жива джоба брокера: carry
+                    -- приносит его заново только для «still pending», любой
+                    -- другой провал старую ссылку стирает.
+                    (COALESCE(metadata, '{}'::jsonb) - 'media_job_id') || CAST(:carry AS jsonb),
                     '{media_retry_count}', to_jsonb(CAST(:cnt AS integer))
                   ),
                   '{media_next_retry_at}',
