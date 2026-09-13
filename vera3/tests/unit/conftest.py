@@ -41,6 +41,7 @@ async def sqlite_db(tmp_path):
     Yields get_session."""
     import vera_shared.db.engine as engine_mod
     from vera_shared.db import models, models_graph, models_sources  # noqa: F401
+    from vera_shared.db.chunk_vectors import forget_chunk_capability
     from vera_shared.db.engine import Base, get_session, init_engine
     from vera_shared.db.vectors import forget_capability
     from vera_shared.llm.circuit import forget_cooldowns
@@ -51,6 +52,7 @@ async def sqlite_db(tmp_path):
     # ветку, которой на SQLite нет вовсе. Новая база — новое состояние.
     forget_cooldowns()
     forget_capability()
+    forget_chunk_capability()
 
     if engine_mod._engine is not None:
         import contextlib

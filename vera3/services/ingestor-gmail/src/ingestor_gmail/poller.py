@@ -21,6 +21,7 @@ from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import GmailAccountRow
 from vera_shared.graph.identity import entity_kind_for_email
 from vera_shared.ingest import AuthorExtractor, insert_events, sync_author_entities
+from vera_shared.text_chunks import clip_content
 from vera_shared.timeutil import utc_naive_now
 
 log = logging.getLogger("gmail")
@@ -249,7 +250,7 @@ def _format_event(account_email: str, msg: dict) -> dict[str, Any]:
     direction = "sent" if account_email.lower() in from_.lower() else "received"
     author_role = "self" if direction == "sent" else "counterparty"
     author_label = "Я" if author_role == "self" else (from_ or "(unknown)")
-    body = _extract_text(msg.get("payload", {}))[:8000]
+    body = clip_content(_extract_text(msg.get("payload", {})))
 
     content = (
         f"Author: {author_label} [{author_role}]\n"

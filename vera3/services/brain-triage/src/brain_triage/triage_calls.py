@@ -14,6 +14,7 @@ from typing import Any
 from vera_shared.db.models import EventRow
 from vera_shared.llm.circuit import llm_cooldown_remaining_s
 from vera_shared.llm.client import chat_async, embed
+from vera_shared.text_chunks import llm_excerpt
 from vera_shared.timeutil import utc_naive_now
 
 from brain_triage.postprocess import postprocess_triage
@@ -59,7 +60,7 @@ def _parse_json_object(response_text: str) -> dict[str, Any]:
 
 async def triage_one(event_row: EventRow) -> dict[str, Any] | None:
     """Триаж одного события. Возвращает metadata."""
-    content = (event_row.content_text or "")[:8000]
+    content = llm_excerpt(event_row.content_text or "")
     prompt = TRIAGE_PROMPT_TEMPLATE.format(
         source=event_row.source,
         account=event_row.account or "—",

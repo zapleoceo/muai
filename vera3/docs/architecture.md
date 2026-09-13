@@ -42,7 +42,7 @@
 
 | Container | Purpose |
 |---|---|
-| `vera3-postgres` | All state. pgvector 0.8.2: embeddings as `halfvec(1024)` (migration 030) next to the legacy JSONB column; ANN via HNSW over binary quantization, rerank by halfvec (see `brain.md`). |
+| `vera3-postgres` | All state. pgvector 0.8.2: embeddings as `halfvec(1024)` (migration 030) next to the legacy JSONB column; ANN via HNSW over binary quantization, rerank by halfvec (see `brain.md`). Long events (>4000 chars) also get chunk vectors in `event_chunk_embeddings` (migration 032, same index shape); search takes the best of event and chunk cosine per event. |
 | `vera3-gateway` | `POST /event/<source>` — single ingest endpoint with X-Internal-Secret |
 | `vera3-brain-triage-N` | Scalable workers (`docker compose up -d --scale brain-triage=3`). SELECT FOR UPDATE SKIP LOCKED → atomic claim. |
 | `vera3-brain-search` | FastAPI `/search` — ReAct agent loop, calls AIbroker. |

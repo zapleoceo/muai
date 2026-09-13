@@ -30,6 +30,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
+from vera_shared.text_chunks import clip_content
 
 from gateway.auth import check_internal_secret
 from gateway.voice_distill import distill
@@ -163,7 +164,7 @@ async def ingest_voice_session(
                 source_event_id=src_id,
                 account="laptop",
                 category="conversation",
-                content_text=body_text(distilled, body.app, body.window_title)[:8000],
+                content_text=clip_content(body_text(distilled, body.app, body.window_title)),
                 # Дословная стенограмма — рядом с событием, но НЕ в content_text:
                 # вектор строится только по выжимке (brain-triage/worker.py), и
                 # сотня обрывков «ага, давай» не должна перебивать её в поиске.

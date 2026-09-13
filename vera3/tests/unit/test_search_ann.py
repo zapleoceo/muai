@@ -92,7 +92,7 @@ def test_similarity_column_goes_last_so_positions_hold():
 
 def test_ann_rows_have_the_primary_shape():
     sql = str(ann.ann_rows_sql("TRUE"))
-    cols = sql.split("FROM ann")[0]
+    cols = sql.split("FROM best JOIN")[0].split("SELECT events.id")[1]
     for name in ("NULL AS embedding", "0.0 AS rank", "events.account", "AS vec_sim"):
         assert name in cols
 
@@ -117,11 +117,34 @@ def test_semantic_filter_keeps_project_and_window_but_not_text():
 
 
 def test_merge_keeps_primary_and_adds_only_new_ids():
-    primary = [_row(1), _row(2)]
+    primary = [_row(1, vec_sim=0.5), _row(2, vec_sim=0.95)]
     semantic = [_row(2, vec_sim=0.9), _row(3, vec_sim=0.8)]
     merged = ann.merge_candidates(primary, semantic)
     assert [r[0] for r in merged] == [1, 2, 3]
     assert merged[1] is primary[1]
+
+
+def test_merge_lifts_similarity_found_through_a_chunk():
+    """Длинное письмо нашлось полнотекстом с косинусом всего письма 0.3, а ANN
+    нашёл его же через кусок с 0.85 — событие одно, сходство лучшее, а
+    ts_rank/account основной выборки на своих позициях."""
+    primary = [_row(1, rank=0.7, account="a@x", vec_sim=0.3)]
+    merged = ann.merge_candidates(primary, [_row(1, vec_sim=0.85)])
+    assert len(merged) == 1
+    assert merged[0].vec_sim == 0.85
+    assert merged[0][7] == 0.7 and merged[0][8] == "a@x"
+    assert row_similarity(merged[0], [1.0]) == 0.85
+
+
+def test_ann_sql_unions_chunks_and_keeps_one_row_per_event():
+    plain = str(ann.ann_rows_sql("TRUE"))
+    assert "event_chunk_embeddings" not in plain
+    sql = str(ann.ann_rows_sql("source <> 'x'", with_chunks=True))
+    assert "UNION ALL" in sql and "FROM event_chunk_embeddings ee" in sql
+    assert "MAX(sim)" in sql and "GROUP BY event_id" in sql
+    # кусок ищется тем же выражением, что в его индексе
+    assert "(binary_quantize(ee.embedding_vec)::bit(1024)) <~>" in sql.split("UNION ALL")[1]
+    assert sql.rstrip().endswith("LIMIT :ann_top")
 
 
 class _Ctx:

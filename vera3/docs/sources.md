@@ -65,6 +65,17 @@ Each source has its own container and writes to the same `events` table.
 - Avatar backfill: `avatar_backfill.run_avatar_backfill(client)` runs as a slow background task on the same session — downloads entity profile photos (highest-degree first) into `entity_avatars` for the graph/dedup UI. Anti-ban: ~1 photo / `AVATAR_FETCH_INTERVAL_S` (default 4s), backs off on FloodWait, pauses with the owner's backfill switch (`is_backfill_paused`), and marks unresolvable/photoless entities `missing` so they're never retried. Env knobs: `AVATAR_BACKFILL_ENABLED`, `AVATAR_BATCH`, `AVATAR_FETCH_INTERVAL_S`, `AVATAR_IDLE_SLEEP_S`.
 - History backfill: a one-shot queue walked every dialog back to 2025-06-01 (6067 dialogs, ~323k messages), completed 2026-06-29. The `backfill_jobs` queue, its worker, the seeder, and the dashboard `/backfill` page were retired afterwards (migration 009). Live ingestion covers everything since; to backfill again, re-apply migration 007 and restore the worker from git history.
 
+## Потолок длины текста (gmail, voice, claude_chat)
+
+До 2026-09-13 эти источники резали `content_text` до 8000 символов на входе:
+за 30 дней 163 письма и 95 сессий Claude у потолка, хвост потерян навсегда
+(восстановить нечем — его нет в базе). Теперь потолок один на всех —
+`text_chunks.clip_content`, 32 000 символов (`MAX_CONTENT_CHARS`); LLM
+триажа по-прежнему видит ≤8000 (голова + хвост), длинные события получают
+векторы кусков. Подробности и цифры — `brain.md`, «Длинные тексты».
+telegram/slack/trello свои `[:8000]` сохранили: у них до потолка не доходит
+(max на проде 5.8 тыс.).
+
 ## gmail
 
 - Container: `vera3-ingestor-gmail`

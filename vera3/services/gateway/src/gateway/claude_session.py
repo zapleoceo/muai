@@ -27,6 +27,7 @@ from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import ClaudeSessionQueueRow, EventRow
+from vera_shared.text_chunks import clip_content
 from vera_shared.timeutil import utc_naive_now
 
 from gateway.auth import check_internal_secret
@@ -35,7 +36,6 @@ log = logging.getLogger(__name__)
 router = APIRouter()
 
 SOURCE = "claude_chat"
-MAX_BODY = 8000
 
 
 class Turn(BaseModel):
@@ -118,8 +118,8 @@ async def store_summary(row: ClaudeSessionQueueRow, distilled: dict[str, Any],
         **report,
     }
     fresh = {
-        EventRow.content_text: body_text(distilled, row.project_dir,
-                                         row.git_branch)[:MAX_BODY],
+        EventRow.content_text: clip_content(body_text(distilled, row.project_dir,
+                                                      row.git_branch)),
         EventRow.metadata_: metadata,
         EventRow.occurred_at: row.started_at,
         EventRow.triage_status: "pending",
