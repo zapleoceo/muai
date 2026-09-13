@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy import text
 from vera_shared.db.engine import get_session
 
+from dashboard.events_filters import source_options, status_options
 from dashboard.render import (
     _render,
     esc,
@@ -17,6 +18,7 @@ from dashboard.render import (
     owner_or_redirect,
     row_list,
 )
+from dashboard.stats import get_stats
 
 router = APIRouter()
 
@@ -36,7 +38,7 @@ EVENTS_COLUMN_HINTS: dict[str, str] = {
     "id": "Внутренний ID события в базе",
     "tr": "Статус триажа — обработки события ИИ. Наведите на значок в строке для деталей",
     "imp": "Важность события, 0–100 — оценивает ИИ при триаже. «—» = ещё не оценено",
-    "src": "Источник события: telegram / gmail / instagram / manual / monitor и т.д.",
+    "src": "Источник события (events.source): telegram, gmail, slack, voice — слушатель, и т.д.",
     "account": "Аккаунт, бот или ящик, через который пришло событие",
     "time": "Когда событие произошло (occurred_at)",
     "preview": "Первые символы текста события",
@@ -117,21 +119,11 @@ async def events_page(request: Request, limit: int = Query(100, ge=1, le=500),  
             f'<td class="mute">{tokens}</td><td class="mute">{cost}</td></tr>'
         )
 
+    st = await get_stats()
     filters = f"""
       <form method="get" style="display:flex;gap:8px;margin-bottom:14px">
-        <select name="source">
-          <option value="">— все источники —</option>
-          <option value="gmail" {'selected' if source=='gmail' else ''}>gmail</option>
-          <option value="telegram" {'selected' if source=='telegram' else ''}>telegram</option>
-          <option value="instagram" {'selected' if source=='instagram' else ''}>instagram</option>
-          <option value="monitor" {'selected' if source=='monitor' else ''}>monitor</option>
-        </select>
-        <select name="status">
-          <option value="">— любой статус —</option>
-          <option value="done" {'selected' if status=='done' else ''}>done</option>
-          <option value="pending" {'selected' if status=='pending' else ''}>pending</option>
-          <option value="error" {'selected' if status=='error' else ''}>error</option>
-        </select>
+        <select name="source">{source_options(st["sources_all"], source)}</select>
+        <select name="status">{status_options(TRIAGE_STATUS_INFO, status)}</select>
         <input type="number" name="limit" value="{limit}" min="1" max="500" style="width:80px">
         <button type="submit">фильтр</button>
       </form>

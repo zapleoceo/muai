@@ -79,7 +79,7 @@ CATALOG: tuple[Source, ...] = (
         key="voice", title="Разговоры у ноутбука", icon="🎙",
         how="vera-listener на ноутбуке → POST /v1/voice/session",
         detail="voice",
-        note="В мозг уходит выжимка, дословная расшифровка остаётся на ноутбуке.",
+        note="В мозг уходит выжимка и дословная расшифровка — её видно в карточке события.",
     ),
     Source(
         key="vera_chat", title="Диалог с Верой", icon="💭",
