@@ -60,6 +60,10 @@ def _listener(tmp_path, segments, embedder, **over) -> Listener:
     listener = Listener(config)
     listener.transcriber = _Transcriber(segments)
     listener._embedder = embedder
+    # Обрезку тишины выключаем: куски здесь несут номер голоса постоянным
+    # уровнем, а не речью, и silero честно выбросил бы их целиком. Саму
+    # обрезку проверяет `test_speaker_speech.py` — тут проверяется раздача имён.
+    listener._trim = lambda audio: audio
     return listener
 
 

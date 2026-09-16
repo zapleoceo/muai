@@ -29,6 +29,7 @@ from vera_listener.speakers import (
     OpenVinoSpeakerEmbedder,
     SpeakerSession,
     VoiceprintRegistry,
+    keep_speech,
 )
 from vera_listener.status import DEAF, IDLE, TALKING, Status
 from vera_listener.transcriber import Transcriber, pcm_to_float, slice_seconds
@@ -61,6 +62,7 @@ class Listener:
         # жизни слушателя, сессия опознания — своя на каждый разговор.
         self.voiceprints = VoiceprintRegistry(config.voiceprints_file)
         self._embedder = OpenVinoSpeakerEmbedder(config.speaker_model_dir)
+        self._trim = keep_speech
         self._speakers: SpeakerSession | None = None
         self.segmenter = Segmenter(silence_timeout_s=config.silence_timeout_s,
                                    max_session_s=config.max_session_s)
@@ -163,7 +165,8 @@ class Listener:
         self._meeting = (meeting_id, part)
         # Своя сессия опознания на каждый разговор: отпечатки одного
         # созвона не должны смешиваться с соседним.
-        self._speakers = SpeakerSession(self._embedder, self.voiceprints)
+        self._speakers = SpeakerSession(self._embedder, self.voiceprints,
+                                        trim=self._trim)
         self.session = self.outbox.start(
             session_id, self._session_wall.isoformat(),
             app=session.app, window_title=session.window_title,

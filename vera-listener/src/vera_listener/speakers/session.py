@@ -19,6 +19,7 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 
 import numpy as np
 
@@ -30,6 +31,7 @@ from vera_listener.speakers.cluster import (
 )
 from vera_listener.speakers.embedder import SpeakerEmbedder
 from vera_listener.speakers.registry import VoiceprintRegistry
+from vera_listener.speakers.speech import keep_speech
 
 log = logging.getLogger("listener.speakers")
 
@@ -42,9 +44,11 @@ class SpeakerSession:
 
     def __init__(self, embedder: SpeakerEmbedder, registry: VoiceprintRegistry, *,
                  threshold: float = MERGE_THRESHOLD,
-                 max_speakers: int = MAX_SPEAKERS):
+                 max_speakers: int = MAX_SPEAKERS,
+                 trim: Callable[[np.ndarray], np.ndarray] = keep_speech):
         self._embedder = embedder
         self._registry = registry
+        self._trim = trim
         self._threshold = threshold
         self._max_speakers = max_speakers
         self._keys: list[float] = []
@@ -57,7 +61,14 @@ class SpeakerSession:
         ценнее любой разметки говорящих, поэтому ошибка гасится здесь.
         """
         try:
-            vector = self._embedder.embed(audio)
+            # Тишину из куска убираем ДО модели: границы реплики whisper даёт
+            # с запасом, а отпечаток усредняется по всему куску — см. замер в
+            # `speech.py`. Порог длины тогда мерит речь, а не паузы вокруг неё.
+            #
+            # Обрезка внедряется, а не зашита, по той же причине, что и сам
+            # опознаватель: она зовёт silero, и тесту наименования незачем
+            # тащить за собой распознавание речи, чтобы проверить раздачу имён.
+            vector = self._embedder.embed(self._trim(audio))
         except Exception as e:                          # noqa: BLE001
             log.warning("отпечаток голоса не снялся (%s) — реплика без имени",
                         type(e).__name__)
