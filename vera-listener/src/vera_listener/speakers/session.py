@@ -10,9 +10,17 @@
 1. **Знакомый отпечаток** — этот голос уже звучал в разговоре, где имя было
    известно из заголовка окна.
 2. **Заголовок окна один на один** — Slack и Telegram называют собеседника.
-   Берём, только если голос в разговоре ровно один: заголовок обещает
-   один-на-один, но если голосов несколько, обещание нарушено, и приписывать
-   имя наугад нельзя.
+   Здесь важно, ПОДТВЕРДИЛО ли приложение личку:
+
+   * Подтвердило (Slack) — имя ставится всем репликам, сколько бы кластеров
+     ни насчиталось. До 16.09 было наоборот («голосов много — значит обещание
+     нарушено»), и правило снято по данным: на живой речи кластеризация дробит
+     ОДНОГО человека, поэтому «кластеров много» перестало быть признаком того,
+     что людей много. Отступаем, только если узнаны два РАЗНЫХ знакомых
+     голоса — это уже противоречие, а не шум.
+   * Не подтвердило (Telegram) — имя только когда голос действительно один.
+     Форма заголовка звонка личку не доказывает: среди реальных заголовков
+     есть «General @ …», то есть групповой чат.
 3. **Порядковый номер** — «Собеседник 1». Не поражение, а честный ответ:
    реплики разделены по голосам, просто имя взять неоткуда.
 """
@@ -20,13 +28,16 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Callable
+from pathlib import Path
 
 import numpy as np
 
 from vera_listener.counterpart import Counterpart
+from vera_listener.speakers import journal
 from vera_listener.speakers.cluster import (
     MAX_SPEAKERS,
     MERGE_THRESHOLD,
+    Cluster,
     cluster_embeddings,
 )
 from vera_listener.speakers.embedder import SpeakerEmbedder
@@ -45,10 +56,12 @@ class SpeakerSession:
     def __init__(self, embedder: SpeakerEmbedder, registry: VoiceprintRegistry, *,
                  threshold: float = MERGE_THRESHOLD,
                  max_speakers: int = MAX_SPEAKERS,
-                 trim: Callable[[np.ndarray], np.ndarray] = keep_speech):
+                 trim: Callable[[np.ndarray], np.ndarray] = keep_speech,
+                 journal_dir: Path | None = None):
         self._embedder = embedder
         self._registry = registry
         self._trim = trim
+        self._journal_dir = journal_dir
         self._threshold = threshold
         self._max_speakers = max_speakers
         self._keys: list[float] = []
@@ -78,13 +91,26 @@ class SpeakerSession:
         self._keys.append(round(float(at), 2))
         self._embeddings.append(vector)
 
-    def resolve(self, counterpart: Counterpart | None = None) -> dict[float, str]:
+    def resolve(self, counterpart: Counterpart | None = None,
+                app: str | None = None) -> dict[float, str]:
         """Кластеризовать и назвать. → {смещение реплики: имя говорящего}."""
         if not self._embeddings:
             return {}
 
         clusters = cluster_embeddings(self._embeddings, threshold=self._threshold,
                                       max_speakers=self._max_speakers)
+
+        # Приложение подтвердило личку — значит на дорожке собеседника ОДИН
+        # человек, сколько бы кластеров ни насчиталось. Спорить с этим
+        # кластеризации нечем: на живой речи она дробит одного на нескольких
+        # (16.09, разговор один на один: восемь «собеседников», сорок реплик
+        # в главном кластере и семь одиночек — и все семь оказались короткими
+        # фразами того же человека).
+        if counterpart is not None and counterpart.is_direct:
+            single = self._one_person(clusters, counterpart, app)
+            if single is not None:
+                return single
+
         alone = len(clusters) == 1
         names: list[str] = []
         taken: set[str] = set()
@@ -114,12 +140,67 @@ class SpeakerSession:
             unnamed += 1
             names.append(f"{UNKNOWN_PREFIX} {unnamed}")
 
+        return self._finish(clusters, names, counterpart, app)
+
+    def _one_person(self, clusters: list[Cluster], counterpart: Counterpart,
+                    app: str | None) -> dict[float, str] | None:
+        """Все реплики — одному человеку. → разметка, или None если не вышло.
+
+        None означает «подтверждению приложения верить нельзя» и возвращает
+        разбор на общий путь с нумерацией.
+        """
+        # Отпечаток надёжнее заголовка и здесь: заголовок говорит, какое окно
+        # впереди, а отпечаток — чей это голос. Порог узнавания 0.72 высокий,
+        # поэтому совпадение с ним — сильное свидетельство.
+        recognised = [(len(c.members), name) for c in clusters
+                      if (name := self._registry.match(c.centroid))]
+
+        # Два РАЗНЫХ знакомых голоса в разговоре, который приложение считает
+        # личкой, — прямое противоречие: либо личка не личка (в хадл позвали
+        # третьего), либо одно из узнаваний ложное. В обоих случаях сводить
+        # всех к одному имени нельзя, и выбирать «по большинству» тоже:
+        # свидетельства спорят, а не дополняют друг друга. Отступаем.
+        if len({name for _, name in recognised}) > 1:
+            log.info("личка подтверждена приложением, но узнаны разные голоса "
+                     "(%s) — доверяем голосам, не заголовку",
+                     ", ".join(sorted({name for _, name in recognised})))
+            return None
+
+        # Имя самого крупного узнанного кластера: за ним больше всего речи.
+        # Имена здесь уже заведомо одинаковые, так что размер решает только
+        # порядок, а не исход.
+        name = max(recognised)[1] if recognised else counterpart.name
+
+        # Назвать и ЗАПОМНИТЬ — решения разной цены. Имя живёт один разговор и
+        # видно глазами; отпечаток уходит в постоянное хранилище, и ошибка в
+        # нём зовёт человека чужим именем годами. Поэтому запоминаем, только
+        # когда кластеризация САМА согласна, что голос один: иначе в центроид
+        # мог бы попасть второй человек, которого приложение не показало.
+        if len(clusters) == 1 and not recognised:
+            self._registry.remember(counterpart.name, clusters[0].centroid)
+            self._registry.save()
+        elif len(clusters) > 1:
+            log.info("личка подтверждена приложением: %d кластеров сведены к "
+                     "одному голосу (%s), отпечаток не запоминаем",
+                     len(clusters), name)
+        return self._finish(clusters, [name] * len(clusters), counterpart, app)
+
+    def _finish(self, clusters: list[Cluster], names: list[str],
+                counterpart: Counterpart | None,
+                app: str | None) -> dict[float, str]:
         mapping: dict[float, str] = {}
         for cluster, name in zip(clusters, names, strict=True):
             for member in cluster.members:
                 mapping[self._keys[member]] = name
 
-        log.info("голосов в разговоре: %d (%s)", len(clusters), ", ".join(names))
+        if self._journal_dir is not None:
+            journal.write(self._journal_dir, self._embeddings, self._keys, names,
+                          [list(c.members) for c in clusters],
+                          counterpart=counterpart.name if counterpart else None,
+                          app=app)
+
+        log.info("голосов в разговоре: %d (%s)", len(set(names)),
+                 ", ".join(dict.fromkeys(names)))
         return mapping
 
     def __len__(self) -> int:

@@ -63,6 +63,8 @@ class Listener:
         self.voiceprints = VoiceprintRegistry(config.voiceprints_file)
         self._embedder = OpenVinoSpeakerEmbedder(config.speaker_model_dir)
         self._trim = keep_speech
+        self._journal_dir = (config.voiceprint_journal_dir
+                             if config.voiceprint_journal else None)
         self._speakers: SpeakerSession | None = None
         self.segmenter = Segmenter(silence_timeout_s=config.silence_timeout_s,
                                    max_session_s=config.max_session_s)
@@ -166,7 +168,8 @@ class Listener:
         # Своя сессия опознания на каждый разговор: отпечатки одного
         # созвона не должны смешиваться с соседним.
         self._speakers = SpeakerSession(self._embedder, self.voiceprints,
-                                        trim=self._trim)
+                                        trim=self._trim,
+                                        journal_dir=self._journal_dir)
         self.session = self.outbox.start(
             session_id, self._session_wall.isoformat(),
             app=session.app, window_title=session.window_title,
@@ -311,7 +314,7 @@ class Listener:
             return 0
         who = counterpart(closed.session.app, closed.session.window_title)
         try:
-            names = speakers.resolve(who)
+            names = speakers.resolve(who, app=closed.session.app)
         except Exception as e:                          # noqa: BLE001
             # Разметка говорящих — надстройка над разговором. Текст уже
             # распознан и ценнее её: сбой не имеет права утащить сессию.
@@ -323,7 +326,18 @@ class Listener:
         # ОДИН, догадываться не о чем: других кандидатов нет. Когда их
         # несколько — оставляем без имени, приписать наугад хуже. Нашло ревью.
         distinct = set(names.values())
-        fallback = next(iter(distinct)) if len(distinct) == 1 else None
+        if distinct:
+            fallback = next(iter(distinct)) if len(distinct) == 1 else None
+        elif who is not None and who.is_direct:
+            # Отпечатков не набралось ВООБЩЕ — все реплики короче порога, шум,
+            # сбой модели. Но приложение подтвердило личку, и кто на том конце,
+            # известно без всякого звука. Промолчать здесь значило бы потерять
+            # имя ровно там, где сомнений в нём нет.
+            fallback = who.name
+            log.info("отпечатков не набралось ни одного — имя берём из "
+                     "заголовка подтверждённой лички (%s)", who.name)
+        else:
+            fallback = None
 
         named = missing = 0
         for utterance in utterances:

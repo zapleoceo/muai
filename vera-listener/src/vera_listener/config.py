@@ -98,6 +98,12 @@ class Config:
     #: не должен нести чужие имена в исходниках, это личный список владельца.
     glossary: tuple[str, ...] = ()
 
+    #: Копить ли векторы голосов для калибровки (`VERA_VOICEPRINT_JOURNAL=0`
+    #: выключает). По умолчанию включено: без настоящих записей пороги
+    #: опознания настраивать не на чем, и они уже дважды промахнулись на
+    #: синтетике. Но это биометрический след, поэтому рубильник есть.
+    voiceprint_journal: bool = True
+
     @property
     def queue_dir(self) -> Path:
         return self.root / "queue"
@@ -121,6 +127,21 @@ class Config:
         return self.model_dir / "speaker"
 
     @property
+    def voiceprint_journal_dir(self) -> Path:
+        """Векторы голосов прошедших разговоров — для калибровки, не для работы.
+
+        Пороги опознания дважды калибровались на синтезированных голосах и
+        дважды не выдержали живого созвона: у настоящей речи через кодек вся
+        шкала сходств едет вниз. Мерить надо на своих записях.
+
+        Здесь лежат ТОЛЬКО ВЕКТОРЫ, звука нет и не будет: 1 КБ на реплику,
+        около 150 КБ на разговор. Наружу не уходит ничего — каталог локальный,
+        в очередь отправки не попадает. Старые разговоры вытесняются (см.
+        `journal.KEEP_SESSIONS`), чтобы диагностика не росла бесконечно.
+        """
+        return self.root / "voiceprint-journal"
+
+    @property
     def voiceprints_file(self) -> Path:
         """Отпечатки голосов. Рядом с очередью, а не в моделях: это данные
         владельца, а не скачанный артефакт — при переустановке их берегут."""
@@ -135,6 +156,10 @@ def load_config() -> Config:
 
     def get(key: str, default: str) -> str:
         return values.get(key, default)
+
+    def flag(key: str, default: bool) -> bool:
+        return get(key, "1" if default else "0").strip().lower() not in (
+            "0", "false", "no", "off")
 
     return Config(
         gateway_url=get("VERA_GATEWAY_URL", Config.gateway_url).rstrip("/"),
@@ -158,4 +183,6 @@ def load_config() -> Config:
         browser_apps=_split(get("VERA_BROWSER_APPS", ",".join(DEFAULT_BROWSER_APPS))),
         deny_apps=_split(get("VERA_DENY_APPS", "")),
         glossary=_split_keep_case(get("VERA_GLOSSARY", "")),
+        voiceprint_journal=flag("VERA_VOICEPRINT_JOURNAL",
+                                Config.voiceprint_journal),
     )

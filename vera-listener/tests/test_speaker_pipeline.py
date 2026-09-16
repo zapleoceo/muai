@@ -329,3 +329,70 @@ class TestEmptyAndPartialLines:
         listener._name_speakers(utterances, _closed(listener, "chrome.exe", title),
                                 listener._speakers)
         assert utterances[2].get("speaker") is None, "безымянной приписали наугад"
+
+
+class TestConfirmedDirectChat:
+    """Подтверждённая личка сильнее и кластеризации, и её отсутствия.
+
+    Вживую 16.09 разговор один на один дал восемь «собеседников», а после
+    подъёма порога длины — четыре. Кластеризация на настоящей речи дробит
+    одного человека, и спорить с подтверждением приложения ей нечем.
+    """
+
+    def test_every_remote_line_gets_the_named_person(self, tmp_path):
+        """Две разные группы отпечатков — всё равно один человек."""
+        segments = [Segment(at=0.0, end=4.0, text="раз"),
+                    Segment(at=5.0, end=9.0, text="два")]
+        embedder = _Embedder({"1": _vec(0), "2": _vec(7)})
+        listener = _listener(tmp_path, segments, embedder)
+        title = "Volodymyr Klym - Sintegrum Team - Slack"
+        _open(listener, app="slack.exe", title=title)
+        for marker in (1, 2):
+            listener._transcribe_into(listener.session, SYSTEM, 0.0,
+                                      _pcm(marker), listener._speakers)
+
+        utterances = list(read_payload(listener.session)["utterances"])
+        listener._name_speakers(utterances, _closed(listener, "slack.exe", title),
+                                listener._speakers)
+
+        remote = [u for u in utterances if u["stream"] == SYSTEM]
+        assert {u.get("speaker") for u in remote} == {"Volodymyr Klym"}
+
+    def test_name_survives_when_no_fingerprint_was_taken(self, tmp_path):
+        """Все реплики короче порога — отпечатков ноль.
+
+        Раньше здесь терялось имя: `resolve` отдавал пустую разметку, и
+        реплики уходили безымянными. Но приложение подтвердило личку, и кто
+        на том конце, известно без всякого звука. Нашло ревью.
+        """
+        segments = [Segment(at=0.0, end=1.0, text="короткая реплика")]
+        embedder = _Embedder({})          # отпечаток не снимется ни с чего
+        listener = _listener(tmp_path, segments, embedder)
+        title = "Volodymyr Klym - Sintegrum Team - Slack"
+        _open(listener, app="slack.exe", title=title)
+        listener._transcribe_into(listener.session, SYSTEM, 0.0, _pcm(9),
+                                  listener._speakers)
+
+        utterances = list(read_payload(listener.session)["utterances"])
+        named = listener._name_speakers(
+            utterances, _closed(listener, "slack.exe", title), listener._speakers)
+
+        assert named == 1
+        assert utterances[0]["speaker"] == "Volodymyr Klym"
+        assert listener.voiceprints.names == []
+
+    def test_unconfirmed_chat_still_stays_silent_without_fingerprints(self, tmp_path):
+        """Telegram личку не подтверждает — там догадываться нельзя."""
+        segments = [Segment(at=0.0, end=1.0, text="короткая реплика")]
+        listener = _listener(tmp_path, segments, _Embedder({}))
+        title = "Кайфушники Нячанга"
+        _open(listener, app="telegram.exe", title=title)
+        listener._transcribe_into(listener.session, SYSTEM, 0.0, _pcm(9),
+                                  listener._speakers)
+
+        utterances = list(read_payload(listener.session)["utterances"])
+        listener._name_speakers(utterances,
+                                _closed(listener, "telegram.exe", title),
+                                listener._speakers)
+
+        assert utterances[0].get("speaker") is None

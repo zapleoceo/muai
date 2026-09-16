@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 from vera_listener.counterpart import (
+    Counterpart,
     counterpart,
     counterpart_name,
     looks_like_person,
@@ -137,3 +138,20 @@ class TestDirectMessageConfidence:
 
     def test_meet_gives_nothing_at_all(self):
         assert counterpart("chrome.exe", "Meet - Google Chrome") is None
+
+
+class TestUnreadMarker:
+    """Звёздочка непрочитанного не должна прятать настоящую личку.
+
+    Из 27 реальных заголовков Slack за 16.09 два терялись именно так, и
+    разговор оставался безымянным, хотя имя стояло прямо в заголовке.
+    """
+
+    def test_star_prefix_still_gives_the_person(self):
+        found = counterpart(
+            "slack.exe", "* Volodymyr Klym (DM) - Sintegrum Team - 2 new items - Slack")
+        assert found == Counterpart(name="Volodymyr Klym", is_direct=True)
+
+    def test_star_does_not_turn_a_channel_into_a_person(self):
+        assert counterpart(
+            "slack.exe", "* pm-only (Channel) - Sintegrum Team - Slack") is None
