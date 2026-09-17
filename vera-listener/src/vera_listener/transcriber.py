@@ -73,6 +73,10 @@ SAMPLE_RATE = 16_000
 #: запусков было шесть за два часа — все на закрытии пустых сессий.
 MIN_AUDIO_S = 0.6
 
+#: Значение `VERA_LANGUAGE`, при котором язык выбирает модель, а не мы.
+#: Почему это умолчание — в `Config.language`, там же замер.
+AUTO_LANGUAGE = "auto"
+
 
 #: Минимум, без которого пайплайн не соберётся. Проверять по ОДНОМУ файлу
 #: нельзя: если загрузка оборвалась (нет сети, кончилось место) после
@@ -156,6 +160,9 @@ class Transcriber:
         # модуля). Отдельно от _banned: устройство рабочее, просто этот приём
         # ему не даётся, и это не повод переставать на нём распознавать вовсе.
         self._glossary_unsupported: set[str] = set()
+        #: Последний язык, о котором мы сказали в лог. Не состояние работы —
+        #: только чтобы не повторять одну строку на каждый кусок.
+        self._language_seen: str = ""
 
     @property
     def device(self) -> str | None:
@@ -223,12 +230,14 @@ class Transcriber:
         if len(audio) < MIN_AUDIO_S * SAMPLE_RATE:
             return []
         pipe = self._load()
-        kwargs = {"language": f"<|{self.config.language}|>", "task": "transcribe",
-                 "return_timestamps": True}
+        kwargs = {"task": "transcribe", "return_timestamps": True}
+        if self.config.language != AUTO_LANGUAGE:
+            kwargs["language"] = f"<|{self.config.language}|>"
         if self.config.glossary and self._device not in self._glossary_unsupported:
             try:
                 result = pipe.generate(audio, initial_prompt=", ".join(self.config.glossary),
                                        **kwargs)
+                self._note_language(result)
                 return segments_of(result, len(audio) / SAMPLE_RATE)
             except Exception as e:                      # noqa: BLE001
                 # НЕ отказ устройства — сам приём подсказки на нём не работает
@@ -252,7 +261,21 @@ class Transcriber:
                 self._banned.add(failed)
                 log.warning("%s отвалился в работе — дальше без него", failed)
             raise
+        self._note_language(result)
         return segments_of(result, len(audio) / SAMPLE_RATE)
+
+    def _note_language(self, result) -> None:
+        """Сказать в лог, на каком языке модель решила слушать.
+
+        При `auto` язык выбирает она, а не мы, и молчать об этом нельзя: если
+        украинскую речь она услышит как русскую, единственным следом будет
+        покорёженный текст — а так видно причину. Пишем только смену, иначе в
+        логе была бы строка на каждый кусок.
+        """
+        found = (getattr(result, "language", "") or "").strip("<|> ")
+        if found and found != self._language_seen:
+            self._language_seen = found
+            log.info("язык распознавания: %s", found)
 
 
 def segments_of(result, duration_s: float = 0.0) -> list[Segment]:

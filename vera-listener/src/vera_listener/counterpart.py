@@ -37,6 +37,12 @@ _PERSON = re.compile(
 _NOISE = re.compile(
     r"\s*\((?:DM|ЛС)\)|\s*[-–—]\s*\d+\s+new\s+items?|\s*\(\d+\)", re.IGNORECASE)
 
+#: Звёздочка непрочитанного в начале заголовка Slack. Без её снятия настоящая
+#: личка не опознаётся вовсе: из 27 реальных заголовков 16.09 два потерялись
+#: именно так («* Volodymyr Klym (DM) - …»), и разговор оставался безымянным,
+#: хотя имя было прямо в заголовке.
+_UNREAD = re.compile(r"^\s*\*\s*")
+
 
 @dataclass(frozen=True)
 class Counterpart:
@@ -54,12 +60,12 @@ def looks_like_person(text: str) -> bool:
 
     Группу из двух слов не отличает — на это есть `Counterpart.is_direct`.
     """
-    cleaned = _NOISE.sub("", text).strip()
+    cleaned = _clean(text)
     return bool(_PERSON.match(cleaned)) and not cleaned.startswith("#")
 
 
 def _clean(text: str) -> str:
-    return _NOISE.sub("", text).strip()
+    return _NOISE.sub("", _UNREAD.sub("", text)).strip()
 
 
 def _from_slack(title: str) -> Counterpart | None:

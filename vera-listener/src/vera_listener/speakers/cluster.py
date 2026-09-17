@@ -47,6 +47,15 @@ MAX_SPEAKERS = 8
 #: отрицательной или near-нулевой похожестью — заведомо разные люди, и
 #: склеить их значит соврать, а не упростить. Лучше оставить говорящих больше
 #: потолка, чем приписать одному человеку чужие слова. Нашло ревью.
+#:
+#: 17.09: смысл потолка с тех пор сузился. Раньше склеенная силой группа
+#: доживала до разметки и становилась «Собеседником N» — «наименее плохим»
+#: говорящим. Теперь её отбрасывает `_voices_only`: внутренней связи у неё нет
+#: по построению (пары лежат между полом и порогом), а значит голосом она не
+#: подтверждена. То есть потолок больше не «сохраняет хоть какого-то
+#: говорящего» — он лишь не даёт кластеризации плодить группы до фильтра.
+#: Реплики такой группы остаются без имени, и чужого имени им не достаётся
+#: (`SpeakerSession.unconfirmed`). Нашло ревью.
 FORCED_MERGE_FLOOR = 0.3
 
 
@@ -78,6 +87,10 @@ def cluster_embeddings(embeddings: list[np.ndarray], *,
     count = len(vectors)
     # Векторы единичные, поэтому их скалярные произведения и есть косинусы.
     sims = (vectors @ vectors.T).astype(np.float32)
+    # Копия ДО порчи диагонали: по ней потом проверяется, подтверждена ли
+    # группа голосом. Второе умножение матриц ради того же самого было бы
+    # лишней работой — на 500 репликах это заметно.
+    raw = sims.copy()
     np.fill_diagonal(sims, -np.inf)
 
     members: list[list[int]] = [[i] for i in range(count)]
@@ -93,12 +106,45 @@ def cluster_embeddings(embeddings: list[np.ndarray], *,
             break
         _merge(sims, sizes, alive, members, left, right)
 
+    groups = [members[i] for i in range(count) if alive[i]]
     clusters = [
-        Cluster(members=tuple(sorted(members[i])),
-                centroid=normalize(vectors[members[i]].mean(axis=0)))
-        for i in range(count) if alive[i]
+        Cluster(members=tuple(sorted(g)),
+                centroid=normalize(vectors[g].mean(axis=0)))
+        for g in _voices_only(groups, raw, threshold)
     ]
     return sorted(clusters, key=lambda c: (-len(c), c.members[0]))
+
+
+def _voices_only(groups: list[list[int]], sims: np.ndarray,
+                 threshold: float) -> list[list[int]]:
+    """Убрать группы, которые голосом не подтверждены.
+
+    Голос подтверждён, если ВНУТРИ группы есть хоть одна пара, дотянувшая до
+    порога. Разница видна на живых данных (созвон на четверых 17.09, 207
+    отпечатков): у самого тихого участника, сказавшего семь реплик, лучшая
+    похожесть на своих 0.67-0.74 — выше порога. У четырёх мусорных групп 0.31,
+    0.43, 0.45 и 0.53: они не близки НИ К ЧЕМУ, включая друг друга, и родились
+    либо одиночками, либо принудительным слиянием при упоре в потолок.
+
+    Раньше такие группы становились «Собеседником N», и разговор вчетвером
+    выглядел как восемь голосов. Понижение порога слияния не помогало —
+    проверено на тех же данных: 0.65 и 0.45 дают одно и то же разбиение, потому
+    что мусор далёк от всего, а не «чуть-чуть не дотянул».
+
+    Но отбрасываем ТОЛЬКО когда есть с чем сравнивать: если ни одна группа
+    подтверждения не набрала, значит разговор просто короткий (личка в две
+    реплики), и судить не по чему — отдаём как есть.
+    """
+    confirmed = [g for g in groups if _has_inner_tie(g, sims, threshold)]
+    return confirmed or groups
+
+
+def _has_inner_tie(group: list[int], sims: np.ndarray, threshold: float) -> bool:
+    if len(group) < 2:
+        return False
+    inside = sims[np.ix_(group, group)]
+    np.fill_diagonal(inside, -np.inf)
+    return bool(inside.max() >= threshold)
 
 
 def _should_merge(best: float, groups: int, threshold: float,

@@ -15,6 +15,7 @@ from vera_listener.speakers.embedder import (
 )
 from vera_listener.speakers.registry import VoiceprintRegistry
 from vera_listener.speakers.session import SpeakerSession
+from vera_listener.speakers.speech import keep_speech
 
 __all__ = [
     "EMBEDDING_DIM",
@@ -22,5 +23,6 @@ __all__ = [
     "SpeakerEmbedder",
     "SpeakerSession",
     "VoiceprintRegistry",
+    "keep_speech",
     "similarity",
 ]

@@ -54,6 +54,26 @@ JACCARD_THRESH = 0.6
 #: слов в двух коротких репликах) и незачем менять один вслед за другим.
 JACCARD_MIN_CHARS = CONTAINED_MIN_CHARS
 
+#: Широкое окно для ДЛИННЫХ совпадений и порог, с которого совпадение считается
+#: длинным.
+#:
+#: Замер на часовом созвоне команды 17.09: при окне 6 с помечено 324 реплики из
+#: 761, и ещё 43 текстуально были эхом, но лежали дальше. Дорожки режутся на
+#: куски независимо, и та же фраза приходит с разбегом до полуминуты.
+#:
+#: Расширять окно ВСЕМ нельзя, и это видно по тем же данным: за окном стоят
+#: «да», «вопрос», «дашборд», «геймификация» — слова, которые владелец говорит
+#: сам и которые совпадают с чем угодно. Зато все совпадения от 30 знаков
+#: (25 реплик) уложились в 26 секунд и случайными не бывают: «ну я не думал что
+#: там же будет прям 150 вариантов ответов», «Дим запиши себе пожалуйста вот
+#: эти статистики».
+#:
+#: Длина берётся по КОРОТКОЙ из пары — это и есть длина свидетельства: вхождение
+#: срабатывает по меньшей строке, и длинная микрофонная реплика, поймавшая
+#: внутри себя чужое «добавить и так далее», доказательством не является.
+LONG_WINDOW_S = 30.0
+LONG_MIN_CHARS = 30
+
 _PUNCT = re.compile(r"[^\w\s]+", re.UNICODE)
 _SPACES = re.compile(r"\s+", re.UNICODE)
 
@@ -80,6 +100,13 @@ def word_overlap(a: str, b: str) -> float:
     if not wa or not wb:
         return 0.0
     return len(wa & wb) / len(wa | wb)
+
+
+def window_for(mic_text: str, system_text: str,
+               *, window_s: float = WINDOW_S) -> float:
+    """Насколько далеко искать источник эха для этой пары реплик."""
+    evidence = min(len(normalize(mic_text)), len(normalize(system_text)))
+    return LONG_WINDOW_S if evidence >= LONG_MIN_CHARS else window_s
 
 
 def looks_like_echo(mic_text: str, system_text: str, *, ratio: float = RATIO) -> bool:
@@ -113,12 +140,13 @@ def mark_echo(utterances: list[dict[str, Any]], *, window_s: float = WINDOW_S,
             out.append(utt)
             continue
         at = float(utt.get("at", 0.0))
+        text = str(utt.get("text", ""))
         echo = any(
             # Окно проверяем первым: сравнение строк дороже, и за пределами
             # окна его считать незачем.
-            abs(float(other.get("at", 0.0)) - at) <= window_s
-            and looks_like_echo(str(utt.get("text", "")), str(other.get("text", "")),
-                                ratio=ratio)
+            abs(float(other.get("at", 0.0)) - at)
+            <= window_for(text, str(other.get("text", "")), window_s=window_s)
+            and looks_like_echo(text, str(other.get("text", "")), ratio=ratio)
             for other in system
         )
         out.append({**utt, "echo": True} if echo else utt)

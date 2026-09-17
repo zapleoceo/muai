@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import sys
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -34,8 +35,9 @@ class _Chunk:
 class _Result:
     """Похоже на WhisperDecodedResults: str() даёт текст, chunks — сегменты."""
 
-    def __init__(self, text="", chunks=None):
+    def __init__(self, text="", chunks=None, language=""):
         self._text = text
+        self.language = language
         if chunks is not None:
             self.chunks = chunks
 
@@ -120,9 +122,80 @@ class TestTooShort:
         pcm = np.zeros(int((MIN_AUDIO_S + 0.5) * 16_000), dtype=np.int16).tobytes()
         assert [(s.at, s.text) for s in t.transcribe(pcm)] == [(0.5, "слышно")]
         assert seen["samples"] == int((MIN_AUDIO_S + 0.5) * 16_000)
-        # Язык уходит whisper-токеном, иначе модель его не поймёт.
-        assert seen["kw"]["language"] == "<|ru|>"
         assert seen["kw"]["return_timestamps"] is True
+
+
+class TestLanguage:
+    """Какой язык уходит модели — и уходит ли вообще.
+
+    До 17.09 язык был прибит к `ru`, и это молча портило украинскую речь:
+    замер на одном звуке дал 34% совпадения с эталоном при принудительном
+    русском против 61% при украинском, а одна фраза выродилась в английский
+    мусор. В команде говорят на двух языках, поэтому умолчание — `auto`.
+    """
+
+    def _pipe_seeing(self, transcriber, monkeypatch, seen):
+        class _Pipe:
+            def generate(self, audio, **kw):
+                seen.update(kw)
+                return _Result(chunks=[_Chunk(0.0, "слышно")], language="uk")
+
+        monkeypatch.setattr(transcriber, "_load", lambda: _Pipe())
+
+    def _audio(self):
+        return np.zeros(int((MIN_AUDIO_S + 0.5) * 16_000), dtype=np.int16).tobytes()
+
+    def test_auto_sends_no_language_at_all(self, tmp_path, monkeypatch):
+        """Токена быть не должно: с ним модель не выбирает, а подчиняется."""
+        t = Transcriber(replace(Config(root=tmp_path, internal_secret="x"),
+                                language="auto"))
+        seen: dict = {}
+        self._pipe_seeing(t, monkeypatch, seen)
+        t.transcribe(self._audio())
+        assert "language" not in seen
+
+    def test_explicit_language_still_goes_as_a_token(self, tmp_path, monkeypatch):
+        """Прибить язык по-прежнему можно, если говорят строго на одном."""
+        t = Transcriber(replace(Config(root=tmp_path, internal_secret="x"),
+                                language="ru"))
+        seen: dict = {}
+        self._pipe_seeing(t, monkeypatch, seen)
+        t.transcribe(self._audio())
+        assert seen["language"] == "<|ru|>"
+
+    def test_chosen_language_is_said_out_loud_once(self, tmp_path, monkeypatch, caplog):
+        """При `auto` язык выбирает модель. Молчать об этом нельзя: услышит
+        украинскую речь как русскую — единственным следом будет кривой текст.
+        И повторять на каждый кусок тоже нельзя."""
+        t = Transcriber(replace(Config(root=tmp_path, internal_secret="x"),
+                                language="auto"))
+        seen: dict = {}
+        self._pipe_seeing(t, monkeypatch, seen)
+        with caplog.at_level("INFO", logger="listener.stt"):
+            t.transcribe(self._audio())
+            t.transcribe(self._audio())
+
+        said = [r for r in caplog.records if "язык распознавания" in r.getMessage()]
+        assert len(said) == 1
+        assert "uk" in said[0].getMessage()
+
+    def test_missing_language_field_is_not_a_crash(self, tmp_path, monkeypatch):
+        """Поле у пайплайна есть (проверено вызовом: отдаёт «ru», без обёртки
+        из угловых скобок — я это сперва предположил неверно, нашло ревью). Но
+        держаться за чужой формат нельзя: версия сменится — распознавание не
+        имеет права падать из-за строки в логе."""
+        class _Bare:
+            chunks = [_Chunk(0.0, "слышно")]
+
+            def __str__(self):
+                return "слышно"
+
+        t = Transcriber(replace(Config(root=tmp_path, internal_secret="x"),
+                                language="auto"))
+        monkeypatch.setattr(t, "_load", lambda: type("P", (), {
+            "generate": lambda self, audio, **kw: _Bare()})())
+        audio = np.zeros(int((MIN_AUDIO_S + 0.5) * 16_000), dtype=np.int16).tobytes()
+        assert [s.text for s in t.transcribe(audio)] == ["слышно"]
 
 
 class TestGlossary:
