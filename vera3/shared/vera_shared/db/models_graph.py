@@ -162,7 +162,7 @@ class MembershipRow(Base):
 
 
 class RelationshipRow(Base):
-    """Edge between two entities with a fact string (Graphiti-style).
+    """Edge between two entities with a fact string.
 
     Examples:
       (Dima)  -[CO_FOUNDER_OF, since=2023]->  (Veranda)

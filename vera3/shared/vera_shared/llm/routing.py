@@ -12,7 +12,7 @@ Capability = Literal[
     "chat:smart",    # сложные задачи, синтез, paper-quality
     "chat:code",     # программирование, code review
     "prefilter",     # лёгкий фильтр перед более тяжёлой обработкой
-    "structured",    # строгий json_schema (Graphiti, extraction)
+    "structured",    # строгий json_schema (extraction)
     "vision",        # мультимодальное
     "embedding",     # эмбеддинги
 ]

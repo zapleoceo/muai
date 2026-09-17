@@ -95,8 +95,11 @@ class EventRow(Base):
     nature: Mapped[str | None] = mapped_column(String(24), nullable=True)
     project: Mapped[str | None] = mapped_column(String(24), nullable=True)
 
-    # Graphiti reference (если попало в граф)
-    graphiti_episode_uuid: Mapped[str | None] = mapped_column(String(36), nullable=True)
+    # Колонка events.graphiti_episode_uuid осталась в БД, но ORM-атрибута
+    # у неё больше нет: писал её только sync-bridge из Vera 2 (удалён
+    # 2026-07-10), последнее значение — 2026-06-08, 530 строк из 448k.
+    # Граф Vera 3 живёт в Postgres (models_graph.py), Graphiti тут нет.
+    # Подробности — docs/domain-model.md.
 
     # Processing state
     triage_status: Mapped[str] = mapped_column(

@@ -40,6 +40,24 @@ still references `embedding_voyage_3` will crash with `UndefinedColumnError`
 — this happened once already after the split; the mapped_column was
 removed from `EventRow` and only a comment marks where it used to live.
 
+### `events.graphiti_episode_uuid` — историческая колонка
+
+Колонка есть в БД, ORM-атрибута у неё нет, и никто её не пишет и не
+читает. Заполнена у 530 строк из 448k, последняя — 2026-06-08.
+
+Откуда: Vera 2 гоняла все события через библиотеку Graphiti во внешний
+граф (Neo4j Aura) и складывала сюда id эпизода. В Vera 3 ни Graphiti, ни
+Neo4j нет: граф материализован прямо в Postgres (`models_graph.py` +
+`vera_shared/graph/`), связи извлекает `graph/rel_extract.py`. Значения
+попали в Vera 3 не работой графа, а sync-bridge'ем, который просто копировал
+строки из SQLite Vera 2; bridge удалён 2026-07-10 (коммит `5d403aaa`), и
+SQLite Vera 2 отключён 2026-06-09 — отсюда дата последней записи.
+
+Колонку НЕ дропаем: в ней настоящие id эпизодов из Vera 2, это исторические
+данные, и решение их выбросить — отдельное решение владельца. Если что-то в
+графе выглядит пустым, искать причину надо в `vera_shared/graph/`, а не
+здесь: тут ничего не сломалось, тут просто перестали писать.
+
 For `source='telegram'`, `metadata.chat_kind` is `private` / `group` /
 `channel` / `other` — the single field for that distinction. Computed by
 `ingestor_telegram.userbot.classify_chat_kind()`. Supergroups are a
@@ -151,7 +169,7 @@ Neo4j swap is a one-file change.
 - `entities` — resolved real-world thing (person, group, channel, place, project)
 - `entity_aliases` — `(source, identifier) → entity_id` for identity resolution
 - `memberships` — "X is in Y" (e.g. user is member of TG group)
-- `relationships` — Graphiti-style edges with `predicate`, `fact`, `confidence`.
+- `relationships` — subject-predicate-object edges with `fact`, `confidence`.
   `derived_from_event_id` has an FK → `events.id` ON DELETE SET NULL
   (migration 013, added `NOT VALID` — enforces on new/changed rows without
   scanning/locking existing ones). Deleting an event no longer leaves a
