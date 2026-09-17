@@ -228,6 +228,73 @@ async def test_fts_russian_stemming_and_order_unchanged(pg_db):
 
 
 @pytest.mark.asyncio
+async def test_fts_finds_a_word_said_once_and_absent_from_the_summary(pg_db):
+    """Регрессия 17.09.2026 (событие 483722, созвон 118 минут).
+
+    В `content_text` у голосового события лежит выжимка, и фамилия, названная
+    в разговоре один раз, в неё не попадает: полнотекст по одной колонке
+    давал 0 строк, а вектор строится из той же выжимки — сказанное не
+    находилось НИКАКИМ способом. Здесь слово есть только в `transcript_text`.
+    """
+    from brain_search import retrieval
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models import EventRow
+
+    now = utc_naive_now()
+    async with get_session() as s:
+        s.add(EventRow(
+            source="voice", source_event_id="call",
+            content_text="Обсудили сроки и бюджет. Темы: CRM; Дешборд",
+            transcript_text="а давайте спросим у Татьяны Елиуповой про дешборд",
+            occurred_at=now, received_at=now, triage_status="done"))
+        s.add(EventRow(source="gmail", source_event_id="other",
+                       content_text="Прогноз погоды на выходные",
+                       occurred_at=now - timedelta(minutes=1), received_at=now,
+                       triage_status="done"))
+
+    found = await retrieval.fetch_candidates(
+        ts_query="елиуповой:*", acc_words=[], time_range=None, project=None,
+        q_vec=None, limit=50)
+
+    async with get_session() as s:
+        from sqlalchemy import select
+        by_id = {r.id: r.source_event_id
+                 for r in (await s.execute(select(EventRow))).scalars().all()}
+    assert [by_id[r[0]] for r in found.rows] == ["call"]
+
+
+@pytest.mark.asyncio
+async def test_transcript_match_does_not_outrank_a_summary_match(pg_db):
+    """Выжимка остаётся основным сигналом: её ранг считается первым, поэтому
+    событие, у которого слово в выжимке, стоит выше найденного по стенограмме.
+    """
+    from brain_search import retrieval
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models import EventRow
+
+    now = utc_naive_now()
+    async with get_session() as s:
+        s.add(EventRow(source="voice", source_event_id="verbatim",
+                       content_text="Обсудили планы",
+                       transcript_text="ну и про дешборд там тоже немного",
+                       occurred_at=now, received_at=now, triage_status="done"))
+        s.add(EventRow(source="gmail", source_event_id="summary",
+                       content_text="дешборд дешборда дешборду — весь текст про дешборд",
+                       occurred_at=now - timedelta(minutes=1), received_at=now,
+                       triage_status="done"))
+
+    found = await retrieval.fetch_candidates(
+        ts_query="дешборд:*", acc_words=[], time_range=None, project=None,
+        q_vec=None, limit=50)
+
+    async with get_session() as s:
+        from sqlalchemy import select
+        by_id = {r.id: r.source_event_id
+                 for r in (await s.execute(select(EventRow))).scalars().all()}
+    assert [by_id[r[0]] for r in found.rows] == ["summary", "verbatim"]
+
+
+@pytest.mark.asyncio
 async def test_search_time_window_branch(pg_db, monkeypatch):
     """Темпоральная ветка: события вне окна не попадают в выдачу."""
     from brain_search import app as bs

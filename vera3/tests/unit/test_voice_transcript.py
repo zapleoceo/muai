@@ -116,6 +116,56 @@ class TestStored:
         assert "Договорились о цене выхода." in sess.params["content_text"]
 
     @pytest.mark.asyncio
+    async def test_verbatim_also_goes_to_the_searchable_column(self):
+        """Регрессия 17.09.2026: стенограмма лежала ТОЛЬКО в jsonb, а его не
+        видит ни полнотекст, ни вектор — сказанное один раз не находилось
+        никогда (событие 483722: 91% слов есть только в стенограмме)."""
+        import gateway.voice as v
+
+        sess = _Sess()
+        with patch.object(fold_mod, "chat_async",
+                          AsyncMock(return_value=(json.dumps(_SUMMARY), {}))), \
+             patch("gateway.voice.get_session", lambda: sess), \
+             patch("gateway.voice.check_internal_secret", lambda s: None):
+            await v.ingest_voice_session(_session(), x_internal_secret="ok")
+
+        assert _SECRET in sess.params["transcript_text"]
+        assert "Пусть будет пятьдесят." in sess.params["transcript_text"]
+
+
+class TestSearchableTranscript:
+    """`transcript_text` — плоская речь для полнотекста, без служебных ключей."""
+
+    def test_only_speech_no_json_noise(self):
+        from gateway.voice import transcript_text
+
+        flat = transcript_text(_session().utterances)
+        assert flat.splitlines() == [_SECRET, "Пусть будет пятьдесят."]
+        for noise in ("mic", "system", "voice_transcript", "at"):
+            assert noise not in flat.split()
+
+    def test_echo_is_kept_because_lexemes_do_not_double(self):
+        """Реплика, помеченная эхом, — те же слова разговора; отбор по флагу
+        отнял бы то, что слушатель пометил ошибочно, а tsvector дубли и так
+        схлопывает в одну лексему."""
+        from gateway.voice import transcript_text
+
+        flat = transcript_text([
+            Utterance(at=0.0, stream="system", text="сроки по проекту"),
+            Utterance(at=1.0, stream="mic", text="сроки по проекту ага", echo=True),
+        ])
+        assert "ага" in flat
+
+    def test_runaway_transcript_is_clipped(self):
+        """Предохранитель от сбойной расшифровки на мегабайты."""
+        from gateway.voice import transcript_text
+        from vera_shared.text_chunks import MAX_TRANSCRIPT_CHARS
+
+        flat = transcript_text(
+            [Utterance(at=0.0, stream="mic", text="а" * (MAX_TRANSCRIPT_CHARS + 500))])
+        assert len(flat) == MAX_TRANSCRIPT_CHARS
+
+    @pytest.mark.asyncio
     async def test_transcript_survives_a_failed_distillation(self):
         """Модель не справилась — дословное тем ценнее, его нельзя терять."""
         import gateway.voice as v
