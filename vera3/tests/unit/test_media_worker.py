@@ -43,6 +43,36 @@ def test_transient_on_rate_limit_and_5xx():
         assert repo._is_permanent(e) is False
 
 
+def test_permanent_on_broker_status_format():
+    # Регрессия 17.09.2026: брокер отвечает "broker 400: ...", а маркеры знали
+    # только литерал "http 400" — ошибка считалась временной, media_permanent
+    # оставался false, и media_requeue.top_up возвращал событие в очередь каждые
+    # три часа. Замер за 48 часов до фикса: 115 срабатываний broker 400.
+    assert repo._is_permanent(
+        'broker 400: {"detail":"inline image #1 is an MP4/MOV video container '
+        '— the declared image/jpeg cannot be decoded by any vision provider"}'
+    ) is True
+    assert repo._is_permanent('broker 413: {"detail":"payload too big"}') is True
+    assert repo._is_permanent("broker poll 404: job not found") is True
+
+
+def test_transient_on_broker_status_format():
+    # Обратная сторона той же монеты: помеченное постоянным не пробуется НИКОГДА,
+    # поэтому темп (429) и отказы провайдера (5xx) обязаны остаться временными.
+    for e in ('broker 429: {"detail":"rate limited"}',
+              "broker 503: no provider available for capability=vision",
+              "broker poll 502: bad gateway",
+              "broker 500: internal error",
+              "broker network: ConnectTimeout(host=broker, port=8080)"):
+        assert repo._is_permanent(e) is False, e
+
+
+def test_status_not_read_from_arbitrary_numbers():
+    # Код читается только рядом со словом-маркером: цифры из текста ошибки
+    # (размеры, id) не должны делать событие вечно-недостижимым.
+    assert repo._is_permanent("download: connection reset after 404 bytes") is False
+
+
 def test_permanent_on_misconfig_and_empty():
     assert repo._is_permanent("BROKER_URL/BROKER_PROJECT_KEY not set") is True
     assert repo._is_permanent("broker vision returned empty text") is True

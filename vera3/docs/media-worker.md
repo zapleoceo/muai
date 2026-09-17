@@ -268,6 +268,23 @@ input entity`: на холодном кэше Telethon (воркер старт�
 ошибки ещё сохранился, помечены одним UPDATE (5 143 строки); 720 без текста
 получат ровно один проход и будут помечены на нём.
 
+**Код ответа читается смыслом, а не написанием (17.09.2026).** Список
+маркеров держал литералы `http 400`/`http 401`/`http 403`/`http 404`/`http
+413`, но брокер отвечает в другом формате — `broker 400: {"detail":…}`
+([`shared/vera_shared/llm/broker_client.py`](../shared/vera_shared/llm/broker_client.py)),
+а ещё есть `broker poll 502:` и `broker whisper HTTP 413:`. Подстрока не
+совпадала, `_is_permanent` возвращала False, событие деградировало как
+**временный** провал, `media_permanent` оставался `false` — и `top_up`
+возвращал его в очередь каждые три часа. Замер за 48 часов: 4 события, 115
+срабатываний `broker 400`, 1 `broker 413`, 39 деградаций. Типичный текст:
+`broker 400: … inline image #1 is an MP4/MOV video container — the declared
+image/jpeg cannot be decoded by any vision provider`. Теперь `_is_permanent`
+дополнительно достаёт трёхзначный код регуляркой `_STATUS_RE` (слово-маркер →
+до 20 не-цифр → код), и постоянным считается **4xx кроме 429**: 4xx — это
+плохой запрос, повтор его не исправит; 429 — темп, а не запрос; 5xx (включая
+503 «no provider», где ключи выходят из кулдауна за минуты) остаются
+временными. Четвёртый формат записи кода поймается тем же правилом.
+
 The bottleneck is **vision-pool capacity** — free-tier vision clears only
 ~130 photos/day, so the 72k photo tail drains over months. This is safe and
 non-disruptive because of the claim order (step 3): voice/audio drain first

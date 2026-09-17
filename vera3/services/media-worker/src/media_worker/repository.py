@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 
 from sqlalchemy import text
 from vera_shared.control import is_backfill_paused, reserve_backfill_allowance
@@ -49,17 +50,41 @@ _PERMANENT_MARKERS: tuple[str, ...] = (
     "message not found",                  # сообщение удалено
     "no media on this message",           # медиа в сообщении уже нет
     "download returned none",             # ингестор не отдал файл (удалён)
-    # Брокер/клиент 4xx = плохой запрос / скоуп / слишком большой payload.
-    # 429 и 5xx — транзиентные, остаются на ретрае. 503 «no provider» —
-    # тоже транзиентный: ключи выходят из кулдауна за минуты.
-    "http 400", "http 401", "http 403", "http 404", "http 413",
 )
+
+#: Код ответа в тексте ошибки. Форматов у нас минимум три и они разъезжаются:
+#: `http 413: audio > 25MB` (recognize.py), `broker 400: {"detail":…}` и
+#: `broker poll 502: …` (shared/llm/broker_client.py), `broker whisper HTTP 413:
+#: …`. До 17.09.2026 список маркеров держал только литералы вида «http 400»,
+#: поэтому `broker 400` мимо него проходил: ошибка считалась временной,
+#: `media_permanent` оставался false и `media_requeue.top_up` каждые три часа
+#: возвращал событие в очередь. Замер за 48 часов до фикса: 4 события, 115
+#: срабатываний `broker 400` и 1 `broker 413`, 39 деградаций — вечный круг.
+#: Поэтому сопоставляем по СМЫСЛУ (код), а не по написанию: слово-маркер, до 20
+#: не-цифр и трёхзначный код — так же ловится и четвёртый формат, если появится.
+_STATUS_RE = re.compile(
+    r"\b(?:http|https|broker|whisper|vision|poll|status|code)\b\D{0,20}?(\d{3})\b",
+    re.IGNORECASE,
+)
+
+#: 4xx = запрос плохой сам по себе, повтор его не исправит. Исключение — 429:
+#: это темп, а не запрос. 5xx тоже остаются временными (в частности 503 «no
+#: provider»: ключи выходят из кулдауна за минуты).
+_TRANSIENT_STATUSES: frozenset[int] = frozenset({429})
+
+
+def _is_permanent_status(err: str) -> bool:
+    match = _STATUS_RE.search(err)
+    if match is None:
+        return False
+    status = int(match.group(1))
+    return 400 <= status < 500 and status not in _TRANSIENT_STATUSES
 
 
 def _is_permanent(err: str) -> bool:
     """Retrying won't help: degrade now and never re-queue."""
     e = err.lower()
-    return any(marker in e for marker in _PERMANENT_MARKERS)
+    return any(marker in e for marker in _PERMANENT_MARKERS) or _is_permanent_status(e)
 
 
 #: Постоянные ошибки, которые на ХОЛОДНОМ кэше Telethon выглядят так же, как
