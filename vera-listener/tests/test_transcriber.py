@@ -438,10 +438,13 @@ class TestSegmentBoundaries:
 
     def test_missing_end_falls_back_to_next_start(self):
         """Модель не всегда проставляет конец; следующая реплика знает, где
-        закончилась предыдущая."""
+        закончилась предыдущая.
+
+        Предложения нарочно закрыты точкой: незакрытую первую склеило бы со
+        второй (`stitch`), и проверять было бы уже нечего."""
         got = segments_of(_Result(chunks=[
-            _Chunk(1.0, "первая", end_ts=0.0),
-            _Chunk(4.0, "вторая", end_ts=6.0),
+            _Chunk(1.0, "первая.", end_ts=0.0),
+            _Chunk(4.0, "вторая.", end_ts=6.0),
         ]), duration_s=8.0)
         assert got[0].end == 4.0
 

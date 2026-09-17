@@ -57,12 +57,12 @@ from __future__ import annotations
 
 import logging
 import time
-from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
 
 from vera_listener.config import Config
+from vera_listener.stitch import Segment, merge_continuations
 
 log = logging.getLogger("listener.stt")
 
@@ -125,23 +125,6 @@ def device_chain(preferred: str) -> list[str]:
     if "CPU" not in chain:
         chain.append("CPU")
     return chain
-
-
-@dataclass(frozen=True)
-class Segment:
-    """Одна распознанная реплика внутри куска.
-
-    `at` и `end` — секунды от начала КУСКА, не сессии: смещение куска
-    прибавляет вызывающий, он же один знает, где кусок стоит в разговоре.
-    """
-
-    at: float
-    end: float
-    text: str
-
-    @property
-    def duration(self) -> float:
-        return max(0.0, self.end - self.at)
 
 
 class Transcriber:
@@ -267,6 +250,9 @@ def segments_of(result, duration_s: float = 0.0) -> list[Segment]:
     куска вырезается именно та речь, отпечаток которой снимаем. `duration_s`
     — длина всего куска, ею закрывается конец последней реплики и случай без
     таймкодов.
+
+    Куски одного предложения, разрезанного по запятой, склеиваются обратно —
+    см. `stitch`: это и читаемость расшифровки, и длина вырезки под отпечаток.
     """
     chunks = getattr(result, "chunks", None)
     if not chunks:
@@ -287,7 +273,7 @@ def segments_of(result, duration_s: float = 0.0) -> list[Segment]:
         if end <= start:
             end = raw[index + 1][0] if index + 1 < len(raw) else duration_s
         out.append(Segment(at=start, end=max(end, start), text=text))
-    return out
+    return merge_continuations(out)
 
 
 def _end_of(chunk) -> float:
