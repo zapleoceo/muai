@@ -4,11 +4,14 @@ from __future__ import annotations
 from vera_listener.dedup import (
     CONTAINED_MIN_CHARS,
     JACCARD_THRESH,
+    LONG_WINDOW_S,
+    WINDOW_S,
     drop_echo,
     looks_like_echo,
     mark_echo,
     normalize,
     similar,
+    window_for,
     word_overlap,
 )
 
@@ -274,3 +277,50 @@ class TestMarkingKeepsOwnWords:
         kept = drop_echo(utterances)
         assert [u["text"] for u in kept] == [
             u["text"] for u in mark_echo(utterances) if not u.get("echo")]
+
+
+class TestWindowScalesWithEvidence:
+    """Далеко искать источник эха можно, но не для любой реплики.
+
+    Замер на часовом созвоне 17.09: при окне 6 с помечено 324 микрофонных
+    реплики из 761, и ещё 43 текстуально были эхом, но лежали дальше — дорожки
+    режутся на куски независимо, и та же фраза приходит с разбегом до
+    полуминуты.
+
+    Расширить окно всем — потерять слова владельца: за окном стояли «да»,
+    «вопрос», «дашборд», которые он говорит сам. Зато все совпадения от 30
+    знаков уложились в 26 секунд и случайными не бывают. Отсюда правило:
+    окно растёт вместе с длиной свидетельства.
+    """
+
+    LONG = "ну я не думал что там же будет прям 150 вариантов ответов"
+
+    def test_long_match_is_caught_far_away(self):
+        marked = mark_echo([_u(0.0, "system", self.LONG),
+                            _u(25.9, "mic", self.LONG)])
+        assert marked[1].get("echo") is True
+
+    def test_short_match_far_away_is_left_alone(self):
+        """«Дашборд» через двадцать секунд — своё слово, а не эхо."""
+        marked = mark_echo([_u(0.0, "system", "дашборд"),
+                            _u(20.2, "mic", "дашборд")])
+        assert marked[1].get("echo") is None
+
+    def test_short_match_close_by_is_still_echo(self):
+        """Узкое окно для коротких никуда не делось."""
+        marked = mark_echo([_u(0.0, "system", "дашборд"),
+                            _u(1.5, "mic", "дашборд")])
+        assert marked[1].get("echo") is True
+
+    def test_long_match_beyond_the_wide_window_is_left_alone(self):
+        """Окно широкое, но не бесконечное."""
+        marked = mark_echo([_u(0.0, "system", self.LONG),
+                            _u(45.0, "mic", self.LONG)])
+        assert marked[1].get("echo") is None
+
+    def test_evidence_is_the_shorter_side_not_the_longer(self):
+        """Длинная реплика владельца, поймавшая внутри чужое короткое «добавить
+        и так далее», доказательством не является — считаем по короткой."""
+        assert window_for("добавить и так далее", "x" * 200) == WINDOW_S
+        assert window_for("x" * 200, "добавить и так далее") == WINDOW_S
+        assert window_for("x" * 200, "y" * 40) == LONG_WINDOW_S
