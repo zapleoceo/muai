@@ -554,6 +554,33 @@ def test_transient_failures_stay_recoverable():
         assert not repo._is_permanent(err), err
 
 
+def test_number_from_the_message_body_is_not_a_status_code():
+    """Число в ТЕКСТЕ ошибки — не код ответа, и хоронить по нему нельзя.
+
+    Обычный длинный войс даёт `whisper: file is 413 seconds long`. Пока зазор
+    между маркером и цифрами был широким, 413 читалось как HTTP 413, событие
+    уезжало в `media_permanent` и терялось навсегда.
+    """
+    for err in ("whisper: file is 413 seconds long",
+                "broker: upload of 404 files started",
+                "vision returned after 500 ms of waiting"):
+        assert not repo._is_permanent(err), err
+
+
+def test_status_code_right_after_the_marker_is_still_caught():
+    """Все четыре живых формата кода читаются — и 5xx среди них остаётся 5xx."""
+    for err, code in (("http 413: audio > 25MB", 413),
+                      ('broker 400: {"detail":"bad request"}', 400),
+                      ("broker poll 502: gateway", 502),
+                      ("broker whisper HTTP 413: too big", 413)):
+        got = repo._STATUS_RE.search(err)
+        assert got is not None and int(got.group(1)) == code, err
+    # хоронится только 4xx кроме 429
+    assert repo._is_permanent("http 413: audio > 25MB")
+    assert repo._is_permanent('broker 400: {"detail":"bad request"}')
+    assert not repo._is_permanent("broker poll 502: gateway")
+
+
 @pytest.mark.asyncio
 async def test_on_failure_marks_transient_degrade_as_recoverable():
     """Три провала подряд на 503 — событие деградирует, но пометить его
