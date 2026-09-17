@@ -25,6 +25,11 @@ class Outbox:
         self.failed_dir = queue_dir / "failed"
         for path in (self.open_dir, self.ready_dir, self.failed_dir):
             path.mkdir(parents=True, exist_ok=True)
+        #: Файлы, которые завела ЭТА очередь и ещё не закрыла. Подбор их не
+        #: трогает — см. `recover`. Владение считает сама очередь, а не
+        #: вызывающий: у него сессия обнуляется в момент закрытия, а файл живёт
+        #: ещё минуты, пока поток распознавания добирается до задачи.
+        self._mine: set[Path] = set()
 
     def start(self, session_id: str, started_at: str, *, app: str | None,
               window_title: str | None, device_hint: str | None,
@@ -39,6 +44,7 @@ class Outbox:
             # называет встречу собой.
             "meeting_id": meeting_id or session_id, "part": part,
         }, mode="w")
+        self._mine.add(path)
         return path
 
     def append(self, path: Path, at: float, stream: str, text: str) -> None:
@@ -56,6 +62,7 @@ class Outbox:
         self._write_line(path, {"kind": "footer", "ended_at": ended_at})
         target = self.ready_dir / path.name
         os.replace(path, target)
+        self._mine.discard(path)
         return target
 
     def _rewrite(self, path: Path, utterances: list[dict[str, Any]]) -> None:
@@ -81,9 +88,9 @@ class Outbox:
         """Ядовитое сообщение — в failed/, чтобы не держало очередь вечно."""
         log.warning("сессия %s отложена в failed: %s", path.name, reason)
         os.replace(path, self.failed_dir / path.name)
+        self._mine.discard(path)
 
-    def recover(self, max_age_s: float = 60.0,
-                active: Path | None = None) -> list[Path]:
+    def recover(self, max_age_s: float = 60.0) -> list[Path]:
         """Недописанные сессии — в очередь, а не в мусор.
 
         Порог был час, и это оставляло мусор навсегда: файлы моложе часа
@@ -98,14 +105,22 @@ class Outbox:
         в open/ до следующего перезапуска. Поэтому `recover` зовётся теперь и
         из цикла отправки, а не только при старте.
 
-        `active` — сессия, в которую пишет ЭТОТ процесс. Её трогать нельзя ни
-        при каком возрасте: в долгом разговоре бывают паузы длиннее минуты, и
-        без этой защиты отправщик утащил бы файл прямо из-под записи.
+        Свои незакрытые файлы (`_mine`) не трогаются ни при каком возрасте.
+        Сначала защита опиралась на «текущую сессию» вызывающего — и этого
+        оказалось мало: в `Listener._finish` сессия обнуляется СРАЗУ, а задача
+        на закрытие уходит в очередь потока распознавания и висит там минутами,
+        пока разбираются накопленные куски. В это окно защиты не было.
+
+        Вживую 17.09: на 118-минутном созвоне подбор забрал живой файл за
+        43 секунды до закрытия. Запись ушла на сервер сырой — без пометок эха и
+        без имён говорящих (0 из 3787), а `_finish` уже не нашёл файла. Поэтому
+        владение считает сама очередь: от `start` до `finish`, независимо от
+        того, что думает о своей сессии вызывающий.
         """
         moved: list[Path] = []
         now = time.time()
         for path in sorted(self.open_dir.glob("*.jsonl")):
-            if active is not None and path == active:
+            if path in self._mine:
                 continue
             if now - path.stat().st_mtime < max_age_s:
                 continue
