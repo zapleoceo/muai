@@ -420,6 +420,12 @@ class Listener:
     def _send(self) -> None:
         while not self._stop.is_set():
             try:
+                # Подбор брошенных сессий — здесь, а не только при старте:
+                # перезапуск посреди разговора оставлял файл моложе минуты, и
+                # он лежал в open/ до следующего перезапуска (17.09, потеряна
+                # была бы отправка 1281 реплики). Свою открытую сессию
+                # исключаем явно — в ней бывают паузы длиннее минуты.
+                self.outbox.recover(active=self.session)
                 sent, left = self.sender.flush()
                 self.status.note_sent(sent, left)
             except Exception as e:

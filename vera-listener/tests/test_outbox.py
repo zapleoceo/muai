@@ -124,3 +124,56 @@ def test_empty_stale_file_is_deleted_not_queued(tmp_path):
     assert box.recover() == []
     assert not path.exists()
     assert list(box.ready_dir.glob("*.jsonl")) == []
+
+
+class TestRestartInTheMiddleOfATalk:
+    """Перезапуск посреди разговора не должен оставлять запись в open/.
+
+    17.09 вживую: слушатель перезапустили на 37-й минуте созвона, файл писался
+    до последней секунды и при старте оказался моложе минуты — порог от гонки с
+    умирающим процессом его пропустил. Второго захода не было, и 1281 реплика
+    лежала в open/ неотправленной. Подбирать пришлось руками.
+    """
+
+    def test_fresh_orphan_is_skipped_at_first_but_picked_up_later(self, tmp_path):
+        box = Outbox(tmp_path)
+        path = box.start("s-1", "2026-09-17T18:56:40+07:00", app="chrome.exe",
+                         window_title="Meet", device_hint=None)
+        box.append(path, 1.0, "system", "разговор шёл прямо до перезапуска")
+
+        # Старт сразу после падения: файл свежий, трогать рано.
+        assert box.recover() == []
+        assert path.exists()
+
+        # Минутой позже — уже некому его писать, и он обязан уехать.
+        os.utime(path, (time.time() - 120, time.time() - 120))
+        assert [p.name for p in box.recover()] == ["s-1.jsonl"]
+        assert list(box.open_dir.glob("*.jsonl")) == []
+
+    def test_own_open_session_is_never_taken(self, tmp_path):
+        """Защита от обратной беды: в долгом разговоре бывают паузы длиннее
+        минуты, и подбор из цикла отправки утащил бы файл из-под записи."""
+        box = Outbox(tmp_path)
+        mine = box.start("s-live", "2026-09-17T19:33:57+07:00", app="chrome.exe",
+                         window_title="Meet", device_hint=None)
+        box.append(mine, 1.0, "system", "говорю прямо сейчас")
+        os.utime(mine, (time.time() - 600, time.time() - 600))
+
+        assert box.recover(active=mine) == []
+        assert mine.exists(), "живую сессию забирать нельзя ни при каком возрасте"
+
+    def test_other_orphans_still_move_while_mine_stays(self, tmp_path):
+        box = Outbox(tmp_path)
+        mine = box.start("s-live", "2026-09-17T19:33:57+07:00", app=None,
+                         window_title=None, device_hint=None)
+        box.append(mine, 1.0, "mic", "моя сессия")
+        orphan = box.start("s-old", "2026-09-17T18:56:40+07:00", app=None,
+                           window_title=None, device_hint=None)
+        box.append(orphan, 1.0, "mic", "брошенная сессия")
+        for path in (mine, orphan):
+            os.utime(path, (time.time() - 600, time.time() - 600))
+
+        moved = box.recover(active=mine)
+
+        assert [p.name for p in moved] == ["s-old.jsonl"]
+        assert mine.exists()
