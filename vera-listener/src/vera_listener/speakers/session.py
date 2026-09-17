@@ -66,6 +66,12 @@ class SpeakerSession:
         self._max_speakers = max_speakers
         self._keys: list[float] = []
         self._embeddings: list[np.ndarray] = []
+        #: Смещения реплик, у которых отпечаток БЫЛ, но голосом не подтвердился
+        #: (см. `cluster._voices_only`). Это НЕ то же самое, что реплика без
+        #: отпечатка: там имя можно достроить по единственному голосу, здесь
+        #: нельзя — вектор как раз и не сошёлся ни с кем. Заполняется в
+        #: `resolve`, читается при раздаче имён.
+        self.unconfirmed: set[float] = set()
 
     def observe(self, at: float, audio: np.ndarray) -> None:
         """Запомнить отпечаток реплики удалённой стороны.
@@ -192,6 +198,7 @@ class SpeakerSession:
         for cluster, name in zip(clusters, names, strict=True):
             for member in cluster.members:
                 mapping[self._keys[member]] = name
+        self.unconfirmed = {k for k in self._keys if k not in mapping}
 
         if self._journal_dir is not None:
             journal.write(self._journal_dir, self._embeddings, self._keys, names,

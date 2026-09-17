@@ -69,13 +69,26 @@ class TestSeparation:
         assert len(cluster_embeddings(pair, threshold=0.1)) == 1
 
 
+#: Похож на B ровно на 0.5 — между полом принудительного слияния и порогом.
+B_HALF = _vec(0, 0.5, 0.8660254)
+
+
+def _spread(index: int) -> np.ndarray:
+    """Вектор, далёкий от всех прочих — как мусорный отпечаток вживую."""
+    full = np.zeros(8, dtype=np.float32)
+    full[(index % 5) + 3] = 1.0
+    return normalize(full)
+
+
 class TestOrdering:
     def test_largest_cluster_comes_first(self):
         """Порядок — не косметика: по нему раздаются номера «Собеседник N»,
         и самый говорливый должен быть первым."""
-        clusters = cluster_embeddings([A, A, A, B])
+        # По две реплики на голос: одиночка голосом не считается вовсе,
+        # см. TestOnlyConfirmedVoices ниже.
+        clusters = cluster_embeddings([A, A, A, B, B])
         assert len(clusters[0]) == 3
-        assert len(clusters[1]) == 1
+        assert len(clusters[1]) == 2
 
     def test_ties_break_by_first_appearance(self):
         """Одинаковые по размеру — в порядке появления, иначе номера
@@ -233,3 +246,51 @@ class TestSpeed:
         elapsed = time.monotonic() - started
         assert len(clusters) == 4
         assert elapsed < 5.0, f"кластеризация 500 реплик заняла {elapsed:.1f}с"
+
+
+class TestOnlyConfirmedVoices:
+    """Группа без внутренней связи — не голос, а плохой отпечаток.
+
+    Замер на живом созвоне вчетвером (17.09, 207 отпечатков): алгоритм выдавал
+    ВОСЕМЬ голосов — четыре настоящих (94, 76, 25 и 7 реплик) и четыре мусорных
+    по одной-две. У настоящего тихого участника лучшая похожесть на своих
+    0.67-0.74, то есть выше порога; у мусорных — 0.31, 0.43, 0.45 и 0.53, они
+    не близки ни к чему.
+
+    Понижение порога слияния это НЕ лечило: 0.65 и 0.45 на тех же данных дают
+    одно и то же разбиение. Мусор далёк от всего, а не «чуть не дотянул».
+    """
+
+    def test_lone_vector_beside_a_real_voice_is_dropped(self):
+        clusters = cluster_embeddings([A, A, A, B])
+        assert [len(c) for c in clusters] == [3]
+
+    def test_quiet_but_real_voice_survives(self):
+        """Две реплики, похожие друг на друга, — уже свидетельство."""
+        clusters = cluster_embeddings([A, A, A, A, B, B])
+        assert sorted(len(c) for c in clusters) == [2, 4]
+
+    def test_forced_merge_without_a_real_tie_is_dropped(self):
+        """Упор в потолок склеивает непохожих. Такая группа — не голос.
+
+        Тут важны именно ЧИСЛА: `B` и `B_HALF` похожи на 0.5 — выше пола
+        принудительного слияния (0.3), но ниже порога (0.65). То есть потолок
+        их реально сольёт силой, а внутренней связи у группы всё равно нет.
+        Прошлая версия теста брала ортогональные векторы, и принудительное
+        слияние в ней не срабатывало вовсе — она проверяла лишь «одиночка не
+        в счёт». Нашло ревью.
+        """
+        assert 0.3 < float(B @ B_HALF) < 0.65, "иначе тест проверяет не то"
+
+        clusters = cluster_embeddings([A, A, B, B_HALF], max_speakers=2)
+
+        assert [c.members for c in clusters] == [(0, 1)],             "склеенная силой пара голосом не подтверждена — её быть не должно"
+
+    def test_short_call_without_any_tie_is_left_alone(self):
+        """Если подтверждения нет НИ У КОГО, судить не по чему: личка в две
+        реплики — не повод остаться вовсе без разметки."""
+        clusters = cluster_embeddings([A, B])
+        assert sorted(len(c) for c in clusters) == [1, 1]
+
+    def test_single_utterance_call_still_gives_a_cluster(self):
+        assert len(cluster_embeddings([A])) == 1

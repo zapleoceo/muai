@@ -396,3 +396,58 @@ class TestConfirmedDirectChat:
                                 listener._speakers)
 
         assert utterances[0].get("speaker") is None
+
+
+class TestRejectedPrintNeverBorrowsAName:
+    """Отброшенный отпечаток и отсутствие отпечатка — разные вещи.
+
+    Реплика без вектора вовсе может достроить имя по единственному голосу:
+    других кандидатов нет. Реплика, чей вектор БЫЛ и ни с кем не сошёлся, —
+    не может: подставить ей это имя значит приписать человеку чужие слова.
+
+    Нашло ревью, и воспроизводилось до починки: разговор с одним говорливым
+    участником и одной чужой репликой отдавал эту реплику говорливому.
+    """
+
+    def test_unconfirmed_line_stays_without_a_name(self, tmp_path):
+        segments = [Segment(at=0.0, end=6.0, text="реплика")]
+        # Три одинаковых отпечатка — подтверждённый голос; четвёртый чужой и
+        # одинокий, значит голосом не подтверждён и кластер отброшен.
+        embedder = _Embedder({"1": _vec(0), "2": _vec(0), "3": _vec(0),
+                              "4": _vec(7)})
+        listener = _listener(tmp_path, segments, embedder)
+        meet = "Meet – Sintegrum daily - Google Chrome"
+        _open(listener, app="chrome.exe", title=meet)
+        for offset, marker in ((0.0, 1), (10.0, 2), (20.0, 3), (30.0, 4)):
+            listener._transcribe_into(listener.session, SYSTEM, offset,
+                                      _pcm(marker), listener._speakers)
+
+        utterances = list(read_payload(listener.session)["utterances"])
+        listener._name_speakers(utterances, _closed(listener, "chrome.exe", meet),
+                                listener._speakers)
+
+        remote = [u for u in utterances if u["stream"] == SYSTEM]
+        named = [u for u in remote if u.get("speaker")]
+        assert len(named) == 3, "названы только подтверждённые"
+        assert all(u["speaker"] == named[0]["speaker"] for u in named)
+        assert any(u.get("speaker") is None for u in remote),             "неподтверждённая реплика обязана остаться без имени"
+
+    def test_confirmed_direct_chat_still_names_everything(self, tmp_path):
+        """В подтверждённой личке собеседник известен помимо звука — там
+        неподтверждённый отпечаток имени не мешает."""
+        segments = [Segment(at=0.0, end=6.0, text="реплика")]
+        embedder = _Embedder({"1": _vec(0), "2": _vec(0), "3": _vec(0),
+                              "4": _vec(7)})
+        listener = _listener(tmp_path, segments, embedder)
+        title = "Volodymyr Klym - Sintegrum Team - Slack"
+        _open(listener, app="slack.exe", title=title)
+        for offset, marker in ((0.0, 1), (10.0, 2), (20.0, 3), (30.0, 4)):
+            listener._transcribe_into(listener.session, SYSTEM, offset,
+                                      _pcm(marker), listener._speakers)
+
+        utterances = list(read_payload(listener.session)["utterances"])
+        listener._name_speakers(utterances, _closed(listener, "slack.exe", title),
+                                listener._speakers)
+
+        remote = [u for u in utterances if u["stream"] == SYSTEM]
+        assert {u.get("speaker") for u in remote} == {"Volodymyr Klym"}

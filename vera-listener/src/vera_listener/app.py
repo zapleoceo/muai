@@ -339,11 +339,20 @@ class Listener:
         else:
             fallback = None
 
+        # Отброшенный отпечаток и отсутствие отпечатка — разные вещи. У первой
+        # реплики вектор БЫЛ и как раз ни с кем не сошёлся; подставить ей
+        # единственное оставшееся имя значило бы приписать человеку чужие
+        # слова. Исключение — подтверждённая приложением личка: там собеседник
+        # известен помимо всякого звука. Нашло ревью.
+        blocked: set[float] = (set() if who is not None and who.is_direct
+                               else speakers.unconfirmed)
+
         named = missing = 0
         for utterance in utterances:
             if utterance.get("stream") != SYSTEM:
                 continue
-            name = names.get(round(float(utterance.get("at", 0.0)), 2)) or fallback
+            key = round(float(utterance.get("at", 0.0)), 2)
+            name = names.get(key) or (None if key in blocked else fallback)
             if name:
                 utterance["speaker"] = name
                 named += 1
