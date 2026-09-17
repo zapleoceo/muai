@@ -455,7 +455,7 @@ async def list_members(parent_entity_id: int) -> list[dict[str, Any]]:
         ]
 
 
-# ─── Relationships (Graphiti-style facts) ────────────────────────────────────
+# ─── Relationships (subject-predicate-object facts) ─────────────────────────
 
 
 async def get_entity(entity_id: int) -> EntityRow | None:

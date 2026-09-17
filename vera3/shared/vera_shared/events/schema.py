@@ -63,7 +63,7 @@ class RawEvent(BaseModel):
     """Каноническое событие. Создаётся ingestor'ом, шлётся в gateway.
 
     После приёма получает дополнительные поля: id (DB), embedding,
-    triage_metadata, graphiti_episode_uuid (если в граф попало).
+    triage_metadata.
     """
 
     # Обязательное
