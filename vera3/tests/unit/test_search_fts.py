@@ -1,8 +1,14 @@
 """Полнотекстовые выражения brain-search (fts.py).
 
 tsvector на SQLite не исполнить, поэтому проверяется строка SQL: условие
-обязано совпадать с выражениями индексов миграции 031 дословно, иначе
+обязано совпадать с выражениями индексов миграций 031 и 033 дословно, иначе
 планировщик уйдёт в seq scan по 445 тыс. строк (замер: 7.7 с).
+
+Колонок две. `content_text` у созвона — выжимка; сказанное один раз в неё не
+попадает (замер 17.09.2026 по событию 483722: 2538 из 2786 слов длиннее шести
+букв есть только в стенограмме). Дословное лежит в `transcript_text`, и
+запрос обязан смотреть в обе колонки — иначе фамилия, названная в разговоре
+однажды, не находится никогда.
 """
 from __future__ import annotations
 
@@ -11,10 +17,17 @@ from pathlib import Path
 
 import pytest
 from brain_search import app as bs
-from brain_search.fts import FTS_CONFIGS, build_ts_query, fts_match_sql, fts_rank_sql
+from brain_search.fts import (
+    FTS_COLUMNS,
+    FTS_CONFIGS,
+    build_ts_query,
+    fts_match_sql,
+    fts_rank_sql,
+)
 
-_MIGRATION = (Path(__file__).resolve().parents[2] / "infra" / "migrations"
-              / "031_events_fts_multilingual.sql")
+_MIGRATIONS = Path(__file__).resolve().parents[2] / "infra" / "migrations"
+_MIGRATION = _MIGRATIONS / "031_events_fts_multilingual.sql"
+_MIGRATION_TRANSCRIPT = _MIGRATIONS / "033_events_transcript_fts.sql"
 
 
 def test_query_keeps_prefix_or_shape():
@@ -35,7 +48,24 @@ def test_match_covers_every_config_with_or():
     sql = fts_match_sql()
     for cfg in ("russian", "indonesian"):
         assert f"to_tsvector('{cfg}', content_text) @@ to_tsquery('{cfg}', :tsq)" in sql
-    assert sql.count(" OR ") == len(FTS_CONFIGS) - 1
+    assert sql.count(" OR ") == len(FTS_CONFIGS) * len(FTS_COLUMNS) - 1
+
+
+def test_match_also_looks_into_the_verbatim_transcript():
+    """Регрессия: до 17.09.2026 условие знало только выжимку, и слово,
+    сказанное в созвоне один раз, не находилось ни одним запросом."""
+    sql = fts_match_sql()
+    for cfg in FTS_CONFIGS:
+        assert (f"to_tsvector('{cfg}', transcript_text)"
+                f" @@ to_tsquery('{cfg}', :tsq)") in sql
+
+
+def test_summary_columns_come_before_the_transcript():
+    """Выжимка остаётся основным сигналом: её OR-условия и её ранги первые."""
+    sql = fts_match_sql()
+    assert sql.index("content_text") < sql.index("transcript_text")
+    rank = fts_rank_sql()
+    assert rank.index("content_text") < rank.index("transcript_text")
 
 
 def test_rank_is_russian_first_so_old_order_survives():
@@ -103,3 +133,14 @@ async def test_agent_search_events_uses_multilingual_sql(monkeypatch):
     assert res["found"] == 0
     assert fts_match_sql() in s.sql[0]
     assert f"ORDER BY {fts_rank_sql()} DESC" in s.sql[0]
+
+
+def test_transcript_index_expressions_match_the_query():
+    """Индексы 033 обязаны повторять выражение WHERE дословно — иначе
+    BitmapOr не соберётся и вторая половина условия уйдёт в seq scan."""
+    body = _MIGRATION_TRANSCRIPT.read_text(encoding="utf-8")
+    indexed = set(re.findall(
+        r"gin \(to_tsvector\('(\w+)', transcript_text\)\)", body))
+    assert indexed == set(FTS_CONFIGS)
+    assert "ADD COLUMN IF NOT EXISTS transcript_text TEXT" in body
+    assert not re.search(r"^\s*BEGIN", body, re.M), "CONCURRENTLY в транзакции запрещён"

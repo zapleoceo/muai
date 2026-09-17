@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
-from vera_shared.text_chunks import clip_content
+from vera_shared.text_chunks import clip_content, clip_transcript
 
 from gateway.auth import check_internal_secret
 from gateway.voice_distill import distill
@@ -109,6 +109,17 @@ def transcript_record(utterances: list[Utterance]) -> dict[str, Any]:
     }
 
 
+def transcript_text(utterances: list[Utterance]) -> str:
+    """Дословная речь одной строкой — для полнотекстового поиска (033).
+
+    Эхо сюда входит: оно помечено, но это те же слова разговора, а лишние
+    повторы полнотекст не видит — лексема в tsvector одна. Отбор по `echo`
+    только отнял бы реплики, которые слушатель пометил ошибочно.
+    """
+    return clip_transcript("\n".join(u.text.strip() for u in utterances
+                                     if u.text.strip()))
+
+
 def body_text(d: dict, app: str | None, title: str | None) -> str:
     """Человекочитаемое тело события — его и увидит поиск по мозгу."""
     parts = [str(d.get("summary", "")).strip()]
@@ -172,6 +183,9 @@ async def ingest_voice_session(
                 # тридцать раз (замер: 66 445 символов при потолке 8 000), а
                 # звук не хранится вообще — что выброшено, того больше нигде нет.
                 content_extra=transcript_record(body.utterances),
+                # Та же речь плоским текстом — её и ищет полнотекст (033).
+                # Замер 17.09.2026: 91% слов созвона живут только здесь.
+                transcript_text=transcript_text(body.utterances),
                 occurred_at=body.started_at.astimezone(timezone.utc).replace(tzinfo=None),
                 metadata_={
                     "app": body.app,

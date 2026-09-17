@@ -69,6 +69,11 @@ class EventRow(Base):
     category: Mapped[str] = mapped_column(String(50), nullable=False, default="generic")
     content_text: Mapped[str] = mapped_column(Text, nullable=False, default="")
     content_extra: Mapped[dict[str, Any] | None] = mapped_column(JsonType, nullable=True)
+    # Дословная стенограмма голосового события — отдельно от выжимки в
+    # content_text (миграция 033). Нужна только полнотексту: вектор строится
+    # по выжимке, и сотня обрывков «ага, давай» не должна её перебивать.
+    # У остальных источников NULL, поэтому GIN-индексы по ней крошечные.
+    transcript_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     entity_hints: Mapped[list[dict[str, Any]]] = mapped_column(
         JsonType, nullable=False, default=list,
     )
