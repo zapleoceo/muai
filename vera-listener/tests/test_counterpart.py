@@ -38,6 +38,13 @@ class TestSlack:
             "slack.exe", "Вадим Кудрявцев - Sintegrum Team - Slack"
         ) == "Вадим Кудрявцев"
 
+    def test_ukrainian_capital_letter(self):
+        # Реальный заголовок 22.09.2026: «І» не входила в А-ЯЁ, и личный
+        # звонок остался без единого имени.
+        assert counterpart_name(
+            "slack.exe", "Клига Ігор - Sintegrum Team - Slack"
+        ) == "Клига Ігор"
+
     def test_channel_is_not_a_person(self):
         """Канал — не человек: записать его голосом одного из участников
         значило бы приписать всем в канале один голос."""
@@ -109,6 +116,20 @@ class TestLooksLikePerson:
 
     def test_three_words_allowed(self):
         assert looks_like_person("Анна Мария Петрова")
+
+    def test_ukrainian_capitals_start_a_name(self):
+        assert looks_like_person("Євген Шевченко")
+        assert looks_like_person("Ґалина Їжакова")
+
+    def test_ukrainian_lowercase_inside_a_word(self):
+        assert looks_like_person("Віталій Ємець")
+        assert looks_like_person("Ґжегож Їґєїі")
+
+    def test_single_ukrainian_word_is_not_enough(self):
+        assert not looks_like_person("Ігор")
+
+    def test_lowercase_ukrainian_start_is_rejected(self):
+        assert not looks_like_person("ігор клига")
 
     def test_single_word_is_not_enough(self):
         """Одно слово — это скорее ник, канал или название приложения."""
