@@ -47,6 +47,10 @@ from __future__ import annotations
 
 _RECOGNIZABLE_IMAGES = frozenset({"photo", "image"})
 _ALWAYS_RECOGNIZED = frozenset({"voice", "audio"})
+#: Всё, что вообще идёт на распознавание. Публично для SQL-предфильтров
+#: (доливка очереди): вид медиа в запросе обязан браться отсюда, а не
+#: перечисляться заново — иначе у отбора и политики снова две правды.
+RECOGNIZED_MEDIA_KINDS = _RECOGNIZABLE_IMAGES | _ALWAYS_RECOGNIZED
 
 #: Причины пропуска — пишутся в metadata и позволяют пересмотреть решение.
 SKIP_KIND = "kind"                      # видео/документ/стикер: не распознаём никогда

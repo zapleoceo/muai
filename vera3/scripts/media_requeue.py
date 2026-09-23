@@ -32,12 +32,16 @@ import asyncio
 import logging
 import os
 
-from sqlalchemy import select, text
+from sqlalchemy import bindparam, select, text
 from vera_shared.chat_activity import min_own_messages, own_message_count
 from vera_shared.control import set_control
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
-from vera_shared.media_policy import SKIP_NO_PARTICIPATION, media_skip_reason
+from vera_shared.media_policy import (
+    RECOGNIZED_MEDIA_KINDS,
+    SKIP_NO_PARTICIPATION,
+    media_skip_reason,
+)
 
 log = logging.getLogger("media-requeue")
 
@@ -59,9 +63,12 @@ TARGET = int(os.environ.get("VERA_MEDIA_QUEUE_TARGET", "800"))
 #: проверяться тестами на SQLite, где такого каста нет.
 
 
-async def _rows(sql: str, **params) -> list[dict]:
+async def _rows(sql: str, _expanding: tuple[str, ...] = (), **params) -> list[dict]:
+    stmt = text(sql)
+    if _expanding:
+        stmt = stmt.bindparams(*(bindparam(n, expanding=True) for n in _expanding))
     async with get_session() as s:
-        return [dict(r) for r in (await s.execute(text(sql), params)).mappings().all()]
+        return [dict(r) for r in (await s.execute(stmt, params)).mappings().all()]
 
 
 async def _retag(ids: list[int], *, status: str, drop_keys: tuple[str, ...] = (),
@@ -160,6 +167,15 @@ async def top_up(min_own: int, dry_run: bool) -> tuple[int, int, int]:
     # живёт настоящая политика и кэш участия); SQL лишь не тратит окно на
     # заведомый брак. Предикат участия — тот же, что в
     # chat_activity.own_message_count, включая CAST для SQLite.
+    #
+    # Берём не только провалы, но и то, что распознавать НЕ ПЫТАЛИСЬ вовсе
+    # (`media_recognition` отсутствует). 23.09.2026: очередь стояла на нуле,
+    # доливка добирала 0, а 1 665 подходящих медиа без единой попытки лежали
+    # месяцами — запрос начинался с `= 'failed'` и их не видел в принципе.
+    # У «непробованных» требуем пустой `media_skip_reason`: уборка (шаг 1)
+    # помечает выкинутое именно им, а не `media_recognition`, и без этого
+    # условия доливка тут же тянула бы выкинутое обратно. Вид медиа — из
+    # политики: иначе стикеры и документы без метки забили бы окно LIMIT.
     candidates = await _rows("""
         WITH own AS (
             SELECT CAST(metadata->>'chat_id' AS TEXT) AS chat_id, COUNT(*) AS n
@@ -174,7 +190,12 @@ async def top_up(min_own: int, dry_run: bool) -> tuple[int, int, int]:
                e.metadata->>'media_kind' AS media_kind
         FROM events e
         LEFT JOIN own ON own.chat_id = CAST(e.metadata->>'chat_id' AS TEXT)
-        WHERE e.metadata->>'media_recognition' = 'failed'
+        WHERE (
+                e.metadata->>'media_recognition' = 'failed'
+             OR (e.metadata->>'media_recognition' IS NULL
+                 AND e.metadata->>'media_skip_reason' IS NULL)
+          )
+          AND e.metadata->>'media_kind' IN :kinds
           AND e.triage_status = 'done'
           AND COALESCE(e.metadata->>'media_permanent', 'false') <> 'true'
           AND COALESCE(e.metadata->>'chat_kind', '') <> 'channel'
@@ -186,7 +207,8 @@ async def top_up(min_own: int, dry_run: bool) -> tuple[int, int, int]:
         ORDER BY (e.metadata->>'media_kind' IN ('voice','audio')) DESC,
                  e.occurred_at DESC
         LIMIT :lim
-    """, lim=need * 2, min_own=min_own)
+    """, lim=need * 2, min_own=min_own, kinds=sorted(RECOGNIZED_MEDIA_KINDS),
+        _expanding=("kinds",))
     verdicts = await _verdicts(candidates, min_own)
     # Порядок из SQL сохраняем: голосовые вперёд, дальше свежие.
     take = [row["id"] for row in candidates if verdicts[row["id"]] is None][:need]
@@ -209,6 +231,11 @@ BACKLOG_LEFT_KEY = "media_backlog_left"
 async def measure(min_own: int, dry_run: bool) -> tuple[int, int]:
     """Шаг 4: сколько медиа политика пропускает всего и сколько ещё не сделано.
 
+    Остаток НЕ включает то, чего больше нет в Telegram (`media_permanent`).
+    До 23.09.2026 включал: дашборд показывал 6 511, из них 6 012 распознать
+    нельзя никогда, и цифра не могла опуститься ниже ~6 000 — выглядело как
+    вечный затык при пустой очереди.
+
     Агрегируем по ЧАТУ, а не по событию: политика решает по чату (тип + участие
     владельца), поэтому сотня строк вместо десятков тысяч, и `own_message_count`
     спрашивается по разу на чат.
@@ -219,8 +246,9 @@ async def measure(min_own: int, dry_run: bool) -> tuple[int, int]:
                metadata->>'media_kind' AS media_kind,
                COUNT(*) AS n,
                COUNT(*) FILTER (
-                 WHERE metadata->>'media_recognition' IS NULL
-                    OR metadata->>'media_recognition' = 'failed'
+                 WHERE (metadata->>'media_recognition' IS NULL
+                        OR metadata->>'media_recognition' = 'failed')
+                   AND COALESCE(metadata->>'media_permanent', 'false') <> 'true'
                ) AS left_n
         FROM events
         WHERE metadata->>'media_kind' IS NOT NULL

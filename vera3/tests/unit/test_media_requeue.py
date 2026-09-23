@@ -237,6 +237,46 @@ class TestTopUp:
         assert added == 1
 
     @pytest.mark.asyncio
+    async def test_never_attempted_media_is_picked_up(self, sqlite_db, requeue):
+        """Ровно затык 23.09.2026: очередь на нуле, доливка добирает 0, а
+        1 665 подходящих медиа без единой попытки лежат месяцами. Запрос
+        начинался с `media_recognition = 'failed'` и непробованных не видел."""
+        await _event(sqlite_db, chat_id=40, chat_kind="private", media_kind="photo",
+                     status="done")                      # метки попытки нет вовсе
+        with pytest.MonkeyPatch.context() as mp:
+            _wire(mp, requeue, sqlite_db)
+            _was, added, _rejected = await requeue.top_up(min_own=5, dry_run=False)
+        assert added == 1
+        assert (await _status(sqlite_db, "tg:40:photo:done:"))[0] == "media_pending"
+
+    @pytest.mark.asyncio
+    async def test_swept_media_is_not_pulled_back(self, sqlite_db, requeue):
+        """Уборка метит выкинутое `media_skip_reason`, а не `media_recognition`.
+        Без проверки причины доливка вернула бы его в очередь тем же проходом."""
+        await _event(sqlite_db, chat_id=41, chat_kind="private", media_kind="photo",
+                     status="done", skip_reason="kind")
+        with pytest.MonkeyPatch.context() as mp:
+            _wire(mp, requeue, sqlite_db)
+            _was, added, _rejected = await requeue.top_up(min_own=5, dry_run=False)
+        assert added == 0
+
+    @pytest.mark.asyncio
+    async def test_unrecognisable_kinds_do_not_fill_the_window(self, sqlite_db, requeue):
+        """Стикеры и документы без метки не распознаём никогда — в окно LIMIT
+        они не должны попадать, иначе вытеснят настоящую работу."""
+        for kind in ("sticker", "document", "video"):
+            await _event(sqlite_db, chat_id=42, chat_kind="private", media_kind=kind,
+                         status="done", tag=kind)
+        await _event(sqlite_db, chat_id=43, chat_kind="private", media_kind="photo",
+                     status="done")
+        with pytest.MonkeyPatch.context() as mp:
+            _wire(mp, requeue, sqlite_db)
+            mp.setattr(requeue, "TARGET", 1)      # need=1 → окно на 2 строки
+            _was, added, rejected = await requeue.top_up(min_own=5, dry_run=False)
+        assert (added, rejected) == (1, 0)
+        assert (await _status(sqlite_db, "tg:43:photo:done:"))[0] == "media_pending"
+
+    @pytest.mark.asyncio
     async def test_full_queue_is_left_alone(self, sqlite_db, requeue):
         for i in range(3):
             await _event(sqlite_db, chat_id=12, chat_kind="private",
@@ -277,6 +317,20 @@ class TestMeasure:
             _wire(mp, requeue, sqlite_db)
             total, left = await requeue.measure(min_own=5, dry_run=True)
         assert (total, left) == (1, 1)
+
+    @pytest.mark.asyncio
+    async def test_media_that_is_gone_is_not_left(self, sqlite_db, requeue):
+        """До 23.09.2026 остаток включал медиа, которых нет в Telegram: из
+        6 511 на дашборде 6 012 были такими, и цифра не опускалась ниже ~6 000
+        при пустой очереди. Файла нет — это не долг, а потеря."""
+        await _event(sqlite_db, chat_id=24, chat_kind="private", media_kind="photo",
+                     status="done", recognition="failed", permanent=True, tag="gone")
+        await _event(sqlite_db, chat_id=24, chat_kind="private", media_kind="photo",
+                     status="done", recognition="failed", tag="retry")
+        with pytest.MonkeyPatch.context() as mp:
+            _wire(mp, requeue, sqlite_db)
+            total, left = await requeue.measure(min_own=5, dry_run=True)
+        assert (total, left) == (2, 1)
 
     @pytest.mark.asyncio
     async def test_writes_both_numbers_for_the_dashboard(self, sqlite_db, requeue):
