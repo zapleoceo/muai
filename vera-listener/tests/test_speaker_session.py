@@ -263,14 +263,55 @@ class TestConfirmedDirectChatWins:
         assert names == {"Вадим", "Олег"}
         assert "Виктор" not in names
 
-    def test_one_known_voice_still_collapses(self, tmp_path):
-        """Один знакомый голос противоречием не является — он подтверждает."""
+    def test_known_voice_of_the_title_person_collapses(self, tmp_path):
+        """Узнан тот же, кто в заголовке, — подтверждение, все реплики ему."""
+        session, registry = _session(tmp_path, [_vec(0), _vec(1)])
+        registry.remember("Виктор", _vec(0))
+        for at in (1.0, 2.0, 3.0, 4.0):
+            session.observe(at, _AUDIO)
+
+        assert set(session.resolve(_direct("Виктор")).values()) == {"Виктор"}
+
+    def test_other_known_voice_in_a_dm_is_a_huddle(self, tmp_path):
+        """21.09: личка Виктора, но в хадле был ещё Вадим — узнан отпечатком.
+
+        Узнанный голос с именем ≠ заголовку — доказательство второго человека
+        на линии. Раньше имя узнанного перетирало всех: 26 реплик «Вадим».
+        """
         session, registry = _session(tmp_path, [_vec(0), _vec(1)])
         registry.remember("Вадим", _vec(0))
         for at in (1.0, 2.0, 3.0, 4.0):
             session.observe(at, _AUDIO)
 
-        assert set(session.resolve(_direct("Виктор")).values()) == {"Вадим"}
+        names = session.resolve(_direct("Виктор"))
+
+        assert names == {1.0: "Вадим", 2.0: "Виктор", 3.0: "Вадим", 4.0: "Виктор"}
+        assert registry.names == ["Вадим"]
+
+    def test_huddle_numbers_the_rest_when_the_title_voice_is_known(self, tmp_path):
+        """Узнаны и Виктор, и Вадим — чей неузнанный осколок, неизвестно."""
+        session, registry = _session(tmp_path, [_vec(0), _vec(1), _vec(2)])
+        registry.remember("Вадим", _vec(0))
+        registry.remember("Виктор", _vec(1))
+        for at in (1.0, 2.0, 3.0):
+            session.observe(at, _AUDIO)
+
+        names = session.resolve(_direct("Виктор"))
+
+        assert names == {1.0: "Вадим", 2.0: "Виктор", 3.0: "Собеседник 1"}
+
+    def test_two_strangers_known_leave_the_rest_to_the_title(self, tmp_path):
+        """Узнаны двое, и оба не хозяин лички, — неузнанное остаётся ему."""
+        session, registry = _session(tmp_path, [_vec(0), _vec(1), _vec(2)])
+        registry.remember("Вадим", _vec(0))
+        registry.remember("Олег", _vec(1))
+        for at in (1.0, 2.0, 3.0):
+            session.observe(at, _AUDIO)
+
+        names = session.resolve(_direct("Виктор"))
+
+        assert names == {1.0: "Вадим", 2.0: "Олег", 3.0: "Виктор"}
+        assert sorted(registry.names) == ["Вадим", "Олег"]
 
     def test_chat_name_without_confirmation_still_needs_one_voice(self, tmp_path):
         """Telegram личку не подтверждает: «General @ …» — групповой чат.
