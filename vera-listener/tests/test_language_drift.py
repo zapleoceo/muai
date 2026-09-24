@@ -9,8 +9,10 @@ from __future__ import annotations
 from dataclasses import replace
 
 import numpy as np
+import pytest
 
 from vera_listener.config import Config
+from vera_listener.language import CYRILLIC_MIN, cyrillic_share
 from vera_listener.transcriber import MIN_AUDIO_S, Transcriber
 
 
@@ -82,3 +84,45 @@ def test_every_check_is_logged_with_track_and_reason(tmp_path, monkeypatch, capl
     said = [r.getMessage() for r in caplog.records if "проверка языка" in r.getMessage()]
     assert len(said) == 1
     assert "mic" in said[0] and "en" in said[0] and "ru" in said[0] and "кириллица" in said[0]
+
+
+def test_foreign_language_without_cyrillic_is_redone_in_english(tmp_path, monkeypatch):
+    """Чужой язык, под `ru` латиница: прогон с `ru` не отдаём — на огрызке он
+    переводит на русский, а исходный ответ несёт токен чужого языка."""
+    pipe = _Pipe(("de", "Wir müssen den Server prüfen"),
+                 {"ru": "We need to check the server", "en": "We need to check the server logs"})
+    assert _run(tmp_path, monkeypatch, pipe) == ["We need to check the server logs"]
+    assert pipe.calls == ["auto", "ru", "en"]
+
+
+def test_missing_language_is_trusted_without_second_pass(tmp_path, monkeypatch):
+    pipe = _Pipe(("", "слышно"), {})
+    assert _run(tmp_path, monkeypatch, pipe) == ["слышно"]
+    assert pipe.calls == ["auto"]
+
+
+def test_known_limit_indonesian_heard_as_english_stays_english(tmp_path, monkeypatch):
+    """ИЗВЕСТНАЯ ГРАНИЦА, не желаемое поведение. Индонезийский и английский —
+    оба латиница, по письму их не различить, так что индонезийская речь под
+    ошибочным `en` остаётся английским переводом (как и до проверки). Тест
+    фиксирует это, чтобы изменение не прошло молча: научились различать —
+    переписать тест вместе с language.py и docs/listener.md."""
+    pipe = _Pipe(("en", "We have not checked it yet"),
+                 {"ru": "We have not checked it yet", "id": "Kami belum memeriksanya"})
+    assert _run(tmp_path, monkeypatch, pipe) == ["We have not checked it yet"]
+    assert pipe.calls == ["auto", "ru"]
+
+
+@pytest.mark.parametrize("text", [
+    # Дословные ответы whisper под `ru` на синтетике (CPU, 24.09.2026).
+    "Я смерджил полреквест в Лейрвелл.",
+    "Деплой на стейджинг упал.",
+    "Глянь в джерр, там тикет по GitLab CI, пейплайн красный.",
+    "Окей, пушил мэстер, потом ревью.",
+])
+def test_russian_jargon_passes_the_threshold(text):
+    assert cyrillic_share(text) >= CYRILLIC_MIN
+
+
+def test_english_under_ru_stays_below_the_threshold():
+    assert cyrillic_share("Yesterday I had a meeting with the new manager") < CYRILLIC_MIN
