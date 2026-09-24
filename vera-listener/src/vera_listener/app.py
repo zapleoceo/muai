@@ -289,7 +289,7 @@ class Listener:
         # а непустой она без него не станет. Поймано сквозным тестом.
         audio = (pcm_to_float(pcm)
                  if speakers is not None and track == SYSTEM else None)
-        for segment in self.transcriber.transcribe(pcm):
+        for segment in self.transcriber.transcribe(pcm, track=track):
             # Тем же условием, что и в `outbox.append`: пустую реплику очередь
             # молча не пишет, и снятый с неё отпечаток остался бы висячим —
             # реплики под него нет, а в кластеризации он участвует и способен
