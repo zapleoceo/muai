@@ -62,6 +62,7 @@ from pathlib import Path
 import numpy as np
 
 from vera_listener.config import Config
+from vera_listener.language import choose, language_of
 from vera_listener.stitch import Segment, merge_continuations
 
 log = logging.getLogger("listener.stt")
@@ -207,21 +208,33 @@ class Transcriber:
             return pipe
         raise RuntimeError("ни одно устройство не поднялось: " + "; ".join(errors))
 
-    def transcribe(self, pcm: bytes) -> list[Segment]:
+    def transcribe(self, pcm: bytes, track: str = "") -> list[Segment]:
         """PCM16 16 кГц → реплики со смещением, концом и текстом."""
         audio = pcm_to_float(pcm)
         if len(audio) < MIN_AUDIO_S * SAMPLE_RATE:
             return []
         pipe = self._load()
+        fixed = self.config.language != AUTO_LANGUAGE
+        result = self._generate(pipe, audio, self.config.language if fixed else None)
+        if not fixed:
+            # Ответу `en` без проверки не верим — почему, в language.py.
+            choice = choose(result, lambda lang: self._generate(pipe, audio, lang))
+            if choice.reason != "модель":
+                log.info("проверка языка: %s, кусок %.0fс — модель сказала %s, беру %s (%s)",
+                         track or "?", len(audio) / SAMPLE_RATE, choice.found or "?",
+                         choice.chosen, choice.reason)
+            result = choice.result
+        self._note_language(result)
+        return segments_of(result, len(audio) / SAMPLE_RATE)
+
+    def _generate(self, pipe, audio: np.ndarray, language: str | None):
         kwargs = {"task": "transcribe", "return_timestamps": True}
-        if self.config.language != AUTO_LANGUAGE:
-            kwargs["language"] = f"<|{self.config.language}|>"
+        if language:
+            kwargs["language"] = f"<|{language}|>"
         if self.config.glossary and self._device not in self._glossary_unsupported:
             try:
-                result = pipe.generate(audio, initial_prompt=", ".join(self.config.glossary),
-                                       **kwargs)
-                self._note_language(result)
-                return segments_of(result, len(audio) / SAMPLE_RATE)
+                return pipe.generate(audio, initial_prompt=", ".join(self.config.glossary),
+                                     **kwargs)
             except Exception as e:                      # noqa: BLE001
                 # НЕ отказ устройства — сам приём подсказки на нём не работает
                 # (см. докстринг модуля). Поэтому не трогаем _banned/_pipe:
@@ -231,7 +244,7 @@ class Transcriber:
                            "дальше без неё на этом устройстве",
                            self._device, type(e).__name__)
         try:
-            result = pipe.generate(audio, **kwargs)
+            return pipe.generate(audio, **kwargs)
         except Exception:                              # noqa: BLE001
             # Устройство могло отвалиться уже в работе: драйвер откатился, NPU
             # занят, память кончилась. Пайплайн кэширован, поэтому без сброса
@@ -244,18 +257,17 @@ class Transcriber:
                 self._banned.add(failed)
                 log.warning("%s отвалился в работе — дальше без него", failed)
             raise
-        self._note_language(result)
-        return segments_of(result, len(audio) / SAMPLE_RATE)
 
     def _note_language(self, result) -> None:
-        """Сказать в лог, на каком языке модель решила слушать.
+        """Сказать в лог, на каком языке распознан кусок.
 
-        При `auto` язык выбирает она, а не мы, и молчать об этом нельзя: если
+        При `auto` язык выбирает модель, а не мы, и молчать об этом нельзя: если
         украинскую речь она услышит как русскую, единственным следом будет
         покорёженный текст — а так видно причину. Пишем только смену, иначе в
-        логе была бы строка на каждый кусок.
+        логе была бы строка на каждый кусок; каждая перепроверка пишется
+        отдельно, с дорожкой и причиной.
         """
-        found = (getattr(result, "language", "") or "").strip("<|> ")
+        found = language_of(result)
         if found and found != self._language_seen:
             self._language_seen = found
             log.info("язык распознавания: %s", found)

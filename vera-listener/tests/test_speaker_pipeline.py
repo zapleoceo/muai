@@ -34,7 +34,7 @@ class _Transcriber:
     def __init__(self, segments: list[Segment]):
         self._segments = segments
 
-    def transcribe(self, pcm: bytes) -> list[Segment]:
+    def transcribe(self, pcm: bytes, track: str = "") -> list[Segment]:
         return list(self._segments)
 
 
