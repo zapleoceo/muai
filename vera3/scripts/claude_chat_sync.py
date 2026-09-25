@@ -50,6 +50,13 @@ MIN_TURNS = 2
 #: Потолок на реплику. Дампы `tool_result` бывают в десятки тысяч символов и
 #: вытесняют смысл; свёртка на сервере всё равно режет текст на окна.
 MAX_TURN_CHARS = 4000
+#: Лимит тела у nginx перед шлюзом — 1 МБ (дефолт, в конфиге vera не задан).
+#: Запас под заголовки и оценку.
+BODY_BUDGET_BYTES = 900_000
+#: Ниже этого реплика перестаёт нести смысл — дальше уже прореживаем.
+MIN_TURN_CHARS = 400
+#: Сколько реплик с начала и с конца сессии прореживание не трогает.
+EDGE_TURNS = 40
 #: Сколько ждать, пока воркер осмыслит принятые сессии. Не дождались — курсор
 #: не двинулся, доберём в следующий проход.
 DEFAULT_WAIT_S = 3600.0
@@ -202,7 +209,7 @@ def read_session(path: Path) -> dict | None:
             continue
         role = message.get("role") or record.get("type")
         turns.append({"role": "user" if role == "user" else "assistant",
-                      "text": text[:MAX_TURN_CHARS]})
+                      "text": text.replace("\x00", "")[:MAX_TURN_CHARS]})
         stamp = _naive_utc(record.get("timestamp") or message.get("timestamp"))
         if stamp:
             first_ts = first_ts or stamp
@@ -226,6 +233,46 @@ def read_session(path: Path) -> dict | None:
 
 
 # ─── Отправка ────────────────────────────────────────────────────────────
+
+
+def _body_bytes(payload: dict) -> int:
+    return len(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+
+
+def fit_body(payload: dict) -> dict:
+    """Ужать сессию под лимит тела запроса, сохранив её ход целиком.
+
+    nginx перед шлюзом пропускает 1 МБ, а живые сессии весят до 26 МБ: 56 из 63
+    ждавших 2026-09-25 отбивались 413 каждый час, и контекст соседних сессий в
+    мозг не попадал вовсе. Больше ~840 тыс. символов сервер всё равно не
+    осмысляет (24 окна по 35 тыс.) и режет ХВОСТ — самую свежую работу.
+
+    Поэтому сначала укорачиваем реплики, потом равномерно прореживаем середину:
+    начало и конец сессии остаются. `turn_count` — полное число реплик, курсор
+    клиента и шлюза считает по нему.
+    """
+    turns = payload["turns"]
+    fitted = {**payload, "turn_count": len(turns)}
+    if _body_bytes(fitted) <= BODY_BUDGET_BYTES:
+        return fitted
+    cap = MAX_TURN_CHARS
+    while cap > MIN_TURN_CHARS:
+        cap = max(MIN_TURN_CHARS, int(cap * 0.75))
+        fitted["turns"] = [{**t, "text": t["text"][:cap]} for t in turns]
+        if _body_bytes(fitted) <= BODY_BUDGET_BYTES:
+            return fitted
+    short = fitted["turns"]
+    keep = len(short)
+    while keep > 2 * EDGE_TURNS:
+        keep = int(keep * 0.85)
+        middle = short[EDGE_TURNS:-EDGE_TURNS]
+        step = len(middle) / max(1, keep - 2 * EDGE_TURNS)
+        sampled = [middle[int(i * step)] for i in range(keep - 2 * EDGE_TURNS)]
+        fitted["turns"] = short[:EDGE_TURNS] + sampled + short[-EDGE_TURNS:]
+        if _body_bytes(fitted) <= BODY_BUDGET_BYTES:
+            return fitted
+    fitted["turns"] = short[:EDGE_TURNS] + short[-EDGE_TURNS:]
+    return fitted
 
 
 def _call(url: str, *, data: bytes | None = None) -> tuple[bool, dict | str]:
@@ -256,7 +303,7 @@ def enqueue(payload: dict) -> tuple[bool, str]:
     дефолтным 60с — синхронная версия ловила 504 ровно на 60.8-й секунде.
     """
     ok, body = _call(f"{VERA_GATEWAY_URL}/v1/claude/session",
-                     data=json.dumps(payload, ensure_ascii=False).encode("utf-8"))
+                     data=json.dumps(fit_body(payload), ensure_ascii=False).encode("utf-8"))
     if not ok:
         return False, str(body)
     return True, str(body.get("status") or "?") if isinstance(body, dict) else "?"

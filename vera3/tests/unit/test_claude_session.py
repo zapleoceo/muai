@@ -163,6 +163,25 @@ class TestAccept:
         assert sess.params["started_at"].tzinfo is None
 
     @pytest.mark.asyncio
+    async def test_thinned_session_counts_all_turns(self):
+        """Клиент прислал ужатую сессию — курсор считает полное число реплик."""
+        import gateway.claude_session as cs
+        from starlette.responses import Response
+
+        sess = _Sess(value="26014a1e-94fe")
+        with patch("gateway.claude_session.get_session", lambda: sess), \
+             patch("gateway.claude_session.check_internal_secret", lambda s: None):
+            res = await cs.accept_claude_session(_session(turn_count=5000), Response(),
+                                                 x_internal_secret="ok")
+
+        assert res.turns == 5000
+        assert sess.params["turn_count"] == 5000
+
+    def test_nul_is_dropped_from_turn_text(self):
+        """Postgres не хранит \\u0000 — иначе 500 на каждый проход."""
+        assert Turn(role="assistant", text="name: \x00\r\n").text == "name: \r\n"
+
+    @pytest.mark.asyncio
     async def test_already_distilled_is_not_requeued(self):
         """WHERE done_turns < turns отсекает повтор — модель зря не гоняем."""
         import gateway.claude_session as cs

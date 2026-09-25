@@ -22,7 +22,7 @@ from datetime import datetime, timezone
 from typing import Any, Literal
 
 from fastapi import APIRouter, Header, HTTPException, Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from vera_shared.db.engine import get_session
@@ -42,6 +42,14 @@ class Turn(BaseModel):
     role: Literal["user", "assistant"]
     text: str
 
+    @field_validator("text")
+    @classmethod
+    def drop_nul(cls, v: str) -> str:
+        # Postgres не хранит \u0000 ни в text, ни в jsonb: один NUL из вывода
+        # ssh-приглашения («Enter the user name…: \0») отдавал 500 на каждый
+        # проход, и сессия не попадала в мозг никогда (2026-09-25).
+        return v.replace("\x00", "")
+
 
 class ClaudeSession(BaseModel):
     session_id: str = Field(max_length=64)
@@ -51,6 +59,10 @@ class ClaudeSession(BaseModel):
     cwd: str | None = None
     git_branch: str | None = Field(default=None, max_length=255)
     turns: list[Turn] = Field(min_length=1)
+    # Сколько реплик в сессии на самом деле. Длинную сессию клиент прореживает,
+    # чтобы влезть в лимит тела nginx, но курсор обязан считать ВСЕ реплики:
+    # иначе дописанная сессия, ужатая до того же размера, не вернётся в очередь.
+    turn_count: int | None = Field(default=None, ge=1)
 
 
 class ClaudeSessionAccepted(BaseModel):
@@ -161,7 +173,7 @@ async def accept_claude_session(
 ) -> ClaudeSessionAccepted:
     check_internal_secret(x_internal_secret)
 
-    turns = len(body.turns)
+    turns = max(len(body.turns), body.turn_count or 0)
     incoming = {
         ClaudeSessionQueueRow.project_dir: body.project_dir,
         ClaudeSessionQueueRow.cwd: body.cwd,
