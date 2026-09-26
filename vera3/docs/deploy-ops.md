@@ -835,3 +835,21 @@ Short version:
 2. Open `https://dima.veranda.my/start` in Chrome
 3. Click through TG-widget-style OAuth flow
 4. Helper writes new refresh tokens, ingestor picks them up next poll
+
+## Живой остаток распознавания: накат 034
+
+Что и почему — `media-worker.md`, шаг `measure`. Порядок как у 031: сначала
+индекс, потом код. Запрос остатка без индекса — группировка со сканом всех
+событий (1.7 с на 466 тыс. строк), а дашборд зовёт его раз в 30 секунд.
+
+1. **Миграция:** `scripts/apply_migration.sh infra/migrations/034_events_media_unrecognized_index.sql`.
+   `CONCURRENTLY`, запись в `events` не блокируется. Индекс частичный — только
+   нераспознанные медиа, это тысячи строк, так что стройка идёт секунды и весит
+   единицы мегабайт.
+2. **Проверка плана** (только чтение): `BEGIN READ ONLY; EXPLAIN` того же
+   запроса, что в `vera_shared/media_backlog.py` — ожидается
+   `Bitmap Index Scan on ix_events_media_unrecognized`, не `Seq Scan`.
+3. **Деплой кода** обычным мерджем. Рестарт не нужен сверх деплоя.
+   Откат кода — revert; откат индекса — `DROP INDEX CONCURRENTLY
+   ix_events_media_unrecognized` и `DELETE FROM schema_migrations WHERE
+   version='034_events_media_unrecognized_index'`, **только после** отката кода.

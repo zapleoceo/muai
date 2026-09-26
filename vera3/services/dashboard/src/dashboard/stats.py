@@ -20,8 +20,10 @@ from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import text
+from vera_shared.chat_activity import min_own_messages
 from vera_shared.control import get_control
 from vera_shared.db.engine import get_session
+from vera_shared.media_backlog import unrecognized_left
 from vera_shared.timeutil import utc_naive_now
 
 log = logging.getLogger(__name__)
@@ -124,11 +126,17 @@ async def _compute_stats() -> dict[str, Any]:
             WHERE created_at >= :month
         """), {"today": today, "month": month_ago, "h1": h1, "h24": h24})).mappings().one()
 
-    # Настоящий остаток распознавания — замер от scripts/media_requeue.py
-    # (см. его measure()). Здесь его не считают: политика «какие чаты вообще
-    # распознаём» живёт там, а тут это был бы второй скан events каждую минуту.
+    # Сколько медиа вообще проходит политику — замер от scripts/media_requeue.py
+    # раз в три часа: цифра меняется медленно, считать её на каждой загрузке
+    # значит сканировать все события.
     media_total = int(await get_control("media_backlog_total", "0") or 0)
-    media_left = int(await get_control("media_backlog_left", "0") or 0)
+    # Остаток считаем вживую: он меняется каждые несколько минут, и запись от
+    # трёхчасового прогона показывала «1 осталось» при пустой очереди.
+    try:
+        media_left = await unrecognized_left(await min_own_messages())
+    except Exception as e:
+        log.warning("живой остаток распознавания не посчитался (%s) — беру замер крона", e)
+        media_left = int(await get_control("media_backlog_left", "0") or 0)
 
     # Свод по всем источникам (суммируем группы — без ещё одного скана)
     agg = dict.fromkeys(("total", "done", "pending", "media_pending", "error", "dead", "ingest_1h", "ingest_24h"), 0)
