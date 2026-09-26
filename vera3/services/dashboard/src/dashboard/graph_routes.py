@@ -17,6 +17,7 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from vera_shared.graph.clusters import get_clusters, recompute_clusters
 from vera_shared.graph.repo import find_entity_by_name, graph_snapshot
 
+from dashboard.graph_labels import predicate_labels_json, predicate_options_html
 from dashboard.render import _render, owner_or_auth_error, owner_or_blank_401
 
 log = logging.getLogger(__name__)
@@ -79,7 +80,7 @@ async def _recluster_bg() -> None:
 
 @router.post("/graph/recluster")
 async def graph_recluster(request: Request):
-    """Кнопка «Кластеры (Вера)»: label-propagation по связям + LLM-ярлыки.
+    """Кнопка «Раскрасить по темам»: label-propagation по связям + LLM-ярлыки.
     Работает в фоне — страница просто перезагружается и подтянет результат."""
     if (resp := owner_or_auth_error(request)) is not None:
         return resp
@@ -95,14 +96,14 @@ async def graph_recluster(request: Request):
 async def graph_page(request: Request):
     if (resp := owner_or_auth_error(request)) is not None:
         return resp
-    pred_opts = "".join(f'<option value="{p}">{p}</option>' for p in _PREDICATES)
-    body = _GRAPH_BODY.replace("__PRED_OPTS__", pred_opts)
+    body = (_GRAPH_BODY.replace("__PRED_OPTS__", predicate_options_html(_PREDICATES))
+            .replace("__PRED_LABELS__", predicate_labels_json(_PREDICATES)))
     return HTMLResponse(_render("graph", body))
 
 
 # The page body: control bar + Cytoscape canvas + init script. Kept as a
 # plain string (not an f-string) so the JS braces don't need escaping;
-# only __PRED_OPTS__ is substituted server-side.
+# only __PRED_OPTS__ / __PRED_LABELS__ are substituted server-side.
 _GRAPH_BODY = """
 <h2>🧠 Граф мозга Веры</h2>
 <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin-bottom:12px">
@@ -120,8 +121,8 @@ _GRAPH_BODY = """
   </label>
   <button id="g-reset">↺ весь граф</button>
   <form method="post" action="/graph/recluster" style="display:inline">
-    <button title="Вера сгруппирует граф по темам (команда, семья, чаты…) и подпишет кластеры">
-      🎨 Кластеры (Вера)</button>
+    <button title="Вера разобьёт граф на темы (работа, друзья, чаты…) и покрасит узлы по темам. Данные не меняются.">
+      🎨 Раскрасить по темам</button>
   </form>
   <span id="g-count" class="mute"></span>
 </div>
@@ -179,9 +180,19 @@ function esc(s){
   return String(s).replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;',
     '"':'&quot;',"'":'&#39;'}[ch]));
 }
+const PRED_LABELS = __PRED_LABELS__;
+const predLabel = p => PRED_LABELS[p] || String(p||'').replace(/_/g,' ');
 const info = document.getElementById('g-info');
 const count = document.getElementById('g-count');
 const legend = document.getElementById('g-legend');
+
+// computed_at is naive UTC ISO; show it in the viewer's local time.
+function fmtStamp(iso){
+  const d = new Date(String(iso).replace(/Z?$/, 'Z'));
+  if (isNaN(d)) return String(iso);
+  const p = n => String(n).padStart(2, '0');
+  return p(d.getDate()) + '.' + p(d.getMonth()+1) + ' в ' + p(d.getHours()) + ':' + p(d.getMinutes());
+}
 
 function renderLegend(data){
   legend.innerHTML = '';
@@ -190,11 +201,14 @@ function renderLegend(data){
   const items = Object.keys(labels).map(Number).filter(c=>present.has(c)).sort((a,b)=>a-b);
   if (!items.length){
     if (data.recluster_running)
-      legend.innerHTML = '<span class="pill warn">⏳ Вера размечает кластеры — обнови страницу через минуту</span>';
+      legend.innerHTML = '<span class="pill warn">⏳ Вера раскрашивает граф по темам — обнови страницу через минуту</span>';
     else if (!data.clusters_at)
-      legend.innerHTML = '<span class="mute" style="font-size:12px">Нажми «🎨 Кластеры (Вера)» — она сгруппирует граф по темам и подпишет их.</span>';
+      legend.innerHTML = '<span class="mute" style="font-size:12px">Нажми «🎨 Раскрасить по темам» — Вера разобьёт граф на темы и покрасит узлы. Меняются только цвета, данные и фильтры — нет.</span>';
     return;
   }
+  if (data.clusters_at)
+    legend.insertAdjacentHTML('beforeend', '<span class="mute" style="font-size:12px">' +
+      'темы посчитаны ' + esc(fmtStamp(data.clusters_at)) + ' · цвет узла = тема</span>');
   for (const c of items){
     legend.insertAdjacentHTML('beforeend',
       '<span style="display:inline-flex;align-items:center;gap:5px;font-size:12px;'+
@@ -263,6 +277,11 @@ cy.on('tap', 'node', ev => {
   info.textContent = 'Загружаю окружение «' + ev.target.data('name') + '»…';
   load({focus: ev.target.data('raw'),
         predicate: document.getElementById('g-pred').value, limit: 400});
+});
+cy.on('tap', 'edge', ev => {
+  const e = ev.target;
+  info.textContent = e.source().data('name') + ' — ' + predLabel(e.data('predicate')) +
+                     ' — ' + e.target().data('name');
 });
 document.getElementById('g-reset').onclick = () => load(coreParams());
 document.getElementById('g-mindeg').onchange = () => load(coreParams());
