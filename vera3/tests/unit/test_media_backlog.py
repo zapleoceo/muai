@@ -138,3 +138,15 @@ def test_query_and_index_predicate_list_the_same_media_kinds():
     kinds_sql = ", ".join(f"'{kind}'" for kind in sorted(RECOGNIZED_MEDIA_KINDS))
     assert f"IN ({kinds_sql})" in media_backlog._UNRECOGNIZED_SQL
     assert f"IN ({kinds_sql})" in migration
+
+
+def test_query_and_index_predicate_drop_channel_photos_the_same_way():
+    """Условие про каналы живёт и в запросе, и в предикате индекса. Разойдутся —
+    запрос снова полезет в кучу за шестнадцатью тысячами строк."""
+    from pathlib import Path
+
+    migration = (Path(__file__).resolve().parents[2] / "infra" / "migrations"
+                 / "034_events_media_unrecognized_index.sql").read_text(encoding="utf-8")
+    clause = "COALESCE(metadata->>'chat_kind', '') <> 'channel'"
+    assert clause in media_backlog._UNRECOGNIZED_SQL
+    assert clause in migration

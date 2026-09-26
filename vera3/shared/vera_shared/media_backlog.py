@@ -48,6 +48,11 @@ _UNRECOGNIZED_SQL = f"""
       AND (metadata->>'media_recognition' IS NULL
            OR metadata->>'media_recognition' = 'failed')
       AND COALESCE(metadata->>'media_permanent', 'false') <> 'true'
+      -- Фото вещательных каналов отсекаем прямо в запросе: политика их
+      -- не пропустит всё равно, а это почти весь нераспознанный остаток,
+      -- и без этого условия запрос поднимает из кучи 16 тыс. строк.
+      AND (metadata->>'media_kind' IN ('audio', 'voice')
+           OR COALESCE(metadata->>'chat_kind', '') <> 'channel')
     GROUP BY 1, 2, 3
 """
 
