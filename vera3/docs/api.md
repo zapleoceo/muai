@@ -123,7 +123,16 @@ renders "everything":
 - Tap a node (or search by name) → **ego network**: `graph_snapshot(focus_id)`
   returns that entity + its 1-hop neighbours. Name search resolves via the
   fuzzy `find_entity_by_name`.
-- `predicate` filter narrows to one relationship type. Node colour = entity
+- `predicate` filter narrows to one relationship type. The dropdown shows
+  Russian labels («работает с», «состоит в», …) with a hint tooltip, sorted
+  alphabetically by label (a fixed list of ~13 is easier to scan by name than
+  by shifting frequency); the option value stays the raw code. The mapping
+  lives in one place, `dashboard/graph_labels.py`: `PREDICATE_LABELS`,
+  `predicate_label` (unknown codes fall back to the code without `_of` and
+  with underscores as spaces — never blank), `predicate_hint`,
+  `predicate_options_html`, `predicate_labels_json` (the same labels are
+  injected into the page JS, so tapping an edge shows «A — label — B»).
+  Node colour = entity
   type (person / group / channel), size ∝ degree.
 
 Two different degrees are in play, deliberately: node **selection** uses the

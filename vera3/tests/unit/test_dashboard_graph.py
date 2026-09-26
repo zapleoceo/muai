@@ -55,6 +55,23 @@ def test_api_graph_requires_auth():
     assert r.status_code == 401
 
 
+def test_graph_page_predicate_filter_shows_russian_labels():
+    r = client.get("/graph", cookies=_owner_cookie())
+    assert r.status_code == 200
+    assert '<option value="coworker_of"' in r.text
+    assert ">работает с</option>" in r.text
+    assert ">coworker_of</option>" not in r.text
+    assert "__PRED_LABELS__" not in r.text
+
+
+def test_graph_page_theme_button_is_self_explaining():
+    r = client.get("/graph", cookies=_owner_cookie())
+    assert "Раскрасить по темам" in r.text
+    assert "Данные не меняются" in r.text
+    assert "темы посчитаны" in r.text
+    assert "Кластеры (Вера)" not in r.text
+
+
 def test_graph_page_renders_for_owner():
     r = client.get("/graph", cookies=_owner_cookie())
     assert r.status_code == 200
