@@ -124,3 +124,17 @@ async def test_repeat_call_does_not_hit_the_database_again(sqlite_db):
         assert await media_backlog.unrecognized_left(5) == 1
         media_backlog.forget()
         assert await media_backlog.unrecognized_left(5) == 2
+
+
+def test_query_and_index_predicate_list_the_same_media_kinds():
+    """Расхождение списка видов в запросе и в предикате частичного индекса не
+    ломает ответ — оно тихо роняет запрос в скан всей таблицы событий."""
+    from pathlib import Path
+
+    from vera_shared.media_policy import RECOGNIZED_MEDIA_KINDS
+
+    migration = (Path(__file__).resolve().parents[2] / "infra" / "migrations"
+                 / "034_events_media_unrecognized_index.sql").read_text(encoding="utf-8")
+    kinds_sql = ", ".join(f"'{kind}'" for kind in sorted(RECOGNIZED_MEDIA_KINDS))
+    assert f"IN ({kinds_sql})" in media_backlog._UNRECOGNIZED_SQL
+    assert f"IN ({kinds_sql})" in migration

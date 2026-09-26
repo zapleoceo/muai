@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import time
 
-from sqlalchemy import bindparam, text
+from sqlalchemy import text
 
 from vera_shared.chat_activity import own_message_count
 from vera_shared.db.engine import get_session
@@ -29,15 +29,22 @@ TTL_S = 30.0
 
 _cache: tuple[int, float] | None = None
 
+#: Виды подставлены в текст, а не связаны параметром: с параметром Postgres
+#: после нескольких прогонов переходит на обобщённый план, где значения ему
+#: неизвестны, и доказать совпадение с предикатом частичного индекса он уже не
+#: может — запрос тихо уезжает в скан всей таблицы. Подстановка безопасна:
+#: список — константа кода, не пользовательский ввод.
+_KINDS_SQL = ", ".join(f"'{kind}'" for kind in sorted(RECOGNIZED_MEDIA_KINDS))
+
 #: Тот же набор условий стоит в предикате частичного индекса (миграция 034).
-#: Меняешь здесь — меняй и там, иначе запрос уедет в скан всей таблицы.
-_UNRECOGNIZED_SQL = """
+#: Меняешь здесь — меняй и там; расхождение ловит тест test_media_backlog.
+_UNRECOGNIZED_SQL = f"""
     SELECT CAST(metadata->>'chat_id' AS TEXT) AS chat_id,
            metadata->>'chat_kind'  AS chat_kind,
            metadata->>'media_kind' AS media_kind,
            COUNT(*) AS n
     FROM events
-    WHERE metadata->>'media_kind' IN :kinds
+    WHERE metadata->>'media_kind' IN ({_KINDS_SQL})
       AND (metadata->>'media_recognition' IS NULL
            OR metadata->>'media_recognition' = 'failed')
       AND COALESCE(metadata->>'media_permanent', 'false') <> 'true'
@@ -57,11 +64,8 @@ async def unrecognized_left(min_own: int) -> int:
     if _cache is not None and _cache[1] > time.monotonic():
         return _cache[0]
 
-    stmt = text(_UNRECOGNIZED_SQL).bindparams(
-        bindparam("kinds", expanding=True))
     async with get_session() as s:
-        rows = (await s.execute(
-            stmt, {"kinds": sorted(RECOGNIZED_MEDIA_KINDS)})).mappings().all()
+        rows = (await s.execute(text(_UNRECOGNIZED_SQL))).mappings().all()
 
     left = 0
     for row in rows:
