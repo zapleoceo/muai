@@ -41,9 +41,12 @@ def _fresh_vector_capability():
     теста, а не только в фикстуре sqlite_db: многие тесты базу не берут."""
     from vera_shared.db.chunk_vectors import forget_chunk_capability
     from vera_shared.db.vectors import forget_capability
+    from vera_shared.media_backlog import forget as forget_media_backlog
     forget_capability()
     forget_chunk_capability()
+    forget_media_backlog()
     yield
+    forget_media_backlog()
     forget_capability()
     forget_chunk_capability()
 

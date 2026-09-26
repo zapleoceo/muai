@@ -33,6 +33,7 @@ import logging
 import os
 
 from sqlalchemy import bindparam, select, text
+from vera_shared import media_backlog
 from vera_shared.chat_activity import min_own_messages, own_message_count
 from vera_shared.control import set_control
 from vera_shared.db.engine import get_session, init_engine
@@ -244,24 +245,22 @@ async def measure(min_own: int, dry_run: bool) -> tuple[int, int]:
         SELECT CAST(metadata->>'chat_id' AS TEXT) AS chat_id,
                metadata->>'chat_kind'  AS chat_kind,
                metadata->>'media_kind' AS media_kind,
-               COUNT(*) AS n,
-               COUNT(*) FILTER (
-                 WHERE (metadata->>'media_recognition' IS NULL
-                        OR metadata->>'media_recognition' = 'failed')
-                   AND COALESCE(metadata->>'media_permanent', 'false') <> 'true'
-               ) AS left_n
+               COUNT(*) AS n
         FROM events
         WHERE metadata->>'media_kind' IS NOT NULL
         GROUP BY 1, 2, 3
     """)
-    total = left = 0
+    total = 0
     for row in rows:
         own = await own_message_count(row["chat_id"])
         if media_skip_reason(row["media_kind"], row["chat_kind"],
                              own_messages=own, min_own_messages=min_own):
             continue
         total += row["n"]
-        left += row["left_n"]
+    # Остаток — тем же счётчиком, что показывает дашборд: две реализации одной
+    # политики уже расходились, и разошлись бы снова.
+    media_backlog.forget()
+    left = await media_backlog.unrecognized_left(min_own)
     if not dry_run:
         await set_control(BACKLOG_TOTAL_KEY, str(total))
         await set_control(BACKLOG_LEFT_KEY, str(left))
