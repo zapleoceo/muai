@@ -57,3 +57,14 @@ def test_clean_run_is_recorded(tmp_path):
     code, state = _run(tmp_path, invalid="")
     assert code == 0
     assert state == "recorded"
+
+
+def test_file_under_a_temporary_name_is_refused(tmp_path):
+    """Копия миграции под именем «034b.sql» записала бы в учёт версию, которой
+    нет в репозитории, — монитор потом тревожил дважды в сутки (26.09.2026)."""
+    mig = tmp_path / "034b.sql"
+    mig.write_text("SELECT 1;\n", encoding="utf-8")
+    done = subprocess.run(["bash", str(SCRIPT), str(mig)], capture_output=True,
+                          text=True, encoding="utf-8", timeout=60)
+    assert done.returncode == 1
+    assert "нет такой миграции в репозитории" in done.stderr
