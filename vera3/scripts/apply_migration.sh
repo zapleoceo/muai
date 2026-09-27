@@ -9,6 +9,15 @@ set -euo pipefail
 FILE="${1:?использование: apply_migration.sh vera3/infra/migrations/0XX_name.sql}"
 [ -f "$FILE" ] || { echo "нет файла: $FILE" >&2; exit 1; }
 VERSION="$(basename "$FILE" .sql)"
+# Версия в учёте — это имя файла. Копия под временным именем (034.sql вместо
+# 034_events_media_unrecognized_index.sql) записала бы в учёт версию, которой
+# нет в репозитории, и монитор дважды в сутки поднимал бы тревогу о расхождении
+# (26.09.2026). Поэтому имя обязано совпадать с файлом из infra/migrations.
+REPO_MIGRATIONS="$(cd "$(dirname "$0")/../infra/migrations" && pwd)"
+if [ ! -f "$REPO_MIGRATIONS/$VERSION.sql" ]; then
+    echo "нет такой миграции в репозитории: $VERSION.sql — накатывай файл под его настоящим именем" >&2
+    exit 1
+fi
 PSQL=(docker exec -i vera3-postgres psql -U vera -d vera)
 
 if [ "$("${PSQL[@]}" -tAc "SELECT to_regclass('public.schema_migrations') IS NOT NULL")" != "t" ]; then
