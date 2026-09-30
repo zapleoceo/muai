@@ -60,7 +60,12 @@ async def sqlite_db(tmp_path):
     закрытом loop'е позже — flaky «Event loop is closed» в случайном тесте).
     Yields get_session."""
     import vera_shared.db.engine as engine_mod
-    from vera_shared.db import models, models_graph, models_sources, models_voice  # noqa: F401
+    from vera_shared.db import (  # noqa: F401
+        models,
+        models_graph,
+        models_sources,
+        models_voice,
+    )
     from vera_shared.db.chunk_vectors import forget_chunk_capability
     from vera_shared.db.engine import Base, get_session, init_engine
     from vera_shared.db.vectors import forget_capability

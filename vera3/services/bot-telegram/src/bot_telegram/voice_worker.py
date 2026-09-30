@@ -23,6 +23,7 @@ from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from html import escape
 
+from vera_shared.timeutil import utc_naive_now
 from vera_shared.voice_commands import (
     claim_command,
     fail_command,
@@ -33,8 +34,6 @@ from vera_shared.voice_commands import (
     pending_notifications,
     revive_stale,
 )
-
-from vera_shared.timeutil import utc_naive_now
 
 from bot_telegram.brain import BrainError, ask_brain, save_event
 from bot_telegram.formatting import format_reply, plain_fallback

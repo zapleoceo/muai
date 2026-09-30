@@ -10,6 +10,8 @@ from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
+from bot_telegram import voice_worker
+from bot_telegram.brain import BrainAnswer
 from fastapi import HTTPException
 from gateway.voice_command import VoiceCommand, accept_voice_command
 from pydantic import ValidationError
@@ -17,9 +19,6 @@ from sqlalchemy import select, update
 from vera_shared import voice_commands
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_voice import VoiceCommandRow
-
-from bot_telegram import voice_worker
-from bot_telegram.brain import BrainAnswer
 
 SECRET = "test-internal-secret"
 OWNER = 169510539
@@ -284,7 +283,7 @@ class TestOnlyOwner:
         from bot_telegram import bot as bot_mod
         sent = AsyncMock()
         with patch.object(bot_mod, "OWNER_ID", 0), \
-             patch.object(bot_mod.bot, "send_message", sent):
-            with pytest.raises(RuntimeError):
-                await bot_mod.send_to_owner("x", "x")
+             patch.object(bot_mod.bot, "send_message", sent), \
+             pytest.raises(RuntimeError):
+            await bot_mod.send_to_owner("x", "x")
         sent.assert_not_awaited()
