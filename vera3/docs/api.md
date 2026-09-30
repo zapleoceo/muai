@@ -9,6 +9,21 @@
 | `/webhook/{source}` | POST | source-specific | Webhook receiver (Telegram, etc.) |
 | `/v1/claude/remember` | POST | `X-Internal-Secret` | Fact ingest from Claude conversations. Two-layer dedup: exact sha256 of text + semantic cosine ≥ 0.92 over last 7 days of claude-source events. Body: `{text, kind: "fact"\|"decision"\|"todo"\|"preference", context?, tags?}`. Returns `{ok, event_id, deduped, dedup_reason: "exact"\|"semantic"\|null, similar_event_id?, similarity?}`. The dedup embedding is written into `event_embeddings` immediately on accept (2026-07-17) — closes the blind window where two similar facts saved minutes apart both passed semantic dedup because triage hadn't embedded the first one yet. Called by the `vera-mcp` MCP server (see `mcp-claude.md`). |
 | `/v1/voice/session` | POST | `X-Internal-Secret` | Разговор с ноутбука: расшифровка одной сессии → выжимка в `events` (source=`voice`). В текст события (`content_text`, по нему триаж/поиск/эмбеддинг) идёт **выжимка**; дословная стенограмма с дорожкой и говорящим каждой реплики хранится в `content_extra` (`kind: voice_transcript`) и видна только в карточке `/events/{id}`. Тело: `{started_at, ended_at, app, window_title, device_hint, meeting_id?, part?, utterances:[{at, stream: mic|system, text}]}`. Длинная расшифровка **сворачивается по окнам, а не обрезается** (`gateway/voice_distill.py`): каждое окно осмысляется отдельно, второй проход сливает частичные выжимки в одну. Дедуп по `started_at+app+window_title`, поэтому ретрай из офлайн-очереди не двоит. Сбой брокера не теряет событие — сохраняется факт разговора с метаданными. Клиент: `vera-listener/` |
+| `/v1/voice/command` | POST | `X-Internal-Secret` | Голосовое поручение владельца (кодовая фраза «Вера, мне нужна помощь, …», пойманная слушателем на дорожке микрофона). Тело: `{command_id, instruction, spoken_at, app?, window_title?}`. В одной транзакции пишет событие (source=`voice_command`, category=`command`, `triage_status=pending` — видно в истории и в поиске) и строку `voice_command_queue` (миграция 035); отвечает `{ok, event_id, deduped}`. Шлюз сам ничего не исполняет — ответ владельцу шлёт бот (см. ниже). Дедуп по `command_id` (PK очереди): ретрай из офлайн-очереди слушателя второго ответа не даёт. Без секрета — 401 и ни одной записи. Текст поручения в логах только на DEBUG. Код: `gateway/voice_command.py`, запись/очередь — `vera_shared/voice_commands.py` |
+
+### Ответ на голосовое поручение (бот)
+
+`bot_telegram/voice_worker.py` живёт в процессе бота рядом с aiogram-поллингом
+и раз в 2 с забирает `voice_command_queue` (`FOR UPDATE SKIP LOCKED`, та же
+схема, что `claude_session_queue`). На каждое поручение — два сообщения
+владельцу: сразу «Услышала: „<поручение>“. Делаю.», потом ответ мозга. Ответ
+идёт ровно тем путём, что на текстовое сообщение (`bot_telegram/brain.py`:
+`/search` в brain-search с историей чата владельца, ответ пишется событием
+`vera_chat`). Первым бот пишет только через `send_to_owner` — адресат
+зашит в `OWNER_TELEGRAM_ID`, без него воркер не берёт из очереди ничего
+(fail-closed, как `_owner_only`). Сбой ответа — до 3 попыток, «Услышала»
+повторно не шлётся (`acked_at`); после третьей владелец получает текст ошибки.
+Действий с внешним эффектом нет: поручение — это вопрос мозгу.
 
 The body of `/event/<source>` is a `RawEvent` (`shared/vera_shared/events/schema.py`).
 Note that the ingestors do NOT go through this endpoint — they write via

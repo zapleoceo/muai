@@ -46,7 +46,7 @@
 | `vera3-gateway` | `POST /event/<source>` — single ingest endpoint with X-Internal-Secret |
 | `vera3-brain-triage-N` | Scalable workers (`docker compose up -d --scale brain-triage=3`). SELECT FOR UPDATE SKIP LOCKED → atomic claim. |
 | `vera3-brain-search` | FastAPI `/search` — ReAct agent loop, calls AIbroker. |
-| `vera3-bot-telegram` | aiogram polling — DM to owner |
+| `vera3-bot-telegram` | aiogram polling — DM to owner; плюс воркер голосовых поручений: забирает `voice_command_queue` и пишет владельцу первым (см. `api.md`, «Ответ на голосовое поручение») |
 | `vera3-ingestor-telegram` | Telethon userbot + FastAPI tools server on :8000 |
 | `vera3-ingestor-gmail` | OAuth refresh + Gmail API polling |
 | `vera3-ingestor-instagram` | instagrapi inbox polling |
