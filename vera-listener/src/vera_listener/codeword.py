@@ -81,6 +81,22 @@ def _match_at(words: list[str], start: int, phrase: list[str]) -> int | None:
     return best[1]
 
 
+#: Усечённые формы обращения — whisper срезает окончание у «Вера» в начале
+#: реплики или перед паузой. Посреди фразы «вер» — чаще обрывок другого слова
+#: («Серьёзно вер мне…», «это не вер, мне…» — сорванные «верно»/«версия»),
+#: поэтому они засчитываются только в начале реплики или перед запятой — и
+#: не после отрицания.
+_CLIPPED_HEADS = frozenset({"вер"})
+
+
+def _stands_alone(text: str, spans: list[re.Match[str]], index: int) -> bool:
+    if index > 0 and _norm(spans[index - 1].group()) in _NEGATIONS:
+        return False
+    if index == 0:
+        return True
+    return text[spans[index].end():].lstrip(" ").startswith(",")
+
+
 def find(text: str, phrase: str = DEFAULT_PHRASE) -> Hit | None:
     """Первое вхождение фразы в реплике и поручение после него.
 
@@ -93,6 +109,8 @@ def find(text: str, phrase: str = DEFAULT_PHRASE) -> Hit | None:
     spans = list(_WORD.finditer(text))
     tokens = [_norm(m.group()) for m in spans]
     for start in range(len(tokens)):
+        if tokens[start] in _CLIPPED_HEADS and not _stands_alone(text, spans, start):
+            continue
         after = _match_at(tokens, start, target)
         if after is None:
             continue

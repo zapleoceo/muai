@@ -424,6 +424,15 @@ class Listener:
             _, path, track, offset, pcm, speakers = job
             self._transcribe_into(path, track, offset, pcm, speakers)
             return
+        try:
+            self._close_session(job)
+        finally:
+            # Упало закрытие — слежение за фразой всё равно снимается: иначе
+            # оно висело бы до конца жизни процесса, а `_tick_watches` гонял
+            # бы его вечно.
+            self._close_watch(job[1])
+
+    def _close_session(self, job: tuple) -> None:
         _, path, closed, speech_s, ended_wall, held, held_lost_s, speakers = job
         verdict = judge(speech_s, app=closed.session.app,
                         allow=self.config.allow_apps,
