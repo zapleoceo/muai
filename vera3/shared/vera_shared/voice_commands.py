@@ -127,32 +127,36 @@ async def finish_command(command_id: str) -> None:
 
 
 async def fail_command(command_id: str, reason: str, attempts: int) -> str:
+    """`reason` — только тип или код ошибки: текст исключения может цитировать
+    поручение (pydantic, ответ поиска), а колонка error — не место для него.
+
+    На error текст поручения ещё нужен — сказать владельцу, ЧТО не вышло;
+    стирается он в `mark_notified`.
+    """
     if attempts >= MAX_ATTEMPTS:
-        await _set(command_id, status="error", error=reason[:500], instruction="")
+        await _set(command_id, status="error", error=reason[:200])
         return "error"
-    await _set(command_id, status="pending", error=reason[:500],
+    await _set(command_id, status="pending", error=reason[:200],
                next_attempt_at=utc_naive_now() + retry_delay(attempts))
     return "pending"
 
 
-async def revive_stale() -> list[str]:
-    """Вернуть зависшие в processing. → id поручений, исчерпавших попытки.
+async def revive_stale() -> int:
+    """Вернуть зависшие в processing. → сколько ушло в error.
 
     Зависает поручение, если процесс упал посреди него. Если падает он на нём
     каждый раз, без счёта попыток оно крутилось бы вечно — поэтому исчерпавшее
-    попытки уходит в error, и владельцу об этом сообщают.
+    попытки уходит в error, а владельцу сообщит `pending_notifications`.
     """
     now = utc_naive_now()
     stale = and_(VoiceCommandRow.status == "processing",
                  VoiceCommandRow.updated_at < now - timedelta(minutes=STALE_MINUTES))
     async with get_session() as s:
-        exhausted = list((await s.execute(
+        exhausted = (await s.execute(
             update(VoiceCommandRow)
             .where(stale, VoiceCommandRow.attempts >= MAX_ATTEMPTS)
-            .values(status="error", instruction="", updated_at=now,
-                    error="процесс падал на каждой попытке")
-            .returning(VoiceCommandRow.command_id)
-        )).scalars())
+            .values(status="error", updated_at=now, error="crash-loop")
+        )).rowcount or 0
         await s.execute(
             update(VoiceCommandRow)
             .where(stale)
@@ -160,3 +164,26 @@ async def revive_stale() -> list[str]:
                     next_attempt_at=now + retry_delay(1))
         )
     return exhausted
+
+
+async def pending_notifications() -> list[tuple[str, str, bool]]:
+    """Поручения в error, о которых владелец ещё не знает.
+
+    → (id, текст поручения, ушёл ли уже ответ). Отдельным проходом, а не в
+    момент ошибки: отправка сообщения об ошибке тоже может упасть, и тогда
+    владелец остался бы и без ответа, и без объяснения.
+    """
+    async with get_session() as s:
+        rows = (await s.execute(
+            select(VoiceCommandRow.command_id, VoiceCommandRow.instruction,
+                   VoiceCommandRow.answered_at)
+            .where(VoiceCommandRow.status == "error",
+                   VoiceCommandRow.notified_at.is_(None))
+            .order_by(VoiceCommandRow.created_at)
+        )).all()
+    return [(r[0], r[1], r[2] is not None) for r in rows]
+
+
+async def mark_notified(command_id: str) -> None:
+    # Сообщили — текст поручения в очереди больше не нужен (он есть в событии).
+    await _set(command_id, notified_at=utc_naive_now(), instruction="")

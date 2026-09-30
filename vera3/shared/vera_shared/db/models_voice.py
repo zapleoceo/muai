@@ -29,6 +29,8 @@ class VoiceCommandRow(Base):
     answered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Раньше этого времени поручение не берём: ретрай с паузой, а не подряд.
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Владельцу сообщили, что поручение не выполнено. NULL при error — сообщить.
+    notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(),
     )

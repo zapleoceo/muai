@@ -28,10 +28,12 @@ from vera_shared.voice_commands import (
     finish_command,
     mark_acked,
     mark_answered,
+    mark_notified,
+    pending_notifications,
     revive_stale,
 )
 
-from bot_telegram.brain import ask_brain, save_event
+from bot_telegram.brain import BrainError, ask_brain, save_event
 from bot_telegram.formatting import format_reply, plain_fallback
 
 log = logging.getLogger(__name__)
@@ -81,23 +83,40 @@ async def process_one(send: Send, owner_id: int) -> bool:
         await finish_command(row.command_id)
         log.info("voice-worker: поручение %s выполнено", row.command_id)
     except Exception as e:
-        status = await fail_command(row.command_id, f"{type(e).__name__}: {e}",
-                                    row.attempts)
+        status = await fail_command(row.command_id, _reason(e), row.attempts)
         log.warning("voice-worker: поручение %s не выполнено (%s), попытка %d → %s",
                     row.command_id, type(e).__name__, row.attempts, status)
-        if status == "error":
-            # Последняя попытка — владелец должен узнать, что ответа не будет.
-            text = failed_text(row.instruction)
-            await send(escape(text, quote=False), text)
     return True
 
 
-async def notify_exhausted(send: Send, command_ids: list[str]) -> None:
-    for command_id in command_ids:
-        log.warning("voice-worker: поручение %s роняло процесс на каждой "
-                    "попытке → error", command_id)
-        text = failed_text("")
-        await send(text, text)
+def _reason(e: Exception) -> str:
+    # У BrainError в тексте только HTTP-код — его оставить полезно.
+    return f"BrainError {e}" if isinstance(e, BrainError) else type(e).__name__
+
+
+async def notify_failed(send: Send) -> int:
+    """Сообщить владельцу о поручениях, выполнить которые не вышло. → сколько.
+
+    Сбой отправки не обрывает проход и не теряет уведомление: без
+    `notified_at` поручение попадёт сюда на следующем витке.
+    """
+    done = 0
+    for command_id, instruction, answered in await pending_notifications():
+        if answered:
+            # Ответ уже ушёл, а упало что-то после (запись события, finish).
+            # «Не смогла» поверх полученного ответа — ложь владельцу.
+            await mark_notified(command_id)
+            continue
+        text = failed_text(instruction)
+        try:
+            await send(escape(text, quote=False), text)
+        except Exception as e:
+            log.warning("voice-worker: не сообщила об ошибке поручения %s (%s) — "
+                        "повторю", command_id, type(e).__name__)
+            continue
+        await mark_notified(command_id)
+        done += 1
+    return done
 
 
 async def run_forever(send: Send, owner_id: int) -> None:
@@ -109,7 +128,8 @@ async def run_forever(send: Send, owner_id: int) -> None:
     log.info("voice-worker: запущен")
     while True:
         try:
-            await notify_exhausted(send, await revive_stale())
+            await revive_stale()
+            await notify_failed(send)
             busy = await process_one(send, owner_id)
         except asyncio.CancelledError:
             raise
