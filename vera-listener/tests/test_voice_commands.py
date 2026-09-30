@@ -175,3 +175,42 @@ class TestOneCommandOneMessage:
         watch.close()
         assert len(sent) == 2
         assert sent[0]["command_id"] != sent[1]["command_id"]
+
+
+def _frames(watch: CommandWatch, until: float, *, gaps=(), system_from: float = 0.0,
+            ) -> None:
+    """Кадры по 32 мс на обеих дорожках; `gaps` — (начало, длина) пропуска system."""
+    step, t = 0.032, 0.0
+    while t < until:
+        watch.hear("mic", t, step, False)
+        skipped = t < system_from or any(a <= t < a + d for a, d in gaps)
+        if not skipped:
+            watch.hear("system", t, step, False)
+        t += step
+
+
+class TestCaptureJitter:
+    """Дрожание захвата — не слепота; мёртвое устройство — слепота."""
+
+    def test_short_pauses_in_system_frames_are_still_owner(self):
+        for pause in (0.1, 0.3, 0.8):
+            watch, sent = _watch()
+            _frames(watch, 30, gaps=[(4.0, pause), (7.0, pause), (11.0, pause)])
+            watch.on_segment("mic", 5.0, 9.0, PHRASE)
+            watch.close()
+            assert len(sent) == 1, pause
+
+    def test_long_gap_in_system_frames_is_not_owner(self):
+        watch, sent = _watch()
+        _frames(watch, 30, gaps=[(7.0, 1.5)])
+        watch.on_segment("mic", 5.0, 9.0, PHRASE)
+        watch.close()
+        assert sent == []
+
+    def test_command_in_first_seconds_of_session(self):
+        """Loopback открылся на полсекунды позже микрофона — это не слепота."""
+        watch, sent = _watch()
+        _frames(watch, 30, system_from=0.5)
+        watch.on_segment("mic", 1.0, 4.0, PHRASE)
+        watch.tick()
+        assert len(sent) == 1
