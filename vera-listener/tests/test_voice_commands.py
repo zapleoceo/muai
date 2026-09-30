@@ -214,3 +214,13 @@ class TestCaptureJitter:
         watch.on_segment("mic", 1.0, 4.0, PHRASE)
         watch.tick()
         assert len(sent) == 1
+
+    def test_system_that_appears_after_the_phrase_is_not_owner(self):
+        """Loopback заработал только через 30 с — фразу на 2-й секунде никто
+        не проверял. Раньше окно «от первого кадра» сжималось в пустоту, и
+        пустое окно считалось покрытым: выходило «владелец»."""
+        watch, sent = _watch()
+        _frames(watch, 40, system_from=30.0)
+        watch.on_segment("mic", 2.0, 5.0, PHRASE)
+        watch.close()
+        assert sent == []

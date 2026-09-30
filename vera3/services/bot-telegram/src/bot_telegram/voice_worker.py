@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
+from datetime import timedelta
 from html import escape
 
 from vera_shared.voice_commands import (
@@ -33,6 +34,8 @@ from vera_shared.voice_commands import (
     revive_stale,
 )
 
+from vera_shared.timeutil import utc_naive_now
+
 from bot_telegram.brain import BrainError, ask_brain, save_event
 from bot_telegram.formatting import format_reply, plain_fallback
 
@@ -42,6 +45,18 @@ POLL_S = 2.0
 #: `Send(html, plain)` → id отправленного сообщения. plain — запасной текст на
 #: случай, если Telegram отклонит HTML (см. formatting.plain_fallback).
 Send = Callable[[str, str], Awaitable[int]]
+
+
+#: Поручение старше этого не исполняется: «срочно напиши» через сутки после
+#: звонка (шлюз лежал, ноутбук был без сети) — уже не то, о чём просили.
+#: Владелец узнаёт об этом сообщением и может сказать ещё раз.
+MAX_AGE = timedelta(minutes=30)
+
+
+def stale_text(instruction: str, age: timedelta) -> str:
+    minutes = int(age.total_seconds() // 60)
+    return (f"Поручение дошло с опозданием ({minutes} мин), не выполняю: "
+            f"„{instruction}“. Скажи ещё раз, если ещё нужно.")
 
 
 def ack_text(instruction: str) -> str:
@@ -67,7 +82,12 @@ async def process_one(send: Send, owner_id: int) -> bool:
     if row is None:
         return False
     try:
-        if row.answered_at is None:
+        age = utc_naive_now() - row.spoken_at
+        if row.answered_at is None and row.acked_at is None and age > MAX_AGE:
+            text = stale_text(row.instruction, age)
+            await send(escape(text, quote=False), text)
+            await mark_answered(row.command_id)
+        elif row.answered_at is None:
             if row.acked_at is None:
                 ack = ack_text(row.instruction)
                 # Поручение — распознанная речь, и «<» в ней сломал бы HTML.

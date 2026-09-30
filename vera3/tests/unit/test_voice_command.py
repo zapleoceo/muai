@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -26,9 +26,13 @@ OWNER = 169510539
 TEST_INSTRUCTION = "срочно напиши мне что-то в телеграм"
 
 
-def _cmd(command_id: str = "vc-1", instruction: str = TEST_INSTRUCTION) -> VoiceCommand:
+def _cmd(command_id: str = "vc-1", instruction: str = TEST_INSTRUCTION,
+         spoken_at: datetime | None = None) -> VoiceCommand:
+    # Время — «сейчас», а не дата-константа: у бота есть срок годности
+    # поручения (MAX_AGE), и тест с фиксированной датой начал бы падать сам
+    # собой через полчаса после неё.
     return VoiceCommand(command_id=command_id, instruction=instruction,
-                        spoken_at=datetime(2026, 9, 30, 10, 0, tzinfo=timezone.utc),
+                        spoken_at=spoken_at or datetime.now(timezone.utc),
                         app="zoom.exe", window_title="Созвон")
 
 
@@ -115,6 +119,31 @@ class TestWorker:
         saved.assert_awaited_once()
         [row] = await _rows(sqlite_db, VoiceCommandRow)
         assert row.status == "done" and row.instruction == ""
+
+    @pytest.mark.asyncio
+    async def test_late_command_is_reported_not_executed(self, sqlite_db):
+        spoken = datetime.now(timezone.utc) - timedelta(hours=2)
+        await accept_voice_command(_cmd(spoken_at=spoken), x_internal_secret=SECRET)
+        send = _Send()
+        ask = AsyncMock(return_value=_answer())
+        with patch.object(voice_worker, "ask_brain", ask),              patch.object(voice_worker, "save_event", AsyncMock()):
+            assert await voice_worker.process_one(send, OWNER) is True
+        ask.assert_not_awaited()
+        assert len(send.sent) == 1
+        assert send.sent[0].startswith("Поручение дошло с опозданием (120 мин)")
+        assert TEST_INSTRUCTION in send.sent[0]
+        [row] = await _rows(sqlite_db, VoiceCommandRow)
+        assert row.status == "done"
+
+    @pytest.mark.asyncio
+    async def test_fresh_command_within_limit_is_executed(self, sqlite_db):
+        spoken = datetime.now(timezone.utc) - timedelta(minutes=10)
+        await accept_voice_command(_cmd(spoken_at=spoken), x_internal_secret=SECRET)
+        send = _Send()
+        ask = AsyncMock(return_value=_answer())
+        with patch.object(voice_worker, "ask_brain", ask),              patch.object(voice_worker, "save_event", AsyncMock()):
+            await voice_worker.process_one(send, OWNER)
+        ask.assert_awaited_once()
 
     @pytest.mark.asyncio
     async def test_failed_answer_is_retried_without_second_ack(self, sqlite_db):
