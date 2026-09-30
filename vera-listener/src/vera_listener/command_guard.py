@@ -36,6 +36,11 @@ OWN, ECHO, WAIT = "own", "echo", "wait"
 #: сплошная речь рассыпалась бы на тысячи отрезков по 30 мс.
 _EPS = 0.05
 
+#: Кадры двух дорожек приходят в общую очередь не строго вперемешку: system
+#: может отставать от mic на доли секунды. Решаем, когда часы ушли дальше окна
+#: с запасом, — иначе хвост окна выглядел бы «без кадров» из-за очерёдности.
+_LAG_S = 1.0
+
 
 @dataclass
 class Spans:
@@ -67,14 +72,23 @@ class SystemTrack:
     def __init__(self) -> None:
         self._lock = threading.Lock()
         self._speech = Spans()
+        # Где кадры системной дорожки РЕАЛЬНО приходили. «Loopback молчал» и
+        # «loopback нет» — разные вещи: устройство отвалилось, захват ждёт
+        # переоткрытия, кадров нет — и без этого учёта пустота выглядела бы
+        # тишиной, а голос из динамиков в микрофоне прошёл бы как владелец.
+        self._frames = Spans()
         self._transcribed: list[tuple[float, float]] = []
         self._utterances: list[tuple[float, str]] = []
         self.heard_until = 0.0
 
-    def hear(self, at: float, duration: float, speech: bool) -> None:
+    def hear(self, at: float, duration: float, speech: bool, *,
+             system: bool = True) -> None:
+        """`system=False` — кадр микрофона: двигает только часы."""
         with self._lock:
-            if speech:
-                self._speech.add(at, at + duration)
+            if system:
+                self._frames.add(at, at + duration)
+                if speech:
+                    self._speech.add(at, at + duration)
             self.heard_until = max(self.heard_until, at + duration)
 
     def transcribed(self, start: float, end: float,
@@ -88,9 +102,15 @@ class SystemTrack:
             return self._verdict(at, end, text, final=final)
 
     def _verdict(self, at: float, end: float, text: str, *, final: bool) -> str:
-        if not final and self.heard_until < end + VAD_SLACK_S:
+        if not final and self.heard_until < end + VAD_SLACK_S + _LAG_S:
             return WAIT
-        if not self._speech.overlapping(at - VAD_SLACK_S, end + VAD_SLACK_S):
+        lo_vad, hi_vad = max(0.0, at - VAD_SLACK_S), end + VAD_SLACK_S
+        if not self._frames.covers(lo_vad, hi_vad):
+            # Системной дорожки на части окна не было — доказать, что
+            # динамики молчали, нечем. Ждать нечего тоже: пропавшие кадры не
+            # вернутся, а на закрытии это отказ.
+            return ECHO
+        if not self._speech.overlapping(lo_vad, hi_vad):
             return OWN
         lo, hi = at - LONG_WINDOW_S, end + LONG_WINDOW_S
         if not final and self.heard_until < hi:

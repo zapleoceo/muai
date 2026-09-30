@@ -64,7 +64,7 @@ class CommandWatch:
 
     def hear(self, track: str, at: float, duration: float, speech: bool) -> None:
         # Микрофон двигает только часы: речь в нём эхом не бывает источником.
-        self.system.hear(at, duration, speech and track != MIC)
+        self.system.hear(at, duration, speech, system=track != MIC)
 
     def on_segment(self, track: str, at: float, end: float, text: str) -> None:
         if track != MIC or not text.strip():
