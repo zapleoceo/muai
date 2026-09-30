@@ -146,15 +146,54 @@ class TestWorker:
     async def test_last_failure_tells_owner_and_clears_text(self, sqlite_db):
         await accept_voice_command(_cmd(), x_internal_secret=SECRET)
         send = _Send()
-        ask = AsyncMock(side_effect=RuntimeError("search down"))
+        ask = AsyncMock(side_effect=RuntimeError(f"search down: {TEST_INSTRUCTION}"))
         with patch.object(voice_worker, "ask_brain", ask), \
              patch.object(voice_worker, "save_event", AsyncMock()):
             for _ in range(3):
                 await _make_due(sqlite_db)
                 await voice_worker.process_one(send, OWNER)
+        await voice_worker.notify_failed(send)
         [row] = await _rows(sqlite_db, VoiceCommandRow)
         assert (row.status, row.instruction) == ("error", "")
-        assert send.sent[-1].startswith("Не смогла выполнить")
+        assert row.notified_at is not None
+        assert send.sent[-1] == f"Не смогла выполнить поручение: „{TEST_INSTRUCTION}“."
+        # В колонку error — только тип, не текст исключения с поручением.
+        assert row.error == "RuntimeError"
+
+    @pytest.mark.asyncio
+    async def test_failed_notification_is_retried_next_pass(self, sqlite_db):
+        await accept_voice_command(_cmd(), x_internal_secret=SECRET)
+        await _set_row(sqlite_db, status="error", attempts=3)
+        flaky = AsyncMock(side_effect=[RuntimeError("telegram down"), 1])
+        assert await voice_worker.notify_failed(flaky) == 0
+        [row] = await _rows(sqlite_db, VoiceCommandRow)
+        assert row.notified_at is None and row.instruction == TEST_INSTRUCTION
+        assert await voice_worker.notify_failed(flaky) == 1
+        assert await voice_worker.notify_failed(flaky) == 0
+        assert flaky.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_one_failed_notification_does_not_stop_the_others(self, sqlite_db):
+        await accept_voice_command(_cmd("vc-1"), x_internal_secret=SECRET)
+        await accept_voice_command(_cmd("vc-2"), x_internal_secret=SECRET)
+        await _set_row(sqlite_db, status="error", attempts=3)
+        flaky = AsyncMock(side_effect=[RuntimeError("telegram down"), 1])
+        assert await voice_worker.notify_failed(flaky) == 1
+
+    @pytest.mark.asyncio
+    async def test_no_failure_message_over_a_delivered_answer(self, sqlite_db):
+        """Ответ ушёл, а упала запись события на последней попытке."""
+        await accept_voice_command(_cmd(), x_internal_secret=SECRET)
+        await _set_row(sqlite_db, attempts=2)
+        send = _Send()
+        with patch.object(voice_worker, "ask_brain", AsyncMock(return_value=_answer())), \
+             patch.object(voice_worker, "save_event",
+                          AsyncMock(side_effect=RuntimeError("gateway down"))):
+            await voice_worker.process_one(send, OWNER)
+        await voice_worker.notify_failed(send)
+        assert not any(m.startswith("Не смогла") for m in send.sent)
+        [row] = await _rows(sqlite_db, VoiceCommandRow)
+        assert row.status == "error" and row.notified_at is not None
 
     @pytest.mark.asyncio
     async def test_command_that_crashes_every_time_ends_in_error(self, sqlite_db):
@@ -163,19 +202,19 @@ class TestWorker:
         await _set_row(sqlite_db, status="processing", attempts=3,
                        updated_at=datetime(2026, 1, 1))
         send = _Send()
-        exhausted = await voice_commands.revive_stale()
-        await voice_worker.notify_exhausted(send, exhausted)
+        assert await voice_commands.revive_stale() == 1
+        await voice_worker.notify_failed(send)
         [row] = await _rows(sqlite_db, VoiceCommandRow)
         assert (row.status, row.instruction) == ("error", "")
         assert await voice_worker.process_one(send, OWNER) is False
-        assert send.sent == ["Не смогла выполнить голосовое поручение."]
+        assert send.sent == [f"Не смогла выполнить поручение: „{TEST_INSTRUCTION}“."]
 
     @pytest.mark.asyncio
     async def test_stale_command_with_attempts_left_is_retried(self, sqlite_db):
         await accept_voice_command(_cmd(), x_internal_secret=SECRET)
         await _set_row(sqlite_db, status="processing", attempts=1,
                        updated_at=datetime(2026, 1, 1))
-        assert await voice_commands.revive_stale() == []
+        assert await voice_commands.revive_stale() == 0
         [row] = await _rows(sqlite_db, VoiceCommandRow)
         assert row.status == "pending"
 
