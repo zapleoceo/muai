@@ -20,7 +20,7 @@ from difflib import SequenceMatcher
 from typing import Any
 
 from vera_listener import codeword
-from vera_listener.command_guard import ECHO, OWN, SystemTrack
+from vera_listener.command_guard import BLIND, ECHO, OWN, SystemTrack
 
 log = logging.getLogger("listener.commands")
 
@@ -121,7 +121,11 @@ class CommandWatch:
                 continue
             verdicts = {self.system.verdict(a, e, t, final=final)
                         for a, e, t in pending.parts}
-            if ECHO in verdicts:
+            if BLIND in verdicts:
+                log.warning("кодовая фраза на %.1fс: звук с динамиков не пишется "
+                            "(нет кадров системной дорожки) — чей голос, не "
+                            "проверить, не исполняю", pending.at)
+            elif ECHO in verdicts:
                 log.warning("кодовая фраза на %.1fс похожа на голос собеседника "
                             "из динамиков — не исполняю", pending.at)
             elif verdicts == {OWN}:

@@ -31,6 +31,8 @@ from vera_listener.dedup import LONG_WINDOW_S, looks_like_echo, window_for
 VAD_SLACK_S = 6.0
 
 OWN, ECHO, WAIT = "own", "echo", "wait"
+#: Системная дорожка не пишется (кадров нет) — не проверить, чей голос.
+BLIND = "blind"
 
 #: Соседние кадры и куски стыкуются в плавающей точке не ровно: без допуска
 #: сплошная речь рассыпалась бы на тысячи отрезков по 30 мс.
@@ -41,15 +43,26 @@ _EPS = 0.05
 #: с запасом, — иначе хвост окна выглядел бы «без кадров» из-за очерёдности.
 _LAG_S = 1.0
 
+#: Разрыв в кадрах system, с которого дорожка считается НЕ пишущейся, а не
+#: дрожащей. Кадр — 32 мс, и паузы в десятки–сотни миллисекунд на захвате
+#: обычны (планировщик Windows, GC, всплеск распознавания в соседнем потоке);
+#: при допуске 50 мс ревью получило отказ законной команды на паузах 0.06 и
+#: 0.3 с. Мёртвое устройство выглядит иначе: захват ждёт `REOPEN_PAUSE_S` = 5 с
+#: перед переоткрытием, то есть разрыв не короче 5 с. Секунда — впятеро ниже
+#: этого и втрое выше худшей замеченной паузы джиттера.
+BLIND_GAP_S = 1.0
+
 
 @dataclass
 class Spans:
     """Отрезки времени сессии: где звучала речь или что уже распознано."""
 
     items: list[tuple[float, float]] = field(default_factory=list)
+    #: Разрыв короче этого склеивается: это тот же сплошной отрезок.
+    gap: float = _EPS
 
     def add(self, start: float, end: float) -> None:
-        if self.items and start <= self.items[-1][1] + _EPS:
+        if self.items and start <= self.items[-1][1] + self.gap:
             last_start, last_end = self.items[-1]
             self.items[-1] = (last_start, max(last_end, end))
             return
@@ -59,7 +72,12 @@ class Spans:
         return [(a, b) for a, b in self.items if a < end and b > start]
 
     def covers(self, start: float, end: float) -> bool:
-        return any(a <= start + _EPS and b >= end - _EPS for a, b in self.items)
+        return any(a <= start + self.gap and b >= end - self.gap
+                   for a, b in self.items)
+
+    @property
+    def first(self) -> float | None:
+        return self.items[0][0] if self.items else None
 
 
 class SystemTrack:
@@ -76,7 +94,7 @@ class SystemTrack:
         # «loopback нет» — разные вещи: устройство отвалилось, захват ждёт
         # переоткрытия, кадров нет — и без этого учёта пустота выглядела бы
         # тишиной, а голос из динамиков в микрофоне прошёл бы как владелец.
-        self._frames = Spans()
+        self._frames = Spans(gap=BLIND_GAP_S)
         self._transcribed: list[tuple[float, float]] = []
         self._utterances: list[tuple[float, str]] = []
         self.heard_until = 0.0
@@ -104,12 +122,21 @@ class SystemTrack:
     def _verdict(self, at: float, end: float, text: str, *, final: bool) -> str:
         if not final and self.heard_until < end + VAD_SLACK_S + _LAG_S:
             return WAIT
-        lo_vad, hi_vad = max(0.0, at - VAD_SLACK_S), end + VAD_SLACK_S
+        first = self._frames.first
+        if first is None:
+            return BLIND
+        # Окно не раньше первого кадра system: захват двух дорожек стартует не
+        # одновременно, и без этого команда в первые секунды сессии казалась
+        # бы сказанной «вслепую».
+        lo_vad = max(at - VAD_SLACK_S, first)
+        hi_vad = end + VAD_SLACK_S
+        if final:
+            hi_vad = min(hi_vad, self.heard_until)
         if not self._frames.covers(lo_vad, hi_vad):
             # Системной дорожки на части окна не было — доказать, что
             # динамики молчали, нечем. Ждать нечего тоже: пропавшие кадры не
             # вернутся, а на закрытии это отказ.
-            return ECHO
+            return BLIND
         if not self._speech.overlapping(lo_vad, hi_vad):
             return OWN
         lo, hi = at - LONG_WINDOW_S, end + LONG_WINDOW_S
