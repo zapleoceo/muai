@@ -26,6 +26,25 @@ TIMEOUT_S = 60
 USER_AGENT = "vera-listener/1.0 (+https://dima.veranda.my)"
 
 
+def post_json(url: str, secret: str, payload: dict) -> tuple[bool, bool, str]:
+    """→ (успех, годное ли тело, пояснение). Общая для сессий и поручений."""
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    request = urllib.request.Request(
+        url, data=data, method="POST",
+        headers={"Content-Type": "application/json",
+                 "X-Internal-Secret": secret,
+                 "User-Agent": USER_AGENT},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=TIMEOUT_S) as response:
+            return (200 <= response.status < 300, True, f"HTTP {response.status}")
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="ignore")[:200]
+        poison = 400 <= e.code < 500 and e.code not in (408, 429)
+        return (False, not poison, f"HTTP {e.code}: {body}")
+    except OSError as e:
+        return (False, True, f"{type(e).__name__}: {e}")
+
 
 class Sender:
     def __init__(self, config: Config, outbox: Outbox):
@@ -39,22 +58,7 @@ class Sender:
 
     def post(self, payload: dict) -> tuple[bool, bool, str]:
         """→ (успех, годное ли тело, пояснение)."""
-        data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
-        request = urllib.request.Request(
-            self.endpoint, data=data, method="POST",
-            headers={"Content-Type": "application/json",
-                     "X-Internal-Secret": self.config.internal_secret,
-                     "User-Agent": USER_AGENT},
-        )
-        try:
-            with urllib.request.urlopen(request, timeout=TIMEOUT_S) as response:
-                return (200 <= response.status < 300, True, f"HTTP {response.status}")
-        except urllib.error.HTTPError as e:
-            body = e.read().decode("utf-8", errors="ignore")[:200]
-            poison = 400 <= e.code < 500 and e.code not in (408, 429)
-            return (False, not poison, f"HTTP {e.code}: {body}")
-        except OSError as e:
-            return (False, True, f"{type(e).__name__}: {e}")
+        return post_json(self.endpoint, self.config.internal_secret, payload)
 
     def flush(self) -> tuple[int, int]:
         """Отправить всё готовое. → (отправлено, осталось)."""

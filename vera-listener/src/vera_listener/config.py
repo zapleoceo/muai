@@ -10,6 +10,8 @@ import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
+from vera_listener.codeword import DEFAULT_PHRASE
+
 HOME = Path(os.path.expanduser("~"))
 ENV_FILE = HOME / ".vera" / "listener.env"
 LEGACY_ENV_FILE = HOME / ".claude" / "vera_sync.env"
@@ -121,6 +123,13 @@ class Config:
     #: синтетике. Но это биометрический след, поэтому рубильник есть.
     voiceprint_journal: bool = True
 
+    #: Кодовая фраза голосового поручения Вере (`VERA_CODEWORD`) и рубильник
+    #: самой функции (`VERA_VOICE_COMMANDS=0`). Рубильник нужен потому, что
+    #: это единственное место, где слушатель не только записывает, но и
+    #: заставляет сервер действовать.
+    codeword: str = DEFAULT_PHRASE
+    voice_commands: bool = True
+
     @property
     def queue_dir(self) -> Path:
         return self.root / "queue"
@@ -202,4 +211,6 @@ def load_config() -> Config:
         glossary=_split_keep_case(get("VERA_GLOSSARY", "")),
         voiceprint_journal=flag("VERA_VOICEPRINT_JOURNAL",
                                 Config.voiceprint_journal),
+        codeword=get("VERA_CODEWORD", Config.codeword).strip() or Config.codeword,
+        voice_commands=flag("VERA_VOICE_COMMANDS", Config.voice_commands),
     )
