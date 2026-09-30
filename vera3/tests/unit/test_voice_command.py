@@ -13,7 +13,8 @@ import pytest
 from fastapi import HTTPException
 from gateway.voice_command import VoiceCommand, accept_voice_command
 from pydantic import ValidationError
-from sqlalchemy import select
+from sqlalchemy import select, update
+from vera_shared import voice_commands
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_voice import VoiceCommandRow
 
@@ -71,6 +72,16 @@ class TestGateway:
             _cmd(instruction="")
 
 
+async def _set_row(get_session, **values) -> None:
+    async with get_session() as s:
+        await s.execute(update(VoiceCommandRow).values(**values))
+
+
+async def _make_due(get_session) -> None:
+    """Пауза ретрая истекла — не ждать её в тесте по-настоящему."""
+    await _set_row(get_session, next_attempt_at=None)
+
+
 def _answer() -> BrainAnswer:
     return BrainAnswer(raw="Пишу: всё в порядке.", provider="p", cost_usd=0.0,
                        n_results=0, n_history=0)
@@ -115,8 +126,71 @@ class TestWorker:
             await voice_worker.process_one(send, OWNER)
             [row] = await _rows(sqlite_db, VoiceCommandRow)
             assert row.status == "pending"
+            await _make_due(sqlite_db)
             await voice_worker.process_one(send, OWNER)
         assert sum(m.startswith("Услышала") for m in send.sent) == 1
+        [row] = await _rows(sqlite_db, VoiceCommandRow)
+        assert row.status == "done"
+
+    @pytest.mark.asyncio
+    async def test_retry_waits_instead_of_running_back_to_back(self, sqlite_db):
+        await accept_voice_command(_cmd(), x_internal_secret=SECRET)
+        ask = AsyncMock(side_effect=RuntimeError("search down"))
+        with patch.object(voice_worker, "ask_brain", ask), \
+             patch.object(voice_worker, "save_event", AsyncMock()):
+            assert await voice_worker.process_one(_Send(), OWNER) is True
+            assert await voice_worker.process_one(_Send(), OWNER) is False
+        assert ask.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_last_failure_tells_owner_and_clears_text(self, sqlite_db):
+        await accept_voice_command(_cmd(), x_internal_secret=SECRET)
+        send = _Send()
+        ask = AsyncMock(side_effect=RuntimeError("search down"))
+        with patch.object(voice_worker, "ask_brain", ask), \
+             patch.object(voice_worker, "save_event", AsyncMock()):
+            for _ in range(3):
+                await _make_due(sqlite_db)
+                await voice_worker.process_one(send, OWNER)
+        [row] = await _rows(sqlite_db, VoiceCommandRow)
+        assert (row.status, row.instruction) == ("error", "")
+        assert send.sent[-1].startswith("Не смогла выполнить")
+
+    @pytest.mark.asyncio
+    async def test_command_that_crashes_every_time_ends_in_error(self, sqlite_db):
+        """Процесс падает посреди поручения — строка висит в processing."""
+        await accept_voice_command(_cmd(), x_internal_secret=SECRET)
+        await _set_row(sqlite_db, status="processing", attempts=3,
+                       updated_at=datetime(2026, 1, 1))
+        send = _Send()
+        exhausted = await voice_commands.revive_stale()
+        await voice_worker.notify_exhausted(send, exhausted)
+        [row] = await _rows(sqlite_db, VoiceCommandRow)
+        assert (row.status, row.instruction) == ("error", "")
+        assert await voice_worker.process_one(send, OWNER) is False
+        assert send.sent == ["Не смогла выполнить голосовое поручение."]
+
+    @pytest.mark.asyncio
+    async def test_stale_command_with_attempts_left_is_retried(self, sqlite_db):
+        await accept_voice_command(_cmd(), x_internal_secret=SECRET)
+        await _set_row(sqlite_db, status="processing", attempts=1,
+                       updated_at=datetime(2026, 1, 1))
+        assert await voice_commands.revive_stale() == []
+        [row] = await _rows(sqlite_db, VoiceCommandRow)
+        assert row.status == "pending"
+
+    @pytest.mark.asyncio
+    async def test_answer_already_sent_is_not_sent_again_after_restart(self, sqlite_db):
+        """Ответ ушёл, процесс упал до finish — перезапуск только закрывает строку."""
+        await accept_voice_command(_cmd(), x_internal_secret=SECRET)
+        await _set_row(sqlite_db, acked_at=datetime(2026, 9, 30),
+                       answered_at=datetime(2026, 9, 30))
+        send = _Send()
+        ask = AsyncMock(return_value=_answer())
+        with patch.object(voice_worker, "ask_brain", ask), \
+             patch.object(voice_worker, "save_event", AsyncMock()):
+            assert await voice_worker.process_one(send, OWNER) is True
+        assert send.sent == [] and ask.await_count == 0
         [row] = await _rows(sqlite_db, VoiceCommandRow)
         assert row.status == "done"
 
