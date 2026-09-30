@@ -72,7 +72,8 @@ class CommandOutbox:
             if not retryable:
                 self._park(path, info)
                 continue
-            log.warning("поручение %s не ушло (%s) — повторю", path.stem, info)
+            log.warning("поручение %s не ушло (%s) — повторю", path.stem, _kind(info))
+            log.debug("поручение %s: ответ сервера %s", path.stem, info)
             break
         left = len(self.ready())
         self.backoff_s = (0.0 if not left else
@@ -92,8 +93,16 @@ class CommandOutbox:
             self._wake.wait(self.backoff_s or RETRY_MAX_S)
 
     def _park(self, path: Path, reason: str) -> None:
-        log.warning("поручение %s отложено в commands-failed: %s", path.stem, reason)
+        log.warning("поручение %s отложено в commands-failed: %s", path.stem,
+                    _kind(reason))
+        log.debug("поручение %s: причина %s", path.stem, reason)
         os.replace(path, self.failed_dir / path.name)
+
+
+def _kind(info: str) -> str:
+    """Только код или тип ошибки. Тело ответа — не для WARNING: pydantic в 422
+    цитирует присланное поле, то есть сам текст поручения."""
+    return info.split(":", 1)[0]
 
 
 def gateway_post(gateway_url: str, secret: str) -> Post:

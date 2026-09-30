@@ -99,3 +99,16 @@ def test_switch_off_disables_commands(tmp_path):
     listener.segmenter.feed(0.0, MIC, True, app="zoom.exe", window_title="Созвон")
     listener._ensure_open()
     assert listener._watches == {}
+
+
+def test_server_body_is_not_logged_at_warning(tmp_path, caplog):
+    box, _ = _box(tmp_path, [(False, False, "HTTP 422: {'input': 'напиши мне'}"),
+                             (False, True, "HTTP 503: напиши мне")])
+    box.put(CMD)
+    box.put({**CMD, "command_id": "vc-2"})
+    with caplog.at_level("WARNING", logger="listener.command_outbox"):
+        box.flush()
+        box.flush()
+    warnings = " ".join(r.getMessage() for r in caplog.records)
+    assert "HTTP 422" in warnings and "HTTP 503" in warnings
+    assert "напиши" not in warnings
