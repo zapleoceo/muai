@@ -1,9 +1,13 @@
 """Очередь поручений: сеть легла — поручение ждёт на диске, а не пропадает."""
 from __future__ import annotations
 
+import os
+import time
 from dataclasses import replace
+from types import SimpleNamespace
 
 import numpy as np
+import pytest
 
 from vera_listener.app import Listener
 from vera_listener.capture import MIC, SYSTEM
@@ -15,23 +19,78 @@ CMD = {"command_id": "vc-1", "instruction": "напиши мне", "spoken_at": 
        "app": None, "window_title": None}
 
 
-def _box(tmp_path, results: list[tuple[bool, bool, str]]):
+class _Clock:
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+
+def _box(tmp_path, results, clock=None):
+    """results: список ответов или dict command_id → список ответов."""
     posted: list[dict] = []
 
     def post(command):
         posted.append(command)
-        return results.pop(0) if results else (True, True, "HTTP 200")
+        queue = results.get(command["command_id"], []) if isinstance(results, dict) \
+            else results
+        return queue.pop(0) if queue else (True, True, "HTTP 200")
 
-    return CommandOutbox(tmp_path / "queue", post), posted
+    return CommandOutbox(tmp_path / "queue", post, clock=clock or _Clock()), posted
 
 
 def test_network_failure_keeps_command_and_retries(tmp_path):
-    box, posted = _box(tmp_path, [(False, True, "URLError"), (False, True, "timeout")])
+    clock = _Clock()
+    box, posted = _box(tmp_path, [(False, True, "URLError"), (False, True, "timeout")],
+                       clock)
     box.put(CMD)
     assert box.flush() == 1 and box.backoff_s > 0
+    assert box.flush() == 1 and len(posted) == 1      # пауза ещё не вышла
+    clock.now += 100
     assert box.flush() == 1
+    clock.now += 100
     assert box.flush() == 0
     assert len(posted) == 3 and box.ready() == []
+
+
+@pytest.mark.parametrize("code", [401, 403, 404, 500, 503])
+def test_fixable_server_answers_are_retried_not_parked(tmp_path, code):
+    """404 — шлюз ещё без новой ручки, 401/403 — ротация секрета."""
+    box, _ = _box(tmp_path, [(False, False, f"HTTP {code}: x")])
+    box.put(CMD)
+    assert box.flush() == 1
+    assert list(box.failed_dir.glob("*.json")) == []
+
+
+@pytest.mark.parametrize("code", [400, 413, 422])
+def test_poison_answers_are_parked(tmp_path, code):
+    box, _ = _box(tmp_path, [(False, False, f"HTTP {code}: x")])
+    box.put(CMD)
+    assert box.flush() == 0
+    assert list(box.failed_dir.glob("*.json"))
+
+
+def test_one_stuck_command_does_not_block_the_rest(tmp_path):
+    stuck = [(False, True, "HTTP 503")] * 10
+    box, posted = _box(tmp_path, {"vc-1": stuck})
+    box.put(CMD)
+    box.put({**CMD, "command_id": "vc-2"})
+    assert box.flush() == 1
+    assert [c["command_id"] for c in posted] == ["vc-1", "vc-2"]
+    assert [p.stem for p in box.ready()] == ["vc-1"]
+
+
+def test_old_parked_commands_are_pruned(tmp_path):
+    box, _ = _box(tmp_path, [])
+    old = box.failed_dir / "vc-old.json"
+    fresh = box.failed_dir / "vc-new.json"
+    old.write_text("{}", encoding="utf-8")
+    fresh.write_text("{}", encoding="utf-8")
+    week_ago = time.time() - 8 * 24 * 3600
+    os.utime(old, (week_ago, week_ago))
+    assert box.prune_failed() == 1
+    assert not old.exists() and fresh.exists()
 
 
 def test_command_survives_restart(tmp_path):
@@ -102,8 +161,8 @@ def test_switch_off_disables_commands(tmp_path):
 
 
 def test_server_body_is_not_logged_at_warning(tmp_path, caplog):
-    box, _ = _box(tmp_path, [(False, False, "HTTP 422: {'input': 'напиши мне'}"),
-                             (False, True, "HTTP 503: напиши мне")])
+    box, _ = _box(tmp_path, {"vc-1": [(False, False, "HTTP 422: {'input': 'напиши мне'}")],
+                             "vc-2": [(False, True, "HTTP 503: напиши мне")]})
     box.put(CMD)
     box.put({**CMD, "command_id": "vc-2"})
     with caplog.at_level("WARNING", logger="listener.command_outbox"):
@@ -112,3 +171,17 @@ def test_server_body_is_not_logged_at_warning(tmp_path, caplog):
     warnings = " ".join(r.getMessage() for r in caplog.records)
     assert "HTTP 422" in warnings and "HTTP 503" in warnings
     assert "напиши" not in warnings
+
+
+def test_watch_is_dropped_even_if_closing_the_session_fails(tmp_path, monkeypatch):
+    listener = _listener(tmp_path, "просто разговор")
+    path = listener.session
+
+    def boom(*_a, **_k):
+        raise RuntimeError("judge упал")
+
+    monkeypatch.setattr("vera_listener.app.judge", boom)
+    closed = SimpleNamespace(session=SimpleNamespace(app="zoom.exe"))
+    with pytest.raises(RuntimeError):
+        listener._run_job(("close", path, closed, {}, None, [], 0.0, None))
+    assert path not in listener._watches
