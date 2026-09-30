@@ -73,6 +73,7 @@ def _listener(tmp_path, text: str) -> Listener:
     watch = listener._watches[listener.session]
     for i in range(80):
         watch.hear(MIC, i * 0.5, 0.5, False)
+        watch.hear(SYSTEM, i * 0.5, 0.5, False)
     return listener
 
 

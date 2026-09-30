@@ -92,6 +92,42 @@ class TestWhoseVoice:
         assert sent == []
 
 
+class TestDeadLoopback:
+    """Системная дорожка не даёт кадров (устройство отвалилось) — это не тишина."""
+
+    def _mic_only(self, watch: CommandWatch, until: float) -> None:
+        t = 0.0
+        while t < until:
+            watch.hear("mic", t, 0.5, True)
+            t += 0.5
+
+    def test_no_system_frames_is_not_owner(self):
+        watch, sent = _watch()
+        self._mic_only(watch, 30)
+        watch.on_segment("mic", 5.0, 9.0, PHRASE)
+        watch.tick()
+        assert sent == []
+
+    def test_no_system_frames_is_rejected_on_close_too(self):
+        watch, sent = _watch()
+        self._mic_only(watch, 30)
+        watch.on_segment("mic", 5.0, 9.0, PHRASE)
+        watch.close()
+        assert sent == []
+
+    def test_gap_in_system_frames_inside_window_is_not_owner(self):
+        watch, sent = _watch()
+        t = 0.0
+        while t < 30:
+            watch.hear("mic", t, 0.5, False)
+            if not 6.0 <= t < 8.0:
+                watch.hear("system", t, 0.5, False)
+            t += 0.5
+        watch.on_segment("mic", 5.0, 9.0, PHRASE)
+        watch.close()
+        assert sent == []
+
+
 class TestInstructionInNextLine:
     def test_instruction_comes_with_the_next_mic_line(self):
         watch, sent = _watch()
