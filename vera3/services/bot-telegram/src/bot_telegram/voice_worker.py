@@ -27,11 +27,12 @@ from vera_shared.voice_commands import (
     fail_command,
     finish_command,
     mark_acked,
+    mark_answered,
     revive_stale,
 )
 
 from bot_telegram.brain import ask_brain, save_event
-from bot_telegram.formatting import format_error, format_reply, plain_fallback
+from bot_telegram.formatting import format_reply, plain_fallback
 
 log = logging.getLogger(__name__)
 
@@ -45,23 +46,38 @@ def ack_text(instruction: str) -> str:
     return f"Услышала: „{instruction}“. Делаю."
 
 
+def failed_text(instruction: str) -> str:
+    if instruction:
+        return f"Не смогла выполнить поручение: „{instruction}“."
+    return "Не смогла выполнить голосовое поручение."
+
+
 async def process_one(send: Send, owner_id: int) -> bool:
-    """Ответить на одно поручение. False — очередь пуста."""
+    """Ответить на одно поручение. False — очередь пуста.
+
+    Гарантия — ответ не теряется и обычно приходит один раз. Дубль возможен в
+    одном узком окне: Telegram принял сообщение, а `mark_answered` не успел
+    записаться (процесс убит в эти миллисекунды, упала БД) или ответ Telegram
+    потерялся в сети. Тогда ретрай ответит повторно — at-least-once: потерять
+    ответ хуже, чем прислать его дважды. То же окно у «Услышала» (`acked_at`).
+    """
     row = await claim_command()
     if row is None:
         return False
     try:
-        if row.acked_at is None:
-            ack = ack_text(row.instruction)
-            # Поручение — распознанная речь, и «<» в ней сломал бы HTML-разметку.
-            await send(escape(ack, quote=False), ack)
-            await mark_acked(row.command_id)
-        answer = await ask_brain(row.instruction, owner_id, owner_id)
-        msg_id = await send(
-            format_reply(answer.raw, answer.provider, answer.cost_usd,
-                         answer.n_results, answer.n_history),
-            plain_fallback(answer.raw, answer.provider))
-        await save_event(owner_id, msg_id, "vera", answer.raw)
+        if row.answered_at is None:
+            if row.acked_at is None:
+                ack = ack_text(row.instruction)
+                # Поручение — распознанная речь, и «<» в ней сломал бы HTML.
+                await send(escape(ack, quote=False), ack)
+                await mark_acked(row.command_id)
+            answer = await ask_brain(row.instruction, owner_id, owner_id)
+            msg_id = await send(
+                format_reply(answer.raw, answer.provider, answer.cost_usd,
+                             answer.n_results, answer.n_history),
+                plain_fallback(answer.raw, answer.provider))
+            await mark_answered(row.command_id)
+            await save_event(owner_id, msg_id, "vera", answer.raw)
         await finish_command(row.command_id)
         log.info("voice-worker: поручение %s выполнено", row.command_id)
     except Exception as e:
@@ -71,9 +87,17 @@ async def process_one(send: Send, owner_id: int) -> bool:
                     row.command_id, type(e).__name__, row.attempts, status)
         if status == "error":
             # Последняя попытка — владелец должен узнать, что ответа не будет.
-            text = format_error(e)
-            await send(text, text)
+            text = failed_text(row.instruction)
+            await send(escape(text, quote=False), text)
     return True
+
+
+async def notify_exhausted(send: Send, command_ids: list[str]) -> None:
+    for command_id in command_ids:
+        log.warning("voice-worker: поручение %s роняло процесс на каждой "
+                    "попытке → error", command_id)
+        text = failed_text("")
+        await send(text, text)
 
 
 async def run_forever(send: Send, owner_id: int) -> None:
@@ -85,7 +109,7 @@ async def run_forever(send: Send, owner_id: int) -> None:
     log.info("voice-worker: запущен")
     while True:
         try:
-            await revive_stale()
+            await notify_exhausted(send, await revive_stale())
             busy = await process_one(send, owner_id)
         except asyncio.CancelledError:
             raise

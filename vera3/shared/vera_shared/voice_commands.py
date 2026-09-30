@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import select, update
+from sqlalchemy import and_, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
 from vera_shared.db.engine import get_session
@@ -28,6 +28,8 @@ SOURCE = "voice_command"
 #: Три попытки, потом error: гонять поиск по кругу на ядовитом поручении
 #: дороже, чем один раз не ответить — владелец увидит, что ответа нет.
 MAX_ATTEMPTS = 3
+#: Первая пауза между попытками; дальше удваивается.
+RETRY_BASE_S = 30
 #: Бот перезапустили посреди ответа. Поиск отвечает до 120с — порог выше.
 STALE_MINUTES = 10
 
@@ -70,11 +72,21 @@ async def create_command(command_id: str, instruction: str, spoken_at: datetime,
         return event.id, False
 
 
+def retry_delay(attempts: int) -> timedelta:
+    """Пауза перед следующей попыткой: 30 с, минута, две. Три подряд без паузы
+    — это три отказа одного и того же упавшего поиска за секунду."""
+    return timedelta(seconds=RETRY_BASE_S * 2 ** max(0, attempts - 1))
+
+
 async def claim_command() -> VoiceCommandRow | None:
+    now = utc_naive_now()
     async with get_session() as s:
         chosen = (await s.execute(
             select(VoiceCommandRow.command_id)
-            .where(VoiceCommandRow.status == "pending")
+            .where(VoiceCommandRow.status == "pending",
+                   VoiceCommandRow.attempts < MAX_ATTEMPTS,
+                   or_(VoiceCommandRow.next_attempt_at.is_(None),
+                       VoiceCommandRow.next_attempt_at <= now))
             .order_by(VoiceCommandRow.created_at)
             .limit(1)
             .with_for_update(skip_locked=True)
@@ -85,7 +97,7 @@ async def claim_command() -> VoiceCommandRow | None:
             update(VoiceCommandRow)
             .where(VoiceCommandRow.command_id == chosen)
             .values(status="processing", attempts=VoiceCommandRow.attempts + 1,
-                    updated_at=utc_naive_now())
+                    updated_at=now)
             .returning(VoiceCommandRow)
         )).scalar_one_or_none()
 
@@ -103,24 +115,48 @@ async def mark_acked(command_id: str) -> None:
     await _set(command_id, acked_at=utc_naive_now())
 
 
+async def mark_answered(command_id: str) -> None:
+    """Ответ ушёл в Telegram. Отдельной записью сразу после отправки: упади
+    процесс до finish — перезапуск увидит признак и второй раз не ответит."""
+    await _set(command_id, answered_at=utc_naive_now())
+
+
 async def finish_command(command_id: str) -> None:
     # Текст поручения живёт в событии; в очереди он больше не нужен.
     await _set(command_id, status="done", instruction="", error=None)
 
 
 async def fail_command(command_id: str, reason: str, attempts: int) -> str:
-    status = "error" if attempts >= MAX_ATTEMPTS else "pending"
-    await _set(command_id, status=status, error=reason[:500])
-    return status
+    if attempts >= MAX_ATTEMPTS:
+        await _set(command_id, status="error", error=reason[:500], instruction="")
+        return "error"
+    await _set(command_id, status="pending", error=reason[:500],
+               next_attempt_at=utc_naive_now() + retry_delay(attempts))
+    return "pending"
 
 
-async def revive_stale() -> int:
+async def revive_stale() -> list[str]:
+    """Вернуть зависшие в processing. → id поручений, исчерпавших попытки.
+
+    Зависает поручение, если процесс упал посреди него. Если падает он на нём
+    каждый раз, без счёта попыток оно крутилось бы вечно — поэтому исчерпавшее
+    попытки уходит в error, и владельцу об этом сообщают.
+    """
+    now = utc_naive_now()
+    stale = and_(VoiceCommandRow.status == "processing",
+                 VoiceCommandRow.updated_at < now - timedelta(minutes=STALE_MINUTES))
     async with get_session() as s:
-        result = await s.execute(
+        exhausted = list((await s.execute(
             update(VoiceCommandRow)
-            .where(VoiceCommandRow.status == "processing",
-                   VoiceCommandRow.updated_at
-                   < utc_naive_now() - timedelta(minutes=STALE_MINUTES))
-            .values(status="pending", updated_at=utc_naive_now())
+            .where(stale, VoiceCommandRow.attempts >= MAX_ATTEMPTS)
+            .values(status="error", instruction="", updated_at=now,
+                    error="процесс падал на каждой попытке")
+            .returning(VoiceCommandRow.command_id)
+        )).scalars())
+        await s.execute(
+            update(VoiceCommandRow)
+            .where(stale)
+            .values(status="pending", updated_at=now,
+                    next_attempt_at=now + retry_delay(1))
         )
-        return result.rowcount or 0
+    return exhausted

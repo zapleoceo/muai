@@ -10,8 +10,8 @@
 -- command_id выдаёт слушатель — ретрай той же команды из его офлайн-очереди
 -- упирается в PRIMARY KEY и второго ответа не даёт.
 --
--- Приватность: instruction нужна только до ответа, бот очищает её на done —
--- сам текст остаётся в событии.
+-- Приватность: instruction нужна только до ответа, бот очищает её и на
+-- done, и на error — сам текст остаётся в событии.
 
 BEGIN;
 
@@ -26,6 +26,10 @@ CREATE TABLE IF NOT EXISTS voice_command_queue (
     error        TEXT,
     -- «Услышала, делаю» уже ушло: ретрай после сбоя шлёт только результат.
     acked_at     TIMESTAMP,
+    -- Ответ уже ушёл: после перезапуска бот второй раз не отвечает.
+    answered_at  TIMESTAMP,
+    -- Ретрай с паузой (30 с, 1 мин, 2 мин), а не три попытки подряд.
+    next_attempt_at TIMESTAMP,
     created_at   TIMESTAMP NOT NULL DEFAULT NOW(),
     updated_at   TIMESTAMP NOT NULL DEFAULT NOW()
 );

@@ -25,6 +25,10 @@ class VoiceCommandRow(Base):
     error: Mapped[str | None] = mapped_column(Text, nullable=True)
     # «Услышала, делаю» уже ушло — ретрай после сбоя шлёт только результат.
     acked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Ответ уже ушёл владельцу — после перезапуска второй раз не отвечаем.
+    answered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Раньше этого времени поручение не берём: ретрай с паузой, а не подряд.
+    next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(),
     )
