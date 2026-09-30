@@ -16,6 +16,8 @@ from pathlib import Path
 from typing import Any
 
 from vera_listener.capture import MIC, SYSTEM, Capture, Frame
+from vera_listener.command_outbox import CommandOutbox, gateway_post
+from vera_listener.commands import CommandWatch
 from vera_listener.config import Config
 from vera_listener.counterpart import counterpart
 from vera_listener.dedup import mark_echo
@@ -33,7 +35,7 @@ from vera_listener.speakers import (
 )
 from vera_listener.status import DEAF, IDLE, TALKING, Status
 from vera_listener.transcriber import Transcriber, pcm_to_float, slice_seconds
-from vera_listener.vad import SpeechDetector
+from vera_listener.vad import FRAME_S, SpeechDetector
 from vera_listener.winctx import active_audio_app, foreground_window_title
 
 log = logging.getLogger("listener")
@@ -58,6 +60,12 @@ class Listener:
         self.capture = Capture(self.frames)
         self.transcriber = Transcriber(config)
         self.sender = Sender(config, self.outbox)
+        self.commands = CommandOutbox(
+            config.queue_dir, gateway_post(config.gateway_url, config.internal_secret))
+        # Слежение за кодовой фразой — своё на каждую сессию, по её файлу:
+        # задания распознавания несут путь, и по нему находят своё слежение
+        # даже когда главный поток уже открыл следующую сессию.
+        self._watches: dict[Path, CommandWatch] = {}
         # Опознание говорящих. Хранилище отпечатков — одно на всё время
         # жизни слушателя, сессия опознания — своя на каждый разговор.
         self.voiceprints = VoiceprintRegistry(config.voiceprints_file)
@@ -92,6 +100,8 @@ class Listener:
         self.capture.start()
         threading.Thread(target=self._work, name="stt", daemon=True).start()
         threading.Thread(target=self._send, name="sender", daemon=True).start()
+        threading.Thread(target=self.commands.run, args=(self._stop,),
+                         name="commands", daemon=True).start()
         log.info("слушаю: микрофон + системный звук, очередь %s", self.config.queue_dir)
         try:
             self._pump()
@@ -176,6 +186,11 @@ class Listener:
             device_hint=self.capture.device_hint,
             meeting_id=meeting_id, part=part,
         )
+        if self.config.voice_commands:
+            self._watches[self.session] = CommandWatch(
+                session_id, self._session_wall, self.commands.put,
+                phrase=self.config.codeword, app=session.app,
+                window_title=session.window_title)
         self.status.set_state(TALKING)
         if part > 1:
             log.info("разговор продолжается, часть %d (%s)", part, meeting_id)
@@ -186,8 +201,17 @@ class Listener:
     def _record(self, frame: Frame, speech: bool) -> None:
         recorder = self.recorders[frame.track]
         recorder.add(frame.pcm, speech, frame.at - self._session_zero)
+        watch = self._watches.get(self.session) if self.session else None
+        if watch is not None:
+            watch.hear(frame.track, frame.at - self._session_zero, FRAME_S, speech)
         if recorder.ready():
             self._queue_chunk(frame.track, via_ready=True)
+        elif (frame.track == SYSTEM and watch is not None
+              and watch.wants_system_text() and recorder.silence_s >= PAUSE_FLUSH_S):
+            # Поручение ждёт распознанного системного звука, чтобы исключить
+            # эхо, а обычный кусок набирается минуту речи. Отдаём накопленное
+            # на ближайшей паузе — иначе ответ ждал бы конца чужого монолога.
+            self._queue_chunk(SYSTEM)
         if self._held and self._system_confirmed():
             self._flush_held()
 
@@ -289,6 +313,8 @@ class Listener:
         # а непустой она без него не станет. Поймано сквозным тестом.
         audio = (pcm_to_float(pcm)
                  if speakers is not None and track == SYSTEM else None)
+        watch = self._watches.get(path)
+        heard: list[tuple[float, str]] = []
         for segment in self.transcriber.transcribe(pcm, track=track):
             # Тем же условием, что и в `outbox.append`: пустую реплику очередь
             # молча не пишет, и снятый с неё отпечаток остался бы висячим —
@@ -297,10 +323,17 @@ class Listener:
             if not segment.text.strip():
                 continue
             self.outbox.append(path, offset + segment.at, track, segment.text)
+            heard.append((offset + segment.at, segment.text))
+            if watch is not None:
+                watch.on_segment(track, offset + segment.at, offset + segment.end,
+                                 segment.text)
             if audio is not None and speakers is not None:
                 speakers.observe(
                     offset + segment.at,
                     slice_seconds(audio, segment.at, segment.end))
+        if watch is not None and track == SYSTEM:
+            watch.system.transcribed(offset, offset + len(pcm) / BYTES_PER_S, heard)
+            watch.tick()
 
     def _name_speakers(self, utterances: list[dict[str, Any]], closed: Closed,
                        speakers: SpeakerSession | None) -> int:
@@ -368,11 +401,22 @@ class Listener:
             try:
                 job = self.jobs.get(timeout=1.0)
             except queue.Empty:
+                self._tick_watches()
                 continue
             try:
                 self._run_job(job)
             except Exception as e:
                 log.exception("обработка сессии сорвалась: %s", e)
+
+    def _tick_watches(self) -> None:
+        """Поручения, ждущие решения по эху, пересматриваются и без новых кусков."""
+        for watch in list(self._watches.values()):
+            watch.tick()
+
+    def _close_watch(self, path: Path) -> None:
+        watch = self._watches.pop(path, None)
+        if watch is not None:
+            watch.close()
 
     def _run_job(self, job: tuple) -> None:
         kind = job[0]
@@ -392,6 +436,9 @@ class Listener:
             log.info("разговор отброшен (%s, %s), не распознавали %.0fс системного",
                      verdict.reason, closed.reason, held_s)
             self.status.note_dropped()
+            # Поручение не зависит от того, попадёт ли разговор в мозг: владелец
+            # мог сказать фразу и в коротком монологе, который ворота отбросят.
+            self._close_watch(path)
             self.outbox.drop(path)
             return
         # Сессию берём — теперь придержанный системный звук стоит распознать.
@@ -400,6 +447,7 @@ class Listener:
                         held_lost_s)
         for offset, pcm in held:
             self._transcribe_into(path, SYSTEM, offset, pcm, speakers)
+        self._close_watch(path)
         payload = read_payload(path)
         if payload is None:
             self.outbox.drop(path)
