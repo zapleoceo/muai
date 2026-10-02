@@ -11,6 +11,10 @@ Exposed (all POST, JSON body, X-Internal-Secret required):
   /tools/get_dialog_history  {chat_query: str, limit?: int}
   /tools/find_user           {q: str}
   /tools/spec                — returns JSON-Schema list of all tools
+
+Not a tool (no spec entry, X-Send-Secret instead of X-Internal-Secret):
+  /actions/send_message      {chat_id: str, text: str} — posts AS DIMA to an
+                             allow-listed chat; guards in send_guard.py
 """
 from __future__ import annotations
 
@@ -238,6 +242,38 @@ def build_app(client: TelegramClient) -> FastAPI:
             return {"b64": b64encode(data).decode("ascii"), "mime": mime, "size": size}
         except Exception as e:
             return {"error": f"{type(e).__name__}: {e}"}
+
+    @app.post("/actions/send_message")
+    async def send_message(
+        body: dict[str, Any],
+        x_send_secret: str | None = Header(None, alias="X-Send-Secret"),
+    ) -> dict[str, Any]:
+        """Post ``text`` to an allow-listed chat AS DIMA (send_guard.py).
+
+        Deliberately outside ``/tools/*`` and absent from TOOL_SPECS: the
+        agent must never be able to speak for the owner.
+        """
+        from ingestor_telegram.send_guard import (
+            allowed_chats,
+            check_send_request,
+            send_to_chat,
+        )
+
+        refusal = check_send_request(
+            x_send_secret, body.get("chat_id"), body.get("text"),
+            send_secret=os.environ.get("TG_SEND_SECRET", ""),
+            allowed=allowed_chats(),
+        )
+        if refusal is not None:
+            raise HTTPException(status_code=refusal[0], detail=refusal[1])
+        chat_id = int(str(body["chat_id"]).strip())
+        try:
+            msg_id = await send_to_chat(client, chat_id, body["text"])
+        except Exception as e:
+            log.warning("send_message to %s failed: %s", chat_id, e)
+            raise HTTPException(status_code=502, detail=f"{type(e).__name__}: {e}") from e
+        log.info("send_message: posted msg %s to %s", msg_id, chat_id)
+        return {"ok": True, "chat_id": chat_id, "message_id": msg_id}
 
     @app.post("/tools/sync_project_rosters")
     async def sync_project_rosters(

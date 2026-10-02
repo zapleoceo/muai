@@ -481,6 +481,28 @@ LLM-guessed itstep/veranda to `other` for chats not yet in
 table. Safe if triage is paused (`backfill_paused=1`) while you apply
 the migration and run the sync once.
 
+## Ежемесячный отчёт бани → «Веранда и Баня»
+
+`scripts/banya_monthly_report.sh`, root cron (сервер в UTC, 03:00 UTC = 10:00 Нячанг):
+
+```cron
+0 3,5,8 1 * * bash /var/www/vera3/scripts/banya_monthly_report.sh >> /var/log/banya-monthly-report.log 2>&1
+```
+
+1-го числа забирает с veranda.my сумму бани без кальянов за прошлый месяц
+(`GET /internal/banya-month-summary`, `X-Report-Secret`) и шлёт в группу от
+имени Димы через `/actions/send_message` (api.md):
+
+    Сумма без кальянов: 120 009 500
+    К выплате 24 001 900
+
+К выплате — 20% (`App\Banya\MonthlyPayout` в veranda_my). Три запуска в день —
+страховка от недоступной veranda.my; после успеха маркер
+`/var/lib/banya-monthly-report/sent-YYYY-MM`, повторной отправки нет. Сбой —
+алерт владельцу ботом. Проверка без отправки:
+`YM=2026-09 DRY_RUN=1 bash /var/www/vera3/scripts/banya_monthly_report.sh`.
+Выключить — убрать строку из crontab или очистить `TG_SEND_ALLOWED_CHATS`.
+
 ## Secrets
 
 Server `.env` at `/var/www/vera3/infra/.env` (mode 600):
@@ -497,6 +519,10 @@ Server `.env` at `/var/www/vera3/infra/.env` (mode 600):
 | `BROKER_URL` | `https://aib.zapleo.com` |
 | `BROKER_PROJECT_KEY` | one-shot from broker `/admin/projects` |
 | `VERA_DAILY_GLOBAL_CAP_USD` | hard global LLM spend cap |
+| `TG_SEND_SECRET` | `X-Send-Secret` для `/actions/send_message` (отправка от имени Димы); пусто = выключено |
+| `TG_SEND_ALLOWED_CHATS` | allowlist чатов для той же отправки, marked id через запятую |
+| `BANYA_REPORT_SECRET` | `X-Report-Secret` к `veranda.my/internal/banya-month-summary` (тот же ключ в .env veranda) |
+| `BANYA_REPORT_CHAT_ID` | куда слать отчёт бани: `-1003799072880` («Веранда и Баня») |
 
 ## Миграции: учёт и дрейф
 

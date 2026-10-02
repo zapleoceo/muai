@@ -238,6 +238,11 @@ services:
       TELEGRAM_PHONE: ${TELEGRAM_PHONE}
       TELEGRAM_SESSION_DIR: /sessions
       INTERNAL_SECRET: ${INTERNAL_SECRET:?INTERNAL_SECRET must be set}
+      # /actions/send_message (send_guard.py): отправка от имени Димы. Пустые
+      # значения = эндпоинт отказывает всем. Сейчас единственный чат —
+      # «Веранда и Баня» для ежемесячного отчёта (scripts/banya_monthly_report.sh).
+      TG_SEND_SECRET: ${TG_SEND_SECRET:-}
+      TG_SEND_ALLOWED_CHATS: ${TG_SEND_ALLOWED_CHATS:-}
     volumes:
       - vera3_tg_sessions:/sessions
     expose:

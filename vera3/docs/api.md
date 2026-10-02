@@ -229,6 +229,26 @@ X-Internal-Secret required on all `/tools/*`.
 | `/tools/get_dialog_history` | POST | `{chat_query, limit?}` |
 | `/tools/find_user` | POST | `{q}` |
 
+### `/actions/send_message` — отправка ОТ ИМЕНИ ДИМЫ (не tool)
+
+`POST {chat_id, text}` → `{ok, chat_id, message_id}`. Единственный путь, которым
+юзербот пишет в чат как владелец. Сейчас один вызывающий — ежемесячный отчёт
+бани (`scripts/banya_monthly_report.sh`, см. deploy-ops.md). Три независимых
+замка (`ingestor_telegram/send_guard.py`):
+
+1. Путь `/actions/*`, а не `/tools/*`: агент brain-search ходит только на
+   `/tools/{name}` и в `/tools/spec` эндпоинта нет — LLM его не достанет даже
+   угадав имя (тест `test_not_exposed_to_the_agent`).
+2. Свой секрет `X-Send-Secret` == `TG_SEND_SECRET`, а не `INTERNAL_SECRET`
+   (тот есть у всех сервисов). Пустой секрет — отказ всем (401).
+3. Allowlist чатов `TG_SEND_ALLOWED_CHATS` (marked id через запятую). Чужой
+   чат — 403; пустой список — отказ всем.
+
+`check_send_request()` — проверки секрета/чата/текста (до 4000 символов),
+`allowed_chats()` — разбор allowlist из env, `send_to_chat()` — отправка с
+фолбэком: StringSession не хранит кэш сущностей, поэтому при «Could not find
+the input entity» чат ищется обходом диалогов. Сбой отправки — 502.
+
 ## External (via Cloudflare → nginx :80 → :8003 dashboard)
 
 Production URL: `https://dima.veranda.my`
