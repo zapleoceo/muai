@@ -1,0 +1,172 @@
+"""MCP-инструменты записи. Каждая запись попадает в `mcp_audit` и откатывается `undo`.
+
+Ничего не удаляется: событие скрывается (`hidden`), связь снимается
+(`is_current=false`). Слияния сущностей здесь нет — это отдельный этап
+(`vera_shared.graph.merge`, ветка feat/graph-dedup-merge); когда он
+появится, `entity_merge` добавляется сюда новой функцией и записью в
+`WRITE_TOOLS`.
+"""
+from __future__ import annotations
+
+from collections.abc import Awaitable, Callable
+from typing import Annotated, Any, Literal
+
+from mcp.server.fastmcp import Context
+from pydantic import Field
+from sqlalchemy.ext.asyncio import AsyncSession
+from vera_shared.db.engine import get_session
+from vera_shared.events import edit as event_edit
+from vera_shared.graph import edit as graph_edit
+from vera_shared.memory.remember import remember_fact
+
+from vera_mcp import audit
+from vera_mcp.auth import client_of
+from vera_mcp.undo import undo_entry
+
+#: (target_id, before, after, extra-поля ответа)
+Applied = tuple[int | None, dict[str, Any] | None, dict[str, Any] | None, dict[str, Any]]
+MAX_CONTENT_CHARS = 50_000
+
+
+async def _audited(ctx: Context, tool: str, args: dict[str, Any], kind: str,
+                   op: Callable[[AsyncSession], Awaitable[Applied]]) -> dict[str, Any]:
+    """Правка и запись журнала — одна транзакция."""
+    async with get_session() as s:
+        target_id, before, after, extra = await op(s)
+        audit_id = await audit.record(
+            s, client=client_of(ctx), tool=tool, args=args, kind=kind,
+            target_id=target_id, before=before, after=after)
+    return {"ok": True, "audit_id": audit_id, **extra}
+
+
+async def remember(
+    text: Annotated[str, Field(min_length=3, max_length=8000)],
+    ctx: Context,
+    kind: Literal["fact", "decision", "todo", "preference"] = "fact",
+    context: Annotated[str | None, Field(max_length=2000)] = None,
+    tags: Annotated[list[str] | None, Field(max_length=10)] = None,
+) -> dict[str, Any]:
+    """Запомнить факт/решение/задачу/предпочтение (с дедупом). Remember a self-contained fact; duplicates are detected server-side."""
+    outcome = await remember_fact(text, kind, context, tags)
+    result: dict[str, Any] = {
+        "ok": True, "event_id": outcome.event_id, "deduped": outcome.deduped,
+        "dedup_reason": outcome.dedup_reason, "similar_event_id": outcome.similar_event_id,
+        "audit_id": None}
+    if outcome.event_id is None or outcome.dedup_reason == "exact":
+        return result
+    async with get_session() as s:
+        result["audit_id"] = await audit.record(
+            s, client=client_of(ctx), tool="remember",
+            args={"text": text, "kind": kind, "context": context, "tags": tags},
+            kind="event", target_id=outcome.event_id, before=None,
+            after={"created": True, "deduped": outcome.deduped})
+    return result
+
+
+async def update_event(
+    event_id: int, ctx: Context,
+    content_text: Annotated[str | None, Field(min_length=1, max_length=MAX_CONTENT_CHARS)] = None,
+    metadata: dict[str, Any] | None = None,
+    category: Annotated[str | None, Field(min_length=1, max_length=50)] = None,
+) -> dict[str, Any]:
+    """Изменить текст/метаданные/категорию события; метаданные сливаются по ключам (null удаляет ключ); правка текста пере-индексирует событие. Edit an event; the previous version is kept in the audit log."""
+    if content_text is None and not metadata and category is None:
+        raise ValueError("nothing to change: pass content_text, metadata or category")
+
+    async def op(s: AsyncSession) -> Applied:
+        before, after = await event_edit.update_event(
+            s, event_id, content_text=content_text, metadata_patch=metadata,
+            category=category)
+        return event_id, before, after, {"requeued_for_embedding":
+                                         after["triage_status"] == "pending"}
+
+    return await _audited(ctx, "update_event",
+                          {"event_id": event_id, "content_text": content_text,
+                           "metadata": metadata, "category": category}, "event", op)
+
+
+async def hide_event(event_id: int, ctx: Context) -> dict[str, Any]:
+    """Скрыть событие из поиска и выдач (не удаляя). Soft-hide an event; reversible via unhide_event / undo."""
+    async def op(s: AsyncSession) -> Applied:
+        before, after = await event_edit.set_hidden(s, event_id, hidden=True)
+        return event_id, before, after, {"hidden": True}
+
+    return await _audited(ctx, "hide_event", {"event_id": event_id}, "event", op)
+
+
+async def unhide_event(event_id: int, ctx: Context) -> dict[str, Any]:
+    """Вернуть скрытое событие в поиск. Restore a hidden event to search."""
+    async def op(s: AsyncSession) -> Applied:
+        before, after = await event_edit.set_hidden(s, event_id, hidden=False)
+        return event_id, before, after, {"hidden": False}
+
+    return await _audited(ctx, "unhide_event", {"event_id": event_id}, "event", op)
+
+
+async def entity_rename(
+    entity_id: int, name: Annotated[str, Field(min_length=1, max_length=500)],
+    ctx: Context,
+) -> dict[str, Any]:
+    """Переименовать сущность. Rename an entity (old name kept in the audit log)."""
+    async def op(s: AsyncSession) -> Applied:
+        before, after = await graph_edit.rename_entity(s, entity_id, name)
+        return entity_id, before, after, {"name": name}
+
+    return await _audited(ctx, "entity_rename", {"entity_id": entity_id, "name": name},
+                          "entity", op)
+
+
+async def entity_add_alias(
+    entity_id: int, source: Annotated[str, Field(min_length=1, max_length=40)],
+    identifier: Annotated[str, Field(min_length=1, max_length=500)], ctx: Context,
+    display_name: Annotated[str | None, Field(max_length=500)] = None,
+) -> dict[str, Any]:
+    """Добавить сущности алиас (source + identifier, напр. telegram + user:123 или gmail + адрес). Attach an identifier; refuses if it belongs to another entity."""
+    args = {"entity_id": entity_id, "source": source, "identifier": identifier,
+            "display_name": display_name}
+    async with get_session() as s:
+        alias_id, created = await graph_edit.add_alias(
+            s, entity_id, source, identifier, display_name)
+        if not created:
+            return {"ok": True, "created": False, "alias_id": alias_id, "audit_id": None}
+        audit_id = await audit.record(
+            s, client=client_of(ctx), tool="entity_add_alias", args=args, kind="alias",
+            target_id=alias_id, before=None, after={"entity_id": entity_id})
+    return {"ok": True, "created": True, "alias_id": alias_id, "audit_id": audit_id}
+
+
+async def relationship_set(
+    subject_id: int, object_id: int, predicate: str, ctx: Context,
+    fact: Annotated[str | None, Field(max_length=2000)] = None,
+    confidence: Annotated[float, Field(ge=0.0, le=1.0)] = 0.8,
+) -> dict[str, Any]:
+    """Создать или обновить связь (predicate из графа: boss_of, works_at, spouse_of …) и сделать её текущей. Add/update a relationship between two entities."""
+    args = {"subject_id": subject_id, "object_id": object_id, "predicate": predicate,
+            "fact": fact, "confidence": confidence}
+
+    async def op(s: AsyncSession) -> Applied:
+        rel_id, before, after = await graph_edit.set_relationship(
+            s, subject_id, object_id, predicate, fact, confidence)
+        return rel_id, before, after, {"relationship_id": rel_id, "created": before is None}
+
+    return await _audited(ctx, "relationship_set", args, "relationship", op)
+
+
+async def relationship_retire(relationship_id: int, ctx: Context) -> dict[str, Any]:
+    """Снять связь (is_current=false), не удаляя. Retire a relationship; reversible via undo."""
+    async def op(s: AsyncSession) -> Applied:
+        before, after = await graph_edit.retire_relationship(s, relationship_id)
+        return relationship_id, before, after, {"relationship_id": relationship_id}
+
+    return await _audited(ctx, "relationship_retire",
+                          {"relationship_id": relationship_id}, "relationship", op)
+
+
+async def undo(audit_id: int, ctx: Context, force: bool = False) -> dict[str, Any]:
+    """Откатить запись журнала по id (remember скрывает событие). Undo an audit entry; refuses if the object changed since unless force."""
+    async with get_session() as s:
+        return await undo_entry(s, audit_id, client_of(ctx), force)
+
+
+WRITE_TOOLS = (remember, update_event, hide_event, unhide_event, entity_rename,
+               entity_add_alias, relationship_set, relationship_retire, undo)

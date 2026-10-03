@@ -18,3 +18,11 @@ from datetime import UTC, datetime
 def utc_naive_now() -> datetime:
     """Текущее время UTC без tzinfo — ровно то, что кладётся в БД."""
     return datetime.now(UTC).replace(tzinfo=None)
+
+
+def parse_iso_naive(value: str) -> datetime:
+    """ISO-дата или дата-время (с `Z`/смещением тоже) → наивный UTC."""
+    parsed = datetime.fromisoformat(value.strip().replace("Z", "+00:00"))
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone(UTC).replace(tzinfo=None)
+    return parsed

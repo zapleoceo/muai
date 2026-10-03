@@ -12,7 +12,7 @@ _RAW_DEPENDENT_TABLES = ("event_chunk_embeddings",)
 
 
 async def reset_schema(conn: AsyncConnection) -> None:
-    from vera_shared.db import models, models_graph, models_sources  # noqa: F401
+    from vera_shared.db import models, models_graph, models_mcp, models_sources  # noqa: F401
     from vera_shared.db.engine import Base
 
     for table in _RAW_DEPENDENT_TABLES:
