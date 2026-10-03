@@ -17,6 +17,12 @@ def test_every_known_predicate_has_label() -> None:
         assert code in PREDICATE_LABELS, code
 
 
+def test_filter_lists_only_stored_predicates_but_keeps_their_labels() -> None:
+    assert "reports_to" not in _PREDICATES and "child_of" not in _PREDICATES
+    assert {"boss_of", "parent_of", "member_of", "coworker_of"} <= set(_PREDICATES)
+    assert "reports_to" in PREDICATE_LABELS and "child_of" in PREDICATE_LABELS
+
+
 def test_known_labels() -> None:
     assert predicate_label("coworker_of") == "работает с"
     assert predicate_label("member_of") == "состоит в"

@@ -16,6 +16,7 @@ from sqlalchemy import select
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
+from vera_shared.events.visibility import HIDDEN_STATUS
 from vera_shared.graph.rel_cleanup import Action, Row, retire_action
 from vera_shared.graph.rel_verify import (
     ERROR,
@@ -50,9 +51,11 @@ def _append(path: Path, query: EdgeQuery, verdict: Verdict) -> None:
 
 
 async def event_texts(event_ids: list[int]) -> dict[int, str]:
+    """Тексты видимых событий; скрытого или пропавшего в словаре нет."""
     async with get_session() as s:
         rows = (await s.execute(select(EventRow.id, EventRow.content_text)
-                                .where(EventRow.id.in_(event_ids)))).all()
+                                .where(EventRow.id.in_(event_ids),
+                                       EventRow.triage_status != HIDDEN_STATUS))).all()
     return {eid: message_body(text) for eid, text in rows}
 
 

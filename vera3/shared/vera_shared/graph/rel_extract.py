@@ -22,7 +22,7 @@ from sqlalchemy import text
 
 from vera_shared.db.engine import get_session
 from vera_shared.events.visibility import NOT_HIDDEN_SQL
-from vera_shared.graph.rel_judge import judge_relationship
+from vera_shared.graph.rel_judge import Candidate, judge_batch
 from vera_shared.graph.rel_text import End, Evidence
 from vera_shared.graph.rel_validate import (
     is_referential_name,
@@ -240,6 +240,7 @@ async def extract_and_store(event_id: int, body: str) -> RelExtractOutcome:
             described[entity_id] = (row.name, row.type) if row else ("", "")
         return described[entity_id]
 
+    prepared: list[tuple[Candidate, str]] = []   # (кандидат, факт)
     for r in rels:
         subj = (r.get("subject") or "").strip()
         obj = (r.get("object") or "").strip()
@@ -252,7 +253,6 @@ async def extract_and_store(event_id: int, body: str) -> RelExtractOutcome:
         if not subj_id or not obj_id:
             out.unresolved += 1
             continue
-        conf = float(r.get("confidence", 0.6))
         # Проверяем сущности из графа, а не строки модели: «Я» резолвится в
         # автора, а тип конца (person/organization/…) есть только у сущности.
         subj_name, subj_type = await _describe(subj_id)
@@ -261,17 +261,18 @@ async def extract_and_store(event_id: int, body: str) -> RelExtractOutcome:
         names = await entity_names([subj_id, obj_id])
         evidence = Evidence(fact, End(tuple(names[subj_id]), subj_strong, subj_author),
                             End(tuple(names[obj_id]), obj_strong, obj_author))
-        ends = ((subj_id, subj_name, subj_type), (obj_id, obj_name, obj_type))
-        reason = await judge_relationship(ends, pred, conf, evidence,
-                                          event_id=event_id, body=body)
+        prepared.append((Candidate(((subj_id, subj_name, subj_type),
+                                    (obj_id, obj_name, obj_type)), pred,
+                                   float(r.get("confidence", 0.6)), evidence), fact))
+
+    reasons = await judge_batch([c for c, _ in prepared], event_id=event_id, body=body)
+    for (cand, fact), reason in zip(prepared, reasons, strict=True):
         if reason:
             out.rejected[reason] += 1
             continue
-        # Canonical upsert lives in repo.py — single source of truth for the
-        # (subject, predicate, object) soft-upsert.
         if await upsert_relationship(
-            subject_entity_id=subj_id, object_entity_id=obj_id,
-            predicate=pred, fact=fact, confidence=conf,
+            subject_entity_id=cand.ends[0][0], object_entity_id=cand.ends[1][0],
+            predicate=cand.predicate, fact=fact, confidence=cand.confidence,
             derived_from_event_id=event_id,
         ):
             out.inserted += 1

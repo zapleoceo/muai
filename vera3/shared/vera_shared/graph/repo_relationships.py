@@ -164,3 +164,14 @@ async def entity_names(entity_ids: list[int]) -> dict[int, list[str]]:
                     EntityAliasRow.display_name.is_not(None)))):
             names[eid].append(display)
     return names
+
+
+async def alias_index(entity_ids: list[int]) -> dict[str, int]:
+    """«источник:идентификатор» → id сущности, по которым ищется автор события."""
+    if not entity_ids:
+        return {}
+    async with get_session() as s:
+        rows = (await s.execute(select(EntityAliasRow.source, EntityAliasRow.identifier,
+                                       EntityAliasRow.entity_id)
+                                .where(EntityAliasRow.entity_id.in_(entity_ids)))).all()
+    return {f"{source}:{identifier}": eid for source, identifier, eid in rows}

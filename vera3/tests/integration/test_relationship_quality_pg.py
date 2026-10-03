@@ -64,7 +64,7 @@ async def test_concurrent_upserts_of_one_triple_do_not_raise(pg_db):
     results = await asyncio.gather(*(
         repo.upsert_relationship(subject_entity_id=a, object_entity_id=b,
                                  predicate="works_at", confidence=0.7,
-                                 derived_from_event_id=i) for i in range(8)))
+                                 derived_from_event_id=None) for _ in range(8)))
     assert results.count(True) == 1
     assert len(await _rows(pg_db)) == 1
 
@@ -75,7 +75,7 @@ async def test_concurrent_symmetric_writers_leave_one_row(pg_db):
     a, b = await _pair()
     await asyncio.gather(
         *(repo.upsert_relationship(subject_entity_id=x, object_entity_id=y,
-                                   predicate="friend_of", derived_from_event_id=1)
+                                   predicate="friend_of", derived_from_event_id=None)
           for x, y in [(a, b), (b, a)] * 4))
     assert len(await _rows(pg_db)) == 1
 

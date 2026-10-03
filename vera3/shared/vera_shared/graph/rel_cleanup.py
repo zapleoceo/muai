@@ -16,6 +16,7 @@
 """
 from __future__ import annotations
 
+import json
 from collections import Counter, defaultdict
 from datetime import UTC, datetime
 from typing import Any
@@ -29,6 +30,7 @@ from vera_shared.graph.rel_canon import (
 )
 from vera_shared.graph.rel_text import End, Evidence
 from vera_shared.graph.rel_validate import REJECT_WEAK_NAME, relationship_reject_reason
+from vera_shared.ingest.authorship import OWNER, resolve_author
 
 PLAN_VERSION = 1
 RULE_SYMMETRIC = "symmetric_duplicate"
@@ -73,9 +75,27 @@ def _convert(row: Row) -> Action:
                       "is_current": True}}
 
 
-def _reject_reason(row: Row, names: dict[str, list[str]], owner_id: int | None) -> str | None:
+def author_entity_id(row: Row, aliases: dict[str, int], owner_id: int | None) -> int | None:
+    """Кто написал сообщение-источник связи: по тем же правилам, что при
+    извлечении (`ingest.authorship`). «Я» в факте — это он, а не только владелец."""
+    source = row.get("event_source")
+    if not source:
+        return None
+    meta = row.get("event_meta") or {}
+    if isinstance(meta, str):
+        meta = json.loads(meta)
+    author = resolve_author(source, meta)
+    if author is OWNER:
+        return owner_id
+    return aliases.get(f"{author[0]}:{author[1]}") if author else None
+
+
+def _reject_reason(row: Row, snapshot: dict[str, Any]) -> str | None:
+    names, owner_id = snapshot.get("names", {}), snapshot.get("owner_id")
+    author_id = author_entity_id(row, snapshot.get("aliases", {}), owner_id)
+
     def end(entity_id: int) -> End:
-        own = entity_id == owner_id
+        own = entity_id in (owner_id, author_id)
         return End(tuple(names.get(str(entity_id), ())), strong=own, author=own)
 
     return relationship_reject_reason(
@@ -87,10 +107,9 @@ def _reject_reason(row: Row, names: dict[str, list[str]], owner_id: int | None) 
 
 
 def _extracted_reasons(snapshot: dict[str, Any]) -> dict[int, str]:
-    names, owner_id = snapshot.get("names", {}), snapshot.get("owner_id")
     return {r["id"]: reason for r in snapshot["relationships"]
             if r["is_current"] and r.get("derived_from_event_id") is not None
-            and (reason := _reject_reason(r, names, owner_id))}
+            and (reason := _reject_reason(r, snapshot))}
 
 
 def soft_retirements(snapshot: dict[str, Any]) -> dict[int, str]:

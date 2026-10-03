@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.engine import get_session
@@ -73,10 +74,19 @@ async def apply_plan(plan: dict[str, Any], report_path: str | Path | None) -> di
                     out["skipped"].append({"action_id": action["id"],
                                            "reason": "строка изменилась после плана"})
                     continue
+                try:
+                    # SAVEPOINT: живой rel-extract мог успеть записать каноническую
+                    # тройку — тогда падает только это действие, не вся пачка.
+                    async with s.begin_nested():
+                        _set_state(row, action["after"])
+                        await s.flush()
+                except IntegrityError:
+                    out["skipped"].append({"action_id": action["id"],
+                                           "reason": "конфликт уникальности: тройка занята"})
+                    continue
                 batch.append({"action_id": action["id"], "rel_id": row.id,
                               "rule": action["rule"], "before": action["before"],
                               "after": action["after"], "undone": False})
-                _set_state(row, action["after"])
             out["entries"] += batch
             _write_json(path, out)
             await s.flush()
@@ -94,8 +104,15 @@ async def undo_report(report_path: str | Path) -> int:
                     continue
                 row = await _row(s, entry["rel_id"])
                 if row is not None and _state(row) == entry["after"]:
-                    _set_state(row, entry["before"])
-                    undone += 1
+                    try:
+                        async with s.begin_nested():
+                            _set_state(row, entry["before"])
+                            await s.flush()
+                        undone += 1
+                    except IntegrityError:
+                        entry["note"] = "конфликт уникальности: прежняя тройка занята"
+                else:
+                    entry["note"] = "строка изменилась после применения — не трогаю"
                 entry["undone"] = True
             await s.flush()
         _write_json(path, data)
