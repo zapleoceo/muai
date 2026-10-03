@@ -22,6 +22,21 @@ PREDICATE_LABELS: dict[str, tuple[str, str]] = {
 }
 
 
+# Карточка называет, КЕМ ДРУГОЙ приходится смотрящему, поэтому у направленных
+# ролей подпись зависит от стороны: «out» — смотрящий в роли subject.
+DIRECTIONAL_LABELS: dict[tuple[str, str], str] = {
+    ("boss_of", "out"): "подчинённый", ("boss_of", "in"): "начальник",
+    ("parent_of", "out"): "ребёнок", ("parent_of", "in"): "родитель",
+    ("client_of", "out"): "поставщик", ("client_of", "in"): "клиент",
+    ("vendor_of", "out"): "клиент", ("vendor_of", "in"): "поставщик",
+    ("works_at", "out"): "место работы", ("works_at", "in"): "сотрудник",
+}
+
+
+def role_label(code: str, direction: str) -> str:
+    return DIRECTIONAL_LABELS.get((code, direction)) or predicate_label(code)
+
+
 def predicate_label(code: str) -> str:
     if code in PREDICATE_LABELS:
         return PREDICATE_LABELS[code][0]

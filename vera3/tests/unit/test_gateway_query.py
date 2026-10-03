@@ -240,7 +240,7 @@ async def test_entity_context_composes_full_response():
          patch("vera_shared.graph.context.get_entity", AsyncMock(return_value=entity)), \
          patch("vera_shared.graph.context.list_relationships", AsyncMock(return_value=rel_rows)), \
          patch("vera_shared.graph.context.get_entity_context", AsyncMock(return_value=ctx)), \
-         patch("vera_shared.graph.context.list_members", AsyncMock(return_value=[])):
+         patch("vera_shared.graph.context.list_members", AsyncMock(return_value=[])),          patch("vera_shared.graph.context.entity_connections", AsyncMock(return_value=[])):
         result = await entity_context(name="Дмитрий",
                                        x_internal_secret="test-internal-secret")
     assert result["entity_id"] == 42

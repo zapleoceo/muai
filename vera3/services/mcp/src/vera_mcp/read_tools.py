@@ -106,15 +106,16 @@ async def entity_find(
 async def entity_context(
     entity_id: int | None = None,
     name: Annotated[str | None, Field(min_length=2)] = None,
+    raw_relationships: bool = False,
 ) -> dict[str, Any]:
-    """Что известно о сущности: алиасы, членства, связи, активность (по id или имени). Everything known about one entity."""
+    """Что известно о сущности: алиасы, членства, связи-пары (роли с весом и взаимодействиями), активность (по id или имени). raw_relationships=true добавляет записи relationships по одной (с id для relationship_retire). Everything known about one entity; connections are one per counterpart."""
     if entity_id is None:
         if not name:
             raise ValueError("pass entity_id or name")
         entity_id = await find_entity_by_name(name)
         if entity_id is None:
             raise LookupError(f"no entity matching '{name}'")
-    payload = await entity_context_payload(entity_id)
+    payload = await entity_context_payload(entity_id, raw_relationships=raw_relationships)
     if payload is None:
         raise LookupError(f"entity {entity_id} not found")
     members = payload["members"]
@@ -126,9 +127,11 @@ async def entity_context(
 async def graph_neighbours(
     entity_id: int, predicate: str | None = None,
     limit: Annotated[int, Field(ge=1, le=100)] = 50,
+    raw_edges: bool = False,
 ) -> dict[str, Any]:
-    """Соседи сущности в графе (1 шаг: связи и членства). One-hop neighbours of an entity."""
-    snap = await graph_snapshot(focus_id=entity_id, limit=limit, predicate=predicate)
+    """Соседи сущности в графе (1 шаг): одно ребро на пару с главной ролью, весом и «also»; членства. raw_edges=true — по одному ребру на запись relationships. One-hop neighbours; one edge per pair."""
+    snap = await graph_snapshot(focus_id=entity_id, limit=limit, predicate=predicate,
+                                raw_edges=raw_edges)
     edges = snap["edges"]
     return {"nodes": snap["nodes"], "edges": edges[:MAX_EDGES],
             "truncated": len(edges) > MAX_EDGES or len(snap["nodes"]) >= limit}

@@ -201,6 +201,37 @@ class RelationshipRow(Base):
     is_current: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
 
 
+class PairStatsRow(Base):
+    """Кэш взаимодействий пары сущностей (миграция 040): считается из событий
+    периодической задачей brain-triage и целиком пересобирается, правды тут нет —
+    источник остаётся в `events`. Пара упорядочена: entity_a < entity_b."""
+    __tablename__ = "pair_stats"
+    __table_args__ = (
+        Index("ix_pair_stats_b", "entity_b"),
+    )
+
+    entity_a: Mapped[int] = mapped_column(
+        ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True,
+    )
+    entity_b: Mapped[int] = mapped_column(
+        ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True,
+    )
+    dm_msgs: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    dm_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    mail_msgs: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    mail_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    co_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    work_co_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    co_chats: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    shared_groups: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    active_days: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    first_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    computed_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(),
+    )
+
+
 # ─── L2 Patterns ─────────────────────────────────────────────────────────────
 
 

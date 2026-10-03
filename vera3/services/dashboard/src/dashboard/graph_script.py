@@ -45,7 +45,8 @@ const cy = cytoscape({
       'border-color': e => clusterColor(e.data('cluster')) || C.line}},
     {selector:'node:selected', style:{'border-width':4, 'border-color':C.text,
       'font-size':'12px'}},
-    {selector:'edge', style:{'width': e => 0.6 + (e.data('confidence')||0.5)*1.4,
+    // Ребро — пара людей целиком: толщина = вес связи, подпись при клике.
+    {selector:'edge', style:{'width': e => 0.6 + (e.data('weight')||e.data('confidence')||0.3)*3.4,
       'line-color':C.line, 'curve-style':'haystack', 'opacity':0.6}},
     // Членство — структурная связь: тоньше и пунктиром, чтобы факты выделялись.
     {selector:'edge[predicate = "member_of"]', style:{'line-style':'dashed', 'width':0.5,
@@ -98,7 +99,8 @@ function render(data){
     const s='n'+e.source, t='n'+e.target;
     if (seen.has(s) && seen.has(t))
       els.push({data:{id:s+'_'+t+'_'+e.predicate, source:s, target:t,
-                       predicate:e.predicate, confidence:e.confidence}});
+                       predicate:e.predicate, confidence:e.confidence,
+                       weight:e.weight, also:e.also||[], inferred:!!e.inferred}});
   }
   cy.elements().remove();
   cy.add(els);
@@ -142,9 +144,7 @@ function renderPanel(p){
   const stats = [c.relationships + ' связей'];
   if (c.groups) stats.push('в группах: ' + c.groups);
   if (c.members) stats.push('участников: ' + c.members);
-  const rels = p.relationships.map(r =>
-    '<li>' + (r.direction === 'in' ? '← ' : '') + esc(r.label || predLabel(r.predicate)) +
-    ': <a href="#" data-focus="' + r.other_id + '">' + esc(r.other_name) + '</a></li>').join('');
+  const rels = p.connections.map(connRow).join('');
   const evs = p.events.map(e =>
     '<li><a href="/events/' + e.id + '">' + esc(SOURCE_RU[e.source] || e.source) + ' · ' +
     esc(fmtStamp(e.occurred_at)) + '</a><div class="muted small">' + esc(e.snippet) + '</div></li>').join('');
@@ -156,7 +156,7 @@ function renderPanel(p){
     (p.profile.length ? '<p class="muted small">' + p.profile.map(esc).join(' · ') + '</p>' : '') +
     (chips.length ? '<div class="g-chips">' + chips.map(x => '<span class="chip">' + x + '</span>').join('') + '</div>' : '') +
     '<p class="muted small">' + stats.join(' · ') + '</p>' +
-    (rels ? '<h4>Связи</h4><ul>' + rels + '</ul>' : '') +
+    (rels ? '<h4>Связи по людям</h4><ul>' + rels + '</ul>' : '') +
     (evs ? '<h4>Последние события</h4><ul>' + evs + '</ul>' : '') +
     (link ? '<a role="button" class="secondary" href="' + esc(link) + '"' +
       (link.indexOf('http') === 0 ? ' target="_blank" rel="noopener"' : '') + '>Открыть в Telegram</a>' : '');
@@ -180,8 +180,11 @@ function focusOn(id){
 cy.on('tap', 'node', ev => focusOn(ev.target.data('raw')));
 cy.on('tap', 'edge', ev => {
   const e = ev.target;
+  const also = (e.data('also') || []).map(predLabel).join(', ');
+  const w = e.data('weight');
   info.textContent = e.source().data('name') + ' — ' + predLabel(e.data('predicate')) +
-                     ' — ' + e.target().data('name');
+                     ' — ' + e.target().data('name') + (w ? ' (вес ' + w.toFixed(2) + ')' : '') +
+                     (also ? ' · также: ' + also : '');
 });
 panel.addEventListener('click', ev => {
   const focus = ev.target.closest('[data-focus]');

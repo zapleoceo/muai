@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dashboard.graph_labels import predicate_labels_json, predicate_options_html
 from dashboard.graph_script import GRAPH_SCRIPT
+from dashboard.graph_script_connections import CONNECTIONS_SCRIPT
 
 GRAPH_CSS = """
 .g-head{display:flex;align-items:baseline;justify-content:space-between;gap:1rem;flex-wrap:wrap}
@@ -90,5 +91,5 @@ def graph_body(predicates: list[str], pending: int | None) -> str:
     return (_BODY.replace("__CSS__", GRAPH_CSS)
             .replace("__DUP_LABEL__", dupes_label(pending))
             .replace("__PRED_OPTS__", predicate_options_html(predicates))
-            .replace("__SCRIPT__", GRAPH_SCRIPT)
+            .replace("__SCRIPT__", CONNECTIONS_SCRIPT + GRAPH_SCRIPT)
             .replace("__PRED_LABELS__", predicate_labels_json(predicates)))

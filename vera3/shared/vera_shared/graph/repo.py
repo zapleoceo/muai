@@ -32,6 +32,7 @@ from vera_shared.db.models_graph import (
     IdentityNodeRow,
     MembershipRow,
 )
+from vera_shared.graph.pair_stats import ordered
 from vera_shared.graph.repo_relationships import upsert_relationship  # noqa: F401  re-export
 from vera_shared.timeutil import utc_naive_now
 
@@ -248,6 +249,7 @@ async def resolve_entity_exact(name: str) -> int | None:
 async def graph_snapshot(
     *, min_degree: int = 2, limit: int = 300,
     predicate: str | None = None, focus_id: int | None = None,
+    raw_edges: bool = False,
 ) -> dict[str, Any]:
     """Node/edge slice for the /graph visualizer. Two modes:
 
@@ -262,9 +264,15 @@ async def graph_snapshot(
     IT STEP выглядели несвязанными). predicate='member_of' фильтрует до
     одних членств; любой другой predicate — до одних rel-фактов.
 
+    Рёбра-факты — одна связь на ПАРУ (`connections.connections_among`: главная роль,
+    вес, «также»); `raw_edges=True` отдаёт прежние строки `relationships` по одной.
+    Членство, дублирующее пару со связью, не рисуется отдельным ребром.
+
     Edges are only those whose BOTH endpoints are in the returned node set,
     so the client never references a missing node. `limit` is clamped to
     GRAPH_MAX_NODES to protect the browser."""
+    # Импорт здесь: connections → connection_hints → identity → dedup → ingest → repo.
+    from vera_shared.graph.connections import connections_among, inferred_partner_ids
     limit = max(1, min(limit, GRAPH_MAX_NODES))
     min_degree = max(1, min_degree)
     want_rels = predicate != "member_of"
@@ -311,6 +319,10 @@ async def graph_snapshot(
                     {" UNION ".join(nb_parts)}
                 ) x LIMIT :lim
             """), params)).scalars().all())
+            if want_rels and not raw_edges and predicate in (None, "coworker_of"):
+                known = set(ids)
+                ids += [i for i in await inferred_partner_ids(focus_id)
+                        if i not in known][:max(0, limit - len(ids))]
         else:
             params["mind"] = min_degree
             ids = list((await s.execute(text(f"""
@@ -363,7 +375,7 @@ async def graph_snapshot(
         )).mappings().all()
 
         edge_rows: list = []
-        if want_rels:
+        if want_rels and raw_edges:
             edge_rows += list((await s.execute(
                 text(f"""
                     SELECT r.subject_entity_id AS source, r.object_entity_id AS target,
@@ -387,6 +399,16 @@ async def graph_snapshot(
                 {"ids": ids},
             )).mappings().all())
 
+    pair_edges = await connections_among(ids, predicate) if want_rels and not raw_edges else []
+    taken = {ordered(e["source"], e["target"]) for e in pair_edges}
+    edges = list(pair_edges)
+    for r in edge_rows:
+        pair = ordered(r["source"], r["target"])
+        if not raw_edges and pair in taken:
+            continue
+        taken.add(pair)
+        edges.append({"source": r["source"], "target": r["target"],
+                      "predicate": r["predicate"], "confidence": round(float(r["confidence"]), 2)})
     return {
         "nodes": [
             {"id": r["id"], "name": r["name"], "type": r["type"],
@@ -394,11 +416,7 @@ async def graph_snapshot(
              "username": r["username"], "tg_id": r["tg_id"]}
             for r in node_rows
         ],
-        "edges": [
-            {"source": r["source"], "target": r["target"],
-             "predicate": r["predicate"], "confidence": round(float(r["confidence"]), 2)}
-            for r in edge_rows
-        ],
+        "edges": edges,
     }
 
 

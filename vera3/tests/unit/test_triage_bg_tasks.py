@@ -19,9 +19,10 @@ async def test_start_background_loops_keeps_strong_refs():
     bl._bg_tasks.clear()
     tasks = bl.start_background_loops()
     try:
-        assert len(tasks) == 3
+        assert len(tasks) == 4
         assert set(tasks) <= bl._bg_tasks, "задача не взята под ссылку"
-        assert {t.get_name() for t in tasks} == {"triage-watchdog", "triage-retry", "triage-reembed"}
+        assert {t.get_name() for t in tasks} == {
+            "triage-watchdog", "triage-retry", "triage-reembed", "triage-pair-stats"}
     finally:
         for t in tasks:
             t.cancel()

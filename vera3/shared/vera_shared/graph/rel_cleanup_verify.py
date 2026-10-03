@@ -1,5 +1,10 @@
 """Проход `verify` чистки: связи с одним словом вместо имени судит модель.
 
+Связи пары с устоявшимся общением (`connections.established_pairs`: сотни личных
+сообщений, общие рабочие чаты) модель не судит: роль таких людей определяет
+модель связи по числу и виду контактов, а не одна фраза. Они остаются в плане
+действием `skip` с правилом `pair_established` и не стоят вызовов брокера.
+
 План строится из вердиктов `rel_verify`: «no» — `retire` («unclear» — только у иерархии), «yes» —
 связь остаётся (в плане записана как `skip` с цитатой для аудита), «error»
 (сбой брокера) — не трогается и считается в `unverified`: повторите прогон,
@@ -17,6 +22,7 @@ from sqlalchemy import select
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
 from vera_shared.events.visibility import HIDDEN_STATUS
+from vera_shared.graph.pair_stats import ordered
 from vera_shared.graph.rel_cleanup import Action, Row, retire_action
 from vera_shared.graph.rel_verify import (
     ERROR,
@@ -32,6 +38,7 @@ from vera_shared.ingest.envelope import message_body
 
 RULE_WEAK = "weak_name"
 RULE_VERIFIED = "weak_name_verified"
+RULE_ESTABLISHED = "pair_established"
 
 
 def load_cache(path: Path) -> Cache:
@@ -75,9 +82,23 @@ def _action(row: Row, verdict: Verdict) -> Action:
             "verdict": verdict.verdict, "quote": verdict.quote}
 
 
+def _pair(row: Row) -> tuple[int, int]:
+    return ordered(row["subject_entity_id"], row["object_entity_id"])
+
+
+def _established_skip(row: Row) -> Action:
+    return {"action": "skip", "rule": RULE_ESTABLISHED, "rel_id": row["id"], "keep_id": None,
+            "brief": f"{row['subject_name']} -[{row['predicate']}]-> {row['object_name']}"}
+
+
 async def verify_plan(candidates: list[Row], cache_path: Path, *, limit: int | None = None,
-                      concurrency: int = 4) -> tuple[list[Action], dict[str, Any]]:
-    """(действия, статистика). `limit` — пробная партия: первые N кандидатов."""
+                      concurrency: int = 4,
+                      established: set[tuple[int, int]] | None = None,
+                      ) -> tuple[list[Action], dict[str, Any]]:
+    """(действия, статистика). `limit` — пробная партия: первые N кандидатов, которых
+    не освободило общение пары (`established` — упорядоченные пары)."""
+    exempt = [r for r in candidates if _pair(r) in (established or ())]
+    candidates = [r for r in candidates if _pair(r) not in (established or ())]
     batch = candidates[:limit] if limit else candidates
     texts = await event_texts(sorted({r["derived_from_event_id"] for r in batch}))
     cache = load_cache(cache_path)
@@ -91,8 +112,9 @@ async def verify_plan(candidates: list[Row], cache_path: Path, *, limit: int | N
     fresh = [q for q in queries if q.key not in cache]
     await verify_many(((q, texts.get(q.event_id, "")) for q in fresh), cache=cache,
                       concurrency=concurrency, on_done=remember)
-    actions: list[Action] = []
-    stats: dict[str, Any] = {"candidates": len(candidates), "checked": len(batch),
+    actions: list[Action] = [_established_skip(r) for r in exempt]
+    stats: dict[str, Any] = {"candidates": len(candidates) + len(exempt),
+                             "established": len(exempt), "checked": len(batch),
                              "from_cache": len(queries) - len(fresh), YES: 0, NO: 0,
                              UNCLEAR: 0, "unverified": 0, "cost_usd": 0.0}
     for row, query in zip(batch, queries, strict=True):
