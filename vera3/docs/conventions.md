@@ -139,5 +139,6 @@ id_rsa commits), `ruff --fix` on `vera3/`, `ruff format` on `vera3/`,
 
 - One logical change per commit.
 - Commit message starts with `feat:` / `fix:` / `refactor:` / `chore:` / `docs:` / `test:`.
-- Push to `master` triggers Tests + Deploy + docs-check workflows. If
-  docs-check blocks you, update the right `vera3/docs/*.md` file.
+- Push to `master` runs the single `deploy.yml` workflow (docs → quality →
+  test → build → deploy); PRs run it without deploy. If the docs gate blocks
+  you, update the right `vera3/docs/*.md` file.

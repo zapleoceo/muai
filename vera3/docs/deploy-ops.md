@@ -2,33 +2,56 @@
 
 ## Auto-deploy
 
-Push to `master` → `.github/workflows/deploy.yml` runs **four jobs**:
+Push to `master` → `.github/workflows/deploy.yml` ("Deploy vera3 to Hetzner")
+is the **only** vera3 workflow. Pull requests run the same pipeline minus
+`deploy`. Jobs run in a chain, so a red gate stops the later (more
+expensive) ones: `docs` → `quality` → `test` → `build` → `deploy`.
 
 1. **`docs` job** — any file changed under `vera3/services/` or
    `vera3/shared/` must be matched by a change under `vera3/docs/`.
    Opt-out per commit: literal `docs-not-needed`.
-2. **`test` job** — pytest must pass; total coverage gate **70%** on
-   `vera_shared` + `gateway`.
-3. **`quality` job** — strict static analysis on the diff:
+2. **`quality` job** — strict static analysis on the diff (no tests):
+   - **Secret scan** on added lines (bot tokens, `sk-…`, AWS keys, private
+     keys, `ghp_…`).
    - **Ruff** with extended ruleset `E,F,W,I,B,UP,SIM,C4,RET` — no
      warnings tolerated (`SIM` = simplify, `C4` = comprehensions,
      `RET` = unreachable-after-return).
    - **Vulture** dead-code detector on the files this push touched
      (`--min-confidence 80`) — surfaces unused funcs, classes, vars
      that ruff's `F401`/`F841` miss.
-   - **Diff-cover** — every new/changed line must be ≥75% covered by
-     tests in this PR (separate from the repo-wide 70% gate). Caught:
-     "added a function without a test".
    - **Docs name-sync** — extract every public symbol added/removed in
      the diff (lowercase `def foo`, PascalCase `class Bar`; skip
      `_private`, `test_*`, dunders). Each **added** name must appear
      somewhere in `vera3/docs/`; each **removed** name must NOT remain
      in `vera3/docs/` (orphaned reference = stale doc). Opt-out:
      `docs-not-needed`.
-4. **`deploy` job** — `needs: [docs, test, quality]`. SSH to the server
+3. **`test` job** — ONE pytest run (live `pgvector/pgvector:pg16` service,
+   `RUN_INTEGRATION_TESTS=1`) whose `coverage.xml` feeds:
+   - **per-package coverage floors** (`scripts/check_coverage.py`);
+   - **Diff-cover** — every new/changed line in `vera_shared`, `gateway`,
+     `media_worker`, `brain_search` must be ≥75% covered (the report is
+     narrowed to those packages with `coverage xml --include`, same scope
+     as before the workflows were merged). Caught: "added a function
+     without a test";
+   - informational (`continue-on-error`): whole-tree `ruff` and `mypy
+     shared/vera_shared`.
+4. **`build` job** — all eleven service images build (`push: false`, GHA
+   layer cache). Runs on PRs too.
+5. **`deploy` job** — only for a push (or manual run) on `master`;
+   `needs: [docs, quality, test, build]`. SSH to the server
    with a restricted key wired in `/root/.ssh/authorized_keys` to
    `command="/usr/local/bin/vera3-deploy"` — anything the client sends
    is ignored.
+6. **`notify` job** — if ANY job above failed or was cancelled on a
+   non-PR run, DMs the owner via the bot (`TELEGRAM_BOT_TOKEN_VERA`,
+   `OWNER_TELEGRAM_ID`) with the names of the failed jobs.
+
+Shared CI plumbing lives in two scripts so it exists once:
+`vera3/scripts/ci_install.sh lint|test` (the ONLY dependency list — add a new
+service package there) and `vera3/scripts/ci_diff_base.sh` (diff base for
+push vs pull request). Concurrency: PR runs are grouped per branch and
+superseded runs are cancelled; push/dispatch runs share one queue and are
+never cancelled, so an in-flight deploy cannot be interrupted.
 
 ### ⚠️ Manual server edits are NOT durable
 
@@ -51,7 +74,7 @@ considering it done — otherwise it's living on borrowed time.
 
 Any commit that reaches production has: passing tests, ≥75% coverage on
 the actual changes, no dead code in the touched files, no syntax/import
-nits, every public name documented, no orphan references to removed
+nits, every public name documented, every image buildable, no orphan references to removed
 code. If any of those fails, deploy is **blocked** until fixed — you
 don't have to remember to check anything yourself.
 
@@ -182,19 +205,6 @@ Docker (82% всех) никем не востребованы** плюс **3.74
 файловые системы повторно. Мерить надо `du --exclude=merged` либо суммой
 `overlay2/*/diff`.
 
-## Tests gate (separate workflow)
-
-`.github/workflows/vera3-tests.yml` also runs on every push (independent
-of deploy) and is the same pytest invocation. The duplication is
-intentional: tests workflow shows up as a clean check on every PR, deploy
-workflow re-runs them as a guard before shipping.
-
-## Docs gate
-
-`.github/workflows/docs-check.yml` blocks pushes that change Python under
-`vera3/services/` or `vera3/shared/` without touching `vera3/docs/`.
-Opt-out: `docs-not-needed` literal in any commit in the range.
-
 ## Restricted SSH key
 
 Generated once on a dev box:
@@ -212,12 +222,6 @@ No shell, no scp, no port-forward, no agent-forward.
 
 Stored in GH Secrets as `HETZNER_SSH_KEY_VERA3`. The old (full-root)
 `HETZNER_SSH_KEY` is no longer used by Vera's deploy and can be removed.
-
-## Docs gate
-
-`.github/workflows/docs-check.yml` blocks pushes that change Python under
-`vera3/services/` or `vera3/shared/` without touching `vera3/docs/`.
-Opt-out: `docs-not-needed` literal in any commit in the range.
 
 ## Monitor
 

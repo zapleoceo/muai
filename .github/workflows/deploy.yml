@@ -1,56 +1,58 @@
 name: Deploy vera3 to Hetzner
 
+# Единственный воркфлоу vera3: docs → quality → test → build → deploy.
+# Раньше то же самое делали три файла (deploy.yml, vera3-tests.yml,
+# docs-check.yml): docs-гейт, pytest с покрытием и сборка одиннадцати образов
+# гонялись по два раза на каждый пуш. Теперь каждая работа выполняется один
+# раз; на PR идёт всё, кроме deploy.
+#
+# Имя воркфлоу "Deploy vera3 to Hetzner" и id job'ов (docs, quality, test,
+# build, deploy, notify) не менять: по ним воркфлоу ищут снаружи.
+
 on:
   push:
     branches: [master]
     paths:
       - 'vera3/**'
       - '.github/workflows/deploy.yml'
-  # На PR из этого воркфлоу гоняется ТОЛЬКО job `quality` — см. `if` у
-  # остальных. Он гейтит деплой, но жил один на push в master, поэтому
-  # покраснеть мог исключительно ПОСЛЕ мерджа: 2026-09-01 так и вышло —
-  # ветка зелёная, мердж прошёл, quality упал на diff-cover, job deploy
-  # пропущен, прод остался на старом коде. Теперь тот же гейт виден на PR.
-  #
-  # docs/test/build здесь на PR намеренно НЕ запускаются: их уже гоняют
-  # docs-check.yml и vera3-tests.yml (там же и сборка всех одиннадцати
-  # образов). Включить их — удвоить каждый PR, включая 11 сборок дважды.
   pull_request:
     paths:
       - 'vera3/**'
       - '.github/workflows/deploy.yml'
   workflow_dispatch:
 
-# Прогон на PR НЕ должен стоять в одной очереди с продакшн-деплоем: группа
-# общая и cancel-in-progress: false, поэтому чужой PR задерживал бы выкладку.
-# У PR своя группа на ветку, и там отменять предыдущий прогон правильно —
-# у продакшн-деплоя нельзя никогда.
+# PR получает свою группу на ветку и отменяет устаревшие прогоны. Всё, что
+# ведёт в продакшн (push в master, ручной запуск), стоит в общей очереди и
+# НИКОГДА не отменяется: отмена посреди deploy оставила бы сервер на
+# полпути между rsync и compose up.
 concurrency:
-  group: ${{ github.event_name == 'pull_request' && format('deploy-pr-{0}', github.ref) || 'deploy-production' }}
+  group: ${{ github.event_name == 'pull_request' && format('ci-pr-{0}', github.ref) || 'deploy-production' }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+env:
+  # Вход для vera3/scripts/ci_diff_base.sh: без ${{ }} внутри shell-кода.
+  CI_EVENT: ${{ github.event_name }}
+  CI_BEFORE: ${{ github.event.before }}
+  CI_PR_BASE: ${{ github.event.pull_request.base.sha }}
+  CI_HEAD: ${{ github.sha }}
 
 jobs:
   # ─── 1. Docs gate ────────────────────────────────────────────────────────
-  # Blocks deploy if vera3/services or vera3/shared changed without
+  # Blocks the run if vera3/services or vera3/shared changed without
   # vera3/docs being updated. Opt-out per commit: `docs-not-needed`.
   docs:
-    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 3
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
       - name: Verify vera3/docs updated alongside code
         shell: bash
         run: |
           set -euo pipefail
-          BASE="${{ github.event.before }}"
-          HEAD="${{ github.sha }}"
-          if [ -z "${BASE:-}" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
-             || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
-            BASE="$(git rev-parse "${HEAD}~1" 2>/dev/null || echo "$HEAD")"
-          fi
+          BASE="$(bash vera3/scripts/ci_diff_base.sh)"
+          HEAD="$CI_HEAD"
           CHANGED="$(git diff --name-only "$BASE" "$HEAD")"
           echo "changed files:"; echo "$CHANGED"
 
@@ -68,160 +70,38 @@ jobs:
           fi
           echo "docs gate passed"
 
-  # ─── 2. Test gate ────────────────────────────────────────────────────────
-  test:
-    if: github.event_name != 'pull_request'
-    runs-on: ubuntu-latest
-    timeout-minutes: 12
-    defaults:
-      run:
-        working-directory: vera3
-    # Живой Postgres. Юнит-тесты идут на SQLite (быстро, без сервиса), но
-    # весь сырой SQL проекта — Postgres-only и на SQLite физически не
-    # исполняется: to_tsvector, FOR UPDATE SKIP LOCKED, FILTER (WHERE …),
-    # metadata->>, = ANY(:ids), NOW(). Из-за этого тела `_claim_batch`,
-    # `_compute_stats` и `brain_search.search` не исполнялись НИ ОДНИМ
-    # тестом — покрытие показывало 0% по их строкам, а «тест» на claim
-    # сравнивал inspect.getsource() со строкой.
-    # Образ тот же, что в проде (pgvector/pgvector:pg16).
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_USER: vera
-          POSTGRES_PASSWORD: test
-          POSTGRES_DB: vera_test
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U vera -d vera_test"
-          --health-interval 5s --health-timeout 5s --health-retries 10
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-          cache: pip
-      - name: Install
-        run: |
-          pip install -e ./shared[dev] aiosqlite
-          pip install -e ./services/gateway[dev]
-          pip install -e ./services/dashboard
-          pip install -e ./services/media-worker
-          pip install -e ./services/ingestor-telegram
-          pip install -e ./services/ingestor-gmail
-          pip install -e ./services/ingestor-trello
-          pip install -e ./services/ingestor-slack
-          pip install -e ./services/brain-search
-          pip install -e ./services/bot-telegram
-      - name: Pytest
-        # Coverage gate stair-step. 2026-06-24: 40 → 60 → 70 (246 passed, 74.17%)
-        env:
-          TELEGRAM_API_ID: "1"
-          TELEGRAM_API_HASH: "test"
-          TELEGRAM_PHONE: "+10000000000"
-          # Включает tests/pg и tests/integration. Без этих двух переменных
-          # они молча пропускаются — так они и простояли мёртвыми в CI.
-          RUN_INTEGRATION_TESTS: "1"
-          TEST_DATABASE_URL: postgresql+asyncpg://vera:test@localhost:5432/vera_test
-        run: |
-          # brain_search intentionally NOT in --cov here: repo-wide 70% gate
-          # would retroactively fail on its pre-existing legacy coverage gap.
-          # It IS collected/run (regressions still fail this job) and IS
-          # covered by the quality job's diff-cover (new-lines-only, below).
-          # PYTHONPATH здесь НЕ задаётся: tests/unit/conftest.py сам кладёт в
-          # sys.path shared и все services/*/src. Раньше список жил в трёх
-          # копиях в двух воркфлоу и разъехался — у шага diff-cover не было
-          # brain-triage, сборка тестов падала, а деплой стоял молча.
-          # ВСЕ пакеты под измерением, и порог у каждого свой.
-          # Один общий процент по двум пакетам из двенадцати описывал 38.8%
-          # продового кода: регресс в дашборде, триаже, поиске, боте или
-          # любом ингесторе ворота не останавливали. И даже внутри
-          # измеряемого пакета среднее прятало нули — vera_shared/tools
-          # стоял на 0% и ехал на хорошо покрытых соседях.
-          pytest tests/ \
-            --cov=vera_shared --cov=gateway --cov=media_worker \
-            --cov=brain_search --cov=brain_triage --cov=dashboard \
-            --cov=ingestor_gmail --cov=ingestor_slack --cov=ingestor_trello \
-            --cov=ingestor_telegram --cov=bot_telegram \
-            --cov-report=term-missing \
-            --cov-report=xml:coverage.xml
-          python scripts/check_coverage.py coverage.xml
-
-  # ─── 3. Quality gate ─────────────────────────────────────────────────────
-  # Strict static analysis on the diff:
-  #   (a) Ruff with extended ruleset (E,F,W,I,B,UP,SIM,C4,RET) — no warnings.
-  #   (b) Vulture — flags dead/unused code in files touched by this push.
-  #   (c) Diff-cover — ≥75% line coverage on the diff itself (not just repo total).
+  # ─── 2. Quality gate ─────────────────────────────────────────────────────
+  # Strict static analysis on the diff (no tests here — coverage is in `test`):
+  #   (a) Secret scan on added lines.
+  #   (b) Ruff with extended ruleset (E,F,W,I,B,UP,SIM,C4,RET) — no warnings.
+  #   (c) Vulture — flags dead/unused code in files touched by this push.
   #   (d) Docs-name sync — every newly-added public symbol (def foo / class Bar)
   #       must appear in vera3/docs/*; every removed symbol must NOT remain there.
   # Opt-out per commit: `docs-not-needed` (skips d only).
   quality:
+    needs: docs
     runs-on: ubuntu-latest
-    timeout-minutes: 12
-    # Тот же Postgres, что в job `test`, и по той же причине — но здесь она
-    # стоила заблокированного деплоя. Postgres подняли только в `test`, а
-    # порог diff-cover гейтит `quality`, где pytest шёл на одном SQLite.
-    # Postgres-only код (to_tsvector, FILTER, FOR UPDATE SKIP LOCKED) при
-    # этом не исполняется, его строки считаются непокрытыми — и свежий
-    # разбор brain_search на модули дал 63% вместо 88%. Деплой встал на
-    # ровном месте: тесты зелёные, покрытие настоящее, красный — измеритель.
-    # Замерено на том же диффе: без Postgres 146 непокрытых строк из 396,
-    # с Postgres — 47.
-    services:
-      postgres:
-        image: pgvector/pgvector:pg16
-        env:
-          POSTGRES_USER: vera
-          POSTGRES_PASSWORD: test
-          POSTGRES_DB: vera_test
-        ports: ["5432:5432"]
-        options: >-
-          --health-cmd "pg_isready -U vera -d vera_test"
-          --health-interval 5s --health-timeout 5s --health-retries 10
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: vera3/scripts/ci_install.sh
       - name: Install
-        run: |
-          pip install -e ./vera3/shared[dev] aiosqlite
-          pip install -e ./vera3/services/gateway[dev]
-          pip install -e ./vera3/services/dashboard
-          pip install -e ./vera3/services/media-worker
-          pip install -e ./vera3/services/ingestor-telegram
-          pip install -e ./vera3/services/ingestor-gmail
-          pip install -e ./vera3/services/ingestor-trello
-          pip install -e ./vera3/services/ingestor-slack
-          pip install -e ./vera3/services/brain-search
-          pip install -e ./vera3/services/bot-telegram
-          pip install vulture==2.13 diff-cover==9.2.0 ruff==0.7.4
+        run: bash vera3/scripts/ci_install.sh lint
 
       - name: Compute diff base
         id: base
         shell: bash
         run: |
-          HEAD="${{ github.sha }}"
-          # На pull_request `github.event.before` ПУСТОЙ, а github.sha — это
-          # merge-коммит PR с базой. Прежний фолбэк взял бы HEAD~1, то есть
-          # первого родителя merge-коммита (верхушку master), и дифф вышел бы
-          # вывернутым: правки PR прочитались бы как удаления. Правильная база
-          # — pull_request.base.sha.
-          if [ "${{ github.event_name }}" = "pull_request" ]; then
-            BASE="${{ github.event.pull_request.base.sha }}"
-          else
-            BASE="${{ github.event.before }}"
-          fi
-          if [ -z "${BASE:-}" ] || [ "$BASE" = "0000000000000000000000000000000000000000" ] \
-             || ! git cat-file -e "${BASE}^{commit}" 2>/dev/null; then
-            BASE="$(git rev-parse "${HEAD}~1" 2>/dev/null || echo "$HEAD")"
-          fi
+          BASE="$(bash vera3/scripts/ci_diff_base.sh)"
           echo "base=$BASE" >> "$GITHUB_OUTPUT"
-          echo "head=$HEAD" >> "$GITHUB_OUTPUT"
-          echo "Diff base: $BASE → $HEAD (event: ${{ github.event_name }})"
+          echo "head=$CI_HEAD" >> "$GITHUB_OUTPUT"
+          echo "Diff base: $BASE → $CI_HEAD (event: $CI_EVENT)"
 
       - name: Secret scan (no credentials in the diff)
         # 2026-07-15 incident: the Telegram bot token was committed twice —
@@ -303,37 +183,6 @@ jobs:
               exit 1
             }
 
-      - name: Diff-cover (≥75% on new lines)
-        # Only the lines this push changed need ≥75% coverage. Total-repo
-        # gate (70%) handled separately by the test job. Skips automatically
-        # when the diff has no .py files.
-        shell: bash
-        run: |
-          BASE="${{ steps.base.outputs.base }}"
-          HEAD="${{ steps.base.outputs.head }}"
-          if ! git diff --name-only "$BASE" "$HEAD" | grep -qE '^vera3/.*\.py$'; then
-            echo "No .py changes — skip diff-cover"
-            exit 0
-          fi
-          cd vera3
-          export TELEGRAM_API_ID=1 TELEGRAM_API_HASH=test TELEGRAM_PHONE=+10000000000
-          # Без этих двух переменных tests/pg и tests/integration молча
-          # пропускаются, а Postgres-only строки считаются непокрытыми.
-          export RUN_INTEGRATION_TESTS=1
-          export TEST_DATABASE_URL=postgresql+asyncpg://vera:test@localhost:5432/vera_test
-          # PYTHONPATH здесь НЕ задаётся: tests/unit/conftest.py сам кладёт в
-          # sys.path shared и все services/*/src. Раньше список жил в трёх
-          # копиях в двух воркфлоу и разъехался — у шага diff-cover не было
-          # brain-triage, сборка тестов падала, а деплой стоял молча.
-            pytest tests/ -q --no-header \
-              --cov=vera_shared --cov=gateway --cov=media_worker --cov=brain_search \
-              --cov-report=xml:coverage.xml -p no:cacheprovider \
-              || { echo "pytest exit $?"; exit 1; }
-          # Compare against the parent commit on the same branch.
-          diff-cover coverage.xml \
-            --compare-branch="$BASE" \
-            --fail-under=75
-
       - name: Docs name-sync
         shell: bash
         run: |
@@ -391,18 +240,107 @@ jobs:
           [ "$fail" -eq 0 ] && echo "docs name-sync passed"
           exit $fail
 
-  # ─── 3b. Build gate ──────────────────────────────────────────────────────
+  # ─── 3. Test gate ────────────────────────────────────────────────────────
+  # Один прогон pytest на весь воркфлоу: из его coverage.xml берутся и пороги
+  # по пакетам (check_coverage.py), и diff-cover на новых строках.
+  test:
+    needs: quality
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    # Живой Postgres. Юнит-тесты идут на SQLite (быстро, без сервиса), но
+    # весь сырой SQL проекта — Postgres-only и на SQLite физически не
+    # исполняется: to_tsvector, FOR UPDATE SKIP LOCKED, FILTER (WHERE …),
+    # metadata->>, = ANY(:ids), NOW(). Без него tests/pg и tests/integration
+    # молча пропускаются, а Postgres-only строки считаются непокрытыми — так
+    # diff-cover на SQLite выдавал 63% вместо 88% и блокировал деплой.
+    # Образ тот же, что в проде (pgvector/pgvector:pg16).
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: vera
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: vera_test
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U vera -d vera_test"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      TELEGRAM_API_ID: "1"
+      TELEGRAM_API_HASH: "test"
+      TELEGRAM_PHONE: "+10000000000"
+      # Включает tests/pg и tests/integration. Без этих двух переменных
+      # они молча пропускаются — так они и простояли мёртвыми в CI.
+      RUN_INTEGRATION_TESTS: "1"
+      TEST_DATABASE_URL: postgresql+asyncpg://vera:test@localhost:5432/vera_test
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0     # diff-cover сравнивает с базой диффа
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: vera3/scripts/ci_install.sh
+      - name: Install
+        run: bash vera3/scripts/ci_install.sh test
+
+      - name: Pytest + per-package coverage floors
+        working-directory: vera3
+        run: |
+          # PYTHONPATH здесь НЕ задаётся: tests/unit/conftest.py сам кладёт в
+          # sys.path shared и все services/*/src.
+          # ВСЕ пакеты под измерением, и порог у каждого свой — см.
+          # scripts/check_coverage.py. Один общий процент по двум пакетам из
+          # двенадцати описывал 38.8% продового кода.
+          pytest tests/ \
+            --cov=vera_shared --cov=gateway --cov=media_worker \
+            --cov=brain_search --cov=brain_triage --cov=dashboard \
+            --cov=ingestor_gmail --cov=ingestor_slack --cov=ingestor_trello \
+            --cov=ingestor_telegram --cov=bot_telegram \
+            --cov-report=term-missing \
+            --cov-report=xml:coverage.xml
+          python scripts/check_coverage.py coverage.xml
+
+      - name: Diff-cover (≥75% on new lines)
+        # Only the lines this change touched need ≥75% coverage. Skips
+        # automatically when the diff has no .py files.
+        shell: bash
+        run: |
+          BASE="$(bash vera3/scripts/ci_diff_base.sh)"
+          if ! git diff --name-only "$BASE" "$CI_HEAD" | grep -qE '^vera3/.*\.py$'; then
+            echo "No .py changes — skip diff-cover"
+            exit 0
+          fi
+          cd vera3
+          # Раньше diff-cover имел собственный прогон pytest с четырьмя
+          # --cov (shared, gateway, media-worker, brain-search). Чтобы гейт не
+          # стал строже после слияния прогонов, отчёт сужается до тех же
+          # четырёх пакетов: у файлов остальных пакетов в диффе по-прежнему
+          # нет порога на строки (на них есть пакетные пороги check_coverage.py).
+          python -m coverage xml \
+            --include='*/shared/vera_shared/*,*/services/gateway/*,*/services/media-worker/*,*/services/brain-search/*' \
+            -o coverage-diffcover.xml
+          diff-cover coverage-diffcover.xml \
+            --compare-branch="$BASE" \
+            --fail-under=75
+
+      - name: Lint whole tree with ruff (informational)
+        working-directory: vera3
+        run: ruff check shared services tests --output-format=github
+        continue-on-error: true  # warning, not blocking yet
+
+      - name: Type check with mypy (informational)
+        working-directory: vera3
+        run: mypy shared/vera_shared --ignore-missing-imports
+        continue-on-error: true  # warning, not blocking yet
+
+  # ─── 4. Build gate ───────────────────────────────────────────────────────
   # Каждый образ должен собираться ДО того, как деплой начнёт их пересобирать
-  # на боевом хосте. Раньше в CI собирался ровно один Dockerfile из
-  # одиннадцати — gateway, и то в другом воркфлоу (vera3-tests.yml), которого
-  # нет в needs у деплоя. То есть сломанный Dockerfile или неразрешимая
-  # зависимость выяснялись уже на проде, в промежутке между «ворота зелёные»
-  # и «сервис не поднялся». Опрос /healthz после деплоя ловит только gateway.
-  #
-  # Пуша нет — только сборка. Образы всё равно собираются на хосте: цель
-  # гейта — отделить «код не собирается» от «код не работает».
+  # на боевом хосте. Пуша нет — только сборка. Образы всё равно собираются на
+  # хосте: цель гейта — отделить «код не собирается» от «код не работает».
   build:
-    if: github.event_name != 'pull_request'
+    needs: test
     runs-on: ubuntu-latest
     timeout-minutes: 20
     strategy:
@@ -421,10 +359,10 @@ jobs:
           - ingestor-trello
           - media-worker
     steps:
-      - uses: actions/checkout@v4
-      - uses: docker/setup-buildx-action@v3
+      - uses: actions/checkout@v7
+      - uses: docker/setup-buildx-action@v4
       - name: Build ${{ matrix.service }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: vera3
           file: vera3/services/${{ matrix.service }}/Dockerfile
@@ -434,11 +372,11 @@ jobs:
           cache-from: type=gha,scope=${{ matrix.service }}
           cache-to: type=gha,scope=${{ matrix.service }},mode=max
 
-  # ─── 4. Deploy ───────────────────────────────────────────────────────────
-  # Hard-gated: docs + tests + quality + build must ALL pass.
+  # ─── 5. Deploy ───────────────────────────────────────────────────────────
+  # Только push в master (или ручной запуск на master); needs — все гейты.
   deploy:
-    if: github.event_name != 'pull_request'
-    needs: [docs, test, quality, build]
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    needs: [docs, quality, test, build]
     runs-on: ubuntu-latest
     # 25, а не 15: опрос занятого замка до десяти минут плюс сам деплой до
     # семи в прежний бюджет не влезали, а упор в таймаут даёт cancelled —
@@ -450,7 +388,7 @@ jobs:
 
     steps:
       - name: Set up SSH
-        uses: webfactory/ssh-agent@v0.9.0
+        uses: webfactory/ssh-agent@v0.10.0
         with:
           # Prefer the restricted key (vera3-only, command=...).
           # Falls back to the old full-root key if the new secret isn't set yet.
@@ -510,19 +448,20 @@ jobs:
             https://dima.veranda.my/login | grep -qE "200|303" \
             || echo "(CF probe failed but origin was healthy at deploy end)"
 
-  # ─── 5. Уведомление о ЛЮБОМ падении ──────────────────────────────────────
+  # ─── 6. Уведомление о ЛЮБОМ падении ──────────────────────────────────────
   # Отдельный job, а не шаг внутри deploy: при красном гейте job deploy не
   # запускается вовсе, поэтому шаг внутри него не срабатывал — падение гейта
   # проходило молча. Реальный случай 2026-08-27: у шага diff-cover разъехался
   # PYTHONPATH, сборка тестов падала, деплой стоял на ЧЕТЫРЁХ коммитах, и
   # узналось это только когда кто-то заметил, что сервер отстал.
+  # Секреты: TELEGRAM_BOT_TOKEN_VERA и OWNER_TELEGRAM_ID (без них молча выходит).
   notify:
-    needs: [docs, test, quality, build, deploy]
+    needs: [docs, quality, test, build, deploy]
     # cancelled обязателен наравне с failure: при упоре в timeout-minutes
     # GitHub помечает job как cancelled, и условие только на failure пропускало
     # бы ровно тот случай, от которого этот job и написан — «деплой встал, и
     # никто не узнал». Нашло ревью.
-    # Только на push: провал на PR виден в самом PR, а DM владельцу на каждый
+    # Только вне PR: провал на PR виден в самом PR, а DM владельцу на каждый
     # красный чек чужой ветки — шум, от которого перестают читать уведомления.
     # Ровно так 27.08 и потеряли мёртвый bot-telegram среди ложных тревог.
     if: >-
@@ -536,16 +475,19 @@ jobs:
           OWNER_ID: ${{ secrets.OWNER_TELEGRAM_ID }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
           R_DOCS: ${{ needs.docs.result }}
-          R_TEST: ${{ needs.test.result }}
           R_QUALITY: ${{ needs.quality.result }}
+          R_TEST: ${{ needs.test.result }}
           R_BUILD: ${{ needs.build.result }}
           R_DEPLOY: ${{ needs.deploy.result }}
         run: |
           [ -z "$BOT_TOKEN" ] && exit 0
           [ -z "$OWNER_ID" ] && exit 0
           FAILED=""
-          for pair in "docs:$R_DOCS" "test:$R_TEST" "quality:$R_QUALITY" "build:$R_BUILD" "deploy:$R_DEPLOY"; do
-            case "${pair#*:}" in failure) FAILED="$FAILED ${pair%%:*}";; esac
+          for pair in "docs:$R_DOCS" "quality:$R_QUALITY" "test:$R_TEST" "build:$R_BUILD" "deploy:$R_DEPLOY"; do
+            case "${pair#*:}" in
+              failure) FAILED="$FAILED ${pair%%:*}";;
+              cancelled) FAILED="$FAILED ${pair%%:*}(cancelled)";;
+            esac
           done
           curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
                -d "chat_id=${OWNER_ID}" \

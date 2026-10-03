@@ -479,8 +479,8 @@ Migration that backfills both fields + the content_text prefix:
 5. `infra/docker-compose.yml` — блок сервиса. Переменные объявлять со значением
    по умолчанию (`${VAR:-}`), а не как обязательные: `${VAR:?}` уронил бы весь
    `compose up`, то есть всю Веру, из-за одного отсутствующего ключа.
-6. `.github/workflows/deploy.yml` и `vera3-tests.yml` — `pip install -e` и
-   `PYTHONPATH`. Забудешь — тесты источника не запустятся, а гейт покрытия при
+6. `vera3/scripts/ci_install.sh` — `pip install -e` (единственный список
+   зависимостей CI; `PYTHONPATH` у тестов задаёт `tests/unit/conftest.py`). Забудешь — тесты источника не запустятся, а гейт покрытия при
    этом пройдёт.
 7. `docs/sources.md` (этот файл), `architecture.md`, `domain-model.md` —
    иначе docs-гейт блокирует деплой.
