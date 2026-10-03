@@ -20,31 +20,20 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
-import httpx
 from vera_shared.llm.client import LLMCallFailed, chat_async
-from vera_shared.timeutil import utc_naive_now
+
+from brain_search.agent_tools import (
+    BUILTIN_SPECS,
+    TELEGRAM_TOOLS_URL,
+    ToolDescriptor,
+    execute_tool,
+    load_remote_tool_specs,
+)
 
 log = logging.getLogger(__name__)
 
 # Потолок на ОДИН шаг агента — иначе зависший брокер-вызов вешает /search навсегда.
 AGENT_STEP_TIMEOUT_S = float(os.environ.get("AGENT_STEP_TIMEOUT_S", "90"))
-
-TELEGRAM_TOOLS_URL = os.environ.get(
-    "TELEGRAM_TOOLS_URL", "http://ingestor-telegram:8000"
-)
-INTERNAL_SECRET = os.environ.get("INTERNAL_SECRET", "")
-
-
-# ─── Tool plumbing ────────────────────────────────────────────────────────────
-
-
-@dataclass
-class ToolDescriptor:
-    name: str
-    description: str
-    params_schema: dict[str, Any]
-    invoker: str  # 'http:telegram' | 'builtin:search_events' | 'builtin:memory'
-
 
 @dataclass
 class AgentTrace:
@@ -55,211 +44,12 @@ class AgentTrace:
     provider_last: str | None = None
 
 
-async def _load_remote_tool_specs(url: str) -> list[ToolDescriptor]:
-    """Fetch /tools/spec from a remote ingestor and adapt."""
-    try:
-        async with httpx.AsyncClient(timeout=5) as c:
-            r = await c.get(f"{url}/tools/spec")
-        if r.status_code >= 400:
-            log.warning("remote /tools/spec returned %s", r.status_code)
-            return []
-        specs = r.json()
-    except Exception as e:
-        log.warning("failed to fetch %s/tools/spec: %s", url, e)
-        return []
-    return [
-        ToolDescriptor(
-            name=s["name"],
-            description=s["description"],
-            params_schema=s["params_schema"],
-            invoker="http:telegram",
-        )
-        for s in specs
-    ]
-
-
-async def _exec_http_telegram(tool_name: str, params: dict[str, Any]) -> dict[str, Any]:
-    short = tool_name.split(".", 1)[-1]
-    try:
-        async with httpx.AsyncClient(timeout=30) as c:
-            r = await c.post(
-                f"{TELEGRAM_TOOLS_URL}/tools/{short}",
-                json=params,
-                headers={"X-Internal-Secret": INTERNAL_SECRET},
-            )
-        if r.status_code >= 400:
-            return {"error": f"HTTP {r.status_code}", "body": r.text[:300]}
-        return r.json()
-    except Exception as e:
-        return {"error": f"{type(e).__name__}: {e}"}
-
-
-# ─── Built-in tools ───────────────────────────────────────────────────────────
-
-
-BUILTIN_SPECS: list[ToolDescriptor] = [
-    ToolDescriptor(
-        name="search_events",
-        description=(
-            "Full-text search across ALL events (telegram, gmail, instagram, "
-            "vera_chat). Use when you need MORE messages than initial context "
-            "already shows. For time-bound questions (вчера, за неделю, дата) "
-            "ALWAYS pass date_from/date_to (ISO date, e.g. 2026-06-09) — "
-            "an empty q with dates returns everything in the period."
-        ),
-        params_schema={
-            "type": "object",
-            "properties": {
-                "q": {"type": "string"},
-                "source": {"type": "string",
-                            "enum": ["telegram", "gmail", "instagram", "vera_chat", "any"]},
-                "limit": {"type": "integer", "default": 20},
-                "date_from": {"type": "string",
-                               "description": "ISO date inclusive, e.g. 2026-06-09"},
-                "date_to": {"type": "string",
-                             "description": "ISO date inclusive, e.g. 2026-06-09"},
-            },
-            "required": ["q"],
-        },
-        invoker="builtin:search_events",
-    ),
-    ToolDescriptor(
-        name="memory.remember",
-        description=(
-            "Save a long-lived fact into Vera's own brain (source='vera_memory'). "
-            "Use this AFTER deriving a non-obvious truth from tool calls, so future "
-            "questions don't repeat the same work. Example: after counting members "
-            "of group X, remember the count + date."
-        ),
-        params_schema={
-            "type": "object",
-            "properties": {
-                "fact": {"type": "string", "description": "Plain Russian sentence."},
-                "tags": {"type": "array", "items": {"type": "string"}},
-                "confidence": {"type": "number", "minimum": 0, "maximum": 1},
-            },
-            "required": ["fact"],
-        },
-        invoker="builtin:memory",
-    ),
-]
-
-
-def _parse_iso_date(raw: str | None):
-    """Lazy import — datetime not needed elsewhere in this module."""
-    from datetime import datetime as _dt
-    if not raw:
-        return None
-    try:
-        return _dt.strptime(raw.strip()[:10], "%Y-%m-%d")
-    except ValueError:
-        return None
-
-
-async def _exec_search_events(q: str, source: str = "any",
-                                limit: int = 20,
-                                date_from: str | None = None,
-                                date_to: str | None = None) -> dict[str, Any]:
-    from datetime import timedelta
-
-    from sqlalchemy import text
-    from vera_shared.db.engine import get_session
-
-    from brain_search.fts import build_ts_query, fts_match_sql, fts_rank_sql
-    from brain_search.query_parse import TZ_OFFSET_H
-
-    STOPWORDS = {"что", "как", "и", "в", "на", "о", "по", "у", "для", "это",
-                 "что-то", "ли", "ну", "же", "то", "был", "была", "были",
-                 "быть", "есть", "не", "ни", "при", "из", "за",
-                 "ты", "я", "мне", "мы", "вы", "он", "она", "они"}
-    raw_words = re.findall(r"[\wа-яА-ЯёЁ]+", q)
-    words = [w for w in raw_words if len(w) >= 2 and w.lower() not in STOPWORDS]
-    ts_query = build_ts_query(words)
-
-    params: dict[str, Any] = {"tsq": ts_query, "lim": limit}
-    where_extra = ""
-    if source != "any":
-        where_extra += " AND source = :src"
-        params["src"] = source
-
-    # Даты — локальные (Jakarta), храним naive UTC → сдвиг на -TZ_OFFSET_H.
-    d_from = _parse_iso_date(date_from)
-    d_to = _parse_iso_date(date_to)
-    if d_from:
-        params["d_from"] = d_from - timedelta(hours=TZ_OFFSET_H)
-        where_extra += " AND occurred_at >= :d_from"
-    if d_to:
-        # inclusive конец дня
-        params["d_to"] = d_to + timedelta(days=1) - timedelta(hours=TZ_OFFSET_H)
-        where_extra += " AND occurred_at < :d_to"
-
-    async with get_session() as s:
-        if ts_query:
-            stmt = text(f"""
-                SELECT id, source, occurred_at, content_text,
-                       metadata->>'author_role'  AS author_role,
-                       metadata->>'author_label' AS author_label,
-                       metadata->>'chat_title'   AS chat_title
-                FROM events
-                WHERE {fts_match_sql()} {where_extra}
-                ORDER BY {fts_rank_sql()} DESC,
-                         occurred_at DESC
-                LIMIT :lim
-            """)
-        else:
-            stmt = text(f"""
-                SELECT id, source, occurred_at, content_text,
-                       metadata->>'author_role'  AS author_role,
-                       metadata->>'author_label' AS author_label,
-                       metadata->>'chat_title'   AS chat_title
-                FROM events
-                WHERE 1=1 {where_extra}
-                ORDER BY occurred_at DESC LIMIT :lim
-            """)
-        rs = (await s.execute(stmt, params)).all()
-    return {
-        "found": len(rs),
-        "events": [
-            {"event_id": r[0], "source": r[1],
-             "occurred_at": str(r[2])[:19],
-             "author_role": r[4],
-             "author_label": r[5],
-             "chat_title": r[6],
-             "preview": (r[3] or "")[:400]}
-            for r in rs
-        ],
-    }
-
-
-async def _exec_memory_remember(fact: str, tags: list[str] | None = None,
-                                  confidence: float = 0.8) -> dict[str, Any]:
-
-    from vera_shared.db.engine import get_session
-    from vera_shared.db.models import EventRow
-
-    now = utc_naive_now()
-    async with get_session() as s:
-        ev = EventRow(
-            source="vera_memory",
-            source_event_id=f"memory:{now.timestamp()}",
-            account="vera",
-            category="fact",
-            content_text=fact[:8000],
-            occurred_at=now,
-            metadata_={"tags": tags or [], "confidence": confidence},
-            triage_status="pending",
-        )
-        s.add(ev)
-        await s.flush()
-        return {"saved": True, "event_id": ev.id}
-
-
 # ─── Loop ─────────────────────────────────────────────────────────────────────
 
 
 async def collect_tools() -> list[ToolDescriptor]:
     tools = list(BUILTIN_SPECS)
-    tools.extend(await _load_remote_tool_specs(TELEGRAM_TOOLS_URL))
+    tools.extend(await load_remote_tool_specs(TELEGRAM_TOOLS_URL))
     return tools
 
 
@@ -378,6 +168,10 @@ async def run_agent(
                 trace.steps.append({"step": step, "raw": raw, "error": "invalid JSON"})
                 continue
 
+        if not isinstance(parsed, dict):
+            trace.steps.append({"step": step, "raw": raw, "error": "not an object"})
+            continue
+
         action = parsed.get("action")
         if action == "answer":
             trace.answer = parsed.get("text", "").strip() or "(пусто)"
@@ -393,14 +187,7 @@ async def run_agent(
                 obs = {"error": f"unknown tool: {name}",
                        "available": list(tools_by_name.keys())}
             else:
-                if tool.invoker == "http:telegram":
-                    obs = await _exec_http_telegram(name, params)
-                elif tool.invoker == "builtin:search_events":
-                    obs = await _exec_search_events(**params)
-                elif tool.invoker == "builtin:memory":
-                    obs = await _exec_memory_remember(**params)
-                else:
-                    obs = {"error": f"no invoker for {tool.invoker}"}
+                obs = await execute_tool(tool, params)
 
             trace.steps.append({"step": step, **parsed, "observation": obs})
             transcript.append({"role": "assistant",
@@ -418,6 +205,6 @@ async def run_agent(
     if not trace.answer:
         trace.answer = (
             "Я попробовала несколько подходов, но не пришла к точному ответу за "
-            f"{max_steps} шагов. Попробуй спросить уже́е."
+            f"{max_steps} шагов. Попробуй уточнить вопрос."
         )
     return trace
