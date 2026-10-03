@@ -31,8 +31,8 @@ from vera_shared.db.models_graph import (
     EntityRow,
     IdentityNodeRow,
     MembershipRow,
-    RelationshipRow,
 )
+from vera_shared.graph.repo_relationships import upsert_relationship  # noqa: F401  re-export
 from vera_shared.timeutil import utc_naive_now
 
 log = logging.getLogger(__name__)
@@ -510,41 +510,6 @@ async def find_project_chats() -> list[dict[str, Any]]:
               AND e.type IN ('group', 'supergroup')
         """))).mappings().all()
     return [dict(r) for r in rows]
-
-
-async def upsert_relationship(
-    *, subject_entity_id: int, object_entity_id: int,
-    predicate: str, fact: str | None = None,
-    confidence: float = 0.6,
-    derived_from_event_id: int | None = None,
-) -> bool:
-    """Soft-upsert: if (subject, predicate, object) exists → touch last_seen
-    and return False. Otherwise insert and return True (so callers like
-    rel-extract can count genuinely new links)."""
-    now = utc_naive_now()
-    async with get_session() as s:
-        existing = (await s.execute(
-            select(RelationshipRow).where(
-                RelationshipRow.subject_entity_id == subject_entity_id,
-                RelationshipRow.object_entity_id == object_entity_id,
-                RelationshipRow.predicate == predicate,
-            )
-        )).scalar_one_or_none()
-        if existing:
-            existing.last_seen_at = now
-            existing.confidence = max(existing.confidence, confidence)
-            if fact and not existing.fact:
-                existing.fact = fact
-            return False
-        s.add(RelationshipRow(
-            subject_entity_id=subject_entity_id,
-            object_entity_id=object_entity_id,
-            predicate=predicate, fact=fact,
-            confidence=confidence,
-            derived_from_event_id=derived_from_event_id,
-            first_seen_at=now, last_seen_at=now, is_current=True,
-        ))
-        return True
 
 
 # ─── L3 Identity nodes (Goal/Value/NoGo/Style/Self/Fact) ─────────────────────

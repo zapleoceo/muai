@@ -10,12 +10,11 @@ from __future__ import annotations
 from typing import Any
 
 from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.models_graph import EntityAliasRow, EntityRow, RelationshipRow
 from vera_shared.graph.rel_extract import PREDICATES
+from vera_shared.graph.rel_insert import insert_relationship_if_absent
 from vera_shared.timeutil import utc_naive_now
 
 
@@ -122,16 +121,9 @@ async def set_relationship(
     if row is None:
         # Параллельный вызов с той же тройкой не должен упасть на уникальном
         # индексе uq_relationships_spo: проигравший перечитывает победителя.
-        insert = pg_insert if s.get_bind().dialect.name == "postgresql" else sqlite_insert
-        created = (await s.execute(
-            insert(RelationshipRow).values(
-                subject_entity_id=subject_id, object_entity_id=object_id,
-                predicate=predicate, fact=fact, confidence=confidence,
-                first_seen_at=now, last_seen_at=now, is_current=True)
-            .on_conflict_do_nothing(index_elements=["subject_entity_id", "predicate",
-                                                    "object_entity_id"])
-            .returning(RelationshipRow.id)
-        )).scalar_one_or_none()
+        created = await insert_relationship_if_absent(
+            s, subject_id=subject_id, object_id=object_id, predicate=predicate,
+            fact=fact, confidence=confidence, now=now)
         if created is not None:
             row = await _relationship(s, created)
             return row.id, None, relationship_snapshot(row)

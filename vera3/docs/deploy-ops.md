@@ -572,6 +572,71 @@ $RUN --undo /reports/rollback-2026-10-03.json
 - Не запускайте `--apply` по плану, составленному до деплоя фиксов
   первопричин: ингестор успеет завести новые дубли того же класса.
 
+## Чистка связей графа: план → проверка → применение → откат
+
+Правила — `identity.md`, раздел «Качество связей». Скрипт
+`scripts/clean_relationships.py` (рядом с `merge_graph_duplicates.py`, тот же
+образ `brain-triage` и тома `/scripts`, `/reports`) запускается разово, вручную,
+ПОСЛЕ деплоя кода с правилами записи — иначе rel-extract тут же допишет мусор
+обратно. Связи не удаляются: `is_current = false` либо приведение к канонической
+форме (`convert`).
+
+```bash
+cd /var/www/vera3/infra
+RUN="docker compose run --rm --no-deps -v /var/www/vera3/scripts:/scripts \n  -v /var/lib/vera3-reports:/reports brain-triage python /scripts/clean_relationships.py"
+
+# 0. страховка: дамп таблицы связей (читает, ничего не меняет)
+docker exec vera3-postgres pg_dump -U vera -d vera -t relationships \n  > /var/lib/vera3-reports/relationships-before-$(date +%F).sql
+
+# 1. ПРОХОД soft — без модели, БД не меняет; в stdout счётчики и по 10 примеров на правило
+$RUN --plan /reports/rel_plan.json
+
+# 2. ПРОВЕРКА ГЛАЗАМИ: план содержит имена и факты — личные данные, храните вне репозитория
+# 3. применение; без --report скрипт откажется, существующий отчёт не перезаписывает
+$RUN --apply /reports/rel_plan.json --report /reports/rel_rollback-$(date +%F).json
+
+# 4. ПРОХОД verify — одиночные имена судит модель (нужны БД и брокер; запускать на
+#    сервере, не на ноутбуке). Сначала пробная партия:
+$RUN --phase verify --plan /reports/rel_verify.json --limit 50
+less /var/lib/vera3-reports/rel_verify.json        # вердикт и цитата у каждой связи
+# затем полный прогон (уже вынесенные вердикты берутся из rel_verify.verdicts.jsonl)
+$RUN --phase verify --plan /reports/rel_verify.json
+$RUN --apply /reports/rel_verify.json --report /reports/rel_rollback-verify-$(date +%F).json
+
+# 5. откат по отчёту
+$RUN --undo /reports/rel_rollback-2026-10-03.json
+```
+
+- **Порядок:** сначала soft, применить, и только потом verify — он берёт связи,
+  оставшиеся после soft. Verify ходит в брокер: общий пул, поэтому начните с
+  `--limit`, смотрите стоимость (`stats.cost_usd` в плане и строки
+  `rel_verify … cost_usd` в логе); параллелизм по умолчанию 4
+  (`--concurrency`). Брейкер сбоя брокера отвечает мгновенно: такие связи
+  попадают в `stats.unverified` и не гасятся — повторите прогон позже.
+- Автор сообщения для проверки факта вычисляется из события (`event_source`,
+  `event_meta` в срезе); `EXPORT_SQL` отдаёт для этого ключи авторства и алиасы
+  концов. Скрытое или пропавшее событие и текст без единого конца — `unverified`.
+- **Verify-план:** `retire` (правило `weak_name`) только для «no»;
+  `skip` (`weak_name_verified`) для «yes» (с цитатой) и «unclear». Применять можно
+  частями — действие по строке, изменившейся после плана, пропускается.
+- Правила soft-плана (счётчики в `counts`): `fact_mismatch` и прочие причины
+  `relationship_reject_reason` (одиночное имя здесь не гасится); `symmetric_duplicate`,
+  `inverse_duplicate`, `contradiction`; `convert_inverse` (одиночная
+  `reports_to` / `child_of` переписывается в `boss_of` / `parent_of`);
+  `convert_blocked` (каноническая тройка уже занята погашенной строкой —
+  оставлено как есть, `action=skip`).
+- Связи без события-источника (`derived_from_event_id IS NULL`, заведены руками)
+  по правилам извлечения не судятся; при конфликте ручная побеждает.
+- Отчёт с намерениями пачки (по 200) пишется на диск с fsync ДО коммита.
+  `--undo` возвращает только строки, чьё состояние всё ещё равно «после»;
+  повторный запуск идемпотентен.
+- Строка, изменившаяся после составления плана, пропускается (`skipped`):
+  устаревший план применять нельзя, составьте новый.
+- План по SELECT-выгрузке без подключения к БД: `--plan out.json --snapshot
+  export.json`. Выгрузку делает `EXPORT_SQL` из
+  `vera_shared/graph/rel_cleanup_snapshot.py`
+  (`psql -At -v owner=<OWNER_TELEGRAM_ID> -f export.sql`, только SELECT).
+
 ## Secrets
 
 Server `.env` at `/var/www/vera3/infra/.env` (mode 600):

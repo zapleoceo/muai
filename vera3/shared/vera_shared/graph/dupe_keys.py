@@ -31,6 +31,22 @@ def _latin(word: str) -> str:
     return out.replace("ie", "e")  # Yegor и Егор: начальное «е» латиницей — «ye»
 
 
+def _fold(name: str | None) -> str:
+    folded = (name or "").casefold().replace("й", "и").replace("ё", "е")
+    return "".join(ch for ch in unicodedata.normalize("NFKD", folded)
+                   if not unicodedata.combining(ch))
+
+
+def word_key(word: str) -> str:
+    """Ключ одного слова — тот же транслит-фолд, что у `name_key`."""
+    return _DOUBLE.sub(r"\1", _latin(_fold(word)).translate(_UNIFY))
+
+
+def name_words(name: str | None) -> list[str]:
+    """Ключи слов имени (≥2 букв) в порядке написания."""
+    return [word_key(w) for w in re.split(r"[^a-zа-яёіїєґ]+", _fold(name)) if len(w) > 1]
+
+
 def name_key(name: str | None) -> str:
     """Ключ полного имени: «Виктор Гавриленко» и «Viktor Gavrylenko» → один.
 
@@ -38,11 +54,7 @@ def name_key(name: str | None) -> str:
     порядок слов не важен. Меньше двух слов → пустой ключ: одиночное имя («Саша»)
     слишком слабая улика, чтобы по нему что-то сливать.
     """
-    folded = (name or "").casefold().replace("й", "и").replace("ё", "е")
-    folded = "".join(ch for ch in unicodedata.normalize("NFKD", folded)
-                     if not unicodedata.combining(ch))
-    words = [w for w in re.split(r"[^a-zа-яёіїєґ]+", folded) if len(w) > 1]
-    keys = sorted(_DOUBLE.sub(r"\1", _latin(w).translate(_UNIFY)) for w in words)
+    keys = sorted(name_words(name))
     return " ".join(keys) if len(keys) >= 2 else ""
 
 

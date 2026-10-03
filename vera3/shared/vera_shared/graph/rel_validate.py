@@ -21,6 +21,7 @@ from __future__ import annotations
 import re
 
 from vera_shared.graph.identity import canonical_name_parts
+from vera_shared.graph.rel_text import Evidence, fact_names_both_ends, single_token_name
 
 # Слова, которые НИКОГДА не обозначают конкретного человека — даже если в
 # графе есть аккаунт ровно с таким именем профиля.
@@ -45,6 +46,8 @@ REJECT_LOW_CONFIDENCE = "low_confidence"
 REJECT_NOT_REFERENTIAL = "not_referential"
 REJECT_SERVICE_ACCOUNT = "service_account"
 REJECT_TYPE = "type_mismatch"
+REJECT_WEAK_NAME = "weak_name"
+REJECT_FACT = "fact_mismatch"
 
 MIN_CONFIDENCE = 0.5
 
@@ -61,9 +64,11 @@ _PARTY_PARTY = frozenset({"client_of", "vendor_of"})
 _PARTY = frozenset({PERSON, ORGANIZATION})
 
 # «Ольга Крячко (JIRA)», «OpenRouter Team», «jira-bot» — в имени сказано, что
-# это система или рассылка, даже если сущность заведена как person.
-_TOOL_TAG_RE = re.compile(r"\(\s*(jira|confluence|github|gitlab|trello|slack)\s*\)",
-                          re.IGNORECASE)
+# это система или рассылка, даже если сущность заведена как person. Один
+# список на запись связи и на гейт rel_policy.
+TOOL_TAG_RE = re.compile(
+    r"\(\s*(jira|confluence|github|gitlab|trello|slack|google calendar|"
+    r"календарь|calendar)\s*\)", re.IGNORECASE)
 _SERVICE_WORDS = frozenset({
     "team", "jira", "noreply", "no-reply", "bot", "notifications",
     "notification", "support", "newsletter", "mailer", "команда",
@@ -109,7 +114,7 @@ def is_service_name(name: str | None) -> bool:
     """Имя сущности выдаёт системный аккаунт, бота или рассылку."""
     if not name:
         return False
-    if _TOOL_TAG_RE.search(name):
+    if TOOL_TAG_RE.search(name):
         return True
     tokens = [t.lower() for t in _TOKEN_RE.findall(name)]
     # «_bot» только с разделителем: голое «…bot» ловит фамилии вроде Talbot.
@@ -133,11 +138,23 @@ def _type_reject(predicate: str, subject_type: str | None,
     return True
 
 
+def _weak_name(name: str | None, entity_type: str | None, strong: bool) -> bool:
+    """Персона, названная одним словом («Андрей»), без сильного идентификатора:
+    по такому имени в графе не отличить людей, и связь липнет к случайному."""
+    return entity_type == PERSON and not strong and single_token_name(name)
+
+
 def relationship_reject_reason(
     *, subject_name: str | None, subject_type: str | None, predicate: str,
     object_name: str | None, object_type: str | None, confidence: float,
+    evidence: Evidence | None = None,
 ) -> str | None:
-    """Почему связь нельзя писать в граф. None — можно."""
+    """Почему связь нельзя писать в граф. None — можно.
+
+    `evidence` (факт и сведения о концах) включает проверки «одно слово без
+    сильного идентификатора» и «факт называет оба конца»; без него действуют
+    только проверки по именам и типам.
+    """
     if confidence < MIN_CONFIDENCE:
         return REJECT_LOW_CONFIDENCE
     if not (is_referential_name(subject_name) and is_referential_name(object_name)):
@@ -148,4 +165,11 @@ def relationship_reject_reason(
         return REJECT_TYPE
     if is_service_name(subject_name) or is_service_name(object_name):
         return REJECT_SERVICE_ACCOUNT
+    if evidence is None:
+        return None
+    if (_weak_name(subject_name, subject_type, evidence.subject.strong)
+            or _weak_name(object_name, object_type, evidence.object.strong)):
+        return REJECT_WEAK_NAME
+    if not fact_names_both_ends(evidence):
+        return REJECT_FACT
     return None

@@ -17,6 +17,8 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy.exc import SQLAlchemyError
 from vera_shared.graph.clusters import get_clusters, recompute_clusters
 from vera_shared.graph.panel import entity_panel
+from vera_shared.graph.rel_canon import INVERSE
+from vera_shared.graph.rel_extract import PREDICATES
 from vera_shared.graph.repo import find_entity_by_name, graph_snapshot
 from vera_shared.graph.suggestions import count_pending_suggestions
 
@@ -30,15 +32,11 @@ router = APIRouter()
 _recluster: dict = {"running": False}
 _bg_tasks: set[asyncio.Task] = set()   # ссылки — иначе GC может убить задачу
 
-# Stable predicate set (see vera_shared.graph.rel_extract.PREDICATES) — used
-# only to build the filter dropdown; the API accepts any string. member_of —
-# синтетический предикат membership-рёбер (кто в какой группе).
-_PREDICATES = [
-    "member_of",
-    "coworker_of", "works_at", "friend_of", "client_of", "reports_to",
-    "boss_of", "vendor_of", "spouse_of", "parent_of", "child_of",
-    "co_founder_of", "lives_in",
-]
+# Фильтр строится из предикатов, которые реально хранятся: `reports_to` и
+# `child_of` записываются как `boss_of` и `parent_of` (`rel_canon`), пункты с
+# ними были бы пустыми. Подписи для показа остаются в `graph_labels`. API
+# принимает любую строку; member_of — синтетический предикат membership-рёбер.
+_PREDICATES = ["member_of", *(p for p in PREDICATES if p not in INVERSE)]
 
 
 @router.get("/api/graph", response_class=JSONResponse)
