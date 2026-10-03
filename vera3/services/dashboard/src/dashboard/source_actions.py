@@ -20,53 +20,46 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from dashboard.auth import COOKIE_NAME, require_owner
+from dashboard.render import esc
 from dashboard.source_registry import resolve_source
 from dashboard.source_state import can_disconnect, disconnect, state_of
 from dashboard.stats import drop_detail_cache
+from dashboard.ui.shell import standalone_html
 
 log = logging.getLogger(__name__)
 router = APIRouter()
 
 
 def _page(body: str, *, code: int = 200) -> HTMLResponse:
-    return HTMLResponse(f"""<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
-<title>Отключить источник</title><style>
-body{{font-family:-apple-system,sans-serif;background:#0f1115;color:#e4e6eb;
-display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:24px}}
-.box{{background:#1a1d24;padding:36px;border-radius:16px;max-width:480px;width:100%}}
-h1{{margin:0 0 14px;font-size:20px}}
-button{{padding:11px 22px;border-radius:8px;border:none;background:#c94a4a;color:#fff;
-font-weight:600;font-size:15px;cursor:pointer}}
-a.cancel{{color:#9aa0a8;margin-left:16px;text-decoration:none;font-size:14px}}
-.mute{{color:#9aa0a8;font-size:14px;line-height:1.6}}
-b{{color:#e4e6eb}}
-</style></head><body><div class="box">{body}</div></body></html>""", status_code=code)
+    return HTMLResponse(standalone_html("Отключить источник", body), status_code=code)
 
 
 @router.get("/api/sources/{key}/disconnect", response_class=HTMLResponse)
 async def disconnect_confirm(key: str, request: Request):
     require_owner(request, request.cookies.get(COOKIE_NAME))
     src = resolve_source(key)
+    title = f"{src.icon} {esc(src.title)}"
+    back = f"/sources/{esc(key)}"
     if not can_disconnect(key):
         return _page(
-            f'<h1>{src.icon} {src.title}</h1><p class="mute">Этот источник из '
+            f'<h1>{title}</h1><p class="muted">Этот источник из '
             f'дашборда не отключается: секрета в базе у него нет.</p>'
-            f'<p class="mute"><a href="/sources/{key}">← к источнику</a></p>', code=400)
+            f'<p><a href="{back}">← к источнику</a></p>', code=400)
 
     state = await state_of(key)
     if not state.connected:
         return RedirectResponse(f"/sources/{key}", status_code=303)
 
     return _page(f"""
-      <h1>Отключить {src.icon} {src.title}?</h1>
-      <p class="mute">Сейчас подключено: <b>{state.label}</b>.<br>
-      {state.affects or "приём событий остановится"}.</p>
-      <p class="mute">Уже собранные события <b>останутся</b> — отключение
+      <h1>Отключить {title}?</h1>
+      <p class="muted">Сейчас подключено: <strong>{esc(state.label)}</strong>.<br>
+      {esc(state.affects or "приём событий остановится")}.</p>
+      <p class="muted">Уже собранные события <strong>останутся</strong> — отключение
       останавливает приём, а не стирает память. Секрет из базы не удаляется,
       поэтому шаг обратим.</p>
-      <form method="post" action="/api/sources/{key}/disconnect">
-        <button type="submit">Отключить</button>
-        <a class="cancel" href="/sources/{key}">отмена</a>
+      <form method="post" action="/api/sources/{esc(key)}/disconnect" class="inline">
+        <button type="submit" class="danger-solid">Отключить</button>
+        <a href="{back}">отмена</a>
       </form>
     """)
 

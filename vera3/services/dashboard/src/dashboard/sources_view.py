@@ -7,12 +7,7 @@ from dashboard.render import data_table, esc
 from dashboard.source_detail import Block, Html
 from dashboard.source_freshness import EMPTY, LIVE, QUIET, SILENT, freshness_of
 from dashboard.source_registry import Source
-from dashboard.source_state import State
-
-
-def is_off(src: Source, state: State) -> bool:
-    """Необязательный источник, который владелец не включал."""
-    return src.optional and state.connected is False
+from dashboard.source_state import State, is_off
 
 
 def source_level(last: datetime | None, now: datetime, src: Source, state: State) -> str | None:

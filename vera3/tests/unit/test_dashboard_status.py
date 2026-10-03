@@ -28,9 +28,9 @@ from dashboard.source_freshness import (  # noqa: E402
     silence_limit_min,
 )
 from dashboard.source_registry import BY_KEY, CATALOG  # noqa: E402
-from dashboard.source_state import State, disabled_optional  # noqa: E402
+from dashboard.source_state import State, disabled_optional, is_off  # noqa: E402
 from dashboard.sources_routes import actions, connection_pill  # noqa: E402
-from dashboard.sources_view import is_off, source_level  # noqa: E402
+from dashboard.sources_view import source_level  # noqa: E402
 from dashboard.ui.theme import SOURCES_CSS, VERA_CSS  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
@@ -86,6 +86,12 @@ class TestOptionalSources:
     def test_trello_says_not_configured(self):
         out = connection_pill(State(connected=False, label="ключ не задан"), BY_KEY["trello"])
         assert "не настроен" in out
+
+    def test_unreadable_state_of_optional_source_is_a_failure_not_a_choice(self):
+        broken = State(False, "таблица не создана — миграция не накатана", broken=True)
+        assert not is_off(BY_KEY["trello"], broken)
+        assert source_level(None, NOW, BY_KEY["trello"], broken) == "err"
+        assert "pill err" in connection_pill(broken, BY_KEY["trello"])
 
     def test_required_source_that_is_down_is_still_red(self):
         state = State(connected=False, label="токена нет")

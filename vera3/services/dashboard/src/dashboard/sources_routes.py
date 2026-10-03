@@ -20,8 +20,8 @@ from vera_shared.timeutil import utc_naive_now
 from dashboard.render import _render, esc, local_dt, owner_or_redirect
 from dashboard.source_freshness import EMPTY, LIVE, NO_POLLING, QUIET, freshness_of
 from dashboard.source_registry import CATALOG, Source, resolve_source
-from dashboard.source_state import State, can_disconnect, state_of
-from dashboard.sources_view import is_off, render_block, source_level
+from dashboard.source_state import State, can_disconnect, is_off, state_of
+from dashboard.sources_view import render_block, source_level
 from dashboard.stats import get_source_detail, get_sources_overview
 from dashboard.ui.components import collapsible, status_dot
 from dashboard.ui.theme import SOURCES_CSS
@@ -76,7 +76,8 @@ def connection_pill(state: State, src: Source | None = None) -> str:
     if state.connected is None:
         return '<span class="mute">—</span>'
     if src is not None and is_off(src, state):
-        return f'<span class="pill off">{esc(src.off_label)}</span>'
+        return (f'<span class="pill off" title="{esc(state.label)}">'
+                f'{esc(src.off_label)}</span>')
     cls = "ok" if state.connected else "err"
     label = state.label or ("подключён" if state.connected else "не подключён")
     return f'<span class="pill {cls}">{esc(label)}</span>'
@@ -156,13 +157,13 @@ async def sources_page(request: Request):
 
       {collapsible("Конвейер обработки", PROGRESS_BLOCK)}
 
-      <table class="src-list">
+      <div class="overflow-auto"><table class="src-list">
         <thead><tr>
           <th>источник</th><th>подключение</th><th>свежесть</th><th class="num">событий</th>
           <th class="num">за сутки</th><th>последнее</th><th></th>
         </tr></thead>
         <tbody>{rows}</tbody>
-      </table>
+      </table></div>
     """))
 
 
@@ -200,7 +201,7 @@ async def source_page(key: str, request: Request):
         <h1>{src.icon} {esc(src.title)}</h1>
         {connection_pill(state, src)}
         {_freshness_cell(src, stat, state, now)}
-        <span style="margin-left:auto">{action}</span>
+        <span class="push-right">{action}</span>
       </div>
       <p class="note">{esc(src.how)}</p>
       {note}
@@ -213,7 +214,7 @@ async def source_page(key: str, request: Request):
         <div><div class="k">За сутки</div>
              <div class="v">+{stat.get("c24h", 0):,}</div></div>
         <div><div class="k">Последнее</div>
-             <div class="v" style="font-size:15px">
+             <div class="v v-small">
                {local_dt(stat.get("last"), "datetime_sec", "—")}</div></div>
       </div>
 

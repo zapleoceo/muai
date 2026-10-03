@@ -29,13 +29,14 @@ border:1px solid var(--vera-line);border-radius:var(--pico-border-radius);paddin
 .g-panel[hidden]{display:none}
 .g-panel h3{margin:0;font-size:1.15rem;overflow-wrap:anywhere}
 .g-panel h4{margin:1rem 0 .3rem;font-size:.75rem;text-transform:uppercase;letter-spacing:.06em;color:var(--vera-muted)}
-.g-panel ul{list-style:none;padding:0;margin:0}.g-panel li{margin:0 0 .45rem;overflow-wrap:anywhere}
+.g-panel ul{list-style:none;padding:0;margin:0}.g-panel li{margin:0 0 .45rem;padding:0;overflow-wrap:anywhere}
+.g-panel li a{display:inline;padding:0;margin:0}
 .g-panel-head{display:flex;gap:.7rem;align-items:center}
 .g-panel-head img{width:2.6rem;height:2.6rem;border-radius:50%;flex:none}
 .g-panel-head .g-close{margin-left:auto;width:auto;padding:.1rem .6rem;margin-bottom:0}
 .g-chips{display:flex;gap:.35rem;flex-wrap:wrap;margin:.5rem 0}
 .g-panel [role=button]{margin-top:1rem;width:100%}
-@media (max-width:760px){.g-layout{flex-direction:column}.g-canvas{height:55vh}
+@media (max-width:760px){.g-layout{flex-direction:column}.g-canvas{flex:none;width:100%;height:55vh}
 .g-panel{width:auto;max-height:none}}
 """
 

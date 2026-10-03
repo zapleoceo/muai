@@ -26,7 +26,7 @@ from vera_shared.db.models_sources import (
     TelegramSessionRow,
 )
 
-from dashboard.source_registry import CATALOG
+from dashboard.source_registry import CATALOG, Source
 
 log = logging.getLogger(__name__)
 
@@ -38,6 +38,9 @@ class State:
     label: str = ""
     #: что произойдёт при отключении — показывается на подтверждении
     affects: str = ""
+    #: состояние прочитать не удалось (нет таблицы, сбой БД). Это поломка, а не
+    #: выбор владельца: необязательный источник с такой ошибкой остаётся красным.
+    broken: bool = False
 
 
 UNKNOWN = State(connected=None)
@@ -137,13 +140,17 @@ async def state_of(key: str) -> State:
         return await provider()
     except Exception as e:  # noqa: BLE001 — один источник не роняет список
         log.warning("состояние источника %s не прочитал: %s", key, e)
-        return State(False, _why(e))
+        return State(False, _why(e), broken=True)
+
+
+def is_off(src: Source, state: State) -> bool:
+    """Необязательный источник, который владелец не включал (не сбой чтения)."""
+    return src.optional and state.connected is False and not state.broken
 
 
 async def disabled_optional() -> frozenset[str]:
-    """Ключи необязательных источников, которые сейчас не подключены."""
-    return frozenset([s.key for s in CATALOG
-                      if s.optional and not (await state_of(s.key)).connected])
+    """Ключи необязательных источников, которые сейчас выключены."""
+    return frozenset([s.key for s in CATALOG if s.optional and is_off(s, await state_of(s.key))])
 
 
 def _why(error: Exception) -> str:

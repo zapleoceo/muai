@@ -23,6 +23,8 @@ VERA_CSS = """
 body>main{padding-block:1rem}
 nav.top{margin-bottom:1.2rem;border-bottom:1px solid var(--vera-line);flex-wrap:wrap;column-gap:1rem}
 nav.top ul{flex-wrap:wrap}
+@media (max-width:640px){nav.top{--pico-nav-element-spacing-vertical:.3rem;--pico-nav-element-spacing-horizontal:.5rem}
+}
 nav.top a[aria-current=page]{font-weight:600;color:var(--pico-contrast)}
 nav.top .out{color:var(--vera-muted)}
 .muted,.mute{color:var(--vera-muted)}
@@ -77,6 +79,8 @@ ul.sources{padding-left:1.1rem}ul.sources li{margin-bottom:.6rem}
 .day{margin:1.4rem 0 .3rem;font-size:.8rem;text-transform:uppercase;letter-spacing:.06em;color:var(--vera-muted)}
 .narrow{max-width:34rem;margin:8vh auto}
 details>summary{cursor:pointer}
+form.inline{margin:0;display:inline-flex;gap:.6rem;align-items:center}
+form.inline button{margin:0;width:auto}
 """
 
 DUPES_CSS = """
@@ -93,13 +97,14 @@ border-radius:var(--pico-border-radius);padding:1rem;margin:0 0 1rem}
 font-size:.8rem;color:var(--vera-muted)}
 .chips{margin:.4rem 0}
 .actions,.bulk{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center}
-.actions form,.bulk form,form.inline{margin:0;display:inline-flex;gap:.6rem}
-.actions button,.bulk button,form.inline button{margin:0;width:auto}
+.actions form,.bulk form{margin:0;display:inline-flex;gap:.6rem}
+.actions button,.bulk button{margin:0;width:auto}
 .select-merge{display:flex;gap:.8rem;flex-wrap:wrap;align-items:end}
 .select-merge label,.select-merge select,.select-merge button{margin:0}
 .warning{border-left:3px solid var(--vera-warn);padding:.5rem .8rem;color:var(--vera-warn)}
 .bulk{margin:.6rem 0 1.2rem}
-@media (max-width:640px){.pair{grid-template-columns:1fr}}
+@media (max-width:640px){.pair{grid-template-columns:1fr}
+}
 """
 
 SOURCES_CSS = """
@@ -140,5 +145,7 @@ a.btn:hover { border-color:var(--pico-primary); color:var(--pico-primary); }
 .blk h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em;
           color:var(--vera-muted); margin:0 0 12px; }
 .blk .hint { color:var(--vera-muted); font-size:12px; margin-top:12px; line-height:1.45; }
+.push-right { margin-left:auto; }
+.strip .v.v-small { font-size:15px; }
 .note { color:var(--vera-muted); font-size:13px; margin:6px 0 0; }
 """
