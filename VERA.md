@@ -125,10 +125,11 @@ vera3/
 git push origin master
 ```
 
-Push to `master` runs `.github/workflows/deploy.yml`: **docs gate → tests
-(coverage 70%) → quality (ruff `E,F,W,I,B,UP,SIM,C4,RET`, vulture,
-diff-cover 75%, docs name-sync) → deploy**. Any failing gate blocks the
-deploy.
+Push to `master` runs `.github/workflows/deploy.yml` (the only vera3
+workflow; PRs run it without the deploy job): **docs gate → quality (secret
+scan, ruff `E,F,W,I,B,UP,SIM,C4,RET`, vulture, docs name-sync) → tests
+(per-package coverage floors, diff-cover 75%) → build of all 11 images →
+deploy**. Any failing gate blocks the deploy and notifies the owner.
 
 Manual fallback — `ssh hetzner-root /usr/local/bin/vera3-deploy`. It takes
 **no arguments** and always ships `origin/master`: fetch + `reset --hard`,
@@ -173,7 +174,7 @@ as a pre-commit hook.
   `vera3/infra/migrations/*.sql` has been applied. Numbering also skips
   `018` and `019`.
 - ~~Coverage gate is 40% in `vera3-tests.yml` but 70% in `deploy.yml`~~ —
-  **исправлено 2026-09-01.** Оба воркфлоу гоняют один и тот же гейт
+  **исправлено 2026-09-01; с 2026-10 воркфлоу один.** Оба воркфлоу гоняли один и тот же гейт
   (`vera3/scripts/check_coverage.py`) с порогом НА КАЖДЫЙ пакет, а не одним
   процентом на репозиторий. Прежние 70% считались по двум пакетам из
   двенадцати, то есть описывали 38.8% продового кода; настоящая цифра по
