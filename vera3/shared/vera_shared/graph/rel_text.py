@@ -17,7 +17,10 @@ _FIRST_PERSON = re.compile(r"\b(я|мне|мой|моя|моё|мои|меня|�
 # «На Андрея (это я)», «Андрей — это я», «I am Andrey»: автор называет себя по имени.
 _SELF_AFTER_NAME = re.compile(r"\((?:это\s+)?я\)|\bэто\s+я\b", re.IGNORECASE)
 _SELF_BEFORE_NAME = re.compile(r"\bi\s+am\b|\bi['’]m\b", re.IGNORECASE)
-_NEAR_WORDS = 2
+_APPOSITION = re.compile(
+    r"([\w'’-]+)\s*(?:\((?:это\s+)?я\)|[—–-]\s*это\s+я\b|\bэто\s+я\))", re.IGNORECASE)
+_COMPLEMENT = re.compile(r"\bi\s+am\s+([\w'’-]+)|\bi['’]m\s+([\w'’-]+)", re.IGNORECASE)
+_POSSESSIVE = re.compile(r"['’]s$", re.IGNORECASE)
 # Общие слова названий не доказывают упоминание: «Group», «Inc» есть в любом факте.
 _GENERIC = frozenset({"the", "inc", "llc", "ltd", "team", "group", "company", "corp",
                       "and", "for"})
@@ -79,12 +82,12 @@ def _near(text: str, end: End) -> bool:
 
 
 def claims_to_be_author(fact: str | None, end: End) -> bool:
-    """Факт сам говорит, что названный конец — автор («На Андрея (это я)»): ближайшие
-    слова перед «(это я)» или после «I am» содержат имя конца."""
-    for m in _SELF_AFTER_NAME.finditer(fact or ""):
-        if _near(" ".join(re.findall(r"[\w'’-]+", fact[:m.start()])[-_NEAR_WORDS:]), end):
-            return True
-    for m in _SELF_BEFORE_NAME.finditer(fact or ""):
-        if _near(" ".join(re.findall(r"[\w'’-]+", fact[m.end():])[:_NEAR_WORDS]), end):
-            return True
-    return False
+    """Факт сам говорит, что названный конец — автор: имя СРАЗУ перед «(это я)» /
+    «— это я» / «это я)» (приложение) либо СРАЗУ после «I am» / «I'm» (сказуемое, не
+    притяжательное «Sandra's»). «Позвонил Андрей, это я опоздал» и «I am Anna's friend»
+    — не самоназвание."""
+    if any(_near(m.group(1), end) for m in _APPOSITION.finditer(fact or "")):
+        return True
+    return any(_near(token, end)
+               for m in _COMPLEMENT.finditer(fact or "")
+               if not _POSSESSIVE.search(token := m.group(1) or m.group(2)))

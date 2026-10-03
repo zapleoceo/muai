@@ -69,7 +69,8 @@ def canonical_plan(snapshot: dict[str, Any]) -> list[Action]:
         mine, theirs = _side_weight(members), _side_weight(rival)
         if mine == theirs:
             continue
-        loser_rows, keep = (rival, members[0]) if mine > theirs else (members, rival[0])
+        loser_rows, winner_rows = (rival, members) if mine > theirs else (members, rival)
+        keep = max(winner_rows, key=_rank)
         for row in loser_rows:
             dead.add(row["id"])
             actions.append(retire_action(row, RULE_CONTRADICTION, keep))

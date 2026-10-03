@@ -256,8 +256,9 @@ def _neutral(stats: PairStats, interaction: float) -> Role | None:
 def build_connection(a: int, b: int, claims: Iterable[Claim], stats: PairStats,
                      shared_work: bool = False, suppress_inferred: bool = False) -> Connection | None:
     """Связь пары из записей и статистики; None — нет показываемой роли и не на что опереться
-    (записей нет и общения меньше `CONTACT_MIN_DAYS`, либо роли скрыты и общения нет). `suppress_inferred` — владелец отверг выведенное
-    «работает с»: общение не считается уликой, записанные роли остаются."""
+    (записей нет и общения меньше `CONTACT_MIN_DAYS`, либо роли скрыты и общения нет).
+    `suppress_inferred` — владелец отверг выведенное «работает с»: общение не считается
+    уликой, записанные роли остаются."""
     interaction = interaction_strength(stats)
     work = work_strength(stats, shared_work)
     grouped: dict[RoleKey, list[Claim]] = {}

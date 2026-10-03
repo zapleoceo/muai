@@ -114,3 +114,28 @@ def test_self_reference_to_another_entity_is_rejected_not_attributed_to_a_namesa
 
 def test_self_reference_resolving_to_the_author_passes_the_check():
     assert _reject(True) != REJECT_SELF_REFERENCE
+
+
+def test_possessive_or_other_clause_is_not_a_self_reference():
+    sandra, john, anna, andrey = (End((n,)) for n in ("Sandra", "John", "Anna", "Андрей"))
+    assert not claims_to_be_author("I am Sandra's boss", sandra)
+    assert not claims_to_be_author("I'm John's brother", john)
+    assert not claims_to_be_author("I am Anna’s friend", anna)
+    assert not claims_to_be_author("Позвонил Андрей, это я опоздал", andrey)
+    assert not claims_to_be_author("Андрей сказал, что это я виноват", andrey)
+
+
+def test_direct_apposition_and_complement_are_self_references():
+    assert claims_to_be_author("На Андрея (это я) наложили штраф", End(("Андрей",)))
+    assert claims_to_be_author("Андрей — это я", End(("Андрей",)))
+    assert claims_to_be_author("Андрей (я) тоже там был", End(("Андрей",)))
+    assert claims_to_be_author("I am Sandra from sales", End(("Sandra",)))
+    assert claims_to_be_author("I'm Andrey", End(("Andrey",)))
+
+
+def test_contradiction_keep_is_the_strongest_row_regardless_of_input_order():
+    rows = [row(1, 1, "boss_of", 2, event=10, conf=0.5), row(2, 1, "boss_of", 2, event=11, conf=0.9),
+            row(3, 2, "boss_of", 1, event=12)]
+    for ordering in (rows, rows[::-1]):
+        retire = [a for a in plan(*ordering) if a["action"] == "retire"]
+        assert [a["rel_id"] for a in retire] == [3] and retire[0]["keep_id"] == 2
