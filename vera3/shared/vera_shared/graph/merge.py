@@ -23,6 +23,7 @@ from vera_shared.graph import merge_children as children
 from vera_shared.graph.merge_codec import row_dict
 from vera_shared.graph.merge_errors import MergeError
 from vera_shared.graph.merge_report import MergeReport, Recorder
+from vera_shared.graph.merge_suppressions import merge_suppressions
 from vera_shared.timeutil import utc_naive_now
 
 
@@ -68,7 +69,8 @@ async def _merge(s: AsyncSession, keep_id: int, drop_ids: list[int],
     rec = Recorder(report)
     for step in (children.merge_aliases, children.merge_memberships,
                  children.merge_relationships, children.merge_avatars,
-                 children.move_identity_nodes, children.merge_suggestions):
+                 children.move_identity_nodes, children.merge_suggestions,
+                 merge_suppressions):
         await step(s, rec, keep_id, drop_ids)
 
     keep.attributes = union_attributes(dict(keep.attributes or {}), drops)

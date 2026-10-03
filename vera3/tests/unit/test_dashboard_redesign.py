@@ -19,7 +19,7 @@ from dashboard.events_view import day_label  # noqa: E402
 from dashboard.health import assess, silent_sources  # noqa: E402
 from dashboard.search_routes import SOURCES_SHOWN, sources_html  # noqa: E402
 from dashboard.ui.shell import nav, standalone_html  # noqa: E402
-from dashboard.ui.theme import PICO_URL  # noqa: E402
+from dashboard.ui.theme import CSS_URL  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from vera_shared.timeutil import utc_naive_now  # noqa: E402
 
@@ -74,19 +74,20 @@ def _events(rows: list[dict], query: str = ""):
 class TestShell:
     def test_nav_labels_and_links(self):
         html = nav("home")
-        for label in ("Поиск", "Входящее", "Люди", "Источники", "⚙", "выйти"):
+        for label in ("Поиск", "Входящее", "Люди", "Источники", "Журнал", "Настройки", "выйти"):
             assert label in html
         for href in ('href="/"', 'href="/events"', 'href="/graph"',
-                     'href="/sources"', 'href="/settings"', 'href="/api/logout"'):
+                     'href="/sources"', 'href="/journal"', 'href="/settings"',
+                     'href="/api/logout"'):
             assert href in html
         assert ">log<" not in html and "сущности" not in html
 
     def test_duplicates_page_highlights_people(self):
         assert 'href="/graph" aria-current="page"' in nav("entities")
 
-    def test_pinned_pico_and_dark_theme(self):
+    def test_own_theme_pinned_scripts_and_dark_theme(self):
         page = standalone_html("t", "<p>x</p>")
-        assert PICO_URL in page and "@2.1.1" in PICO_URL
+        assert CSS_URL in page and "pico" not in page.lower()
         assert 'integrity="sha384-' in page and 'crossorigin="anonymous"' in page
         assert "htmx.min.js" in page and "@1.9.10" in page
         assert 'data-theme="dark"' in page
@@ -94,7 +95,7 @@ class TestShell:
     def test_standalone_login_pages_share_the_shell(self):
         from dashboard.telegram_login import _page
         body = _page("Вход", "<h1>Привет</h1>").body.decode()
-        assert PICO_URL in body and "<h1>Привет</h1>" in body
+        assert CSS_URL in body and "<h1>Привет</h1>" in body
 
 
 class TestHealth:

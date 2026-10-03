@@ -31,6 +31,7 @@ from vera_shared.graph.connection_model import (
     role_payload,
 )
 from vera_shared.graph.pair_stats import PairStats, ordered, partner_stats, stats_within
+from vera_shared.graph.suppressions import suppressed_partners, suppressed_within
 
 CONNECTIONS_LIMIT = 50
 
@@ -43,9 +44,9 @@ def _by_pair(claims: list[Claim]) -> dict[tuple[int, int], list[Claim]]:
 
 
 def _connection(a: int, b: int, claims: list[Claim], stats: PairStats | None,
-                idents: dict[int, WorkIdent]) -> Connection | None:
+                idents: dict[int, WorkIdent], muted: bool = False) -> Connection | None:
     return build_connection(a, b, claims, stats or PairStats(),
-                            shared_work(idents.get(a), idents.get(b)))
+                            shared_work(idents.get(a), idents.get(b)), suppress_inferred=muted)
 
 
 def _interaction_payload(conn: Connection) -> dict[str, Any]:
@@ -68,14 +69,16 @@ async def _connections_of(entity_id: int) -> tuple[list[Connection], dict[int, C
     by_other = {(b if a == entity_id else a): claims
                 for (a, b), claims in _by_pair(await claims_of(entity_id)).items()}
     stats = await partner_stats(entity_id)
-    candidates = set(by_other) | {p for p, st in stats.items() if could_infer_work(st)}
+    muted = await suppressed_partners(entity_id)
+    candidates = set(by_other) | {p for p, st in stats.items()
+                                  if could_infer_work(st) and p not in muted}
     if not candidates:
         return [], {}
     cards = await entity_cards([entity_id, *candidates])
     idents = await work_idents([entity_id, *candidates])
     conns = [c for other in candidates if other in cards
              if (c := _connection(entity_id, other, by_other.get(other, []),
-                                  stats.get(other), idents)) is not None]
+                                  stats.get(other), idents, other in muted)) is not None]
     conns.sort(key=lambda c: (-c.weight, -c.interaction))
     return conns, cards
 
@@ -121,13 +124,16 @@ async def connections_among(ids: list[int], predicate: str | None = None) -> lis
         return []
     grouped = _by_pair(await claims_within(ids, predicate))
     stats = await stats_within(ids)
+    muted = await suppressed_within(ids)
     if predicate in (None, INFERRED_PREDICATE):
-        inferable = {pair for pair, st in stats.items() if could_infer_work(st)}
+        inferable = {pair for pair, st in stats.items()
+                     if could_infer_work(st) and pair not in muted}
     else:
         inferable = set()
     pairs = set(grouped) | inferable
     idents = await work_idents(sorted({i for pair in pairs for i in pair}))
-    conns = (_connection(a, b, grouped.get((a, b), []), stats.get((a, b)), idents)
+    conns = (_connection(a, b, grouped.get((a, b), []), stats.get((a, b)), idents,
+                         (a, b) in muted)
              for a, b in sorted(pairs))
     edges = [edge_payload(c) for c in conns if c is not None]
     return [e for e in edges if predicate is None or predicate == e["predicate"]

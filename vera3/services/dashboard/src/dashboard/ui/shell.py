@@ -1,12 +1,12 @@
-"""Общая оболочка страниц: `<head>` (Pico + слой Веры + htmx), верхнее
-меню и подвал. Здесь нет ни `esc`, ни обращений к `render`, чтобы `render`
-мог импортировать этот модуль без цикла."""
+"""Общая оболочка страниц: `<head>` (наш CSS + htmx), верхнее меню и подвал.
+Здесь нет ни `esc`, ни обращений к `render`, чтобы `render` мог импортировать
+этот модуль без цикла."""
 from __future__ import annotations
 
 from html import escape
 
 from dashboard.ui.favicon import FAVICON_LINKS
-from dashboard.ui.theme import HTMX_SRI, HTMX_URL, PICO_SRI, PICO_URL, VERA_CSS
+from dashboard.ui.theme import CSS_URL, HTMX_SRI, HTMX_URL, JS_URL
 from dashboard.ui.tz import DAYS_SCRIPT, TZ_FOOTER, TZ_SCRIPT
 
 # (ключ страницы, адрес, подпись). Путь «Входящее» и «Люди» остался прежним:
@@ -20,50 +20,48 @@ NAV_ITEMS: tuple[tuple[str, str, str], ...] = (
 # Страница дублей — часть раздела «Люди».
 _NAV_ALIASES = {"entities": "graph"}
 
-
-# Строка таблицы с data-href открывается кликом; ссылки и кнопки внутри живут своей жизнью.
-# Здесь же подтверждение опасных форм.
-ROW_LINK_SCRIPT = """<script>
-document.addEventListener('click',function(e){
-  var r=e.target.closest('tr.row-link');
-  if(r&&!e.target.closest('a,button,input,select,summary'))location.href=r.dataset.href;
-});
-// Опасные формы несут вопрос в data-confirm: имена в нём были бы кодом, а так это строка.
-document.addEventListener('submit',function(e){
-  var m=e.target.dataset&&e.target.dataset.confirm;
-  if(m&&!window.confirm(m))e.preventDefault();
-});
-</script>"""
+_GEAR = ('<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" '
+         'stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">'
+         '<circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1'
+         'a1.7 1.7 0 0 0-1.8-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1.1-1.5 1.7 1.7 0 0 0-1.8.3'
+         'l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.8 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1.1'
+         ' 1.7 1.7 0 0 0-.3-1.8l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.8.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1'
+         'a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.8-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.8V9a1.7 1.7 0 0 0 1.5 1H21'
+         'a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z"/></svg>')
 
 
 def head(title: str) -> str:
     return (
         f'<!DOCTYPE html><html lang="ru" data-theme="dark"><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width, initial-scale=1">'
+        f'<meta name="color-scheme" content="dark">'
         f'<title>{escape(title)}</title>{FAVICON_LINKS}'
-        f'<link rel="stylesheet" href="{PICO_URL}" integrity="{PICO_SRI}" crossorigin="anonymous">'
+        f'<link rel="stylesheet" href="{CSS_URL}">'
         f'<script src="{HTMX_URL}" integrity="{HTMX_SRI}" crossorigin="anonymous"></script>'
-        f'<style>{VERA_CSS}</style></head>'
+        f'<script src="{JS_URL}" defer></script></head>'
     )
 
 
 def nav(active: str) -> str:
     key = _NAV_ALIASES.get(active, active)
 
-    def link(k: str, href: str, label: str) -> str:
+    def link(k: str, href: str, label: str, title: str = "") -> str:
         cur = ' aria-current="page"' if k == key else ""
-        return f'<li><a href="{href}"{cur}>{label}</a></li>'
+        hint = f' title="{escape(title)}" aria-label="{escape(title)}"' if title else ""
+        return f'<li><a href="{href}"{cur}{hint}>{label}</a></li>'
 
     left = "".join(link(*item) for item in NAV_ITEMS)
-    right = (link("settings", "/settings", "⚙")
+    right = (link("journal", "/journal", "Журнал")
+             + link("settings", "/settings", _GEAR, "Настройки")
              + '<li><a class="out" href="/api/logout">выйти</a></li>')
-    return (f'<nav class="top"><ul><li><strong>Vera</strong></li>{left}</ul>'
-            f'<ul>{right}</ul></nav>')
+    return (f'<nav class="top" aria-label="Разделы"><ul><li class="brand"><span class="orb"></span>'
+            f'<span class="word">Vera</span></li>{left}</ul><ul>{right}</ul></nav>')
 
 
-def page(active: str, body: str) -> str:
-    return (head("Vera 3.0") + '<body><main class="container">' + nav(active)
-            + body + TZ_FOOTER + "</main>" + TZ_SCRIPT + DAYS_SCRIPT + ROW_LINK_SCRIPT + "</body></html>")
+def page(active: str, body: str, wide: bool = False) -> str:
+    cls = "container wide" if wide else "container"
+    return (head("Vera 3.0") + f'<body><main class="{cls}">' + nav(active)
+            + body + TZ_FOOTER + "</main>" + TZ_SCRIPT + DAYS_SCRIPT + "</body></html>")
 
 
 def standalone_html(title: str, body: str) -> str:

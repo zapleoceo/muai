@@ -17,10 +17,10 @@ from vera_shared.graph import event_links
 from vera_shared.graph.context import entity_context_payload
 from vera_shared.graph.repo import find_entity_by_name, graph_snapshot
 from vera_shared.graph.search import search_entities
+from vera_shared.journal import audit
 from vera_shared.search_client import SearchUnavailable, search_brain
 from vera_shared.timeutil import parse_iso_naive, utc_naive_now
 
-from vera_mcp import audit
 from vera_mcp.sql_guard import MAX_ROWS, run_readonly
 
 MAX_EVENTS = 200

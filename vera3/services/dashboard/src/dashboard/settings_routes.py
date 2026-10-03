@@ -78,15 +78,6 @@ async def settings_page(request: Request):
     <p><a href="/entities/duplicates">Дубли людей</a>
        <span class="muted small"> — объединение повторяющихся карточек</span></p>
 
-    <style>
-      .set-row {{ display:flex; justify-content:space-between; align-items:flex-start;
-                  gap:1.2rem; padding:.9rem 0; border-bottom:1px solid var(--vera-line); }}
-      .set-main label {{ font-weight:600; }}
-      .set-desc {{ color:var(--vera-muted); font-size:.85rem; margin-top:.2rem; max-width:32rem; }}
-      .set-field {{ white-space:nowrap; display:flex; align-items:center; gap:.4rem; }}
-      .set-field input, .set-field select {{ width:8rem; margin:0; }}
-      .set-unit {{ color:var(--vera-muted); font-size:.85rem; }}
-    </style>
     """
     return HTMLResponse(_render("settings", body))
 

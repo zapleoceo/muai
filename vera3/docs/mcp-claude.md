@@ -18,7 +18,7 @@ vera3-mcp :8000 (хост 127.0.0.1:8007)          services/mcp, пакет vera
   ├─ BearerAuthMiddleware (auth.py)            401 без/с неверным токеном
   ├─ FastMCP, stateless_http=True, json_response=True   (server.py)
   ├─ read_tools.py   → vera_shared (events.queries, graph.*, search_client) + sql_guard.py → ro_engine.py (роль vera_ro)
-  └─ write_tools.py  → vera_shared (events.edit, graph.edit, memory.remember) + audit.py / undo.py
+  └─ write_tools.py  → vera_shared (events.edit, graph.edit, memory.remember) + `vera_shared.journal` (audit, undo — общие с дашбордом)
         │ БД: Postgres (тот же engine/репозитории, что у остальных сервисов)
         │ search: HTTP → brain-search:8000 (как /v1/search шлюза)
         └ запись: событие/граф + строка mcp_audit в ОДНОЙ транзакции
@@ -264,8 +264,10 @@ bearer_token_env_var = "VERA_MCP_TOKEN"
 - `vera_mcp.ro_engine`: `get_ro_engine`, `forget_ro_engine`, `ReadOnlyUnavailable`.
 - `vera_mcp.sql_guard`: `validate_sql`, `strip_literals`, `run_readonly`,
   `SqlRejected`.
-- `vera_mcp.audit`: `record`, `get_entry`, `list_entries`, `AuditNotFound`.
-- `vera_mcp.undo`: `undo_entry`, `UndoRefused`.
+- `vera_shared.journal.audit`: `record`, `get_entry`, `list_entries`, `recent_rows`, `AuditNotFound`
+  (переехал из `vera_mcp.audit` 2026-10-04: журнал общий с дашбордом, клиент `dashboard`).
+- `vera_shared.journal.undo`: `undo_entry`, `UndoRefused` (из `vera_mcp.undo`; новый вид
+  цели `suppression` откатывает отвергнутое «работает с»).
 - `vera_shared.events.edit`: `update_event`, `set_hidden`,
   `load_row`, `snapshot`, `merge_metadata`, `restore_fields`, `EventNotFound`,
   `EventBusy`;

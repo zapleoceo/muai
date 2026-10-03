@@ -43,7 +43,7 @@ class TestShell:
     def test_timezone_footer_is_present_once_and_small(self):
         html = page("home", "<p>x</p>")
         assert html.count('id="tz-note"') == 1
-        assert re.search(r"\.tz-note\{[^}]*font-size:\.7rem", VERA_CSS)
+        assert re.search(r"\.tz-note\{[^}]*font-size:\.72rem", VERA_CSS)
 
     def test_footer_text_is_written_once_by_the_script(self):
         from dashboard.ui.tz import TZ_SCRIPT
@@ -86,7 +86,7 @@ class TestDisconnectConfirmation:
 
     def test_uses_the_shared_theme_and_a_solid_danger_button(self):
         r = self._get(State(True, "Команда", "опрос остановится"))
-        assert "pico" in r.text.lower() and 'class="danger-solid"' in r.text
+        assert "/ui/vera.css" in r.text and 'class="danger-solid"' in r.text
 
     def test_label_from_the_database_is_escaped(self):
         r = self._get(State(True, "<script>alert(1)</script>", "<b>стоп</b>"))

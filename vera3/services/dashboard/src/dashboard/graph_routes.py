@@ -123,4 +123,4 @@ async def _pending_pairs() -> int | None:
 async def graph_page(request: Request):
     if (resp := owner_or_auth_error(request)) is not None:
         return resp
-    return HTMLResponse(_render("graph", graph_body(_PREDICATES, await _pending_pairs())))
+    return HTMLResponse(_render("graph", graph_body(_PREDICATES, await _pending_pairs()), wide=True))

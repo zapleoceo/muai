@@ -17,12 +17,12 @@ from vera_shared.db.engine import get_session
 from vera_shared.events import edit as event_edit
 from vera_shared.graph import edit as graph_edit
 from vera_shared.graph.merge import merge_entities
+from vera_shared.journal import audit
+from vera_shared.journal.undo import undo_entry
 from vera_shared.memory.remember import RememberOutcome, remember_fact
 
-from vera_mcp import audit
 from vera_mcp.auth import client_of
 from vera_mcp.merge_guard import MergeBlocked, entity_names, merge_blockers
-from vera_mcp.undo import undo_entry
 
 #: (target_id, before, after, extra-поля ответа)
 Applied = tuple[int | None, dict[str, Any] | None, dict[str, Any] | None, dict[str, Any]]

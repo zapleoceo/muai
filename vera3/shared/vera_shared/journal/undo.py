@@ -10,14 +10,15 @@ from __future__ import annotations
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from vera_shared.db.models_mcp import McpAuditRow
 from vera_shared.events import edit as event_edit
 from vera_shared.graph import edit as graph_edit
 from vera_shared.graph.merge_errors import MergeError
 from vera_shared.graph.merge_report import MergeReport
+from vera_shared.graph.suppressions import lift_suppression
 from vera_shared.graph.unmerge import UnmergeError, unmerge
-
-from vera_mcp import audit
+from vera_shared.journal import audit
 
 _TEXT_KEYS = ("content_text", "metadata", "category")
 _STATUS_KEYS = ("triage_status", "triage_metadata")
@@ -95,7 +96,15 @@ async def _undo_merge(s: AsyncSession, row: McpAuditRow,
     return {"dropped": report.drop_ids}, {"restored": report.drop_ids}
 
 
+async def _undo_suppression(s: AsyncSession, row: McpAuditRow,
+                            force: bool) -> tuple[dict[str, Any], dict[str, Any]]:
+    after = row.after or {}
+    lifted = await lift_suppression(s, int(after["entity_a"]), int(after["entity_b"]))
+    return {"suppressed": lifted}, {"suppressed": False}
+
+
 _UNDO_BY_KIND = {
+    "suppression": _undo_suppression,
     "merge": _undo_merge,
     "event": _undo_event,
     "entity": _undo_entity,

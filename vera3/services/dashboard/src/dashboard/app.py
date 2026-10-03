@@ -12,13 +12,16 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Response
 from vera_shared.db.engine import close_engine, init_engine
 
+from dashboard.assets_routes import router as assets_router
 from dashboard.auth_routes import router as auth_router
+from dashboard.connection_routes import router as connection_router
 from dashboard.entities_routes import router as entities_router
 from dashboard.events_routes import router as events_router
 from dashboard.gmail_oauth import router as gmail_oauth_router
 from dashboard.graph_routes import router as graph_router
 from dashboard.home_routes import router as home_router
 from dashboard.instagram_login import router as instagram_login_router
+from dashboard.journal_routes import router as journal_router
 from dashboard.progress_routes import router as progress_router
 from dashboard.render import FAVICON_SVG
 from dashboard.search_routes import router as search_router
@@ -43,6 +46,7 @@ for router in (
     sources_router, search_router, settings_router, entities_router,
     graph_router, gmail_oauth_router, instagram_login_router,
     telegram_login_router, slack_connect_router, source_actions_router,
+    assets_router, connection_router, journal_router,
 ):
     app.include_router(router)
 

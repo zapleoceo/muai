@@ -8,8 +8,6 @@ from unittest.mock import patch
 import pytest
 from sqlalchemy import select
 from vera_mcp import write_tools as w
-from vera_mcp.audit import AuditNotFound
-from vera_mcp.undo import UndoRefused
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_graph import EntityAliasRow, EntityRow, RelationshipRow
@@ -17,6 +15,8 @@ from vera_shared.db.models_mcp import McpAuditRow
 from vera_shared.events.edit import EventBusy, EventNotFound
 from vera_shared.graph.edit import GraphEditError
 from vera_shared.graph.merge_errors import MergeError
+from vera_shared.journal.audit import AuditNotFound
+from vera_shared.journal.undo import UndoRefused
 from vera_shared.memory.remember import RememberOutcome
 
 pytestmark = pytest.mark.asyncio
