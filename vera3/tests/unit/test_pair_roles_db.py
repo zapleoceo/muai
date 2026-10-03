@@ -236,3 +236,13 @@ async def test_a_bad_format_does_not_stop_the_cycle_but_a_broker_failure_does(wo
     with fake_llm(LLMCallFailed("outage"), reply(boss_role())) as llm:
         done = await run_cycle(5)
     assert llm.await_count == 1 and done[0].failed and len(done) == 1
+
+
+async def test_infer_pair_returns_the_trace_and_a_self_asserted_role_is_explained(world):
+    own = {**boss_role(), "quotes": [QUOTE]}                 # только реплики самого начальника
+    with fake_llm(reply(own)):
+        result = await infer_pair(world["owner"], world["boss"], dry_run=True)
+    assert result.roles == () and result.summary
+    (t,) = result.trace
+    assert t.self_assertion == "самоутверждение" and t.quotes[0].authors == ("B",)
+    assert await stored_rows(world["gs"]) == ([], [])

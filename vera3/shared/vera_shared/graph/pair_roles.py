@@ -24,7 +24,7 @@ from vera_shared.graph.pair_roles_data import (
     work_context,
 )
 from vera_shared.graph.pair_roles_pack import build_evidence
-from vera_shared.graph.pair_roles_parse import PairRolesFormatError, parse_answer
+from vera_shared.graph.pair_roles_parse import PairRolesFormatError, parse_traced
 from vera_shared.graph.pair_roles_prompt import PAIR_ROLES_JSON_SCHEMA, render_prompt
 from vera_shared.graph.pair_roles_queue import marker_of, pick_pairs
 from vera_shared.graph.pair_roles_signals import text_signals
@@ -89,7 +89,7 @@ async def infer_pair(a: int, b: int, *, force: bool = False, dry_run: bool = Fal
             messages=[{"role": "user", "content": prompt}], capability="structured",
             response_format=PAIR_ROLES_JSON_SCHEMA, max_tokens=MAX_OUTPUT_TOKENS, temperature=0.0,
             workflow="pair_roles", poll_deadline_s=poll_deadline_s)
-        roles, summary = parse_answer(raw, evidence.corpus, evidence.messages)
+        roles, summary, trace = parse_traced(raw, evidence.corpus, evidence.messages)
     except LLMCallFailed as e:
         log.warning("pair_roles %s-%s: LLM не ответила: %s", low, high, e)
         return PairInference(low, high, digest=evidence.digest, failed=True, skipped=str(e)[:200])
@@ -102,7 +102,8 @@ async def infer_pair(a: int, b: int, *, force: bool = False, dry_run: bool = Fal
     model = str((meta or {}).get("model") or (meta or {}).get("provider") or "")[:120]
     log.info("pair_roles %s-%s: ролей=%d сообщений=%d ≈токенов=%d cost_usd=%.6f", low, high,
              len(roles), len(evidence.messages), estimate_tokens(prompt), cost)
-    result = PairInference(low, high, tuple(roles), summary, model, evidence.digest, cost)
+    result = PairInference(low, high, tuple(roles), summary, model, evidence.digest, cost,
+                           trace=tuple(trace))
     if not dry_run:
         await save_inference(result, marker)
     return result

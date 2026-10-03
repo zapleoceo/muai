@@ -39,8 +39,11 @@ Confidence 0..1: 0.85+ explicit statement or a very consistent pattern; 0.6-0.85
 below 0.6 - leave the role out.
 "quotes": 1-3 EXACT substrings (at least 12 characters) copied from the pack (a message text, an e-mail
 address, a title) that support the role. A quote that is not in the pack is discarded; a role without a
-valid quote is dropped. A superior's own claims or orders are NOT enough on their own: include a quote
-written by the other person or by a third person (X) that confirms the role, or a structural one.
+valid quote is dropped. For boss_of and parent_of a superior's own claims or orders are NOT enough: the
+quotes MUST include at least one line written by the OTHER person (from = the subordinate/child: reporting,
+asking permission or a raise, formal "Вы", naming the superior's decisions) or by a third person (X), or a
+structural one (address, title). Look for such a line in the pack before answering; if the pack has none,
+set confidence below 0.6 instead of quoting only the superior.
 "rationale": one or two sentences in Russian naming the pattern (do not retell the messages).
 "relationship_summary": one line in Russian describing the relationship plainly, also when "roles" is empty.
 Answer with JSON only.
