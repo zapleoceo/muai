@@ -30,6 +30,14 @@ LINKS_START_DELAY_S = float(os.environ.get("TRIAGE_LINKS_START_DELAY_S", "120"))
 LINKS_BATCH = int(os.environ.get("TRIAGE_LINKS_BATCH", "200"))
 LINKS_MAX_BATCHES = int(os.environ.get("TRIAGE_LINKS_MAX_BATCHES", "5"))
 
+# Роли пар по истории переписки (pair_roles_loop.py): до BATCH пар за проход, раз в 30 минут,
+# пары владельца первыми. Выключено по умолчанию — первый проход тратит бюджет брокера на всю
+# очередь устоявшихся пар; включать после просмотра dry-run (scripts/infer_pair_roles.py).
+PAIR_ROLES_ENABLED = os.environ.get("TRIAGE_PAIR_ROLES_ENABLED", "0") == "1"
+PAIR_ROLES_INTERVAL_S = float(os.environ.get("TRIAGE_PAIR_ROLES_INTERVAL_S", "1800"))
+PAIR_ROLES_BATCH = int(os.environ.get("TRIAGE_PAIR_ROLES_BATCH", "20"))
+PAIR_ROLES_START_DELAY_S = float(os.environ.get("TRIAGE_PAIR_ROLES_START_DELAY_S", "600"))
+
 # ─── Групповой батчинг ───────────────────────────────────────────────────────
 # Rate limiter (backfill_max_per_hour) считает LLM-ВЫЗОВЫ, не события. Группы
 # (супергруппы + легаси Chat) — короткие сообщения (медиана ~260 симв.),

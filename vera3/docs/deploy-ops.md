@@ -1181,3 +1181,38 @@ Short version:
 7. **Откат:** `DROP TABLE event_entities, link_cursor, entity_nicknames, voice_speaker_map` и
    `DELETE FROM schema_migrations WHERE version IN ('042_event_entities', '043_entity_nicknames',
    '044_voice_speaker_map')`; `links_loop` пишет WARNING и ждёт.
+
+## Роль по истории переписки: накат 045 и dry-run на проде
+
+Что и почему — `identity.md`, «Роль по истории переписки». Таблицы производные: код без них
+работает (чтение пусто), откат — `DROP TABLE pair_role_inferences, pair_role_runs` и
+`DELETE FROM schema_migrations WHERE version='045_pair_role_inferences'`. Предпосылка: накачены
+042–044 и построен индекс `event_entities` (см. «Связи событий с людьми»): пакет улик строится из него.
+
+1. **Миграция:** `scripts/apply_migration.sh infra/migrations/045_pair_role_inferences.sql`.
+2. **Деплой кода.** Цикл `pair_roles_loop` ВЫКЛЮЧЕН (`TRIAGE_PAIR_ROLES_ENABLED=0`): тратить бюджет брокера
+   до просмотра результатов нельзя.
+3. **Найти id пары** (только чтение):
+   `SELECT id, name FROM entities WHERE type='person' AND name ILIKE '%<фамилия>%';` — id владельца:
+   `SELECT entity_id FROM entity_aliases WHERE source='telegram' AND identifier='user:'||'<OWNER_TELEGRAM_ID>';`
+4. **Пакет улик без вызова модели** (ничего не тратит и не пишет):
+   `docker compose run --rm --no-deps -v /var/www/vera3/scripts:/scripts brain-triage python /scripts/infer_pair_roles.py --pair <id_владельца>,<id_директора> --show-pack`
+   — печатает пакет и `estimated_input_tokens`; глазами проверить, что в нём личка в обе стороны, письма
+   с подписью и адресом, упоминания третьими лицами (в том числе по прозвищу) и что нет чужого.
+5. **Вывод роли БЕЗ записи** (модель зовётся, цена печатается):
+   `… python /scripts/infer_pair_roles.py --pair <id_владельца>,<id_директора> --dry-run`
+   и то же для пары с сотрудницей: `--pair <id_владельца>,<id_сотрудницы> --dry-run`. Результат — рёбра вида
+   `A -[boss_of]-> B` с уверенностью, обоснованием и цитатами; цитата, которой нет в пакете, роль не
+   пропускает. Для директора ожидается `boss_of` от директора к владельцу; чтобы он был в карточке без
+   ручной строки, ручную строку `relationships` (если заводилась как временная мера) снимают
+   `relationship_retire` / `undo`, а затем запускают без `--dry-run`.
+6. **Запись** одной пары: тот же вызов без `--dry-run`; очередь целиком (пары владельца первыми):
+   `… python /scripts/infer_pair_roles.py --limit 20`. Карточка человека на `/graph` покажет роль с
+   пометкой «выведено из переписки» и цитатами; «Это неверно» гасит её у этой пары.
+7. **Включить фоновый цикл** после просмотра: `TRIAGE_PAIR_ROLES_ENABLED=1` в `infra/.env`,
+   пересоздать `brain-triage`. В логе строка `pair-roles: пар N, ролей M, cost_usd=…` раз в 30 минут; один
+   сбой брокера прекращает проход.
+8. **Цена.** Пакет ≤ 24 000 знаков ≈ 7 тыс. входных токенов + до 900 выходных на пару. Реальную цену
+   печатает `--dry-run` (`cost_usd` из ответа брокера; free-пул — 0). Очередь = число устоявшихся пар
+   (`is_established`): `SELECT count(*) FROM pair_stats WHERE active_days + 0.5*least(shared_groups,4) >= 7.33;`.
+   После первого прохода модель зовётся только при изменении пакета (не чаще раза в 3 дня на пару) и раз в 30 дней.
