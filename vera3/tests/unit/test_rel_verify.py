@@ -241,3 +241,13 @@ def test_prompt_accepts_strong_implication_and_rejects_irony():
     from vera_shared.graph.rel_verify import PROMPT
     assert "STRONGLY imply" in PROMPT
     assert "irony" in PROMPT and "sarcasm" in PROMPT
+
+
+def test_unclear_boss_of_is_retired_but_unclear_coworker_is_kept():
+    from vera_shared.graph.rel_cleanup_verify import _action
+    from vera_shared.graph.rel_verify import Verdict
+
+    base = {"id": 5, "subject_name": "A", "object_name": "B",
+            "subject_entity_id": 1, "object_entity_id": 2, "is_current": True}
+    assert _action({**base, "predicate": "boss_of"}, Verdict("unclear"))["action"] == "retire"
+    assert _action({**base, "predicate": "coworker_of"}, Verdict("unclear"))["action"] == "skip"

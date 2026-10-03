@@ -54,7 +54,8 @@ two specific people/entities? Names may be inflected or transliterated.
 Strong implication counts: in a work chat one person fines, pays, hires or gives
 orders to the other (boss); someone negotiates their raise with the other (the other
 is the employer); "my daughter", "my supplier". NOT enough: being mentioned
-together, a greeting or thanks, a request, money paid from someone's account, a guess.
+together, a greeting or thanks, a request, money paid from someone's account, a guess,
+a colleague passing on an instruction from someone else.
 A joke, irony or sarcasm ("he is my boss, haha") is NOT a claim: answer no.
 If the direction is unclear (who is whose boss), answer unclear. Answer with JSON only:
 {{"verdict": "yes" | "no" | "unclear", "quote": "<exact span copied from the message that states or implies it, empty unless yes>"}}"""
