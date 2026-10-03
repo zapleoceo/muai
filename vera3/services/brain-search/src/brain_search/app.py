@@ -26,6 +26,8 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Header, HTTPException
 from vera_shared.auth import internal_secret_ok
 from vera_shared.db.engine import close_engine, init_engine
+from vera_shared.links.context import owner_entity_id
+from vera_shared.links.filters import FilterError, build_where, from_dict
 
 from brain_search.models import AnswerResponse, SearchQuery
 from brain_search.pipeline import embed_query, query_terms
@@ -42,7 +44,7 @@ from brain_search.reports import (
     render_report_markdown,
     render_simple_markdown,
 )
-from brain_search.retrieval import fetch_candidates
+from brain_search.retrieval import LinkScope, fetch_candidates
 from brain_search.synthesis import answer as synthesize
 
 log = logging.getLogger(__name__)
@@ -103,6 +105,19 @@ async def _try_report(question: str) -> AnswerResponse | None:
     )
 
 
+async def _link_scope(query: SearchQuery) -> LinkScope | None:
+    """Фильтр запроса → условие поиска; неверный фильтр — 422."""
+    if not query.filters:
+        return None
+    try:
+        flt = from_dict(query.filters)
+        owner = await owner_entity_id() if flt.with_owner else None
+        build_where(flt, owner)         # проверка заранее: ошибка до тяжёлой выборки
+    except (FilterError, ValueError, TypeError) as e:
+        raise HTTPException(422, f"filters: {e}") from e
+    return LinkScope(flt, owner)
+
+
 @app.post("/search", response_model=AnswerResponse)
 async def search(
     query: SearchQuery,
@@ -130,7 +145,7 @@ async def search(
 
     found = await fetch_candidates(
         ts_query=ts, acc_words=acc_words, time_range=time_range,
-        project=project, q_vec=q_vec, limit=eff_limit,
+        project=project, q_vec=q_vec, limit=eff_limit, links=await _link_scope(query),
     )
 
     return await synthesize(

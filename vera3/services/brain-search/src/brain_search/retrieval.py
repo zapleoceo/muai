@@ -28,14 +28,16 @@ from brain_search.ann import fetch_ann_rows, merge_candidates, vec_sim_column
 from brain_search.fts import fts_match_sql, fts_rank_sql
 from brain_search.retrieval_filters import (
     NOT_A_WORLD_EVENT,
+    LinkScope,
     account_clause,
+    links_clause,
     project_clause,
     semantic_filter,
     source_clause,
 )
 from brain_search.rows import META_COLUMNS, Candidate
 
-__all__ = ["CANDIDATE_POOL", "RECENT_FALLBACK", "Candidates", "account_clause",
+__all__ = ["CANDIDATE_POOL", "RECENT_FALLBACK", "Candidates", "LinkScope", "account_clause",
            "fetch_candidates", "project_clause", "semantic_filter"]
 
 log = logging.getLogger(__name__)
@@ -94,14 +96,15 @@ async def _primary_with_degrade(s, **kw) -> tuple[Candidates, bool]:
 async def fetch_candidates(
     *, ts_query: str, acc_words: list[str], time_range, project,
     q_vec: list[float] | None, limit: int, source: str | None = None,
+    links: LinkScope | None = None,
 ) -> Candidates:
     """Кандидаты для скоринга: основной режим + смысловые из ANN."""
     async with get_session() as s:
         found, with_vec = await _primary_with_degrade(
             s, ts_query=ts_query, acc_words=acc_words, time_range=time_range,
-            project=project, q_vec=q_vec, limit=limit, source=source)
+            project=project, q_vec=q_vec, limit=limit, source=source, links=links)
         if with_vec and q_vec is not None:
-            where, params = semantic_filter(project, time_range, source)
+            where, params = semantic_filter(project, time_range, source, links)
             semantic = await fetch_ann_rows(s, q_vec, where, params)
             before = len(found.rows)
             found.rows = merge_candidates(found.rows, semantic)
@@ -119,10 +122,10 @@ async def _run(s, stmt, params: dict[str, Any], mode: str,
 
 async def _project_rows(s, *, ts_query: str, project, time_range, source,
                         vec_params: dict[str, Any], with_vec: bool,
-                        limit: int) -> Candidates:
+                        limit: int, links: LinkScope | None = None) -> Candidates:
     """Слова запроса работают внутри проекта: FTS-ранг и ANN-добавка. Только
     когда содержательных слов нет (или они ничего не нашли) — свежее."""
-    where, params = project_clause(project, time_range, source)
+    where, params = project_clause(project, time_range, source, links)
     if ts_query:
         stmt = _select(extra_cols=f"{fts_rank_sql()} AS rank, account",
                        join="LEFT JOIN", where=f"{where} AND {fts_match_sql()}",
@@ -140,7 +143,8 @@ async def _project_rows(s, *, ts_query: str, project, time_range, source,
 
 async def _primary(s, *, ts_query: str, acc_words: list[str], time_range,
                    project, q_vec: list[float] | None, with_vec: bool,
-                   limit: int, source: str | None = None) -> Candidates:
+                   limit: int, source: str | None = None,
+                   links: LinkScope | None = None) -> Candidates:
     """Режимы перечислены в порядке убывания точности."""
     vec_params: dict[str, Any] = {}
     if with_vec and q_vec is not None:
@@ -151,13 +155,15 @@ async def _primary(s, *, ts_query: str, acc_words: list[str], time_range,
         time_where = " AND occurred_at >= :t_start AND occurred_at < :t_end"
         time_params = {"t_start": time_range[0], "t_end": time_range[1]}
     src_sql, src_params = source_clause(source)
+    link_sql, link_params = links_clause(links)
+    src_sql, src_params = src_sql + link_sql, {**src_params, **link_params}
     world = NOT_A_WORLD_EVENT + src_sql
 
     if project is not None:
         return await _project_rows(s, ts_query=ts_query, project=project,
                                    time_range=time_range, source=source,
                                    vec_params=vec_params, with_vec=with_vec,
-                                   limit=limit)
+                                   limit=limit, links=links)
 
     if ts_query:
         acc_where, acc_match, acc_params = account_clause(acc_words)

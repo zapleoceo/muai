@@ -15,7 +15,7 @@ from vera_shared.llm.client import LLMCallFailed, embed
 from brain_search.fts import build_ts_query
 from brain_search.lang import content_words
 from brain_search.query_parse import ProjectScope, extract_account_terms
-from brain_search.retrieval import Candidates, fetch_candidates
+from brain_search.retrieval import Candidates, LinkScope, fetch_candidates
 from brain_search.rows import Candidate
 from brain_search.scoring import score_candidates
 
@@ -49,11 +49,12 @@ async def embed_query(question: str) -> list[float] | None:
 async def search_ranked(
     question: str, *, limit: int, time_range: tuple[datetime, datetime] | None = None,
     source: str | None = None, project: ProjectScope | None = None,
+    links: LinkScope | None = None,
 ) -> tuple[Candidates, list[tuple[float, Candidate]]]:
     """Полный проход поиска. Пустой вопрос = только окно времени, без вектора."""
     q_vec = await embed_query(question) if question.strip() else None
     ts, acc_words = query_terms(question, project)
     found = await fetch_candidates(
         ts_query=ts, acc_words=acc_words, time_range=time_range, project=project,
-        q_vec=q_vec, limit=limit, source=source)
+        q_vec=q_vec, limit=limit, source=source, links=links)
     return found, score_candidates(found.rows, q_vec, found.acc_words)[:limit]
