@@ -451,7 +451,7 @@ its own session.
 
 ## Backfill pause + rate limit
 
-Two controls on the 📥 Live прогресс dashboard card, both stored in the
+Two controls in the «Конвейер обработки» block on `/sources`, both stored in the
 `app_control` KV table (`vera_shared.control`, migration 009), so they
 hold across restarts/deploys:
 
