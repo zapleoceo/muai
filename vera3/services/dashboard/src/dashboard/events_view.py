@@ -80,7 +80,8 @@ def event_row(e: Mapping[str, Any], tech: bool) -> str:
     who = esc(e["account"] or "—")
     preview = esc((e["content_text"] or "")[:160])
     return (
-        f'<tr><td class="muted">{local_dt(e["occurred_at"], "time")}</td>'
+        f'<tr class="ev" data-utc="{esc(e["occurred_at"].isoformat())}Z">'
+        f'<td class="muted">{local_dt(e["occurred_at"], "time")}</td>'
         f'<td title="{esc(src.title)}">{src.icon}</td><td>{who}</td>'
         f'<td class="preview"><a href="/events/{e["id"]}">{preview or "—"}</a></td>'
         f'<td>{status_cell(e["triage_status"])}</td>{_tech_cells(e) if tech else ""}</tr>'
@@ -95,7 +96,7 @@ def day_groups(rows: Iterable[Mapping[str, Any]], today: date, tech: bool) -> st
         at: datetime = e["occurred_at"]
         if at.date() != current:
             current = at.date()
-            out.append(f'<tr><td colspan="{width}" class="day">'
+            out.append(f'<tr class="day-fb"><td colspan="{width}" class="day">'
                        f'{esc(day_label(current, today))}</td></tr>')
         out.append(event_row(e, tech))
     return "".join(out)
@@ -121,6 +122,18 @@ def filter_form(sources: list[tuple[str, int]], source: str | None,
       </form>"""
 
 
-def more_link(params: dict[str, Any], limit: int) -> str:
-    qs = urlencode({**{k: v for k, v in params.items() if v}, "limit": limit + PAGE_STEP})
+def cursor_of(row: Mapping[str, Any]) -> str:
+    return f'{row["occurred_at"].isoformat()}_{row["id"]}'
+
+
+def parse_cursor(raw: str) -> tuple[datetime, int] | None:
+    stamp, _, ident = raw.rpartition("_")
+    try:
+        return datetime.fromisoformat(stamp), int(ident)
+    except ValueError:
+        return None
+
+
+def more_link(params: dict[str, Any], last_row: Mapping[str, Any]) -> str:
+    qs = urlencode({**{k: v for k, v in params.items() if v}, "before": cursor_of(last_row)})
     return f'<p><a role="button" class="secondary" href="/events?{esc(qs)}">Показать ещё</a></p>'

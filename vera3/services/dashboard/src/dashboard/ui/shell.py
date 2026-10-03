@@ -7,7 +7,7 @@ from html import escape
 
 from dashboard.ui.favicon import FAVICON_LINKS
 from dashboard.ui.theme import HTMX_SRI, HTMX_URL, PICO_SRI, PICO_URL, VERA_CSS
-from dashboard.ui.tz import TZ_FOOTER, TZ_SCRIPT
+from dashboard.ui.tz import DAYS_SCRIPT, TZ_FOOTER, TZ_SCRIPT
 
 # (ключ страницы, адрес, подпись). Путь «Входящее» и «Люди» остался прежним:
 # меняются только подписи.
@@ -48,7 +48,7 @@ def nav(active: str) -> str:
 
 def page(active: str, body: str) -> str:
     return (head("Vera 3.0") + '<body><main class="container">' + nav(active)
-            + body + TZ_FOOTER + "</main>" + TZ_SCRIPT + "</body></html>")
+            + body + TZ_FOOTER + "</main>" + TZ_SCRIPT + DAYS_SCRIPT + "</body></html>")
 
 
 def standalone_html(title: str, body: str) -> str:

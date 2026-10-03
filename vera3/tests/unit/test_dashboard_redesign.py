@@ -87,6 +87,8 @@ class TestShell:
     def test_pinned_pico_and_dark_theme(self):
         page = standalone_html("t", "<p>x</p>")
         assert PICO_URL in page and "@2.1.1" in PICO_URL
+        assert 'integrity="sha384-' in page and 'crossorigin="anonymous"' in page
+        assert "htmx.min.js" in page and "@1.9.10" in page
         assert 'data-theme="dark"' in page
 
     def test_standalone_login_pages_share_the_shell(self):
@@ -181,12 +183,43 @@ class TestEvents:
         _, session = _events([], "?q=50%25_x")
         assert session.params["q"] == "%50\\%\\_x%"
 
-    def test_show_more_only_when_there_is_more(self):
-        rows = [_event(i, utc_naive_now()) for i in range(1, 4)]
+    def test_show_more_is_a_keyset_cursor_not_a_growing_limit(self):
+        rows = [_event(i, utc_naive_now()) for i in range(3, 0, -1)]
         r, _ = _events(rows, "?limit=2")
-        assert "Показать ещё" in r.text and "limit=52" in r.text
+        assert "Показать ещё" in r.text and "before=" in r.text
+        assert f"_{rows[1]['id']}" in r.text.split("before=")[1].split('"')[0]
         r2, _ = _events(rows[:2], "?limit=2")
         assert "Показать ещё" not in r2.text
+
+    def test_cursor_is_bound_as_a_row_comparison(self):
+        _, session = _events([], "?before=2026-10-03T10%3A00%3A00_77")
+        assert session.params["before_id"] == 77
+        assert session.params["before_at"] == datetime(2026, 10, 3, 10, 0)
+
+    def test_garbage_cursor_is_ignored(self):
+        r, session = _events([], "?before=nonsense")
+        assert r.status_code == 200 and "before_id" not in session.params
+
+    def test_paging_has_no_upper_boundary_failure(self):
+        r, _ = _events([], "?limit=200&before=2026-10-03T10%3A00%3A00_1")
+        assert r.status_code == 200
+
+    def test_search_timeout_shows_a_hint(self):
+        from sqlalchemy.exc import DBAPIError
+
+        class Slow(_Session):
+            async def execute(self, _stmt, params=None):
+                raise DBAPIError("select", {}, Exception("canceling statement due to statement timeout"))
+
+        stats = {"sources_all": []}
+        with patch("dashboard.events_routes.get_session", lambda: Slow([])),              patch("dashboard.events_routes.get_stats", AsyncMock(return_value=stats)):
+            r = client.get("/events?q=abc", cookies=_cookie())
+        assert r.status_code == 200 and "Слишком долгий поиск" in r.text
+
+    def test_rows_carry_utc_for_client_side_day_headers(self):
+        r, _ = _events([_event(1, datetime(2026, 10, 3, 23, 30))])
+        assert 'class="ev" data-utc="2026-10-03T23:30:00Z"' in r.text
+        assert 'class="day-fb"' in r.text and "tr.day-fb" in r.text
 
 
 class TestSettingsAndSources:

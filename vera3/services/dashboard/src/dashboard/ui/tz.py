@@ -50,3 +50,36 @@ TZ_SCRIPT = """<script>
   document.body.addEventListener('htmx:afterSwap',function(e){localize(e.target);});
 })();
 </script>"""
+
+# Заголовки дней — по местному времени браузера: серверный день в UTC у
+# владельца в UTC+7 переворачивался бы в 07:00. Без JS остаются серверные
+# заголовки (tr.day-fb), с JS они заменяются.
+DAYS_SCRIPT = """<script>
+(function(){
+  function p(n){return String(n).padStart(2,'0');}
+  function key(d){return d.getFullYear()+'-'+p(d.getMonth()+1)+'-'+p(d.getDate());}
+  var now=new Date(),ty=new Date(now.getFullYear(),now.getMonth(),now.getDate()-1);
+  function label(d){
+    var k=key(d);
+    if(k===key(now))return 'Сегодня';
+    if(k===key(ty))return 'Вчера';
+    return p(d.getDate())+'.'+p(d.getMonth()+1)+'.'+d.getFullYear();
+  }
+  document.querySelectorAll('table.data').forEach(function(t){
+    var rows=t.querySelectorAll('tr.ev[data-utc]');
+    if(!rows.length)return;
+    t.querySelectorAll('tr.day-fb').forEach(function(r){r.remove();});
+    var prev='';
+    rows.forEach(function(r){
+      var d=new Date(r.getAttribute('data-utc'));
+      if(isNaN(d.getTime()))return;
+      var k=key(d);
+      if(k===prev)return;
+      prev=k;
+      var h=document.createElement('tr'),c=document.createElement('td');
+      c.colSpan=r.children.length;c.className='day';c.textContent=label(d);
+      h.appendChild(c);r.parentNode.insertBefore(h,r);
+    });
+  });
+})();
+</script>"""
