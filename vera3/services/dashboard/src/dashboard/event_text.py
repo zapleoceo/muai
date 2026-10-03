@@ -15,6 +15,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
+from vera_shared.ingest.quotes import strip_quoted
+
 HEADER_KEYS = frozenset({"Author", "From", "To", "Cc", "Subject", "Chat", "Where",
                          "Date", "Direction"})
 SNIPPET_CHARS = 160
@@ -97,6 +99,11 @@ def describe(parsed: ParsedText, meta: Mapping[str, Any] | None = None) -> Event
     subject = parsed.headers.get("Subject", "")
     venue = subject or _venue(parsed.headers, data)
     return EventLine(_author(parsed.headers, data), venue, parsed.body, subject)
+
+
+def snippet_of(body: str, limit: int = SNIPPET_CHARS) -> str:
+    """Одна строка из тела без истории ответа (общий помощник списков и источников)."""
+    return one_line(strip_quoted(body), limit)
 
 
 def one_line(text: str, limit: int = SNIPPET_CHARS) -> str:

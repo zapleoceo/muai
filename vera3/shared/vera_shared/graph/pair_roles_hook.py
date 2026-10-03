@@ -9,14 +9,14 @@
   (и «A над B» при ручном «B над A»), не показывается;
 - с записанной неручной противоположной стороной иерархии побеждает та, у кого вес выше;
 - отвергнутая владельцем роль (`connection_suppressions`, предикат пары) не показывается;
-- конкретная роль начальника / соучредителя / родителя вытесняет безликое выведенное «работает с»;
-  нейтральное «общение без ясной роли» уступает любой роли;
+- конкретная роль (`SPECIFIC_OVER`: начальник, родитель, супруг) поглощает менее конкретные, как в
+  самой модели связи (`_absorb`); нейтральное «общение без ясной роли» уступает любой роли;
 - в карточке такая роль помечена «выведено из переписки», с обоснованием и цитатами.
 """
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, fields, replace
 from datetime import datetime
 from typing import Any
 
@@ -26,9 +26,9 @@ from sqlalchemy.exc import DBAPIError
 from vera_shared.db.engine import get_session
 from vera_shared.graph.connection_model import (
     HIERARCHY,
-    INFERRED_PREDICATE,
     NEUTRAL_PREDICATE,
     ROLE_PRIORITY,
+    SPECIFIC_OVER,
     Connection,
     Role,
     RoleKey,
@@ -45,8 +45,6 @@ log = logging.getLogger(__name__)
 #: Потолок веса выведенной по истории роли: ниже ручной правки (`MANUAL_WEIGHT` = 1.0).
 HISTORY_MAX = 0.85
 HISTORY_LABEL = "выведено из переписки"
-#: Эти роли вытесняют безликое выведенное «работает с»: «начальник» уже сказал больше.
-SPECIFIC_WORK_ROLES = frozenset({"boss_of", "co_founder_of"})
 
 
 @dataclass(frozen=True)
@@ -85,9 +83,24 @@ def _history_role(stored: StoredRole, key: RoleKey, base: Role | None) -> Histor
     return HistoryRole(**values, **extra)
 
 
-def _order(role: Role) -> tuple[float, int]:
+def _order(role: Role) -> tuple[bool, float, int]:
+    """Тот же порядок, что у модели связи: конкретная роль (`SPECIFIC_OVER`) главнее, затем вес."""
     index = ROLE_PRIORITY.index(role.predicate) if role.predicate in ROLE_PRIORITY else len(ROLE_PRIORITY)
-    return -role.weight, index
+    return role.predicate not in SPECIFIC_OVER, -role.weight, index
+
+
+def _absorb(roles: dict[RoleKey, Role]) -> tuple[dict[RoleKey, Role], int]:
+    """Как в модели связи: конкретная роль (начальник, родитель, супруг) забирает менее
+    конкретные (`SPECIFIC_OVER`): вес — больший, подтверждения и id записей складываются."""
+    folded = 0
+    for key in [k for k in roles if k[0] in SPECIFIC_OVER]:
+        for other in [k for k in roles if k[0] in SPECIFIC_OVER[key[0]]]:
+            small, big = roles.pop(other), roles[key]
+            roles[key] = replace(big, weight=max(big.weight, small.weight),
+                                 support=big.support + small.support,
+                                 rel_ids=tuple(sorted({*big.rel_ids, *small.rel_ids})))
+            folded += 1
+    return roles, folded
 
 
 def apply_history(conn: Connection | None, a: int, b: int, stored: list[StoredRole],
@@ -114,11 +127,7 @@ def apply_history(conn: Connection | None, a: int, b: int, stored: list[StoredRo
         added = True
     if not added:
         return conn
-    specific = any(isinstance(r, HistoryRole) and r.predicate in SPECIFIC_WORK_ROLES
-                   for r in roles.values())
-    if specific:
-        roles = {k: r for k, r in roles.items()
-                 if not (k[0] == INFERRED_PREDICATE and r.inferred and r.support == 0)}
+    roles, _ = _absorb(roles)
     hidden = conn.hidden_roles if conn else 0
     return Connection(low, high, tuple(sorted(roles.values(), key=_order)), hidden,
                       interaction_strength(stats), stats, shared_work)

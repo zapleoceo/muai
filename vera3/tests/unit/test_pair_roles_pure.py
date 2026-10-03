@@ -204,11 +204,12 @@ def test_history_role_is_capped_below_manual_and_carries_rationale_and_quotes():
 
 
 def test_history_adds_to_a_recorded_claim_as_independent_evidence():
-    claim = Claim(2, "boss_of", 1, 0.8, event_id=7, rel_id=10)
-    plain = build_connection(1, 2, [claim], est())
+    claims = [Claim(2, "boss_of", 1, 0.8, event_id=7, rel_id=10),
+              Claim(2, "boss_of", 1, 0.8, event_id=8, rel_id=11)]      # иерархия видна от двух событий
+    plain = build_connection(1, 2, claims, est())
     merged = apply_history(plain, 1, 2, [stored()], frozenset(), est())
-    assert merged.main.weight > plain.main.weight and merged.main.support == 1
-    assert merged.main.rel_ids == (10,)
+    assert merged.main.weight > plain.main.weight and merged.main.support == 2
+    assert merged.main.rel_ids == (10, 11)
 
 
 def test_manual_edit_overrides_history_in_both_directions():
@@ -221,8 +222,9 @@ def test_manual_edit_overrides_history_in_both_directions():
 
 
 def test_stronger_history_beats_a_weak_recorded_rival_hierarchy():
-    weak = Claim(1, "boss_of", 2, 0.4, event_id=3, rel_id=5)
-    conn = build_connection(1, 2, [weak], est())
+    weak = [Claim(1, "boss_of", 2, 0.4, event_id=3, rel_id=5), Claim(1, "boss_of", 2, 0.4, event_id=4, rel_id=6)]
+    conn = build_connection(1, 2, weak, est())
+    assert [(r.predicate, r.subject_id) for r in conn.roles] == [("boss_of", 1)]      # показана: два события
     merged = apply_history(conn, 1, 2, [stored("b_to_a", confidence=0.95)], frozenset(), est())
     assert [(r.predicate, r.subject_id) for r in merged.roles] == [("boss_of", 2)]
 

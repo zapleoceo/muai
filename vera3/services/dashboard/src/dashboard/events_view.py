@@ -7,11 +7,12 @@ from datetime import date, datetime
 from typing import Any
 from urllib.parse import urlencode
 
-from dashboard.event_text import describe, one_line, parse_content
+from dashboard.event_text import describe, one_line, parse_content, snippet_of
 from dashboard.events_filters import source_options, status_options
 from dashboard.render import data_table, esc, local_dt
 from dashboard.source_registry import resolve_source
 from dashboard.ui.components import status_dot
+from dashboard.ui.icons import source_icon
 
 PAGE_STEP = 50
 PREVIEW_CHARS = 200
@@ -84,15 +85,15 @@ def event_row(e: Mapping[str, Any], tech: bool) -> str:
     line = describe(parse_content(e["content_text"]), e.get("metadata"))
     who = esc(line.who or src.title)
     venue = f'<div class="muted small">{esc(line.venue)}</div>' if line.venue else ""
-    preview = esc(one_line(line.body or line.subject, PREVIEW_CHARS))
+    preview = esc(snippet_of(line.body, PREVIEW_CHARS) or one_line(line.subject, PREVIEW_CHARS))
     return (
         f'<tr class="ev row-link" data-href="/events/{e["id"]}" '
         f'data-utc="{esc(e["occurred_at"].isoformat())}Z">'
-        f'<td class="muted nowrap">{local_dt(e["occurred_at"], "time")}</td>'
-        f'<td title="{esc(src.title)}">{src.icon}</td>'
+        f'<td class="muted nowrap c-time">{local_dt(e["occurred_at"], "time")}</td>'
+        f'<td class="c-src" title="{esc(src.title)}">{source_icon(src.key)}</td>'
         f'<td class="who-cell"><div>{who}</div>{venue}</td>'
         f'<td class="preview"><a href="/events/{e["id"]}">{preview or "—"}</a></td>'
-        f'<td>{status_cell(e["triage_status"])}</td>{_tech_cells(e) if tech else ""}</tr>'
+        f'<td class="c-st">{status_cell(e["triage_status"])}</td>{_tech_cells(e) if tech else ""}</tr>'
     )
 
 
@@ -121,8 +122,8 @@ def filter_form(sources: list[tuple[str, int]], source: str | None,
                 status: str | None, q: str, tech: bool) -> str:
     checked = " checked" if tech else ""
     return f"""
-      <form method="get" class="grid">
-        <input type="search" name="q" value="{esc(q) if q else ''}" placeholder="Что искать в тексте">
+      <form method="get" class="filter-bar">
+        <input type="search" name="q" value="{esc(q) if q else ''}" placeholder="Поиск по тексту" data-hotkey-search>
         <select name="source">{source_options(sources, source)}</select>
         <select name="status">{status_options(TRIAGE_STATUS_INFO, status, STATUS_LABEL)}</select>
         <label><input type="checkbox" name="tech" value="1"{checked}> техданные</label>

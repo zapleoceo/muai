@@ -43,16 +43,16 @@ def test_established_threshold_is_about_eight_days():
 
 
 def test_one_phrase_without_contact_is_a_weak_role():
-    conn = m.build_connection(A, B, [claim("boss_of")], stats())
+    conn = m.build_connection(A, B, [claim("coworker_of")], stats())
     assert conn is not None
     assert conn.weight == pytest.approx(0.4)
     assert conn.main.support == 1 and not conn.main.manual and not conn.main.inferred
 
 
 def test_work_contact_corroborates_work_roles_only_in_a_work_context():
-    quiet = m.build_connection(A, B, [claim("boss_of")], stats())
-    work = m.build_connection(A, B, [claim("boss_of")], stats(active_days=30), shared_work=True)
-    private = m.build_connection(A, B, [claim("boss_of")], stats(active_days=30))
+    quiet = m.build_connection(A, B, [claim("coworker_of")], stats())
+    work = m.build_connection(A, B, [claim("coworker_of")], stats(active_days=30), shared_work=True)
+    private = m.build_connection(A, B, [claim("coworker_of")], stats(active_days=30))
     assert work.weight > quiet.weight * 1.8
     assert private.weight == quiet.weight
 
@@ -97,15 +97,16 @@ def test_also_needs_two_supports_or_manual_and_the_weight_floor():
 
 
 def test_four_single_phrase_roles_collapse_to_one_main_and_hidden_rest():
-    claims = [claim("boss_of", conf=0.9), claim("client_of", conf=0.6),
+    claims = [claim("friend_of", conf=0.9), claim("client_of", conf=0.6),
               claim("coworker_of", conf=0.5), claim("vendor_of", conf=0.3)]
     conn = m.build_connection(A, B, claims, stats())
-    assert conn.main.predicate == "boss_of"
+    assert conn.main.predicate == "friend_of"
     assert len(conn.also) <= 1 and conn.hidden >= 2
 
 
 def test_ties_prefer_the_more_specific_role():
-    conn = m.build_connection(A, B, [claim("coworker_of"), claim("boss_of")], stats())
+    conn = m.build_connection(A, B, [claim("coworker_of"), claim("boss_of"), claim("boss_of")],
+                              stats())
     assert conn.main.predicate == "boss_of"
 
 
@@ -115,8 +116,8 @@ def test_latest_fact_and_best_confidence_are_reported():
     assert conn.main.fact == "новое" and conn.main.confidence == 0.9
 
 
-def test_no_claims_and_no_work_signal_is_no_connection():
-    assert m.build_connection(A, B, [], stats(active_days=40)) is None
+def test_no_claims_and_no_work_signal_and_little_contact_is_no_connection():
+    assert m.build_connection(A, B, [], stats(active_days=m.CONTACT_MIN_DAYS - 1)) is None
 
 
 def test_work_together_is_inferred_from_shared_domain_and_contact():
@@ -147,11 +148,12 @@ def test_inference_does_not_override_a_different_main_role():
     conn = m.build_connection(A, B, [claim("boss_of", manual=True)], stats(active_days=20),
                               shared_work=True)
     assert conn.main.predicate == "boss_of"
-    assert [r.predicate for r in conn.roles] == ["boss_of", "coworker_of"]
+    assert [r.predicate for r in conn.roles] == ["boss_of"]        # «работает с» поглощено
 
 
 def test_role_payload_direction_is_relative_to_the_viewer():
-    conn = m.build_connection(A, B, [claim("boss_of", rel_id=7)], stats())
+    conn = m.build_connection(A, B, [claim("boss_of", rel_id=7, manual=True)],
+                              stats())
     assert m.role_payload(conn.main, A)["direction"] == "out"
     payload = m.role_payload(conn.main, B)
     assert payload["direction"] == "in" and payload["rel_ids"] == [7]
@@ -232,8 +234,70 @@ def test_unqualified_hierarchy_side_does_not_block_the_other():
 
 
 def test_hierarchy_tie_is_deterministic_by_recency_then_lower_rel_id():
-    newer = claim("boss_of", s=A, o=B, day=9, rel_id=5)
-    older = claim("boss_of", s=B, o=A, day=1, rel_id=2)
-    first = m.build_connection(A, B, [newer, older], stats())
-    again = m.build_connection(A, B, [older, newer], stats())
+    newer = [claim("boss_of", s=A, o=B, day=9, rel_id=5), claim("boss_of", s=A, o=B, day=9)]
+    older = [claim("boss_of", s=B, o=A, day=1, rel_id=2), claim("boss_of", s=B, o=A, day=1)]
+    first = m.build_connection(A, B, [*newer, *older], stats())
+    again = m.build_connection(A, B, [*older, *newer], stats())
     assert first.main.subject_id == again.main.subject_id == A
+
+
+def test_single_event_hierarchy_stays_hidden_even_in_a_work_context():
+    work = stats(active_days=60, work_co_days=60)
+    assert m.build_connection(A, B, [claim("boss_of", conf=0.9)], work, shared_work=True).main         .predicate == "coworker_of"
+    assert m.build_connection(A, B, [claim("boss_of")], stats()) is None
+
+
+def test_hierarchy_with_two_events_is_not_boosted_by_work_context():
+    claims = [claim("boss_of", conf=0.8), claim("boss_of", conf=0.8)]
+    quiet = m.build_connection(A, B, claims, stats())
+    work = m.build_connection(A, B, claims, stats(active_days=2), shared_work=True)
+    assert work.main.weight == quiet.main.weight == pytest.approx(0.64)
+
+
+def test_manual_single_hierarchy_is_shown():
+    assert m.build_connection(A, B, [claim("boss_of", manual=True)], stats()).main.manual
+
+
+def test_strong_contact_without_any_rows_shows_as_neutral():
+    conn = m.build_connection(A, B, [], stats(dm_days=108, dm_msgs=615, active_days=108))
+    assert conn.main.predicate == m.NEUTRAL_PREDICATE and conn.hidden == 0
+    assert 0.25 < conn.weight <= m.NEUTRAL_MAX_WEIGHT
+
+
+def test_qualified_hierarchy_is_main_and_absorbs_coworker():
+    claims = [claim("coworker_of") for _ in range(3)] + [claim("boss_of"), claim("boss_of")]
+    conn = m.build_connection(A, B, claims, stats(active_days=40), shared_work=True)
+    assert conn.main.predicate == "boss_of" and conn.main.subject_id == A
+    assert [r.predicate for r in conn.roles] == ["boss_of"] and conn.also == ()
+    assert conn.main.support == 5 and conn.hidden == 0
+    assert conn.main.weight >= 0.8 and conn.main.inferred is False
+
+
+def test_inferred_work_is_folded_into_a_qualified_boss_not_listed_separately():
+    conn = m.build_connection(A, B, [claim("boss_of", manual=True)], stats(active_days=40),
+                              shared_work=True)
+    assert [r.predicate for r in conn.roles] == ["boss_of"] and conn.hidden == 0
+
+
+def test_single_event_boss_does_not_absorb_and_work_stays_main():
+    conn = m.build_connection(A, B, [claim("boss_of"), claim("coworker_of")], stats(active_days=40),
+                              shared_work=True)
+    assert conn.main.predicate == "coworker_of" and conn.hidden == 1
+
+
+def test_parent_and_spouse_absorb_friend_when_qualified():
+    two = [claim("parent_of"), claim("parent_of"), claim("friend_of"), claim("friend_of")]
+    conn = m.build_connection(A, B, two, stats())
+    assert [r.predicate for r in conn.roles] == ["parent_of"] and conn.main.support == 4
+    spouse = m.build_connection(A, B, [claim("spouse_of", manual=True), claim("friend_of")], stats())
+    assert [r.predicate for r in spouse.roles] == ["spouse_of"]
+    lone = m.build_connection(A, B, [claim("parent_of"), claim("friend_of")], stats())
+    assert lone.main.predicate == "friend_of"
+
+
+def test_specific_qualified_role_beats_a_heavier_work_role():
+    claims = [claim("spouse_of"), claim("spouse_of")]
+    conn = m.build_connection(A, B, claims, stats(active_days=300, work_co_days=300),
+                              shared_work=True)
+    assert conn.main.predicate == "spouse_of"
+    assert "coworker_of" in [r.predicate for r in conn.roles]

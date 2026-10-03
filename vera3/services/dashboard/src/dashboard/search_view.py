@@ -9,13 +9,15 @@ from dashboard.event_text import (
     EventLine,
     describe,
     normalize_subject,
-    one_line,
     parse_content,
+    snippet_of,
 )
 from dashboard.render import esc, local_dt
 from dashboard.source_registry import resolve_source
+from dashboard.ui.icons import source_icon
 
 SOURCES_SHOWN = 5
+TITLE_FROM_BODY_CHARS = 70
 
 
 def _when(iso: str) -> str:
@@ -30,7 +32,10 @@ def headline(source: str, line: EventLine, title: str) -> str:
         sender = f" · от {line.who}" if line.who else ""
         return f"{line.subject}{sender}"
     parts = [p for p in (line.who, line.venue) if p]
-    return " · ".join(parts) or title
+    if parts:
+        return " · ".join(parts)
+    # Источники без автора и места (память агента) отличаются только текстом.
+    return snippet_of(line.body, TITLE_FROM_BODY_CHARS) or title
 
 
 def dedupe_key(source: str, line: EventLine) -> tuple[str, str] | None:
@@ -60,10 +65,10 @@ def sources_html(results: list[dict[str, Any]]) -> str:
         if key is not None and key == last_key:
             continue
         last_key = key
-        snippet = one_line(line.body)
+        snippet = snippet_of(line.body)
         tail = f'<div class="muted small">{esc(snippet)}</div>' if snippet else ""
         items.append(
-            f'<li><a href="/events/{event_id}">{src.icon} {esc(headline(key_source, line, src.title))}</a>'
+            f'<li><a href="/events/{event_id}">{source_icon(src.key)} {esc(headline(key_source, line, src.title))}</a>'
             f' <span class="muted small">· {_when(r.get("occurred_at") or "")}</span>{tail}</li>')
     if not items:
         return ""

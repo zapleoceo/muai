@@ -20,10 +20,12 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 from dashboard.auth import COOKIE_NAME, require_owner
+from dashboard.csrf import same_origin_or_403
 from dashboard.render import esc
 from dashboard.source_registry import resolve_source
 from dashboard.source_state import can_disconnect, disconnect, state_of
 from dashboard.stats import drop_detail_cache
+from dashboard.ui.icons import source_icon
 from dashboard.ui.shell import standalone_html
 
 log = logging.getLogger(__name__)
@@ -38,7 +40,7 @@ def _page(body: str, *, code: int = 200) -> HTMLResponse:
 async def disconnect_confirm(key: str, request: Request):
     require_owner(request, request.cookies.get(COOKIE_NAME))
     src = resolve_source(key)
-    title = f"{src.icon} {esc(src.title)}"
+    title = f"{source_icon(src.key)} {esc(src.title)}"
     back = f"/sources/{esc(key)}"
     if not can_disconnect(key):
         return _page(
@@ -67,9 +69,11 @@ async def disconnect_confirm(key: str, request: Request):
 @router.post("/api/sources/{key}/disconnect")
 async def disconnect_apply(key: str, request: Request):
     require_owner(request, request.cookies.get(COOKIE_NAME))
+    if (denied := same_origin_or_403(request)) is not None:
+        return denied
     if not can_disconnect(key):
         return RedirectResponse(f"/sources/{key}", status_code=303)
     stopped = await disconnect(key)
     drop_detail_cache(key)
     log.info("источник %s отключён из дашборда (погашено строк: %d)", key, stopped)
-    return RedirectResponse(f"/sources/{key}", status_code=303)
+    return RedirectResponse(f"/sources#open={key}", status_code=303)

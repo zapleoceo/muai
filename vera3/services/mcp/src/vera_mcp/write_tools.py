@@ -16,14 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from vera_shared.db.engine import get_session
 from vera_shared.events import edit as event_edit
 from vera_shared.graph import edit as graph_edit
-from vera_shared.graph.merge import merge_entities
+from vera_shared.graph.merge_actions import apply_merge, preview_merge
 from vera_shared.journal import audit
 from vera_shared.journal.undo import undo_entry
 from vera_shared.memory.remember import RememberOutcome, remember_fact
 
 from vera_mcp.auth import client_of
 from vera_mcp.link_write_tools import LINK_WRITE_TOOLS
-from vera_mcp.merge_guard import MergeBlocked, entity_names, merge_blockers
 
 #: (target_id, before, after, extra-поля ответа)
 Applied = tuple[int | None, dict[str, Any] | None, dict[str, Any] | None, dict[str, Any]]
@@ -170,40 +169,9 @@ async def entity_merge(
     dry_run: bool = True, force: bool = False,
 ) -> dict[str, Any]:
     """Слить дубли: drop_ids вливаются в keep_id. По умолчанию dry_run=true: возвращает имена и счётчики, ничего не меняя; выполнить — dry_run=false. Владелец и сущности с identity-узлами требуют force=true; откат — entity_unmerge/undo. Merge duplicate entities; dry run by default."""
-    ids = [keep_id, *drop_ids]
-    async with get_session() as s:
-        blockers = await merge_blockers(s, ids)
-    blocked = bool(blockers) and not force
     if dry_run:
-        return await _merge_preview(keep_id, drop_ids, reason, blockers, blocked)
-    if blocked:
-        raise MergeBlocked("; ".join(blockers) + " — pass force=true to merge anyway")
-
-    async def op(s: AsyncSession) -> Applied:
-        report = await merge_entities(keep_id, drop_ids, reason, session=s)
-        name = (await graph_edit.current_name(s, keep_id))["name"]
-        return keep_id, report.to_dict(), {"name": name}, {
-            "dry_run": False, "keep_id": keep_id, "merged": report.drop_ids,
-            "counts": report.counts()}
-
-    return await _audited(ctx, "entity_merge",
-                          {"keep_id": keep_id, "drop_ids": drop_ids, "reason": reason,
-                           "force": force}, "merge", op)
-
-
-async def _merge_preview(keep_id: int, drop_ids: list[int], reason: str,
-                         blockers: list[str], blocked: bool) -> dict[str, Any]:
-    """Настоящее слияние в транзакции, которая откатывается: счётчики точные."""
-    async with get_session() as s:
-        names = await entity_names(s, [keep_id, *drop_ids])
-        counts: dict[str, int] | None = None
-        if not blocked:
-            counts = (await merge_entities(keep_id, drop_ids, reason, session=s)).counts()
-            await s.rollback()
-    return {"ok": True, "dry_run": True, "keep": {"id": keep_id, "name": names.get(keep_id)},
-            "drops": [{"id": i, "name": names.get(i)} for i in drop_ids],
-            "counts": counts, "blockers": blockers, "would_be_refused": blocked,
-            "audit_id": None}
+        return await preview_merge(keep_id, drop_ids, reason, force)
+    return await apply_merge(keep_id, drop_ids, reason, client_of(ctx), force)
 
 
 async def entity_unmerge(merge_audit_id: int, ctx: Context,

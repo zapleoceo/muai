@@ -28,6 +28,7 @@ from vera_shared.graph.connection_model import (
     build_connection,
     could_infer_work,
     is_established,
+    is_regular_contact,
 )
 from vera_shared.graph.pair_roles_hook import (
     HistoryRole,
@@ -82,7 +83,8 @@ async def _connections_of(entity_id: int) -> tuple[list[Connection], dict[int, C
     muted = await suppressed_partners(entity_id)
     history, history_muted = await roles_of(entity_id), await suppressed_predicates(entity_id)
     candidates = set(by_other) | set(history) | {p for p, st in stats.items()
-                                                 if could_infer_work(st) and p not in muted}
+                                                 if (could_infer_work(st) or is_regular_contact(st))
+                                                 and p not in muted}
     if not candidates:
         return [], {}
     cards = await entity_cards([entity_id, *candidates])
@@ -130,9 +132,12 @@ def edge_payload(conn: Connection) -> dict[str, Any]:
             "also": [r.predicate for r in conn.also]}
 
 
-async def connections_among(ids: list[int], predicate: str | None = None) -> list[dict[str, Any]]:
+async def connections_among(ids: list[int], predicate: str | None = None,
+                            focus_id: int | None = None) -> list[dict[str, Any]]:
     """Рёбра-пары между сущностями из `ids`. С `predicate` — только пары, у которых
-    есть такая роль (выведенная «работает с» считается для `coworker_of`)."""
+    есть такая роль (выведенная «работает с» считается для `coworker_of`). С `focus_id`
+    (ego-вид) и без фильтра добавляются и постоянные контакты фокуса без записанных
+    ролей; в общее ядро они не идут — иначе граф залило бы переписками."""
     if len(ids) < 2:
         return []
     grouped = _by_pair(await claims_within(ids, predicate))
@@ -144,6 +149,9 @@ async def connections_among(ids: list[int], predicate: str | None = None) -> lis
     else:
         inferable = set()
     history, history_muted = await roles_within(ids), await suppressed_predicates_within(ids)
+    if focus_id is not None and predicate is None:
+        inferable |= {pair for pair, st in stats.items()
+                      if focus_id in pair and is_regular_contact(st) and pair not in muted}
     pairs = set(grouped) | inferable | set(history)
     idents = await work_idents(sorted({i for pair in pairs for i in pair}))
     conns = (_connection(a, b, grouped.get((a, b), []), stats.get((a, b)), idents,

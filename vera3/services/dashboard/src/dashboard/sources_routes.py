@@ -1,4 +1,5 @@
-"""Источники: `/sources` — один список, `/sources/{key}` — подробности.
+"""Источники: `/sources` — один список, `/sources/{key}` — подробности отдельной страницей, `/sources/{key}/panel` — тот же
+кусок для спойлера строки.
 
 Ни одного имени источника в этом файле. Список строится из каталога
 (`source_registry`) в объединении с тем, что реально лежит в `events`; блоки на
@@ -17,13 +18,22 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 from vera_shared.timeutil import utc_naive_now
 
-from dashboard.render import _render, esc, local_dt, owner_or_redirect
+from dashboard.render import (
+    _render,
+    esc,
+    local_dt,
+    owner_or_blank_401,
+    owner_or_redirect,
+)
 from dashboard.source_freshness import EMPTY, LIVE, NO_POLLING, QUIET, freshness_of
+from dashboard.source_panel import panel_html
 from dashboard.source_registry import CATALOG, Source, resolve_source
 from dashboard.source_state import State, can_disconnect, is_off, state_of
-from dashboard.sources_view import render_block, source_level
+from dashboard.sources_script import SOURCES_SCRIPT
+from dashboard.sources_view import source_level
 from dashboard.stats import get_source_detail, get_sources_overview
 from dashboard.ui.components import collapsible, status_dot
+from dashboard.ui.icons import source_icon
 
 router = APIRouter()
 
@@ -101,23 +111,28 @@ def _freshness_cell(src: Source, stat: dict, state: State, now: datetime) -> str
 
 
 def _row(src, stat: dict, state: State, now: datetime) -> str:
+    """Строка-спойлер: шапка со сводкой и пустое тело, которое htmx наполнит при раскрытии."""
     total = stat.get("total", 0)
-    cls = "" if total else "idle"
-    detail = f'<a href="/sources/{esc(src.key)}">{esc(src.title)}</a>' \
-        if (src.detail or total) else esc(src.title)
-    action = actions(src, state)
+    cls = " idle" if not total else ""
+    key = esc(src.key)
     return (
-        f'<tr class="{cls}">'
-        f'<td><div class="src-name">{status_dot(source_level(stat.get("last"), now, src, state))}'
-        f'<span class="ico">{src.icon}</span>'
-        f'<span>{detail}<div class="src-how">{esc(src.how)}</div></span></div></td>'
-        f'<td>{connection_pill(state, src)}</td>'
-        f'<td>{_freshness_cell(src, stat, state, now)}</td>'
-        f'<td class="num">{total:,}</td>'
-        f'<td class="num">{stat.get("c24h", 0):,}</td>'
-        f'<td>{local_dt(stat.get("last"), "datetime", "—")}</td>'
-        f'<td class="act">{action}</td>'
-        f'</tr>'
+        f'<div class="src-item{cls}" id="src-{key}" data-key="{key}">'
+        f'<button type="button" class="src-head" aria-expanded="false" aria-controls="src-body-{key}">'
+        f'<span class="chev" aria-hidden="true"></span>'
+        f'<span class="src-name">{status_dot(source_level(stat.get("last"), now, src, state))}'
+        f'<span class="ico">{source_icon(src.key)}</span>'
+        f'<span class="src-title">{esc(src.title)}<span class="src-how">{esc(src.how)}</span></span></span>'
+        f'<span class="src-cell c-conn">{connection_pill(state, src)}</span>'
+        f'<span class="src-cell c-fresh">{_freshness_cell(src, stat, state, now)}</span>'
+        f'<span class="src-cell num c-total">{total:,}</span>'
+        f'<span class="src-cell num c-day">+{stat.get("c24h", 0):,}</span>'
+        f'<span class="src-cell c-last">{local_dt(stat.get("last"), "datetime", "—")}</span>'
+        f'</button>'
+        f'<div class="src-body" id="src-body-{key}" role="region"><div class="src-inner">'
+        f'<div class="src-load" hx-get="/sources/{key}/panel" hx-trigger="src-open once" '
+        f'hx-swap="innerHTML"><div class="skel-stack"><div class="skeleton"></div>'
+        f'<div class="skeleton"></div><div class="skeleton"></div></div></div>'
+        f'</div></div></div>'
     )
 
 
@@ -139,8 +154,8 @@ async def sources_page(request: Request):
 
     return HTMLResponse(_render("sources", f"""
       <div class="head"><h1>Источники</h1></div>
-      <p class="note">Всё, откуда Вера берёт события. Имя источника —
-         ссылка на подробности. Точка: зелёная — работает, жёлтая — тихо,
+      <p class="note">Всё, откуда Вера берёт события. Нажмите на строку —
+         подробности раскроются здесь же. Точка: зелёная — работает, жёлтая — тихо,
          красная — не подключён или давно молчит, серая — выключен, не настроен
          или просто тихо.</p>
 
@@ -153,14 +168,28 @@ async def sources_page(request: Request):
 
       {collapsible("Конвейер обработки", PROGRESS_BLOCK)}
 
-      <div class="overflow-auto"><table class="src-list">
-        <thead><tr>
-          <th>источник</th><th>подключение</th><th>свежесть</th><th class="num">событий</th>
-          <th class="num">за сутки</th><th>последнее</th><th></th>
-        </tr></thead>
-        <tbody>{rows}</tbody>
-      </table></div>
+      <div class="src-list" id="src-list">
+        <div class="src-legend" aria-hidden="true"><span></span><span>источник</span><span>подключение</span>
+          <span>свежесть</span><span class="num">событий</span><span class="num">за сутки</span><span>последнее</span></div>
+        {rows}
+      </div>
+      <script>{SOURCES_SCRIPT}</script>
     """))
+
+
+async def _panel_inputs(key: str):
+    src = resolve_source(key)
+    stat = (await get_sources_overview()).get(key, {})
+    return src, stat, await state_of(key), await get_source_detail(key)
+
+
+@router.get("/sources/{key}/panel", response_class=HTMLResponse)
+async def source_panel(key: str, request: Request):
+    """Частичный ответ для спойлера: подробности без обвязки страницы."""
+    if (resp := owner_or_blank_401(request)) is not None:
+        return resp
+    src, stat, state, blocks = await _panel_inputs(key)
+    return HTMLResponse(panel_html(src, stat, state, blocks))
 
 
 @router.get("/sources/{key}", response_class=HTMLResponse)
@@ -169,49 +198,13 @@ async def source_page(key: str, request: Request):
         return resp
 
     now = utc_naive_now()
-    src = resolve_source(key)
-    stat = (await get_sources_overview()).get(key, {})
-    state = await state_of(key)
-    blocks = await get_source_detail(key)
-
-    # На странице источника доступны оба действия: переподключить (сменить
-    # секрет) и отключить. В списке — только основное, чтобы не рябило.
-    buttons = []
-    if src.connect_url:
-        buttons.append(
-            f'<a class="btn" href="{esc(src.connect_url)}">'
-            f'{esc(src.reconnect_label if state.connected else (src.connect_label or "Подключить"))}</a>')
-    if state.connected and can_disconnect(key):
-        buttons.append(f'<a class="btn danger" '
-                       f'href="/api/sources/{esc(key)}/disconnect">Отключить</a>')
-    action = " ".join(buttons)
-    note = f'<p class="note">{esc(src.note)}</p>' if src.note else ""
-    body = "".join(render_block(b) for b in blocks) or \
-        '<div class="blk"><div class="mute">Разбивок для этого источника нет — ' \
-        'он не хранит своего состояния.</div></div>'
-
+    src, stat, state, blocks = await _panel_inputs(key)
     return HTMLResponse(_render("sources", f"""
-      <p class="crumb"><a href="/sources">← источники</a></p>
+      <p class="crumb"><a href="/sources#open={esc(key)}">← источники</a></p>
       <div class="head">
-        <h1>{src.icon} {esc(src.title)}</h1>
+        <h1>{source_icon(src.key)} {esc(src.title)}</h1>
         {connection_pill(state, src)}
         {_freshness_cell(src, stat, state, now)}
-        <span class="push-right">{action}</span>
       </div>
-      <p class="note">{esc(src.how)}</p>
-      {note}
-
-      <div class="strip">
-        <div><div class="k">Событий</div>
-             <div class="v">{stat.get("total", 0):,}</div></div>
-        <div><div class="k">За час</div>
-             <div class="v">+{stat.get("c1h", 0):,}</div></div>
-        <div><div class="k">За сутки</div>
-             <div class="v">+{stat.get("c24h", 0):,}</div></div>
-        <div><div class="k">Последнее</div>
-             <div class="v v-small">
-               {local_dt(stat.get("last"), "datetime_sec", "—")}</div></div>
-      </div>
-
-      <div class="blocks">{body}</div>
+      {panel_html(src, stat, state, blocks)}
     """))

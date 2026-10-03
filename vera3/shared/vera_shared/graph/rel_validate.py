@@ -21,7 +21,12 @@ from __future__ import annotations
 import re
 
 from vera_shared.graph.identity import canonical_name_parts
-from vera_shared.graph.rel_text import Evidence, fact_names_both_ends, single_token_name
+from vera_shared.graph.rel_text import (
+    Evidence,
+    claims_to_be_author,
+    fact_names_both_ends,
+    single_token_name,
+)
 
 # Слова, которые НИКОГДА не обозначают конкретного человека — даже если в
 # графе есть аккаунт ровно с таким именем профиля.
@@ -48,6 +53,7 @@ REJECT_SERVICE_ACCOUNT = "service_account"
 REJECT_TYPE = "type_mismatch"
 REJECT_WEAK_NAME = "weak_name"
 REJECT_FACT = "fact_mismatch"
+REJECT_SELF_REFERENCE = "self_reference"
 
 MIN_CONFIDENCE = 0.5
 
@@ -167,6 +173,9 @@ def relationship_reject_reason(
         return REJECT_SERVICE_ACCOUNT
     if evidence is None:
         return None
+    if any(not end.author and claims_to_be_author(evidence.fact, end)
+           for end in (evidence.subject, evidence.object)):
+        return REJECT_SELF_REFERENCE
     if (_weak_name(subject_name, subject_type, evidence.subject.strong)
             or _weak_name(object_name, object_type, evidence.object.strong)):
         return REJECT_WEAK_NAME

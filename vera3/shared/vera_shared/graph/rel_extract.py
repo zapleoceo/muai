@@ -23,7 +23,7 @@ from sqlalchemy import text
 from vera_shared.db.engine import get_session
 from vera_shared.events.visibility import NOT_HIDDEN_SQL
 from vera_shared.graph.rel_judge import Candidate, judge_batch
-from vera_shared.graph.rel_text import End, Evidence, single_token_name
+from vera_shared.graph.rel_text import End, Evidence, has_self_marker, single_token_name
 from vera_shared.graph.rel_validate import (
     is_referential_name,
 )
@@ -280,6 +280,14 @@ async def extract_and_store(event_id: int, body: str) -> RelExtractOutcome:
         subj_name, subj_type = await _describe(subj_id)
         obj_name, obj_type = await _describe(obj_id)
         fact = (r.get("fact") or "")[:500]
+        if has_self_marker(fact):
+            # «На Андрея (это я)»: конец с таким именем — автор. Если имя нашло ДРУГУЮ
+            # сущность, валидация отклонит связь (`self_reference`), а не припишет её тёзке.
+            if author_id is False:
+                author_id = await author_entity_of_event(event_id)
+            subj_author = subj_author or subj_id == author_id
+            obj_author = obj_author or obj_id == author_id
+            subj_strong, obj_strong = subj_strong or subj_author, obj_strong or obj_author
         names = await entity_names([subj_id, obj_id])
         evidence = Evidence(fact, End(tuple(names[subj_id]), subj_strong, subj_author),
                             End(tuple(names[obj_id]), obj_strong, obj_author))

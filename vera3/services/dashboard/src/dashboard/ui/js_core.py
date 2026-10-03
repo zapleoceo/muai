@@ -41,6 +41,60 @@ function confirmDialog(opts){
   });
 }
 
+// Диалог с выпадающими списками: resolve — {имя: значение} или null. `refresh(values)`
+// может вернуть {message, options: {имя: [...]}}: подписи ролей зависят от выбранного человека.
+function chooseDialog(opts){
+  if (!dlg){
+    dlg = el('dialog', 'dlg');
+    dlg.setAttribute('aria-labelledby', 'dlg-title');
+    document.body.appendChild(dlg);
+  }
+  dlg.textContent = '';
+  var title = el('h3', '', opts.title);
+  title.id = 'dlg-title';
+  var msg = el('p', '', opts.message || '');
+  var selects = {};
+  var fill = function(sel, options){
+    sel.textContent = '';
+    options.forEach(function(o){ var op = el('option', '', o.label); op.value = o.value; sel.appendChild(op); });
+  };
+  var read = function(){
+    var out = {};
+    Object.keys(selects).forEach(function(k){ out[k] = selects[k].value; });
+    return out;
+  };
+  dlg.append(title);
+  opts.fields.forEach(function(f){
+    var label = el('label', '', f.label);
+    var sel = el('select');
+    fill(sel, f.options);
+    selects[f.name] = sel;
+    dlg.append(label, sel);
+  });
+  var actions = el('div', 'dlg-actions');
+  var no = el('button', 'secondary', 'Отмена');
+  var yes = el('button', opts.danger ? 'danger-solid' : '', opts.confirmLabel || 'Подтвердить');
+  no.type = yes.type = 'button';
+  actions.append(no, yes);
+  dlg.append(msg, actions);
+  var refresh = function(){
+    if (!opts.refresh) return;
+    var r = opts.refresh(read());
+    msg.textContent = r.message || '';
+    Object.keys(r.options || {}).forEach(function(k){ var v = selects[k].value; fill(selects[k], r.options[k]); selects[k].value = v; });
+  };
+  Object.keys(selects).forEach(function(k){ selects[k].onchange = refresh; });
+  refresh();
+  return new Promise(function(resolve){
+    var done = function(v){ dlg.close(); resolve(v); };
+    no.onclick = function(){ done(null); };
+    yes.onclick = function(){ done(read()); };
+    dlg.oncancel = function(ev){ ev.preventDefault(); done(null); };
+    dlg.onclick = function(ev){ if (ev.target === dlg) done(null); };
+    dlg.showModal();
+  });
+}
+
 var box = null;
 function toast(message, opts){
   opts = opts || {};
@@ -74,7 +128,7 @@ function post(url, body){
     });
 }
 
-window.VeraUI = {confirm: confirmDialog, toast: toast, post: post};
+window.VeraUI = {confirm: confirmDialog, choose: chooseDialog, toast: toast, post: post};
 
 document.addEventListener('submit', function(e){
   var f = e.target, msg = f.dataset && f.dataset.confirm;

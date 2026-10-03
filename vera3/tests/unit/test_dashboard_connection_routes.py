@@ -178,7 +178,7 @@ class TestDesignSystemStructure:
     def test_connection_actions_are_wired_to_endpoints_and_use_the_dialog(self):
         from dashboard.graph_script import GRAPH_SCRIPT
         for needle in ("/api/graph/connection/break", "/api/graph/connection/reject",
-                       "/api/journal/undo", "VeraUI.confirm", "вернуть можно в журнале",
+                       "/api/journal/undo", "VeraUI.choose", "вернуть можно в журнале",
                        "label: 'Вернуть'", "seq !== panelSeq"):
             assert needle in GRAPH_SCRIPT
 

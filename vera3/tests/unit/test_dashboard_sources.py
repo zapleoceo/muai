@@ -150,13 +150,19 @@ class TestPages:
 
     def test_index_shows_totals_and_the_action_that_matches_state(self):
         with patch("dashboard.sources_routes.get_sources_overview",
-                   AsyncMock(return_value=_OVERVIEW)),              patch("dashboard.sources_routes.state_of",
+                   AsyncMock(return_value=_OVERVIEW)), \
+             patch("dashboard.sources_routes.get_source_detail", AsyncMock(return_value=[])), \
+             patch("dashboard.sources_routes.state_of",
                    _states(slack=_OFFLINE, telegram=_CONNECTED)):
-            r = client.get("/sources", cookies={COOKIE_NAME: _owner_cookie()})
-        assert "414,955" in r.text
+            index = client.get("/sources", cookies={COOKIE_NAME: _owner_cookie()})
+            slack = client.get("/sources/slack/panel", cookies={COOKIE_NAME: _owner_cookie()})
+            tg = client.get("/sources/telegram/panel", cookies={COOKIE_NAME: _owner_cookie()})
+        assert "414,955" in index.text
+        # Подробности и действия подгружаются спойлером: в списке — только пустое тело.
+        assert 'hx-get="/sources/telegram/panel"' in index.text
         # Slack не подключён → ведём на подключение; telegram подключён → на отключение.
-        assert "/api/slack/start" in r.text
-        assert "/api/sources/telegram/disconnect" in r.text
+        assert "/api/slack/start" in slack.text
+        assert "/api/sources/telegram/disconnect" in tg.text
 
     def test_detail_renders_blocks_from_the_provider(self):
         blocks = [

@@ -135,17 +135,25 @@ Returns `AnswerResponse` with `answer`, `results`, `provider`, `cost_usd`,
 | `/` | GET | owner cookie | «Поиск» — главная, поиск вперёд: статусная строка (точка зелёная/жёлтая/красная из `health.assess`, «N событий · +M за сутки», ссылка на `/sources`) и поле «Спросить Веру» (`POST /search-ui`). Карточек конвейера и живого прогресса здесь больше нет |
 | `/events` | GET | owner cookie | «Входящее» — события по дням (Сегодня/Вчера/дата): время · иконка источника · кто (имя автора из `From`/`Author`, под ним приглушённо чат, канал или тема письма — не аккаунт ингеста) · текст (тело без заголовка, одной строкой с многоточием) · точка статуса. Вся строка кликабельна (`tr.row-link`, обработчик в `ui/js_core`) и ведёт на `/events/{id}`; Параметры: `q` (текст, ILIKE), `source`, `status`, `tech=1` (колонки техданных: id, важность, запрос к брокеру, модель, токены, цена — по умолчанию скрыты), `limit` (размер страницы, 50 по умолчанию), `before` (курсор `occurred_at_id` для «Показать ещё»: keyset-страницы по `(occurred_at, id)`, `cursor_of` / `parse_cursor`, без растущего лимита; битый курсор игнорируется; ссылка «← к новым» показывается, когда курсор задан — `cursor_given`). Текстовый поиск идёт под `SET LOCAL statement_timeout` в `SEARCH_TIMEOUT_S` = 5 с: при таймауте страница показывает «Слишком долгий поиск — уточните запрос». Заголовки дней Сегодня/Вчера/дата строит браузер по местному времени из `data-utc` у строк (`DAYS_SCRIPT`); без JS остаются серверные заголовки в UTC (`tr.day-fb`). Пакетно обработанные события в техданных помечены «в пачке» (см. `domain-model.md`). Маршрут прежний, поменялась подпись в меню |
 | `/events/{id}` | GET | owner cookie | Карточка события (`event_card`): поля заголовка блоком «название — значение» (`header_pairs`: от, кому, тема, чат, направление; время — в поясе браузера), тело как читаемый текст с сохранёнными переносами строк, стенограмма голоса в сворачиваемом блоке (`transcript_html`), служебные поля — в сворачиваемом «Служебное» (`service_pairs`). Нет события — 404 |
-| `/sources` | GET | owner cookie | Список источников — статусная точка (`source_level`), состояние потока, объём, действие; сворачиваемый блок «Конвейер обработки» (`PROGRESS_BLOCK`: живой прогресс `/_progress` раз в 30 с, пауза и лимит разбора). Строится из `source_registry`, не из ручной разметки |
-| `/sources/{key}` | GET | owner cookie | Подробности источника: подключение, разбивки от провайдера `source_detail`. Источник без провайдера так и говорит |
+| `/sources` | GET | owner cookie | Список источников спойлерами: шапка строки (точка `source_level`, подключение, свежесть, объём, последнее) раскрывается плавно (сетка `0fr`→`1fr`), можно открыть несколько, открытые держатся в `#open=a,b` и переживают перезагрузку. Подробности подгружает htmx при первом раскрытии (скелетон), перехода на отдельную страницу нет; сворачиваемый блок «Конвейер обработки» (`PROGRESS_BLOCK`: живой прогресс `/_progress` раз в 30 с, пауза и лимит разбора). Скрипт — `sources_script.SOURCES_SCRIPT`. Строится из `source_registry` |
+| `/sources/{key}` | GET | owner cookie | Подробности источника отдельной страницей (прямые ссылки): тот же кусок `source_panel.panel_html`, что и в спойлере, плюс заголовок. Источник без провайдера так и говорит |
+| `/sources/{key}/panel` | GET | owner cookie (пусто 401) | Частичный ответ для спойлера (`source_panel`): примечание, действия (подключить/переподключить — ссылка на флоу, «Отключить» — форма с `data-confirm` в общем диалоге), сводка, разбивки провайдера. Без обвязки страницы; всё из БД экранируется |
 | `/api/slack/start` | GET | owner cookie | Форма ввода user-токена Slack (`slack_start_form`) — со списком нужных прав |
 | `/api/slack/start` | POST | owner cookie | Проверка токена через `auth.test` и сохранение в `slack_auth` под шифрованием (`slack_start`). Токен не логируется и в ответ не возвращается |
 | `/api/sources/{key}/disconnect` | GET | owner cookie | Подтверждение отключения (`disconnect_confirm`): что именно погаснет и что события останутся |
-| `/api/sources/{key}/disconnect` | POST | owner cookie | Погасить строки доступа источника (`disconnect_apply`). Секрет НЕ удаляется — шаг обратим |
+| `/api/sources/{key}/disconnect` | POST | owner cookie + same-origin | Погасить строки доступа источника (`disconnect_apply`). Секрет НЕ удаляется — шаг обратим. Как и правки графа, требует `Sec-Fetch-Site: same-origin` или `Origin` = `Host` (`csrf.same_origin_or_403`); после гашения ведёт на `/sources#open={key}` |
 | `/graph` | GET | owner cookie | «Люди» (`graph_page`, разметка — `graph_body`; `graph_css`, скрипт — `graph_script` из частей `graph_script_core`, `graph_script_panel`, `graph_script_connections`, `graph_script_ui`) — Cytoscape.js 3.30.2 (закреплён, SRI) на всю ширину страницы; поверх холста плавают поиск с подсказками по именам, «Фильтры» (связей не меньше, тип связи, «Раскрасить по темам», «весь граф»), легенда, зум и карточка человека. Наведение подсвечивает узел и соседей, остальное гаснет; клик плавно приближает узел и открывает карточку, двойной клик грузит окружение. В шапке «Дубли (N)» (`dupes_label`) и «Журнал правок». See "Graph visualizer" below. |
 | `/api/graph/entity/{id}` | GET | owner cookie | Карточка сущности для боковой панели (поле `mentions` — события, где человека УПОМЯНУЛИ: чат, фрагмент, `via`, уверенность; `vera_shared.links.read.mentioning_events`) (`graph_entity` → `vera_shared.graph.panel.entity_panel`): имя, тип, @username / email / алиасы по источникам, счётчики (связей, групп, участников), `connections` — до двенадцати связей-пар, по одной на собеседника (`vera_shared.graph.connections.entity_connections`: `main` и `also` — роли с `weight`, `support`, `manual`, `inferred`, `direction` и русским `label` из `graph_labels.role_label` (у роли, выведенной по истории переписки, ещё `source: "history"`, `source_label` «выведено из переписки», `rationale`, `quotes`, `model`, `computed_at` — `pair_roles_hook.history_payload`); `hidden`, `interaction` — дни и личка, `shared_work`, `possible_same`), и последние пять событий человека ссылками на `/events/{id}`. `?raw=true` добавляет `relationships` — записи по одной (`label` из `predicate_label`). 404 — нет сущности. События ищутся по алиасу источника (`recent_events`): telegram по индексу `ix_events_tg_sender`, остальные под таймаутом 2 с — при таймауте панель показывается без событий |
 | `/api/graph` | GET | owner cookie | Node/edge JSON for the visualizer (`graph_data`). Params: `min_degree`, `limit` (≤800), `predicate`, `focus` (entity id), `q` (name→focus). Рёбра-факты — одно на пару людей (`connections_among`, `edge_payload`): `predicate` — главная роль, `weight` (толщина линии), `also`, `support`, `inferred`; членство, дублирующее пару со связью, не рисуется. Схема связи как пары — `identity.md`, «Связь как пара». |
 | `/api/graph/connection/break` | POST | owner cookie + same-origin | Разорвать роль пары (`break_connection`): тело `{entity_a, entity_b, predicate, rel_ids}` (`BreakRole`; сервер проверяет, что все записи — ОДНА роль пары с этим каноническим предикатом), гасит записи `relationships` (`is_current=false`) через `connection_actions.break_role` — тот же `graph.edit.retire_relationship`, что у MCP, и строка `mcp_audit` с клиентом `dashboard`. Ответ `{ok, audit_ids}`; чужая или уже погашенная запись — 409 |
 | `/api/graph/connection/reject` | POST | owner cookie + same-origin | «Это неверно» для выведенного «работает с» или роли, выведенной по истории переписки (`reject_connection`): тело `Pair` `{entity_a, entity_b, predicate?}` (без `predicate` — «работает с»; для роли по истории — её предикат), `connection_actions.reject_inferred` пишет пару в `connection_suppressions` (миграция 041) и в журнал. Ответ `{ok, audit_ids}` (пусто, если уже отвергнуто) |
+| `/api/graph/connection/set` | POST | owner cookie + same-origin | «Указать связь» (`set_connection`): тело `SetRole` `{entity_a, entity_b, role}` — `entity_a` карточка, `entity_b` владелец или выбранная связь; `role` — ключ из `manual_roles.MANUAL_ROLES` (начальник в обе стороны, работают вместе, друзья, супруги, родитель/ребёнок, клиент/поставщик в обе стороны). `set_manual_role` пишет каноническую ручную строку (без события-источника, уверенность 1.0) через `graph.edit.set_relationship(manual=True)` и строку `mcp_audit` (`relationship_set`, клиент `dashboard`) — откат как у любой правки, виден в `/journal`. `/api/graph/entity/{id}` теперь отдаёт `owner_id`/`owner_name` |
+| `/api/graph/people/search` | GET | owner cookie | Подсказки людей для объединения (`search_people`): `q` ≥ 2 символов, `exclude` — открытая карточка; имя, `@username`, email, последняя активность, счётчики алиасов/связей/групп (`merge_candidates.entity_summaries`) |
+| `/api/graph/merge/preview` | POST | owner cookie + same-origin | Предпросмотр слияния (`merge_preview`, тело `MergePair` `{a, b, keep_id?}`): кто останется главной (по умолчанию та, где больше данных, `recommend_keep`), что переедет (`merge_actions.preview_merge` — настоящее слияние в откатываемой транзакции), причины отказа (`blockers`: владелец, узлы личности). Ничего не пишет |
+| `/api/graph/merge/apply` | POST | owner cookie + same-origin | Слияние (`merge_apply`, `MergeApply` `{keep_id, drop_id}`): `merge_actions.apply_merge` — тот же путь и журнал `mcp_audit` (`entity_merge`, клиент `dashboard`), что у MCP; откат — `/journal`, `/api/journal/undo`, MCP `undo`. Блокировки без `force` — 409 |
+| `/api/graph/move/preview` | POST | owner cookie + same-origin | «Связи не про этого человека» (`move_preview`, `MovePair` `{from_id, to_id}`): связи, основанные на упоминании имени (`relationship_move.name_evidence`), и исход каждой (`moved` / `retired`). Ничего не пишет |
+| `/api/graph/move/apply` | POST | owner cookie + same-origin | Перенос выбранных связей (`move_apply`, `MoveApply` `{from_id, to_id, rel_ids}`): `relationship_move.move_relationships`, по строке журнала на связь (`relationship_move` или `relationship_retire`), откат общий. Строка, не являющаяся упоминанием имени, — 409 |
+| `/entities/queue/merge`, `/entities/queue/reject` | POST | owner cookie + same-origin | Кнопки очереди дублей: «Это один человек» (`queue_merge` → `apply_merge`, журнал, возврат на ту же позицию с `merged=<audit_id>`) и «Разные люди» (`queue_reject`: `set_suggestion_status` или `suggestions.reject_pair` для точного совпадения) |
 | `/api/journal/undo` | POST | owner cookie + same-origin | Вернуть правки по `audit_ids` (`undo_edits`, тело `UndoRequest`): `journal.undo.undo_entry` на каждую, без `force`. Отказ откатa (`UndoRefused`) — 409 и список уже возвращённых |
 | `/journal` | GET | owner cookie | «Журнал правок» (`journal_page`, разметка `journal_body`, `entry_html`, `describe_entry`): последние 80 записей `mcp_audit` (дашборд и агенты MCP) с кнопкой «Вернуть»; имена людей — `entity_ids` + `entity_cards`, всё экранируется. Строки читает `journal.audit.recent_rows` |
 | `/ui/vera.css`, `/ui/vera.js` | GET | none | Статика дизайн-системы (`vera_css`, `vera_js`): адрес с `?v=<хэш>`, `Cache-Control: immutable`. Данных в них нет, поэтому без входа — ими оформлена и страница входа |
@@ -153,7 +161,7 @@ Returns `AnswerResponse` with `answer`, `results`, `provider`, `cost_usd`,
 | `/api/instagram/start` | POST | owner cookie | Submit username/password (`instagram_start`) — may return a 2FA/challenge code form |
 | `/api/instagram/verify` | POST | owner cookie | Submit 2FA/challenge code (`instagram_verify`) → saves encrypted session |
 | `/tokens` | GET | owner cookie | Now redirects to AIbroker — see `llm-broker.md` |
-| `/entities/merge-email-dupes` | POST | owner cookie | Слить дубли по рабочему email (`entities_merge_email_dupes`) — детерминированные пары, группы 3+ не трогаются |
+| `/entities/merge-email-dupes`, `/entities/merge-collisions` | POST | owner cookie + same-origin | Массовые слияния убраны (`entities_bulk_merge_retired`): отвечают редиректом на очередь, пары email/@username объединяются там по одной |
 | `/search-ui` | POST | owner cookie | Обработчик «Спросить Веру»: ответ модели через `render_markdown` (безопасное подмножество: жирный, курсив, `код`, списки, ссылки только http(s); всё остальное экранируется до разметки) плюс до пяти источников (`sources_html`: ссылка `/events/{id}`, человеческая строка, дата, фрагмент тела) из поля `results` ответа brain-search. Источники одного события или одной цепочки писем подряд не повторяются (`dedupe_key`) |
 
 ### Readable event text (`dashboard/event_text.py`, `dashboard/ui/markdown.py`)
@@ -332,3 +340,105 @@ nginx проксирует наружу не только дашборд: `/` �
 по направлению от «над» к «под». `graph_snapshot(raw_edges=True)` и `?raw=true` у
 карточки отдают прежние записи. Модель, пороги и замеры — `identity.md`, «Связь как
 пара»; накат таблицы и задача — `deploy-ops.md`.
+
+
+### Карточка: события и цитаты
+
+«Последние события» (`vera_shared.graph.panel_events`, `recent_events`) берутся по ВСЕМ алиасам:
+telegram — автор (`metadata.sender_id`, индекс `ix_events_tg_sender`) и личная переписка с
+человеком в обе стороны (`metadata.chat_id`, окно `DM_WINDOW_DAYS` по `ix_events_occurred_at`),
+slack/instagram — `sender_id`, gmail — адрес в `from` ИЛИ `to`. Скрытые события не показываются,
+каждый запрос идёт под `statement_timeout` в своей сессии, итог — самые новые по всем источникам.
+Раньше telegram-алиас искался только по автору, поэтому личная переписка, где пишет сам владелец,
+в карточке не появлялась, а свежее письмо вытесняло её. В событии gmail есть `subject`,
+карточка показывает его перед сниппетом.
+
+Цитаты в письмах (`vera_shared.ingest.quotes.strip_quoted`) отрезаются в одном месте — и в
+карточке, и во «Входящем», и в «На чём основан ответ» (`event_text.snippet_of`): заголовки
+ответа Gmail/Apple (en/ru, в одну или две строки), Outlook (`From/Sent`, `От/Отправлено`,
+`-----Original Message-----`) и строки `>`.
+
+Запросы по алиасам строит `panel_events.queries_for` (пусто для источника, который карточка не
+показывает), текст без шапки ингестора и цитат — `panel_events.snippet` (≤ `SNIPPET_CHARS`).
+
+
+### Живой QA 2026-10-05: что изменилось
+
+- **Третья причина промахов — порядок рисования.** Подсвеченное ребро (`edge.hl`) имело `z-index`
+  выше неподсвеченных узлов и перехватывало наведение на узле под ним. Теперь `z-index-compare: manual`:
+  узлы всегда выше рёбер. Проверка в консоли после правки: 52 из 52 узлов с панелью и сдвигом страницы.
+- **Карточка быстрее.** `/api/graph/entity/{id}?events=0` отдаёт карточку без событий (самая медленная часть),
+  события приходят отдельным `/api/graph/entity/{id}/events` и дорисовываются; `?all=1` — все связи (до
+  `CONNECTIONS_LIMIT`), иначе первые двенадцать и кнопка «и ещё N». Счётчик «людей в связях» —
+  `connections_total` (люди, а не записи ролей). Запросы карточки идут параллельно (`asyncio.gather`).
+- **Узел в свободной области.** Выбор узла центрирует его не по холсту, а по части, не закрытой карточкой
+  (`freeCenter`, `panToFree`; на телефоне — верхняя треть над нижним листом). Легенда — кнопка-переключатель,
+  меню фильтров закрывается кликом мимо. Узлы без фото — цветной диск с инициалами (инициалы берутся по целым символам и только из букв и цифр: имя с эмодзи в начале 04.10.2026 роняло всю страницу на `encodeURIComponent`; второй слой фона под
+  аватаром); подписи приглушённых узлов гаснут; выведенные рёбра тоньше и светлее; раскладка шире
+  (`stretchToCanvas`).
+- **Одна кнопка «⋯» на связь**: диалог `VeraUI.choose` предлагает «Разорвать: роль» / «Это неверно: роль».
+- **Единый вид.** Даты: «25 мая 2026, 14:03» / «сегодня, 14:03» / «вчера, 14:03» (`ui/tz.py`, `window.__fmtDate`,
+  тот же формат у карточки графа). Значки источников — один набор SVG (`ui/icons.py`, `source_icon`), эмодзи
+  `Source.icon` в разметке не используются. Меню ⚙ содержит «Настройки» и «Выйти» (на телефоне и «Журнал
+  правок»). Цели касания ≥44 px на сенсорных экранах и ≤640 px; `/events` на телефоне — карточки «текст
+  сверху, под ним источник · автор · время · точка».
+- **`/events/{id}`**: «Кто» не повторяет «От»/«Автор»; люди из заголовков, известные графу (адрес gmail или
+  `sender_id`), — ссылки `/graph#person=<id>` (граф открывает окружение и карточку).
+- **Журнал**: записи без снимка (правки из SQL и MCP) берут концы из `args` (`subject_id`/`object_id`) или из
+  самой записи связи (`connection_data.relationship_triples`); `#None` не выводится никогда.
+- **Дубли**: страница стала очередью проверки (см. «Объединение людей» ниже); число в «Дубли (N)» графа — ожидающие
+  `merge_suggestions`, то же число показано на странице.
+- **Ответ поиска**: источники без автора и места (память агента) получают заголовок из начала текста,
+  а не одинаковое название источника.
+
+Имена в коде этих правок: маршрут событий карточки — `graph_entity_events`; `event_view.mail_addresses`
+собирает адреса из From/To/Cc для ссылок на граф; `journal_view.relationship_ids` отбирает записи журнала,
+чьи концы нужно доставать из таблицы связей.
+
+
+### Объединение людей (2026-10-05)
+
+**В карточке** две кнопки. «Это тот же человек…»: поиск (`/api/graph/people/search`) → предпросмотр
+(две карточки «останется главной / вольётся», «⇄ Поменять местами», что переедет: алиасы, связи, дубли связей,
+участия в группах) → «Объединить» → тост «Вернуть». «Связи не про этого человека»: поиск правильного человека →
+список связей, взятых из УПОМИНАНИЙ имени, с флажками → «Перенести связи» → тост «Вернуть». В диалогах одна строка
+о разнице: объединить — один человек с двумя аккаунтами; перенести связи — аккаунт чужой, а связи про другого.
+
+**Что значит «упоминание имени».** `relationship_move.authored_by`: событие-источник связи написал НЕ сам этот
+человек (ни один его алиас не автор: telegram/slack/instagram — `metadata.sender_id`, gmail — адрес в
+`metadata.from`). Связи по его собственным сообщениям и ручные связи (без события) не переносятся, сервер
+отказывает в таких `rel_ids`. Перенос меняет концы записи в канонической форме (`graph.edit.repoint_relationship`);
+петля или уже существующая тройка гасит запись (`retired`). Откат возвращает концы (`restore_relationship`).
+
+**Очередь `/entities/duplicates`**: одна пара за раз (`?n=<позиция>`), «3 из 41», слева главная карточка (аватар, имя,
+@username/email, чаты, фразы, счётчики, «почему предложено»), три крупные кнопки «Это один человек» / «Разные
+люди» / «Пропустить», клавиши `Y` / `N` / `S` и `→`. Очередь — `duplicates_repo.load_queue`: ожидающие
+`merge_suggestions`, затем точные совпадения email и @username из двух карточек (`QueueItem`); решённые пары
+(`suggestions.list_decided_pairs`) не возвращаются. Дамп групп «по одному имени» убран — остальных людей находят
+поиском из карточки. Прежние POST (`/entities/merge`, `/entities/suggestion`, массовые, `analyze`, `roster-sync`)
+работают, но теперь тоже требуют same-origin. Слияние и предпросмотр — `merge_actions.preview_merge` /
+`apply_merge`; защита от слияния владельца и узлов личности (`merge_guard.merge_blockers`, `MergeBlocked`)
+переехала из `vera_mcp` в `vera_shared.graph`, MCP `entity_merge` вызывает те же функции.
+
+Вспомогательные имена: `csrf.owner_gate` (JSON-ручки для чтения) и `csrf.owner_post_gate` (владелец + same-origin) —
+общие ворота всех правок; `relationship_move.preview_move` считает исход переноса в откатываемой транзакции;
+`merge_candidates.data_weight` — сумма алиасов, связей и групп, по ней `recommend_keep` выбирает главную карточку.
+
+### Правки по ревью merge-ux
+
+- **Все слияния дашборда — один путь.** `entities_routes._merge_with_report` вызывает только `merge_actions.apply_merge`
+  (защита владельца и узлов личности + журнал, клиент `dashboard`). Отказ — заметка на странице очереди
+  (`notice=blocked` / `gone`: «в паре владелец…» / «одной из карточек уже нет»), а не молчаливый пропуск.
+  Массовые `/entities/merge-email-dupes` и `/entities/merge-collisions` больше ничего не сливают: они отвечают
+  редиректом, пары живут в очереди.
+- **Авторство события** (`relationship_move.authorship`): True / False / None. Без `sender_id` или адреса
+  отправителя, а также для других источников — None (неизвестно), такую связь не переносим. Для владельца событие
+  «его» в любом источнике (`metadata.sender_id` = его telegram-id, адреса gmail из алиасов и атрибута `email`).
+- **Перенос на цель с погашенной связью:** она возвращается со своими уликами (`revived`, журнал
+  `relationship_revive`), исходная гасится (`relationship_retire`); откат возвращает обе.
+- **События карточки:** источник вписан в SQL литералом (`source = 'telegram'`) — иначе планировщик не берёт
+  частичный индекс `ix_events_tg_sender`; `LIKE` по gmail экранирует `%`, `_`, `\`; подзапросы идут одновременно
+  (не больше `MAX_ALIASES_QUERIED` алиасов); сорванный по таймауту подзапрос даёт `partial` (`recent_events_status`) и
+  надпись «Часть событий не загрузилась».
+- **Цитаты:** одиночная строка `>` остаётся текстом, режутся блоки из двух и более; пересланное письмо
+  («Forwarded message», «Begin forwarded message», пересылка без своего текста) сохраняет тело.
