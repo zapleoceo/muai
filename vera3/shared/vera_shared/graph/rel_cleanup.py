@@ -6,6 +6,11 @@
 действий `retire` (is_current=false) и `convert` (привести к канонической
 форме), и оба обратимы по отчёту.
 
+Два прохода. `soft` — всё, что опровергается без модели: факт не называет концы,
+тип концов, дубли, противоречия, обратные пары. Персона из одного слова
+(`weak_name`) одним правилом НЕ гасится: среди таких связей много верных
+(«Маша — дочь»), их разбирает `rel_cleanup_verify` через `rel_verify`.
+
 Связи без события-источника заведены руками (MCP, дашборд) — по извлечению их
 не судят, но в нормализации они участвуют, и при конфликте ручная побеждает.
 """
@@ -23,7 +28,7 @@ from vera_shared.graph.rel_canon import (
     strength,
 )
 from vera_shared.graph.rel_text import End, Evidence
-from vera_shared.graph.rel_validate import relationship_reject_reason
+from vera_shared.graph.rel_validate import REJECT_WEAK_NAME, relationship_reject_reason
 
 PLAN_VERSION = 1
 RULE_SYMMETRIC = "symmetric_duplicate"
@@ -54,7 +59,7 @@ def _state(row: Row) -> dict[str, Any]:
             "object_entity_id": row["object_entity_id"], "is_current": row["is_current"]}
 
 
-def _retire(row: Row, rule: str, keep: Row | None = None) -> Action:
+def retire_action(row: Row, rule: str, keep: Row | None = None) -> Action:
     return {"action": "retire", "rule": rule, "rel_id": row["id"],
             "keep_id": keep["id"] if keep else None, "brief": _brief(row),
             "before": _state(row), "after": {**_state(row), "is_current": False}}
@@ -81,22 +86,43 @@ def _reject_reason(row: Row, names: dict[str, list[str]], owner_id: int | None) 
                           end(row["object_entity_id"])))
 
 
+def _extracted_reasons(snapshot: dict[str, Any]) -> dict[int, str]:
+    names, owner_id = snapshot.get("names", {}), snapshot.get("owner_id")
+    return {r["id"]: reason for r in snapshot["relationships"]
+            if r["is_current"] and r.get("derived_from_event_id") is not None
+            and (reason := _reject_reason(r, names, owner_id))}
+
+
+def soft_retirements(snapshot: dict[str, Any]) -> dict[int, str]:
+    """id → причина для извлечённых связей, опровергаемых без модели. Связь с
+    одиночным именем сюда не попадает по правилам «одно слово» и «факт не
+    называет концы»: на ней настоящая связь легко выглядит как мусор («Маша —
+    дочь» без имени владельца), её судит `rel_verify` по тексту сообщения."""
+    return {i: r for i, r in _extracted_reasons(snapshot).items() if r != REJECT_WEAK_NAME}
+
+
+def weak_name_candidates(snapshot: dict[str, Any]) -> list[Row]:
+    """Связи с персоной из одного слова, которых не опровергло ничего другое."""
+    weak = {i for i, r in _extracted_reasons(snapshot).items() if r == REJECT_WEAK_NAME}
+    return [r for r in snapshot["relationships"] if r["id"] in weak]
+
+
 def build_plan(snapshot: dict[str, Any]) -> list[Action]:
+    """План прохода `soft`."""
     rows: list[Row] = snapshot["relationships"]
-    names: dict[str, list[str]] = snapshot.get("names", {})
-    owner_id: int | None = snapshot.get("owner_id")
     actions: list[Action] = []
-    dead: set[int] = set()
+    # Связи с одиночным именем ждут вердикта: нормализовать их до него нельзя —
+    # пара, из которой модель оставит одну, иначе потеряет не ту.
+    dead: set[int] = {r["id"] for r in weak_name_candidates(snapshot)}
 
     def drop(row: Row, rule: str, keep: Row | None = None) -> None:
         dead.add(row["id"])
-        actions.append(_retire(row, rule, keep))
+        actions.append(retire_action(row, rule, keep))
 
     current = [r for r in rows if r["is_current"]]
+    soft = soft_retirements(snapshot)
     for row in current:
-        if row.get("derived_from_event_id") is None:
-            continue
-        if reason := _reject_reason(row, names, owner_id):
+        if reason := soft.get(row["id"]):
             drop(row, reason)
 
     groups: dict[Triple, list[Row]] = defaultdict(list)
@@ -132,8 +158,8 @@ def build_plan(snapshot: dict[str, Any]) -> list[Action]:
     return actions
 
 
-def plan_document(actions: list[Action], source: str) -> dict[str, Any]:
+def plan_document(actions: list[Action], source: str, phase: str = "soft") -> dict[str, Any]:
     counts = Counter(a["rule"] for a in actions)
     return {"version": PLAN_VERSION, "generated_at": datetime.now(UTC).isoformat(),
-            "source": source, "to_apply": sum(a["action"] != "skip" for a in actions),
+            "source": source, "phase": phase, "to_apply": sum(a["action"] != "skip" for a in actions),
             "counts": dict(counts), "actions": actions}

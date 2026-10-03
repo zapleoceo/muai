@@ -583,24 +583,41 @@ $RUN --undo /reports/rollback-2026-10-03.json
 
 ```bash
 cd /var/www/vera3/infra
-RUN="docker compose run --rm --no-deps -v /var/www/vera3/scripts:/scripts   -v /var/lib/vera3-reports:/reports brain-triage python /scripts/clean_relationships.py"
+RUN="docker compose run --rm --no-deps -v /var/www/vera3/scripts:/scripts \n  -v /var/lib/vera3-reports:/reports brain-triage python /scripts/clean_relationships.py"
 
 # 0. страховка: дамп таблицы связей (читает, ничего не меняет)
-docker exec vera3-postgres pg_dump -U vera -d vera -t relationships   > /var/lib/vera3-reports/relationships-before-$(date +%F).sql
+docker exec vera3-postgres pg_dump -U vera -d vera -t relationships \n  > /var/lib/vera3-reports/relationships-before-$(date +%F).sql
 
-# 1. план — БД не меняет (режим по умолчанию); в stdout счётчики и по 10 примеров на правило
+# 1. ПРОХОД soft — без модели, БД не меняет; в stdout счётчики и по 10 примеров на правило
 $RUN --plan /reports/rel_plan.json
 
 # 2. ПРОВЕРКА ГЛАЗАМИ: план содержит имена и факты — личные данные, храните вне репозитория
 # 3. применение; без --report скрипт откажется, существующий отчёт не перезаписывает
 $RUN --apply /reports/rel_plan.json --report /reports/rel_rollback-$(date +%F).json
 
-# 4. откат по отчёту
+# 4. ПРОХОД verify — одиночные имена судит модель (нужны БД и брокер; запускать на
+#    сервере, не на ноутбуке). Сначала пробная партия:
+$RUN --phase verify --plan /reports/rel_verify.json --limit 50
+less /var/lib/vera3-reports/rel_verify.json        # вердикт и цитата у каждой связи
+# затем полный прогон (уже вынесенные вердикты берутся из rel_verify.verdicts.jsonl)
+$RUN --phase verify --plan /reports/rel_verify.json
+$RUN --apply /reports/rel_verify.json --report /reports/rel_rollback-verify-$(date +%F).json
+
+# 5. откат по отчёту
 $RUN --undo /reports/rel_rollback-2026-10-03.json
 ```
 
-- Правила плана (счётчики в `counts`): `weak_name`, `fact_mismatch` и прочие
-  причины `relationship_reject_reason`; `symmetric_duplicate`,
+- **Порядок:** сначала soft, применить, и только потом verify — он берёт связи,
+  оставшиеся после soft. Verify ходит в брокер: общий пул, поэтому начните с
+  `--limit`, смотрите стоимость (`stats.cost_usd` в плане и строки
+  `rel_verify … cost_usd` в логе); параллелизм по умолчанию 4
+  (`--concurrency`). Брейкер сбоя брокера отвечает мгновенно: такие связи
+  попадают в `stats.unverified` и не гасятся — повторите прогон позже.
+- **Verify-план:** `retire` (правило `weak_name`) для «no» и «unclear»;
+  `skip` (`weak_name_verified`) с цитатой для «yes». Применять можно
+  частями — действие по строке, изменившейся после плана, пропускается.
+- Правила soft-плана (счётчики в `counts`): `fact_mismatch` и прочие причины
+  `relationship_reject_reason` (одиночное имя здесь не гасится); `symmetric_duplicate`,
   `inverse_duplicate`, `contradiction`; `convert_inverse` (одиночная
   `reports_to` / `child_of` переписывается в `boss_of` / `parent_of`);
   `convert_blocked` (каноническая тройка уже занята погашенной строкой —

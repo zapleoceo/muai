@@ -6,11 +6,18 @@ import json
 import pytest
 from sqlalchemy import text
 from vera_shared.graph import repo
-from vera_shared.graph.rel_cleanup import build_plan, plan_document
+from vera_shared.graph.rel_cleanup import (
+    build_plan,
+    plan_document,
+    weak_name_candidates,
+)
 from vera_shared.graph.rel_cleanup_apply import PlanError, apply_plan, undo_report
 
 NAMES = {"1": ["Ivan Petrov"], "2": ["Anna Lee"], "3": ["Олег"], "4": ["Maria Kim"],
          "5": ["Owner Person"]}
+
+
+WITH_OLEG = "Ivan Petrov и Олег"
 
 
 def row(rel_id, s, p, o, *, conf=0.9, fact=None, event=1, current=True):
@@ -30,10 +37,19 @@ def by_rule(actions):
     return {a["rel_id"]: a["rule"] for a in actions}
 
 
-def test_single_token_and_fact_mismatch_retired():
-    actions = plan(row(1, 1, "coworker_of", 3), row(2, 1, "coworker_of", 2, fact="nothing"),
+def test_soft_phase_retires_fact_mismatch_but_not_single_token():
+    actions = plan(row(1, 1, "coworker_of", 3, fact=WITH_OLEG),
+                   row(2, 1, "coworker_of", 2, fact="nothing"),
                    row(3, 1, "coworker_of", 4))
-    assert by_rule(actions) == {1: "weak_name", 2: "fact_mismatch"}
+    assert by_rule(actions) == {2: "fact_mismatch"}
+
+
+def test_weak_name_candidates_are_left_for_the_verifier():
+    snap = {"owner_id": 5, "names": NAMES, "relationships": [
+        row(1, 1, "coworker_of", 3, fact=WITH_OLEG),
+        row(2, 1, "coworker_of", 3, fact="nothing"),
+        row(3, 1, "coworker_of", 4), row(4, 1, "coworker_of", 3, event=None)]}
+    assert [r["id"] for r in weak_name_candidates(snap)] == [1, 2]  # факт слабой связи не судит
 
 
 def test_manual_edges_not_judged_by_extraction_rules():
@@ -73,9 +89,10 @@ def test_lone_inverse_is_converted_unless_target_taken():
 
 
 def test_plan_document_counts():
-    doc = plan_document(plan(row(1, 1, "coworker_of", 3), row(2, 1, "reports_to", 2)), "t")
-    assert doc["counts"] == {"weak_name": 1, "convert_inverse": 1}
-    assert doc["to_apply"] == 2
+    doc = plan_document(plan(row(1, 1, "coworker_of", 2, fact="x"), row(2, 1, "reports_to", 2)),
+                        "t")
+    assert doc["counts"] == {"fact_mismatch": 1, "convert_inverse": 1}
+    assert doc["to_apply"] == 2 and doc["phase"] == "soft"
 
 
 async def _seed(sqlite_db):

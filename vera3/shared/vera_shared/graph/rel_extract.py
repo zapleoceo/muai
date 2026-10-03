@@ -22,11 +22,10 @@ from sqlalchemy import text
 
 from vera_shared.db.engine import get_session
 from vera_shared.events.visibility import NOT_HIDDEN_SQL
+from vera_shared.graph.rel_judge import judge_relationship
 from vera_shared.graph.rel_text import End, Evidence
 from vera_shared.graph.rel_validate import (
-    REJECT_SELF,
     is_referential_name,
-    relationship_reject_reason,
 )
 from vera_shared.graph.repo import (
     find_entity_by_alias,
@@ -262,11 +261,9 @@ async def extract_and_store(event_id: int, body: str) -> RelExtractOutcome:
         names = await entity_names([subj_id, obj_id])
         evidence = Evidence(fact, End(tuple(names[subj_id]), subj_strong, subj_author),
                             End(tuple(names[obj_id]), obj_strong, obj_author))
-        reason = REJECT_SELF if subj_id == obj_id else relationship_reject_reason(
-            subject_name=subj_name, subject_type=subj_type, predicate=pred,
-            object_name=obj_name, object_type=obj_type, confidence=conf,
-            evidence=evidence,
-        )
+        ends = ((subj_id, subj_name, subj_type), (obj_id, obj_name, obj_type))
+        reason = await judge_relationship(ends, pred, conf, evidence,
+                                          event_id=event_id, body=body)
         if reason:
             out.rejected[reason] += 1
             continue

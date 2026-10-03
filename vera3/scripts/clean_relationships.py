@@ -1,7 +1,8 @@
 #!/usr/bin/env python
 """Чистка связей графа: план → проверка глазами → применение → откат.
 
-    python clean_relationships.py --plan plan.json                  # по умолчанию, БД не меняет
+    python clean_relationships.py --plan plan.json                  # проход soft, БД не меняет
+    python clean_relationships.py --phase verify --plan v.json --limit 50   # одиночные имена: модель
     python clean_relationships.py --plan plan.json --snapshot export.json
     python clean_relationships.py --apply plan.json --report rollback.json
     python clean_relationships.py --undo rollback.json
@@ -12,7 +13,10 @@
         -v /var/lib/vera3-reports:/reports brain-triage \\
         python /scripts/clean_relationships.py --plan /reports/rel_plan.json
 
-Правила — `vera_shared/graph/rel_cleanup.py`, регламент — `docs/deploy-ops.md`.
+Проход soft не зовёт модель; проход verify (нужны БД и брокер, запускается на
+сервере) проверяет каждую связь с одним словом вместо имени через
+`vera_shared/graph/rel_verify.py` и гасит те, где модель не нашла прямого
+утверждения с цитатой. Правила — `vera_shared/graph/rel_cleanup.py`, регламент — `docs/deploy-ops.md`.
 Связи не удаляются: `is_current=false` либо приведение к канонической форме.
 """
 from __future__ import annotations
@@ -25,9 +29,14 @@ import sys
 from pathlib import Path
 
 from vera_shared.db.engine import close_engine, init_engine
-from vera_shared.graph.rel_cleanup import build_plan, plan_document
+from vera_shared.graph.rel_cleanup import (
+    build_plan,
+    plan_document,
+    weak_name_candidates,
+)
 from vera_shared.graph.rel_cleanup_apply import PlanError, apply_plan, undo_report
 from vera_shared.graph.rel_cleanup_snapshot import load_snapshot
+from vera_shared.graph.rel_cleanup_verify import verify_plan
 
 EXAMPLES = 10
 
@@ -40,6 +49,11 @@ def _parser() -> argparse.ArgumentParser:
     mode.add_argument("--undo", metavar="ROLLBACK.json", help="откатить по отчёту")
     p.add_argument("--report", metavar="ROLLBACK.json",
                    help="куда писать отчёт для отката (обязателен с --apply)")
+    p.add_argument("--phase", choices=("soft", "verify"), default="soft",
+                   help="soft — правила без модели; verify — модель по одиночным именам")
+    p.add_argument("--limit", type=int, metavar="N",
+                   help="verify: пробная партия из первых N связей")
+    p.add_argument("--concurrency", type=int, default=4, help="verify: параллельных вызовов")
     p.add_argument("--snapshot", metavar="EXPORT.json",
                    help="планировать по SELECT-выгрузке, без подключения к БД")
     return p
@@ -53,17 +67,25 @@ def _print_examples(doc: dict) -> None:
             print(f"  [{a['rule']}] #{a['rel_id']} {a['brief']}")
 
 
-async def _plan(out: Path, snapshot: str | None) -> None:
-    if snapshot:
-        data = json.loads(Path(snapshot).read_text(encoding="utf-8"))
-        source = f"snapshot:{Path(snapshot).name}"
+async def _plan(out: Path, args: argparse.Namespace) -> None:
+    if args.snapshot and args.phase == "soft":
+        data = json.loads(Path(args.snapshot).read_text(encoding="utf-8"))
+        source = f"snapshot:{Path(args.snapshot).name}"
     else:
         await init_engine()
         data = await load_snapshot(int(os.environ["OWNER_TELEGRAM_ID"]))
         source = "db"
-    doc = plan_document(build_plan(data), source)
+    if args.phase == "soft":
+        doc = plan_document(build_plan(data), source)
+    else:
+        cache = out.with_suffix(".verdicts.jsonl")
+        actions, stats = await verify_plan(weak_name_candidates(data), cache,
+                                           limit=args.limit, concurrency=args.concurrency)
+        doc = {**plan_document(actions, source, "verify"), "stats": stats}
+        print("вердикты:", json.dumps(stats))
     out.write_text(json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")
-    print(f"план: {doc['to_apply']} действий, по правилам {json.dumps(doc['counts'])} → {out}")
+    print(f"план ({args.phase}): {doc['to_apply']} действий, по правилам "
+          f"{json.dumps(doc['counts'])} → {out}")
     _print_examples(doc)
 
 
@@ -81,7 +103,7 @@ async def _run(args: argparse.Namespace) -> int:
         await init_engine()
         print(f"откатано {await undo_report(args.undo)}")
     else:
-        await _plan(Path(args.plan or "rel_plan.json"), args.snapshot)
+        await _plan(Path(args.plan or "rel_plan.json"), args)
     return 0
 
 
