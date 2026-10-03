@@ -112,6 +112,7 @@ async def refresh_pair_stats(owner_tg_id: int | None = None) -> int | None:
                                 {"k": REFRESH_LOCK_KEY})).scalar_one():
             return None
         await s.execute(text("SET LOCAL statement_timeout = '120s'"))
+        # Кэш, не правда: пересобирается целиком и атомарно — DELETE и INSERT в одной транзакции.
         await s.execute(text("DELETE FROM pair_stats"))
         res = await s.execute(text(
             f"INSERT INTO pair_stats ({PAIR_STATS_COLUMNS}) {PAIR_STATS_SELECT}"), params)

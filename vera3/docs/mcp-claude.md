@@ -57,6 +57,8 @@ vera3-mcp :8000 (хост 127.0.0.1:8007)          services/mcp, пакет vera
 
 Все выдачи ограничены и несут `truncated`.
 
+> **BREAKING (04.10.2026):** `entity_context` больше не возвращает `relationships` (и `id` записей) по умолчанию. Берите `connections[].main.rel_ids` / `also[].rel_ids` либо передайте `raw_relationships=true`.
+
 Чтение:
 
 | Tool | Что делает |

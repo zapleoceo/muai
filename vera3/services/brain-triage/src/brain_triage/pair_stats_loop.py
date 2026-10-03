@@ -9,7 +9,6 @@ from __future__ import annotations
 import asyncio
 import logging
 
-from sqlalchemy.exc import DBAPIError
 from vera_shared.graph.pair_stats import refresh_pair_stats
 
 from brain_triage.config import PAIR_STATS_INTERVAL_S, PAIR_STATS_START_DELAY_S
@@ -22,8 +21,8 @@ async def pair_stats_loop() -> None:
     while True:
         try:
             pairs = await refresh_pair_stats()
-        except DBAPIError as e:
-            log.warning("pair-stats: пересборка не удалась (миграция 040 накачена?): %s", e)
+        except Exception:
+            log.exception("pair-stats: пересборка не удалась (миграция 040 накачена?)")
         else:
             if pairs is None:
                 log.info("pair-stats: пересборку уже ведёт другая реплика")

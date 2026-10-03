@@ -7,7 +7,8 @@ from __future__ import annotations
 CONNECTIONS_SCRIPT = r"""
 function connMeta(c){
   const m = c.main, meta = ['вес ' + c.weight.toFixed(2)];
-  if (m.support) meta.push(m.support + ' подтв.');
+  if (m.inferred && m.support) meta.push('подтверждено ' + m.support + ' + общение');
+  else if (m.support) meta.push(m.support + ' подтв.');
   if (m.manual) meta.push('задано вручную');
   else if (m.inferred && !m.support) meta.push('выведено из общения');
   if (c.interaction.active_days) meta.push(c.interaction.active_days + ' дн. общения');
@@ -15,7 +16,8 @@ function connMeta(c){
 }
 
 function connRow(c){
-  const roleName = r => esc(r.label || predLabel(r.predicate));
+  const roleName = r => esc(r.label || predLabel(r.predicate)) +
+    (r.inferred ? (r.support ? ' (+ общение)' : ' (выведено из общения)') : '');
   const also = c.also.length ? ' · также: ' + c.also.map(roleName).join(', ') : '';
   const same = (c.possible_same || []).map(h =>
     '<a href="#" data-focus="' + h.id + '">' + esc(h.name) + '</a>').join(', ');

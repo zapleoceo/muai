@@ -51,6 +51,8 @@ const cy = cytoscape({
     // Членство — структурная связь: тоньше и пунктиром, чтобы факты выделялись.
     {selector:'edge[predicate = "member_of"]', style:{'line-style':'dashed', 'width':0.5,
       'opacity':0.35, 'curve-style':'straight'}},
+    // Выведенная из общения связь — пунктиром: за ней нет ни одной фразы.
+    {selector:'edge[?inferred]', style:{'line-style':'dashed'}},
     {selector:'edge:selected', style:{'line-color':C.primary,'opacity':1,'width':2}},
   ],
 });
@@ -184,7 +186,8 @@ cy.on('tap', 'edge', ev => {
   const w = e.data('weight');
   info.textContent = e.source().data('name') + ' — ' + predLabel(e.data('predicate')) +
                      ' — ' + e.target().data('name') + (w ? ' (вес ' + w.toFixed(2) + ')' : '') +
-                     (also ? ' · также: ' + also : '');
+                     (also ? ' · также: ' + also : '') +
+                     (e.data('inferred') ? ' (выведено из общения)' : '');
 });
 panel.addEventListener('click', ev => {
   const focus = ev.target.closest('[data-focus]');

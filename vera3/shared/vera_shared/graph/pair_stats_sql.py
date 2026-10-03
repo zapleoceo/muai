@@ -47,12 +47,15 @@ small_chats AS (
                   OR ltrim(substr(chat, 4), '-') IN (SELECT key FROM work_keys)) AS work
     FROM chat_days GROUP BY chat HAVING count(DISTINCT pid) <= :max_authors)"""
 
+# Самосоединение — только по маленьким чатам: сначала отсекаем большие с обеих сторон.
 _CO_ACTIVITY = """
+small_days AS (
+    SELECT d.chat, d.pid, d.d, c.work
+    FROM chat_days d JOIN small_chats c ON c.chat = d.chat),
 co AS (
-    SELECT x.pid AS a, y.pid AS b, x.d, x.chat, c.work
-    FROM chat_days x
-    JOIN chat_days y ON y.chat = x.chat AND y.d = x.d AND y.pid > x.pid
-    JOIN small_chats c ON c.chat = x.chat)"""
+    SELECT x.pid AS a, y.pid AS b, x.d, x.chat, x.work
+    FROM small_days x
+    JOIN small_days y ON y.chat = x.chat AND y.d = x.d AND y.pid > x.pid)"""
 
 # Личка владельца: Telegram (чат с типом user/private, chat_id = id собеседника),
 # Slack im (собеседник — единственный не-владелец среди авторов канала), почта
