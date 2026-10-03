@@ -63,22 +63,37 @@ def test_inverse_duplicate_keeps_the_stronger_and_only_one_conversion_is_planned
     assert [a["action"] for a in two_events] == ["skip"]            # каноническая тройка занята
 
 
-def test_two_way_hierarchy_retires_the_side_with_fewer_distinct_events():
-    actions = plan(row(1, 1, "boss_of", 2, event=10), row(2, 1, "boss_of", 2, event=11),
-                   row(3, 2, "boss_of", 1, event=12))
-    assert (3, "retire", "contradiction") in kinds(actions)
-    assert not [a for a in actions if a["rel_id"] in (1, 2) and a["action"] == "retire"]
+def test_two_way_hierarchy_is_never_retired_by_the_canonical_phase():
+    cases = [
+        [row(1, 1, "boss_of", 2, event=10), row(2, 1, "boss_of", 2, event=11),
+         row(3, 2, "boss_of", 1, event=12)],
+        [row(1, 1, "boss_of", 2, event=10), row(2, 2, "boss_of", 1, event=11)],
+        [row(1, 1, "boss_of", 2, event=None), row(2, 2, "boss_of", 1, event=10),
+         row(3, 2, "boss_of", 1, event=11)],
+    ]
+    for rows in cases:
+        assert not [a for a in plan(*rows) if a["action"] == "retire"]
 
 
-def test_two_way_hierarchy_tie_keeps_both():
-    actions = plan(row(1, 1, "boss_of", 2, event=10), row(2, 2, "boss_of", 1, event=11))
-    assert not [a for a in actions if a["action"] == "retire"]
+def test_inverse_duplicate_keeps_the_canonical_row_even_with_a_higher_id():
+    # аудит прода: гасилась каноническая boss_of (id 362) и оставалась reports_to (361)
+    actions = plan(row(361, 72, "reports_to", 139, event=5), row(362, 139, "boss_of", 72, event=5))
+    assert kinds(actions) == [(361, "retire", "inverse_duplicate")]
+    assert actions[0]["keep_id"] == 362
+    for ordering in ([row(362, 139, "boss_of", 72, event=5), row(361, 72, "reports_to", 139, event=5)],):
+        assert kinds(plan(*ordering)) == [(361, "retire", "inverse_duplicate")]
 
 
-def test_two_way_hierarchy_manual_side_wins_over_extracted_events():
-    actions = plan(row(1, 1, "boss_of", 2, event=None),
-                   row(2, 2, "boss_of", 1, event=10), row(3, 2, "boss_of", 1, event=11))
-    assert sorted(a["rel_id"] for a in actions if a["action"] == "retire") == [2, 3]
+def test_symmetric_duplicate_keeps_the_canonical_min_max_row():
+    actions = plan(row(10, 9, "coworker_of", 4, event=5), row(11, 4, "coworker_of", 9, event=5))
+    assert kinds(actions) == [(10, "retire", "symmetric_duplicate")]
+    assert actions[0]["keep_id"] == 11
+
+
+def test_two_canonical_rows_of_one_event_cannot_exist_and_stronger_wins_among_equals():
+    actions = plan(row(1, 9, "child_of", 4, event=5, conf=0.5),
+                   row(2, 9, "child_of", 4, event=5, conf=0.9))
+    assert [a["rel_id"] for a in actions if a["action"] == "convert"] == [2]
 
 
 def test_plan_document_records_the_canonical_phase():
@@ -131,11 +146,3 @@ def test_direct_apposition_and_complement_are_self_references():
     assert claims_to_be_author("Андрей (я) тоже там был", End(("Андрей",)))
     assert claims_to_be_author("I am Sandra from sales", End(("Sandra",)))
     assert claims_to_be_author("I'm Andrey", End(("Andrey",)))
-
-
-def test_contradiction_keep_is_the_strongest_row_regardless_of_input_order():
-    rows = [row(1, 1, "boss_of", 2, event=10, conf=0.5), row(2, 1, "boss_of", 2, event=11, conf=0.9),
-            row(3, 2, "boss_of", 1, event=12)]
-    for ordering in (rows, rows[::-1]):
-        retire = [a for a in plan(*ordering) if a["action"] == "retire"]
-        assert [a["rel_id"] for a in retire] == [3] and retire[0]["keep_id"] == 2
