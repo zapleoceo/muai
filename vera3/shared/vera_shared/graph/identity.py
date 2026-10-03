@@ -22,6 +22,7 @@ from sqlalchemy import text
 
 from vera_shared.db.engine import get_session
 from vera_shared.graph.dedup import _as_dict, get_entity_dossiers
+from vera_shared.graph.dupe_keys import FREE_MAIL
 
 log = logging.getLogger(__name__)
 
@@ -312,10 +313,13 @@ _SERVICE_LOCALPARTS = (
     "alerts", "news", "newsletter", "marketing", "team", "hello", "contact",
     "admin", "crm", "logbook", "welcome", "mailer", "bounce", "postmaster",
     "feedback", "digest", "updates", "update", "reply", "noreply-app",
-    "account", "accounts", "service", "help", "notify",
+    "account", "accounts", "service", "help", "notify", "payment", "payments",
+    "statements", "receipts", "reviews", "analytics", "webinar",
 )
 _SERVICE_SUBDOMAINS = ("mail.", "email.", "alert.", "alerts.", "notification.",
-                       "notifications.", "update.", "updates.", "reply.")
+                       "notifications.", "update.", "updates.", "reply.",
+                       "newsletter.", "communication.", "communications.",
+                       "mailing.", "notificationmail.")
 
 
 def entity_kind_for_email(addr: str | None) -> str:
@@ -323,11 +327,15 @@ def entity_kind_for_email(addr: str | None) -> str:
 
     Служебным считаем адрес, у которого local-part начинается со служебного
     слова (плюс-адресация и разделители учитываются: `invoice+statements@`,
-    `no_reply-2@`) либо домен начинается с сервисного поддомена.
+    `no_reply-2@`) либо домен начинается с сервисного поддомена. Адрес на
+    free-mail домене (gmail.com…) — всегда человек: организацией по домену его
+    не назвать, там тысячи несвязанных людей (аудит 2026-09-26).
     """
     if not addr or "@" not in addr:
         return "person"
     local, _, domain = addr.strip().lower().partition("@")
+    if domain in FREE_MAIL:
+        return "person"
     # Токены local-part: `ads-account-noreply` → [ads, account, noreply];
     # совпадение по ЦЕЛОМУ токену, чтобы `supportive-care` не считался
     # `support`, а `informationsecurity` — `info`.
