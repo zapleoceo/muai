@@ -222,16 +222,17 @@ def _neutral(stats: PairStats, interaction: float) -> Role | None:
 
 
 def build_connection(a: int, b: int, claims: Iterable[Claim], stats: PairStats,
-                     shared_work: bool = False) -> Connection | None:
+                     shared_work: bool = False, suppress_inferred: bool = False) -> Connection | None:
     """Связь пары из записей и статистики; None — нет показываемой роли и не на что опереться
-    (записей нет вовсе либо нет общения)."""
+    (записей нет вовсе либо нет общения). `suppress_inferred` — владелец отверг выведенное
+    «работает с»: общение не считается уликой, записанные роли остаются."""
     interaction = interaction_strength(stats)
     work = work_strength(stats, shared_work)
     grouped: dict[RoleKey, list[Claim]] = {}
     for claim in claims:
         grouped.setdefault(_role_key(claim), []).append(claim)
     roles = {key: _asserted_role(key, group, work) for key, group in grouped.items()}
-    inferred = inferred_work_weight(stats, shared_work)
+    inferred = 0.0 if suppress_inferred else inferred_work_weight(stats, shared_work)
     work_key: RoleKey = (INFERRED_PREDICATE, None)
     if inferred and work_key in roles:
         old = roles[work_key]

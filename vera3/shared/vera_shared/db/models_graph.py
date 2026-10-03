@@ -232,6 +232,26 @@ class PairStatsRow(Base):
     )
 
 
+class ConnectionSuppressionRow(Base):
+    """Пара, у которой владелец отверг ВЫВЕДЕННУЮ роль «работает с» (миграция 041).
+
+    У выведенной роли нет строк `relationships`, гасить в ней нечего; запись здесь
+    говорит модели связи: общение этой пары не считать уликой роли. Пара упорядочена:
+    entity_a < entity_b."""
+    __tablename__ = "connection_suppressions"
+
+    entity_a: Mapped[int] = mapped_column(
+        ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True,
+    )
+    entity_b: Mapped[int] = mapped_column(
+        ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True,
+    )
+    predicate: Mapped[str] = mapped_column(String(80), primary_key=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now(),
+    )
+
+
 # ─── L2 Patterns ─────────────────────────────────────────────────────────────
 
 

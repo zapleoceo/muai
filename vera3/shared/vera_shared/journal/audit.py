@@ -5,6 +5,7 @@ from typing import Any
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_mcp import McpAuditRow
 
@@ -47,3 +48,11 @@ async def list_entries(limit: int, client: str | None = None) -> list[dict[str, 
     return [{"audit_id": r.id, "client": r.client, "tool": r.tool, "args": r.args,
              "target": f"{r.target_kind}:{r.target_id}", "status": r.status,
              "undo_of": r.undo_of, "at": r.created_at.isoformat()} for r in rows]
+
+
+async def recent_rows(limit: int) -> list[McpAuditRow]:
+    """Свежие записи целиком (с `before`/`after`) — для страницы журнала дашборда."""
+    async with get_session() as s:
+        return list((await s.execute(
+            select(McpAuditRow).order_by(McpAuditRow.id.desc()).limit(limit)
+        )).scalars().all())
