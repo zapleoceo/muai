@@ -23,7 +23,7 @@ from sqlalchemy import text
 from vera_shared.db.engine import get_session
 from vera_shared.events.visibility import NOT_HIDDEN_SQL
 from vera_shared.graph.rel_judge import Candidate, judge_batch
-from vera_shared.graph.rel_text import End, Evidence
+from vera_shared.graph.rel_text import End, Evidence, single_token_name
 from vera_shared.graph.rel_validate import (
     is_referential_name,
 )
@@ -38,6 +38,7 @@ from vera_shared.graph.repo_relationships import (
     upsert_relationship,
 )
 from vera_shared.ingest.authorship import OWNER, resolve_author
+from vera_shared.links.circle import EventCircle, event_circle, resolve_short_name
 from vera_shared.llm.client import LLMCallFailed, chat_async
 
 log = logging.getLogger(__name__)
@@ -229,10 +230,31 @@ async def extract_and_store(event_id: int, body: str) -> RelExtractOutcome:
             return None, False, False
         if low not in resolved:
             strong_id = await resolve_strong_identifier(name)
-            resolved[low] = (strong_id, True) if strong_id else (
-                await resolve_entity_exact(name), False)
+            if strong_id:
+                resolved[low] = (strong_id, True)
+            elif single_token_name(name):
+                # Одно имя указывает на человека только внутри круга разговора: глобально
+                # «Дима» — десятки людей, а единственный по точному имени — чужой тёзка.
+                resolved[low] = (await _resolve_single(name), False)
+            else:
+                resolved[low] = (await resolve_entity_exact(name), False)
         entity_id, strong = resolved[low]
         return entity_id, strong, False
+
+    circle: list[EventCircle | None] = []
+
+    async def _resolve_in_circle(name: str) -> int | None:
+        if not circle:
+            circle.append(await event_circle(event_id))
+        return await resolve_short_name(name, circle[0]) if circle[0] else None
+
+    async def _resolve_single(name: str) -> int | None:
+        """Организация из одного слова («Acme») — как раньше, по точному имени; человек —
+        только по кругу разговора, даже если по имени он единственный."""
+        by_name = await resolve_entity_exact(name)
+        if by_name is not None and (await _describe(by_name))[1] != "person":
+            return by_name
+        return await _resolve_in_circle(name)
 
     async def _describe(entity_id: int) -> tuple[str, str]:
         if entity_id not in described:

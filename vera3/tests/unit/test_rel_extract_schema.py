@@ -112,8 +112,9 @@ async def test_extract_and_store_upserts_resolved_relationship():
          patch("vera_shared.graph.rel_extract.resolve_entity_exact",
                AsyncMock(side_effect=[1, 2])), \
          patch("vera_shared.graph.rel_extract.get_entity",
-               AsyncMock(side_effect=[SimpleNamespace(name="Дима Петров", type="person"),
-                                      SimpleNamespace(name="ITStep", type="organization")])),          patch("vera_shared.graph.rel_extract.upsert_relationship",
+               AsyncMock(side_effect=lambda i: {
+                   1: SimpleNamespace(name="Дима Петров", type="person"),
+                   2: SimpleNamespace(name="ITStep", type="organization")}[i])),          patch("vera_shared.graph.rel_extract.upsert_relationship",
                AsyncMock(return_value=True)) as up,          patch("vera_shared.graph.rel_extract.resolve_strong_identifier",
                AsyncMock(return_value=None)),          patch("vera_shared.graph.rel_extract.entity_names",
                AsyncMock(return_value={1: ["Дима Петров"], 2: ["ITStep"]})):
@@ -141,6 +142,7 @@ async def test_extract_and_store_skips_unresolved_entity():
                AsyncMock(side_effect=fake_chat)), \
          patch("vera_shared.graph.rel_extract.resolve_entity_exact",
                AsyncMock(return_value=None)), \
+         patch("vera_shared.graph.rel_extract.event_circle", AsyncMock(return_value=None)), \
          patch("vera_shared.graph.rel_extract.upsert_relationship",
                AsyncMock()) as up:
         n = await extract_and_store(7, "текст события длиннее тридцати символов точно")
