@@ -503,6 +503,59 @@ the migration and run the sync once.
 `YM=2026-09 DRY_RUN=1 bash /var/www/vera3/scripts/banya_monthly_report.sh`.
 Выключить — убрать строку из crontab или очистить `TG_SEND_ALLOWED_CHATS`.
 
+## Слияние точных дублей графа: план → проверка → применение → откат
+
+Класс дублей и правила — `identity.md`, раздел «Точные дубли графа». Скрипт
+`scripts/merge_graph_duplicates.py` запускается разово, вручную, в образе
+`brain-triage` (там `vera_shared`; новый код должен быть уже задеплоен). Скрипты
+и отчёты подмонтированы томами; каталог отчётов один раз: `mkdir -p
+/var/lib/vera3-reports`.
+
+```bash
+cd /var/www/vera3/infra
+RUN="docker compose run --rm --no-deps -v /var/www/vera3/scripts:/scripts \
+  -v /var/lib/vera3-reports:/reports brain-triage python /scripts/merge_graph_duplicates.py"
+
+# 0. страховка: дамп графовых таблиц (читает, ничего не меняет)
+docker exec vera3-postgres pg_dump -U vera -d vera \
+  -t entities -t entity_aliases -t entity_avatars -t memberships \
+  -t relationships -t identity_nodes -t merge_suggestions \
+  > /var/lib/vera3-reports/graph-before-$(date +%F).sql
+
+# 1. план — БД не меняет (режим по умолчанию)
+$RUN --plan /reports/plan.json
+
+# 2. ПРОВЕРКА ГЛАЗАМИ: каждое действие несёт reason и досье сторон (who);
+#    неоднозначное лежит в действиях с action=skip — их скрипт не применяет
+less /var/lib/vera3-reports/plan.json
+
+# 3. применение; без --report скрипт откажется. Можно по одному случаю: --case 4
+$RUN --apply /reports/plan.json --report /reports/rollback-$(date +%F).json
+
+# 4. откат всего (или упавшего на середине прогона) по отчёту
+$RUN --undo /reports/rollback-2026-10-03.json
+```
+
+Что полезно знать:
+
+- **Отчёт пишется после каждого действия**, поэтому прогон, упавший на
+  середине, оставляет рабочий rollback того, что успело примениться.
+  Существующий отчёт скрипт не перезаписывает.
+- Каждое действие — отдельная транзакция. Действие, чья сущность с момента
+  плана исчезла или переименована, пропускается и попадает в `skipped` отчёта:
+  план нельзя применять «по старым данным» через недели, составьте новый.
+- Откат (`undo_report`) идемпотентен — откатанные записи помечены, повторный
+  запуск ничего не делает. Откат возвращает удалённые сущности с прежними id;
+  строки, появившиеся у keep после слияния, остаются у него.
+- Проверка после применения (только SELECT): число сущностей упало ровно на
+  число `drop` в применённых действиях; заглушек `tg_user_*` с чатом того же
+  tg id не осталось.
+- План по SELECT-выгрузке без подключения к БД (для разбора на ноутбуке):
+  `--plan out.json --snapshot export.json`, формат выгрузки — `snapshot_from_dict`
+  (ключи `entities`, `aliases`, `degree`, см. `identity.md`).
+- Не запускайте `--apply` по плану, составленному до деплоя фиксов
+  первопричин: ингестор успеет завести новые дубли того же класса.
+
 ## Secrets
 
 Server `.env` at `/var/www/vera3/infra/.env` (mode 600):
