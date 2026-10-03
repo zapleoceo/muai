@@ -76,7 +76,7 @@ function previewMove(){
       '<div><h4>Они про</h4>' + personLine(p.to) + '</div></div>' + (mergeRows.length
         ? '<h4>Связи, взятые из упоминаний имени (не из его сообщений)</h4><ul class="g-list">' + mergeRows.map(r =>
           '<li><label class="chk"><input type="checkbox" data-rel="' + r.rel_id + '" checked> ' + esc(r.other_name) + ' — ' + esc(predLabel(r.predicate)) +
-          ' <span class="muted small">' + (r.outcome === 'retired' ? '(такая уже есть — склеится)' : '(переедет)') + '</span></label>' +
+          ' <span class="muted small">' + (r.outcome === 'retired' ? '(такая уже есть — склеится)' : r.outcome === 'revived' ? '(была погашена — вернётся со своими уликами)' : '(переедет)') + '</span></label>' +
           (r.fact ? '<div class="muted small">' + esc(r.fact) + '</div>' : '') + '</li>').join('') + '</ul>'
         : '<p class="muted">Связей, основанных на упоминании имени, нет — переносить нечего.</p>');
     $('merge-go').disabled = !mergeRows.length;

@@ -15,7 +15,12 @@ from sqlalchemy import text
 
 from vera_shared.db.engine import get_session
 from vera_shared.graph.connections import CONNECTIONS_LIMIT, entity_connections
-from vera_shared.graph.panel_events import EVENTS_SHOWN, SNIPPET_CHARS, recent_events  # noqa: F401
+from vera_shared.graph.panel_events import (  # noqa: F401
+    EVENTS_SHOWN,
+    SNIPPET_CHARS,
+    recent_events,
+    recent_events_status,
+)
 from vera_shared.graph.repo import get_entity, list_relationships
 
 log = logging.getLogger(__name__)
@@ -78,8 +83,10 @@ async def entity_panel(entity_id: int, *, raw: bool = False, with_events: bool =
         "counts": counts,
         "connections": conns[:connections_limit],
         "connections_total": len(conns),
-        "events": await recent_events(aliases) if with_events else [],
+        "events": [], "events_partial": False,
     }
+    if with_events:
+        payload["events"], payload["events_partial"] = await recent_events_status(aliases)
     if raw:
         rels = await list_relationships(entity_id, limit=RAW_RELATIONSHIPS_SHOWN)
         payload["relationships"] = [_relationship(r) for r in rels]

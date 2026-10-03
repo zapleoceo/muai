@@ -82,7 +82,8 @@ def _relationship_text(row: McpAuditRow, names: dict[int, str], triples: Triples
         rel = (row.args or {}).get("relationship_id") or row.target_id
         triple = triples.get(rel) if isinstance(rel, int) else None
     verb = {"relationship_retire": "Связь погашена",
-            "relationship_move": "Связь перенесена"}.get(row.tool, "Связь задана")
+            "relationship_move": "Связь перенесена",
+            "relationship_revive": "Связь возвращена"}.get(row.tool, "Связь задана")
     if triple is None:
         return f"{verb}: запись №{esc(row.target_id)}"
     s, p, o = triple

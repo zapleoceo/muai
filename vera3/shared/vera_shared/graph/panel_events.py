@@ -15,6 +15,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 from datetime import datetime, timedelta
@@ -35,9 +36,11 @@ EVENTS_SHOWN = 5
 SNIPPET_CHARS = 160
 EVENTS_TIMEOUT_S = 2
 DM_WINDOW_DAYS = 400
+MAX_ALIASES_QUERIED = 8
+_LIKE_ESCAPE = "\\"
 _SENDER_SOURCES = ("telegram", "slack", "instagram")
 _SUBJECT = re.compile(r"^Subject:[ \t]*(.*)$", re.MULTILINE)
-_COLUMNS = "SELECT id, source, occurred_at, content_text FROM events WHERE "
+_SELECT = "SELECT id, source, occurred_at, content_text FROM events WHERE "
 _TAIL = f" AND {NOT_HIDDEN_SQL} ORDER BY occurred_at DESC LIMIT :n"
 
 
@@ -61,25 +64,36 @@ def snippet(content_text: str | None) -> str:
     return flat if len(flat) <= SNIPPET_CHARS else flat[:SNIPPET_CHARS - 1].rstrip() + "…"
 
 
+def _like_escape(value: str) -> str:
+    return (value.replace(_LIKE_ESCAPE, _LIKE_ESCAPE * 2).replace("%", _LIKE_ESCAPE + "%")
+            .replace("_", _LIKE_ESCAPE + "_"))
+
+
 def queries_for(source: str, identifier: str, limit: int) -> list[tuple[str, dict[str, Any]]]:
-    """SQL и параметры для одного алиаса; пусто — источник карточка не показывает."""
+    """SQL и параметры для одного алиаса; пусто — источник карточка не показывает.
+
+    Источник вписан в SQL литералом: частичный индекс `ix_events_tg_sender` (WHERE source =
+    'telegram') планировщик берёт только когда условие видно в тексте запроса, а не в параметре.
+    Литералы — из закрытого списка, пользовательских значений в SQL нет."""
     if source == "gmail":
-        key = f"%{identifier.lower()}%"
-        return [(_COLUMNS + "source = 'gmail' AND (lower(metadata->>'from') LIKE :key "
-                 "OR lower(metadata->>'to') LIKE :key)" + _TAIL, {"key": key, "n": limit})]
+        key = f"%{_like_escape(identifier.lower())}%"
+        esc = f" ESCAPE '{_LIKE_ESCAPE}'"
+        return [(_SELECT + "source = 'gmail' AND (lower(metadata->>'from') LIKE :key" + esc
+                 + " OR lower(metadata->>'to') LIKE :key" + esc + ")" + _TAIL, {"key": key, "n": limit})]
     if source not in _SENDER_SOURCES:
         return []
     key = identifier.removeprefix("user:")
-    found = [(_COLUMNS + "source = :src AND metadata->>'sender_id' = :key" + _TAIL,
-              {"src": source, "key": key, "n": limit})]
+    found = [(_SELECT + f"source = '{source}' AND metadata->>'sender_id' = :key" + _TAIL,
+              {"key": key, "n": limit})]
     if source == "telegram":
         since = utc_naive_now() - timedelta(days=DM_WINDOW_DAYS)
-        found.append((_COLUMNS + "source = 'telegram' AND metadata->>'chat_id' = :key "
+        found.append((_SELECT + "source = 'telegram' AND metadata->>'chat_id' = :key "
                       "AND occurred_at > :since" + _TAIL, {"key": key, "since": since, "n": limit}))
     return found
 
 
-async def _run(sql: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+async def _run(sql: str, params: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """Строки события; None — запрос не уложился в таймаут (часть событий не показана)."""
     async with get_session() as s:
         try:
             if _is_postgres(s):
@@ -87,16 +101,26 @@ async def _run(sql: str, params: dict[str, Any]) -> list[dict[str, Any]]:
             rows = (await s.execute(text(sql), params)).mappings().all()
         except DBAPIError as e:
             log.warning("панель: запрос событий не уложился в %sс: %s", EVENTS_TIMEOUT_S, e)
-            return []
+            return None
     return [{"id": r["id"], "source": r["source"], "occurred_at": _iso(r["occurred_at"]),
              "subject": _subject(r["content_text"]) if r["source"] == "gmail" else "",
              "snippet": snippet(r["content_text"])} for r in rows]
 
 
-async def recent_events(aliases: list[tuple[str, str]], limit: int = EVENTS_SHOWN) -> list[dict[str, Any]]:
+async def recent_events_status(aliases: list[tuple[str, str]],
+                               limit: int = EVENTS_SHOWN) -> tuple[list[dict[str, Any]], bool]:
+    """(события, неполно). Запросы идут одновременно (у каждого своя сессия), число алиасов ограничено;
+    `неполно` — какой-то запрос сорвался по таймауту или алиасов больше предела."""
+    jobs = [q for source, identifier in aliases[:MAX_ALIASES_QUERIED]
+            for q in queries_for(source, identifier, limit)]
+    results = await asyncio.gather(*(_run(sql, params) for sql, params in jobs))
     found: dict[int, dict[str, Any]] = {}
-    for source, identifier in aliases:
-        for sql, params in queries_for(source, identifier, limit):
-            for event in await _run(sql, params):
-                found[event["id"]] = event
-    return sorted(found.values(), key=lambda e: e["occurred_at"], reverse=True)[:limit]
+    for rows in results:
+        for event in rows or []:
+            found[event["id"]] = event
+    partial = any(r is None for r in results) or len(aliases) > MAX_ALIASES_QUERIED
+    return sorted(found.values(), key=lambda e: e["occurred_at"], reverse=True)[:limit], partial
+
+
+async def recent_events(aliases: list[tuple[str, str]], limit: int = EVENTS_SHOWN) -> list[dict[str, Any]]:
+    return (await recent_events_status(aliases, limit))[0]

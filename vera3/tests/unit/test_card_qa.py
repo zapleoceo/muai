@@ -76,9 +76,9 @@ class TestCardEndpoints:
     def test_events_endpoint_requires_auth_and_returns_the_list(self):
         assert client.get("/api/graph/entity/1/events").status_code == 401
         with patch("dashboard.graph_routes.entity_aliases", AsyncMock(return_value=[("telegram", "user:1")])), \
-             patch("dashboard.graph_routes.recent_events", AsyncMock(return_value=[{"id": 3}])):
+             patch("dashboard.graph_routes.recent_events_status", AsyncMock(return_value=([{"id": 3}], False))):
             r = client.get("/api/graph/entity/1/events", cookies=_cookie())
-        assert r.json() == {"events": [{"id": 3}]}
+        assert r.json() == {"events": [{"id": 3}], "partial": False}
 
 
 def test_snippet_ends_with_an_ellipsis_when_cut():

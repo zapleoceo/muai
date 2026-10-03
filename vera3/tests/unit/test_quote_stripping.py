@@ -1,8 +1,12 @@
-"""Отрезание истории ответа в письмах: Gmail/Apple (en/ru), Outlook, `>`-цитаты."""
+"""Отрезание истории ответа в письмах: Gmail/Apple (en/ru), Outlook, блоки `>`, пересылки."""
 from __future__ import annotations
 
 import pytest
 from vera_shared.ingest.quotes import strip_quoted
+
+FWD = "---------- Forwarded message ---------\nFrom: A <a@x.example>\nSent: Monday 10:00\n\nbody"
+OUTLOOK_FWD = "From: A <a@x.example>\nSent: Monday 10:00\nTo: B\n\nbody"
+COMMENT_FWD = "See below.\n\nBegin forwarded message:\nFrom: A\nSent: Mon\n\nbody"
 
 CASES = [
     ("gmail_en", "Thanks, see you.\n\nOn Mon, Aug 11, 2026 at 10:00 AM John Doe <j@x.example> wrote:\n> old\n> text", "Thanks, see you."),
@@ -13,7 +17,11 @@ CASES = [
     ("outlook_ru", "Да.\n\nОт: Иван <i@x.example>\nОтправлено: 11 августа 2026 г. 10:00\nКому: Я\nТема: привет\n\nстарое", "Да."),
     ("original", "Reply\n\n-----Original Message-----\nFrom: A\nold", "Reply"),
     ("original_ru", "Ответ\n-----Исходное сообщение-----\nОт: А", "Ответ"),
-    ("inline_quote", "> quoted\nanswer line\n> more", "answer line"),
+    ("quote_block", "> quoted\n> more\nanswer line", "answer line"),
+    ("single_arrow_kept", "a > b is true\n> note", "a > b is true\n> note"),
+    ("forward_keeps_body", FWD, FWD),
+    ("outlook_forward_without_comment", OUTLOOK_FWD, OUTLOOK_FWD),
+    ("comment_then_forward", COMMENT_FWD, COMMENT_FWD),
     ("all_quoted", "> only\n> quote", ""),
 ]
 

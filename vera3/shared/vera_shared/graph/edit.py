@@ -167,24 +167,34 @@ async def restore_relationship(s: AsyncSession, rel_id: int,
 
 async def repoint_relationship(
     s: AsyncSession, rel_id: int, old_id: int, new_id: int,
-) -> tuple[str, dict[str, Any], dict[str, Any]]:
-    """Переносит конец связи `old_id` → `new_id` в канонической форме. Если получилась петля
-    или такая тройка уже есть — запись гасится ('retired'), иначе меняет концы ('moved').
-    Возвращает (исход, до, после)."""
+) -> tuple[str, dict[str, Any], dict[str, Any], tuple[int, dict[str, Any], dict[str, Any]] | None]:
+    """Переносит конец связи `old_id` → `new_id` в канонической форме. Петля или уже действующая
+    такая тройка — запись гасится ('retired'); тройка есть, но погашена, — она возвращается
+    ('revived'), исходная гасится; иначе меняет концы ('moved'). Возвращает (исход, до, после,
+    изменение двойника или None) — двойнику нужна своя строка журнала."""
     row = await _relationship(s, rel_id)
     before = relationship_snapshot(row)
     subject = new_id if row.subject_entity_id == old_id else row.subject_entity_id
     obj = new_id if row.object_entity_id == old_id else row.object_entity_id
     subject, predicate, obj = canonical_edge(subject, row.predicate, obj)
     twin = await _locked_triple(s, subject, obj, predicate) if subject != obj else None
-    if subject == obj or (twin is not None and twin.id != row.id):
+    if twin is not None and twin.id == row.id:
+        twin = None
+    twin_change: tuple[int, dict[str, Any], dict[str, Any]] | None = None
+    if subject == obj or twin is not None:
         row.is_current = False
         outcome = "retired"
+        if twin is not None and not twin.is_current:
+            # Цель уже была связью, но погашенной: возвращаем её со всеми уликами, а не теряем содержимое.
+            twin_before = relationship_snapshot(twin)
+            twin.is_current = True
+            twin_change = (twin.id, twin_before, relationship_snapshot(twin))
+            outcome = "revived"
     else:
         row.subject_entity_id, row.predicate, row.object_entity_id = subject, predicate, obj
         outcome = "moved"
     await s.flush()
-    return outcome, before, relationship_snapshot(row)
+    return outcome, before, relationship_snapshot(row), twin_change
 
 
 async def current_name(s: AsyncSession, entity_id: int) -> dict[str, Any]:

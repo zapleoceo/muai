@@ -154,7 +154,7 @@ Returns `AnswerResponse` with `answer`, `results`, `provider`, `cost_usd`,
 | `/api/instagram/start` | POST | owner cookie | Submit username/password (`instagram_start`) — may return a 2FA/challenge code form |
 | `/api/instagram/verify` | POST | owner cookie | Submit 2FA/challenge code (`instagram_verify`) → saves encrypted session |
 | `/tokens` | GET | owner cookie | Now redirects to AIbroker — see `llm-broker.md` |
-| `/entities/merge-email-dupes` | POST | owner cookie | Слить дубли по рабочему email (`entities_merge_email_dupes`) — детерминированные пары, группы 3+ не трогаются |
+| `/entities/merge-email-dupes`, `/entities/merge-collisions` | POST | owner cookie + same-origin | Массовые слияния убраны (`entities_bulk_merge_retired`): отвечают редиректом на очередь, пары email/@username объединяются там по одной |
 | `/search-ui` | POST | owner cookie | Обработчик «Спросить Веру»: ответ модели через `render_markdown` (безопасное подмножество: жирный, курсив, `код`, списки, ссылки только http(s); всё остальное экранируется до разметки) плюс до пяти источников (`sources_html`: ссылка `/events/{id}`, человеческая строка, дата, фрагмент тела) из поля `results` ответа brain-search. Источники одного события или одной цепочки писем подряд не повторяются (`dedupe_key`) |
 
 ### Readable event text (`dashboard/event_text.py`, `dashboard/ui/markdown.py`)
@@ -416,3 +416,22 @@ slack/instagram — `sender_id`, gmail — адрес в `from` ИЛИ `to`. С�
 Вспомогательные имена: `csrf.owner_gate` (JSON-ручки для чтения) и `csrf.owner_post_gate` (владелец + same-origin) —
 общие ворота всех правок; `relationship_move.preview_move` считает исход переноса в откатываемой транзакции;
 `merge_candidates.data_weight` — сумма алиасов, связей и групп, по ней `recommend_keep` выбирает главную карточку.
+
+### Правки по ревью merge-ux
+
+- **Все слияния дашборда — один путь.** `entities_routes._merge_with_report` вызывает только `merge_actions.apply_merge`
+  (защита владельца и узлов личности + журнал, клиент `dashboard`). Отказ — заметка на странице очереди
+  (`notice=blocked` / `gone`: «в паре владелец…» / «одной из карточек уже нет»), а не молчаливый пропуск.
+  Массовые `/entities/merge-email-dupes` и `/entities/merge-collisions` больше ничего не сливают: они отвечают
+  редиректом, пары живут в очереди.
+- **Авторство события** (`relationship_move.authorship`): True / False / None. Без `sender_id` или адреса
+  отправителя, а также для других источников — None (неизвестно), такую связь не переносим. Для владельца событие
+  «его» в любом источнике (`metadata.sender_id` = его telegram-id, адреса gmail из алиасов и атрибута `email`).
+- **Перенос на цель с погашенной связью:** она возвращается со своими уликами (`revived`, журнал
+  `relationship_revive`), исходная гасится (`relationship_retire`); откат возвращает обе.
+- **События карточки:** источник вписан в SQL литералом (`source = 'telegram'`) — иначе планировщик не берёт
+  частичный индекс `ix_events_tg_sender`; `LIKE` по gmail экранирует `%`, `_`, `\`; подзапросы идут одновременно
+  (не больше `MAX_ALIASES_QUERIED` алиасов); сорванный по таймауту подзапрос даёт `partial` (`recent_events_status`) и
+  надпись «Часть событий не загрузилась».
+- **Цитаты:** одиночная строка `>` остаётся текстом, режутся блоки из двух и более; пересланное письмо
+  («Forwarded message», «Begin forwarded message», пересылка без своего текста) сохраняет тело.

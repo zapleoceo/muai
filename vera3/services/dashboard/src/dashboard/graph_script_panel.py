@@ -16,16 +16,19 @@ function tgLink(u, id){
 
 let current = null;   // карточка, которая открыта сейчас: из неё берутся индексы кнопок
 let lastEvents = null;
+let eventsPartial = false;
 let panelSeq = 0;     // токен запроса: медленный ответ про прежнего человека не затирает новую карточку
 
 const statTile = (n, label) => '<div class="g-stat"><b>' + n + '</b><span>' + label + '</span></div>';
 const SKELETON = '<div class="skel-stack"><div class="skeleton"></div><div class="skeleton"></div>' +
                  '<div class="skeleton"></div></div>';
 
+const PARTIAL_NOTE = '<p class="muted small">Часть событий не загрузилась — обновите карточку позже.</p>';
 function eventsHtml(list){
   if (list === null) return '<div class="skel-stack"><div class="skeleton"></div><div class="skeleton"></div></div>';
-  if (!list.length) return '<p class="muted small">Событий не нашлось.</p>';
-  return '<ul class="g-list">' + list.map(e =>
+  const note = eventsPartial ? PARTIAL_NOTE : '';
+  if (!list.length) return (eventsPartial ? '' : '<p class="muted small">Событий не нашлось.</p>') + note;
+  return note + '<ul class="g-list">' + list.map(e =>
     '<li><a href="/events/' + e.id + '">' + esc(SOURCE_RU[e.source] || e.source) + ' · ' +
     esc(fmtStamp(e.occurred_at)) + '</a>' + (e.subject ? '<div class="small"><b>' + esc(e.subject) + '</b></div>' : '') +
     '<div class="muted small">' + esc(e.snippet) + '</div></li>').join('') + '</ul>';
@@ -73,6 +76,7 @@ function loadEvents(id, seq){
   getJson('/api/graph/entity/' + id + '/events').then(d => {
     if (seq !== panelSeq) return;
     lastEvents = d.events;
+    eventsPartial = !!d.partial;
     const box = $('g-events');
     if (box) box.innerHTML = eventsHtml(lastEvents);
   }).catch(() => { const box = $('g-events'); if (box && seq === panelSeq) box.innerHTML = '<p class="muted small">События не загрузились.</p>'; });

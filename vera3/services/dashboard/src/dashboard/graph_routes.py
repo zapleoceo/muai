@@ -18,7 +18,7 @@ from sqlalchemy.exc import SQLAlchemyError
 from vera_shared.graph.clusters import get_clusters, recompute_clusters
 from vera_shared.graph.connections import CONNECTIONS_LIMIT
 from vera_shared.graph.panel import entity_aliases, entity_panel
-from vera_shared.graph.panel_events import recent_events
+from vera_shared.graph.panel_events import recent_events_status
 from vera_shared.graph.rel_canon import INVERSE
 from vera_shared.graph.rel_extract import PREDICATES
 from vera_shared.graph.repo import (
@@ -115,7 +115,8 @@ async def graph_entity_events(request: Request, entity_id: int):
     if (resp := owner_or_blank_401(request)) is not None:
         return resp
     aliases = await entity_aliases(entity_id)
-    return JSONResponse({"events": await recent_events(aliases)})
+    events, partial = await recent_events_status(aliases)
+    return JSONResponse({"events": events, "partial": partial})
 
 
 @router.get("/api/graph/entity/{entity_id}", response_class=JSONResponse)

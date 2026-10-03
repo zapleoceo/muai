@@ -97,10 +97,15 @@ def _head(progress: str) -> str:
             '<a class="chip" href="/graph">← к людям</a></div>')
 
 
-def review_body(queue: list[QueueItem], n: int, pair_html: str, keep: int | None, notice: int | None,
-                analysis: dict[str, Any]) -> str:
+NOTICES = {"blocked": "Объединение не выполнено: в паре владелец или карточка с узлами личности — такое делается только вручную.",
+           "gone": "Объединение не выполнено: одной из карточек уже нет (её, видимо, объединили раньше)."}
+
+
+def review_body(queue: list[QueueItem], n: int, pair_html: str, keep: int | None, merged: int | None,
+                analysis: dict[str, Any], notice: str | None = None) -> str:
     undo = (f'<p class="pill ok">Карточки объединены. '
-            f'<button type="button" class="ghost sm" data-undo="{notice}">Вернуть</button></p>' if notice else "")
+            f'<button type="button" class="ghost sm" data-undo="{merged}">Вернуть</button></p>' if merged else "")
+    undo += f'<p class="warning">{esc(NOTICES[notice])}</p>' if notice in NOTICES else ""
     tools = f'<details><summary>Вера и участники групп</summary><p>{analysis_status(analysis)}</p></details>'
     if not queue:
         return (_head("Очередь пуста") + undo

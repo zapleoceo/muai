@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import os
 
@@ -12,9 +11,8 @@ import httpx
 from fastapi import APIRouter, Form, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse
 from vera_shared.graph.avatars import get_avatar
-from vera_shared.graph.dedup import get_entity_context, merge_username_collision_pairs
+from vera_shared.graph.dedup import get_entity_context
 from vera_shared.graph.identity import run_identity_analysis, set_suggestion_status
-from vera_shared.graph.merge import merge_entities
 from vera_shared.graph.merge_actions import apply_merge, preview_merge
 from vera_shared.graph.merge_candidates import entity_summaries, recommend_keep
 from vera_shared.graph.merge_errors import MergeError
@@ -29,11 +27,24 @@ from dashboard.render import _render, initials_avatar_svg, owner_or_auth_error
 log = logging.getLogger(__name__)
 
 
-async def _merge_with_report(keep_id: int, drop_id: int, reason: str) -> None:
-    """Один путь слияния с отчётом; отчёт пишем в лог — на странице его
-    негде хранить, а откат по нему делает `merge_graph_duplicates.py --undo`."""
-    report = await merge_entities(keep_id, [drop_id], reason)
-    log.info("merge report: %s", json.dumps(report.to_dict(), ensure_ascii=False))
+async def _merge_with_report(keep_id: int, drop_id: int, reason: str) -> int | str:
+    """Единственный путь слияния из дашборда: защита владельца и узлов личности плюс строка
+    журнала (`merge_actions.apply_merge`). Возвращает id записи журнала или код заметки
+    (`blocked` / `gone`) для страницы очереди."""
+    try:
+        return (await apply_merge(keep_id, [drop_id], reason, "dashboard"))["audit_id"]
+    except MergeBlocked as e:
+        log.warning("слияние отклонено защитой: %s", e)
+        return "blocked"
+    except MergeError as e:
+        log.warning("слияние не выполнено (карточки нет?): %s", e)
+        return "gone"
+
+
+def _after_merge(result: int | str, n: int = 0) -> RedirectResponse:
+    key = "merged" if isinstance(result, int) else "notice"
+    return RedirectResponse(f"/entities/duplicates?n={n}&{key}={result}", status_code=303)
+
 
 # Один анализ за раз; состояние живёт в процессе дашборда (single-owner UI).
 _analysis: dict = {"running": False, "last": None}
@@ -87,29 +98,14 @@ async def entities_analyze(request: Request):
 
 
 @router.post("/entities/merge-email-dupes")
-async def entities_merge_email_dupes(request: Request):
-    """Слить дубли по рабочему email — он глобально уникален, поэтому две
-    person-сущности на один адрес это детерминированный дубль, а не догадка.
-    Группы из трёх и более не трогаются: там разбирать глазами."""
-    if (resp := owner_or_auth_error(request)) is not None:
-        return resp
-    if (denied := same_origin_or_403(request)) is not None:
-        return denied
-    from vera_shared.graph.collisions import merge_email_collision_pairs
-    done = await merge_email_collision_pairs()
-    log.info("email-collision bulk merge: %d pairs", len(done))
-    return RedirectResponse("/entities/duplicates", status_code=303)
-
-
 @router.post("/entities/merge-collisions")
-async def entities_merge_collisions(request: Request):
-    """Слить все однозначные @username-коллизии (канал+персона) одним махом."""
+async def entities_bulk_merge_retired(request: Request):
+    """Массовые слияния убраны: они шли мимо защиты владельца и журнала. Пары с одинаковым
+    email/@username теперь в очереди проверки — каждая объединяется там, с предпросмотром и откатом."""
     if (resp := owner_or_auth_error(request)) is not None:
         return resp
     if (denied := same_origin_or_403(request)) is not None:
         return denied
-    merged = await merge_username_collision_pairs()
-    log.info("username-collision bulk merge: %d pairs", len(merged))
     return RedirectResponse("/entities/duplicates", status_code=303)
 
 
@@ -146,24 +142,26 @@ async def entities_suggestion(request: Request,
     if row and action in ("accept_a", "accept_b"):
         keeper = row["entity_a"] if action == "accept_a" else row["entity_b"]
         merged = row["entity_b"] if action == "accept_a" else row["entity_a"]
-        await _merge_with_report(keeper, merged, f"dashboard: предложение {suggestion_id}")
+        result = await _merge_with_report(keeper, merged, f"dashboard: предложение {suggestion_id}")
+        return _after_merge(result)
     return RedirectResponse("/entities/duplicates", status_code=303)
 
 
 @router.get("/entities/duplicates", response_class=HTMLResponse)
-async def entity_duplicates_page(request: Request, n: int = 0, sw: int = 0, merged: int | None = None):
+async def entity_duplicates_page(request: Request, n: int = 0, sw: int = 0, merged: int | None = None,
+                                 notice: str | None = None):
     """Очередь проверки: одна пара за раз; `n` — позиция, `sw=1` — поменять главную карточку."""
     if (resp := owner_or_auth_error(request)) is not None:
         return resp
     queue = await load_queue()
     n = min(max(n, 0), max(len(queue) - 1, 0))
     if not queue:
-        return HTMLResponse(_render("entities", review_body(queue, 0, "", None, merged, _analysis)))
+        return HTMLResponse(_render("entities", review_body(queue, 0, "", None, merged, _analysis, notice)))
     item = queue[n]
     summaries = await entity_summaries([item.a, item.b])
     if len(summaries) < 2:                      # одной из карточек уже нет — пара устарела
         return RedirectResponse(f"/entities/duplicates?n={n}", status_code=303) if n else \
-            HTMLResponse(_render("entities", review_body([], 0, "", None, merged, _analysis)))
+            HTMLResponse(_render("entities", review_body([], 0, "", None, merged, _analysis, notice or "gone")))
     keep = recommend_keep(summaries[item.a], summaries[item.b])
     if sw:
         keep = item.b if keep == item.a else item.a
@@ -171,7 +169,7 @@ async def entity_duplicates_page(request: Request, n: int = 0, sw: int = 0, merg
     plan = await preview_merge(keep, [drop], "dashboard: предпросмотр очереди")
     dossiers = await pair_dossiers(item.a, item.b)
     return HTMLResponse(_render("entities", review_body(
-        queue, n, pair_view(item, n, keep, dossiers, summaries, plan, bool(sw)), keep, merged, _analysis)))
+        queue, n, pair_view(item, n, keep, dossiers, summaries, plan, bool(sw)), keep, merged, _analysis, notice)))
 
 
 @router.post("/entities/queue/merge")
@@ -185,14 +183,10 @@ async def queue_merge(request: Request, a: int = Form(...), b: int = Form(...), 
     drop = b if keep == a else a
     if keep not in (a, b):
         return RedirectResponse(f"/entities/duplicates?n={n}", status_code=303)
-    try:
-        result = await apply_merge(keep, [drop], "dashboard: очередь проверки дублей", "dashboard")
-    except (MergeBlocked, MergeError) as e:
-        log.warning("очередь дублей: слияние отклонено: %s", e)
-        return RedirectResponse(f"/entities/duplicates?n={n + 1}", status_code=303)
-    if suggestion_id:
+    result = await _merge_with_report(keep, drop, "dashboard: очередь проверки дублей")
+    if isinstance(result, int) and suggestion_id:
         await set_suggestion_status(suggestion_id, "accepted")
-    return RedirectResponse(f"/entities/duplicates?n={n}&merged={result['audit_id']}", status_code=303)
+    return _after_merge(result, n)
 
 
 @router.post("/entities/queue/reject")
@@ -218,8 +212,4 @@ async def entity_merge(request: Request,
         return resp
     if (denied := same_origin_or_403(request)) is not None:
         return denied
-    await _merge_with_report(keeper_id, merged_id, "dashboard: ручное слияние")
-    return RedirectResponse(
-        f"/entities/duplicates?merged={merged_id}",
-        status_code=303,
-    )
+    return _after_merge(await _merge_with_report(keeper_id, merged_id, "dashboard: ручное слияние"))
