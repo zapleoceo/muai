@@ -14,6 +14,10 @@ from vera_shared.graph.dupe_keys import name_words, word_key
 
 _FIRST_PERSON = re.compile(r"\b(я|мне|мой|моя|моё|мои|меня|мною|i|my|me|saya|aku)\b",
                            re.IGNORECASE)
+# «На Андрея (это я)», «Андрей — это я», «I am Andrey»: автор называет себя по имени.
+_SELF_AFTER_NAME = re.compile(r"\((?:это\s+)?я\)|\bэто\s+я\b", re.IGNORECASE)
+_SELF_BEFORE_NAME = re.compile(r"\bi\s+am\b|\bi['’]m\b", re.IGNORECASE)
+_NEAR_WORDS = 2
 # Общие слова названий не доказывают упоминание: «Group», «Inc» есть в любом факте.
 _GENERIC = frozenset({"the", "inc", "llc", "ltd", "team", "group", "company", "corp",
                       "and", "for"})
@@ -63,3 +67,24 @@ def mentions(fact: str | None, end: End) -> bool:
 def fact_names_both_ends(evidence: Evidence) -> bool:
     return (mentions(evidence.fact, evidence.subject)
             and mentions(evidence.fact, evidence.object))
+
+
+def has_self_marker(fact: str | None) -> bool:
+    return bool(fact and (_SELF_AFTER_NAME.search(fact) or _SELF_BEFORE_NAME.search(fact)))
+
+
+def _near(text: str, end: End) -> bool:
+    words = {word_key(w) for w in re.findall(r"[^\W\d_]{2,}", text.casefold())}
+    return any(_matches(k, w) for k in _keys(end.names) for w in words)
+
+
+def claims_to_be_author(fact: str | None, end: End) -> bool:
+    """Факт сам говорит, что названный конец — автор («На Андрея (это я)»): ближайшие
+    слова перед «(это я)» или после «I am» содержат имя конца."""
+    for m in _SELF_AFTER_NAME.finditer(fact or ""):
+        if _near(" ".join(re.findall(r"[\w'’-]+", fact[:m.start()])[-_NEAR_WORDS:]), end):
+            return True
+    for m in _SELF_BEFORE_NAME.finditer(fact or ""):
+        if _near(" ".join(re.findall(r"[\w'’-]+", fact[m.end():])[:_NEAR_WORDS]), end):
+            return True
+    return False

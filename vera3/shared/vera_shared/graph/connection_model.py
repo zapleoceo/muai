@@ -53,15 +53,22 @@ INFER_MIN_DAYS_CHAT = 6
 ALSO_MIN_WEIGHT = 0.35
 ALSO_RATIO = 0.6
 INFERRED_PREDICATE = "coworker_of"
-#: Роли, которым рабочее общение — прямая улика.
-WORK_ROLES = frozenset({"coworker_of", "boss_of", "works_at"})
+#: Роли, которым рабочее общение — прямая улика. Иерархии тут нет: рабочий контекст
+#: доказывает «работает с», а не «кто начальник» («принял приглашение» → вес 0.95
+#: у босса из одного сообщения, прод-QA 04.10).
+WORK_ROLES = frozenset({"coworker_of", "works_at"})
 #: Личные и коммерческие роли: одна фраза — слишком шаткое основание (прод-замер
 #: 04.10: «супруга» и «поставщики» из одного упоминания перебивали 400 дней общих чатов).
-NEEDS_REPEAT = frozenset({"spouse_of", "parent_of", "client_of", "vendor_of"})
+NEEDS_REPEAT = frozenset({"spouse_of", "parent_of", "client_of", "vendor_of", "boss_of"})
 MIN_REPEAT_SUPPORT = 2
 #: Пара с общением, но без показываемой роли, не пропадает: «общение без ясной роли».
 NEUTRAL_PREDICATE = "contact"
 NEUTRAL_MAX_WEIGHT = 0.3
+#: Сколько дней контакта достаточно, чтобы пара без записанных ролей показывалась как
+#: «общение без ясной роли»: рубеж «постоянный контакт» — p90 обычных собеседников
+#: владельца (16) и медиана его коллег (10); ≥10 дней у ~15% личных контактов, то есть
+#: список короткий, но 108 дней и 615 личных сообщений уже не теряются.
+CONTACT_MIN_DAYS = 10
 #: Иерархии, где обе стороны одновременно — противоречие.
 HIERARCHY = frozenset({"boss_of", "parent_of"})
 #: При равном весе главной становится роль, стоящая раньше: она точнее.
@@ -120,7 +127,9 @@ class Connection:
     @property
     def also(self) -> tuple[Role, ...]:
         floor = max(ALSO_MIN_WEIGHT, ALSO_RATIO * self.weight)
-        return tuple(r for r in self.roles[1:] if r.weight >= floor and _corroborated(r))
+        no_contact = self.stats.active_days == 0
+        return tuple(r for r in self.roles[1:] if r.weight >= floor and _corroborated(r)
+                     and not (no_contact and r.predicate in HIERARCHY))
 
     @property
     def hidden(self) -> int:
@@ -160,6 +169,10 @@ def inferred_work_weight(stats: PairStats, shared_work: bool) -> float:
                                          else INFER_MIN_DAYS_CHAT):
         return 0.0
     return INFER_MAX * work_strength(stats, shared_work)
+
+
+def is_regular_contact(stats: PairStats) -> bool:
+    return stats.active_days >= CONTACT_MIN_DAYS
 
 
 def could_infer_work(stats: PairStats) -> bool:
@@ -224,7 +237,7 @@ def _neutral(stats: PairStats, interaction: float) -> Role | None:
 def build_connection(a: int, b: int, claims: Iterable[Claim], stats: PairStats,
                      shared_work: bool = False, suppress_inferred: bool = False) -> Connection | None:
     """Связь пары из записей и статистики; None — нет показываемой роли и не на что опереться
-    (записей нет вовсе либо нет общения). `suppress_inferred` — владелец отверг выведенное
+    (записей нет и общения меньше `CONTACT_MIN_DAYS`, либо роли скрыты и общения нет). `suppress_inferred` — владелец отверг выведенное
     «работает с»: общение не считается уликой, записанные роли остаются."""
     interaction = interaction_strength(stats)
     work = work_strength(stats, shared_work)
@@ -244,7 +257,8 @@ def build_connection(a: int, b: int, claims: Iterable[Claim], stats: PairStats,
     shown = list(_drop_contradictions(qualified).values())
     hidden = len(roles) - len(shown)
     if not shown:
-        neutral = _neutral(stats, interaction) if roles else None
+        neutral = (_neutral(stats, interaction)
+                   if roles or stats.active_days >= CONTACT_MIN_DAYS else None)
         if neutral is None:
             return None
         shown = [neutral]
