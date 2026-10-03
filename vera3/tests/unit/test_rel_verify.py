@@ -223,3 +223,21 @@ def test_unclear_verdict_keeps_the_edge():
            "is_current": True}
     assert _action(row, Verdict("unclear"))["action"] == "skip"
     assert _action(row, Verdict("no"))["action"] == "retire"
+
+
+def test_unclear_hierarchy_direction_is_retired():
+    """Для иерархии «unclear» — это «непонятно, кто чей начальник»: связь с
+    неверным направлением хуже отсутствующей (аудит 04.10.2026)."""
+    from vera_shared.graph.rel_cleanup_verify import _action
+    from vera_shared.graph.rel_verify import Verdict
+
+    row = {"id": 9, "subject_name": "Ли", "predicate": "reports_to",
+           "object_name": "Султан", "subject_entity_id": 1, "object_entity_id": 2,
+           "is_current": True}
+    assert _action(row, Verdict("unclear"))["action"] == "retire"
+
+
+def test_prompt_accepts_strong_implication_and_rejects_irony():
+    from vera_shared.graph.rel_verify import PROMPT
+    assert "STRONGLY imply" in PROMPT
+    assert "irony" in PROMPT and "sarcasm" in PROMPT
