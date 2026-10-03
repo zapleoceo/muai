@@ -766,7 +766,7 @@ systemd-юнитами, поэтому падающий юнит для него
    DELETE FROM schema_migrations WHERE version='030_event_embeddings_pgvector';`
 3. **Рестарт** `vera3-gateway vera3-brain-triage-1 vera3-brain-triage-2
    vera3-brain-search` — «колонка есть» кэшируется на процесс; до рестарта
-   триаж пишет только JSONB (безвредно: бэкфил подберёт).
+   триаж пишет только JSONB (исторически; JSONB снят 038/039).
 4. **Бэкфил** в фоне: `nohup sh -c 'docker exec -i vera3-brain-search python - --batch 1000 < /var/www/vera3/scripts/backfill_pgvector.py' >> /var/log/vera-backfill-pgvector.log 2>&1 &`.
    Чтение+разбор на проде ~1800 строк/с, с записью и паузой 0.2 с между
    порциями ожидаемо **10–20 мин**. Память — порция 1000 строк, в пределах
@@ -803,8 +803,86 @@ systemd-юнитами, поэтому падающий юнит для него
    сохранения с `statement_timeout` на транзакцию
    (`vectors.ANN_STATEMENT_TIMEOUT_MS`, 5 с) и при таймауте пропускается —
    выдача остаётся полнотекстовой, в логе `ann: смысловой шаг пропущен`.
-8. `DROP COLUMN embedding` (JSONB) — отдельной миграцией, не раньше чем
-   через неделю спокойной работы.
+8. `DROP COLUMN embedding` (JSONB) — выполнено миграциями 038/039, см.
+   «Снятие JSONB-эмбеддингов» ниже.
+
+## Снятие JSONB-эмбеддингов: 038, 039, VACUUM FULL
+
+Что и почему — `brain.md`, «Эмбеддинги: pgvector». Старая колонка
+`event_embeddings.embedding` (JSONB) снимается в три шага; код после релиза её
+не читает и не пишет. Замер 2026-10-03: 471 184 строки, таблица 5003 МБ (heap
+1240, индексы 211 вместе с HNSW 189, остальное ~3.5 ГБ — TOAST JSONB);
+`embedding_vec IS NULL` у 2484 строк, все JSON `null`, чужой размерности нет;
+диск 43/75 ГБ; `pg_repack` в образе нет (pgvector 0.8.2 единственное
+расширение), PG 16.14.
+
+Обозначения: `PSQL='docker exec -i vera3-postgres psql -U vera -d vera -v ON_ERROR_STOP=1'`.
+
+0. **Проверки.** `df -h /` свободно ≥ 10 ГБ; свежий ночной бэкап.
+   **Бэкап JSONB перед снятием** (ночной дамп `event_embeddings` исключает, поэтому
+   отдельно, вне корня NAS-синхронизации `/var/backups/vera`):
+   `mkdir -p /var/backups/vera-adhoc && docker exec vera3-postgres pg_dump -U vera -d vera -t event_embeddings -Fc -Z 6 > /var/backups/vera-adhoc/event_embeddings-pre039-$(date +%F).dump`
+   и `ls -lh` (оценка 1.5–2.5 ГБ, 3–6 мин; поверх этого `pg_restore -l` для
+   проверки читаемости). Восстановление — `pg_restore -c -t event_embeddings`.
+1. **Миграция 038** (мгновенно, ACCESS EXCLUSIVE на миллисекунды под
+   `lock_timeout` 5 с): `scripts/apply_migration.sh infra/migrations/038_event_embeddings_jsonb_nullable.sql`.
+   Старый код продолжает работать. **Обязательно ДО пуша нового кода**: проверить
+   `SELECT 1 FROM schema_migrations WHERE version='038_event_embeddings_jsonb_nullable'`.
+   Без 038 новый INSERT без JSONB падает на NOT NULL; факт из `remember` при этом
+   не теряется (вектор пишется в отдельной точке сохранения, `_write_vector`), а
+   события без вектора доэмбеддит reembed, но окно лучше не открывать вовсе.
+2. **Релиз кода** обычным пушем в `master`. Не раньше, чем вся флотилия
+   (gateway, brain-search, brain-triage-1/2, mcp) работает на новом образе:
+   `docker ps --format '{{.Names}} {{.Image}}'`.
+3. **Сутки наблюдения.** `SELECT count(*) FROM event_embeddings WHERE
+   embedding_vec IS NULL` не растёт (должно быть ~2484 и неподвижно); в логах
+   brain-search нет «event_embeddings недоступна». Откат до 039: `ALTER TABLE
+   event_embeddings ALTER COLUMN embedding SET NOT NULL` невозможен, пока есть
+   строки с NULL, обычно откат — вернуть образ, 038 вреда не делает.
+4. **Миграция 039** (минуты, без долгой блокировки записи):
+   `scripts/apply_migration.sh infra/migrations/039_drop_event_embeddings_jsonb.sql`.
+   Внутри: предохранитель (> 10000 строк без вектора → стоп), `CHECK (embedding_vec
+   IS NOT NULL) NOT VALID`, `DELETE` 2484 строк, `VALIDATE CONSTRAINT` (скан
+   1.2 ГБ, 1–3 мин, запись идёт), `SET NOT NULL` без скана по проверенному CHECK,
+   `DROP COLUMN` (каталог). Короткие ACCESS EXCLUSIVE под `lock_timeout` 5 с;
+   упало на таймауте — повторить, файл идемпотентен. Удалённые строки
+   доэмбеддит цикл reembed brain-triage: 100 событий за цикл, старые «дыры» идут
+   хвостовым окном (`reembed.py`), так что полный проход занимает часы, а не
+   минуты. Следить: `SELECT count(*) FROM events e WHERE triage_status='done'
+   AND content_text<>'' AND NOT EXISTS (SELECT 1 FROM event_embeddings m WHERE
+   m.event_id=e.id)` убывает.
+5. **Возврат места: `VACUUM FULL`.** DROP COLUMN диск не освобождает: ~3.5 ГБ
+   лежит в TOAST до перезаписи. Окно ночью (Джакарта спит, ~20:00 UTC):
+   - Что произойдёт: ACCESS EXCLUSIVE на `event_embeddings` на всё время,
+     перезапись heap (~1.2 ГБ, 1–3 мин) и пересборка индексов, главный из них
+     HNSW 189 МБ — 5–15 мин (как в шаге 5 pgvector). Итого **10–20 мин**
+     недоступности таблицы. Нужно свободного места ≈ размер новой таблицы с
+     индексами ≈ 1.5 ГБ + WAL: при 30 ГБ свободно запас большой. Итог: таблица
+     5003 МБ → ~1.5 ГБ, возврат ~3.5 ГБ.
+   - Перед: `docker stop vera3-brain-triage-1 vera3-brain-triage-2` (иначе
+     записи встанут в очередь на блокировке; пауза безопасна, события ждут
+     в `pending`). Остановка триажа **обязательна**; brain-search можно не
+     останавливать — поиск деградирует до полнотекста (см. ниже), но `remember`
+     в gateway/MCP и счётчики дашборда будут ждать конца VACUUM.
+   - `docker exec vera3-postgres psql -U vera -d vera -c "SET maintenance_work_mem='192MB'; SET max_parallel_maintenance_workers=0; VACUUM (FULL, ANALYZE, VERBOSE) event_embeddings"`
+     в `tmux`/`nohup`, не в голом ssh. Контейнер на 768m: смотреть `docker stats`.
+   - После: `docker start vera3-brain-triage-1 vera3-brain-triage-2`;
+     `SELECT pg_size_pretty(pg_total_relation_size('event_embeddings'))`;
+     `ix_event_embeddings_vec_bq` валиден (`backfill_pgvector.py --status`);
+     `df -h /`.
+   - Если brain-search НЕ остановлен: поиск не виснет. Запрос с JOIN по таблице
+     обрывается по `lock_timeout` 3 с, поиск идёт на полнотексте без вектора
+     (`retrieval: event_embeddings недоступна`), а ANN-шаг ещё и под
+     `statement_timeout` 5 с. Кто висит до конца блокировки: `remember` в
+     gateway, счётчики дашборда (`COUNT(*) FROM event_embeddings`), триаж
+     (поэтому его стопим).
+   - Дешевле варианта нет: `pg_repack` не установлен, а установка расширения в
+     образ ради одного раза хуже окна. Альтернатива без долгой блокировки —
+     `CREATE TABLE event_embeddings_new (LIKE event_embeddings INCLUDING ALL)`,
+     копия порциями, дозапись дельты и `RENAME` в короткой транзакции плюс
+     пересоздание FK/индексов вручную; сложнее и рискованнее при таблице,
+     которая перестраивается за 15 минут, поэтому не выбрана.
+   - Откат невозможен после DROP COLUMN, кроме восстановления из дампа шага 0.
 
 ## Многоязычный полнотекст: накат 031
 

@@ -73,7 +73,7 @@ field existed — no backfill/migration needed.
 
 `EventEmbeddingRow` — Voyage embedding, split out of `events` into its own
 narrow table: `event_id` (PK, FK → `events.id` ON DELETE CASCADE),
-`embedding` (JSONB, 1024-dim vector), `created_at`. Reason: embeddings
+`embedding_vec` (`halfvec(1024)` NOT NULL, raw SQL only, not in the ORM; the legacy JSONB `embedding` was dropped by 039), `created_at`. Reason: embeddings
 inline made `events` ~3.9GB, so every `COUNT`/`GROUP BY` scanned the whole
 table. Search/dedup/triage all read/write this table via `LEFT JOIN
 event_embeddings ee ON ee.event_id = events.id` — never the old column.

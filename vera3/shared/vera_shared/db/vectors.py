@@ -1,31 +1,23 @@
-"""Где лежат эмбеддинги: колонка `halfvec` или JSONB — и как это пережить.
+"""Где лежат эмбеддинги: `event_embeddings.embedding_vec halfvec(1024)`.
 
-Миграция 030 добавляет `event_embeddings.embedding_vec halfvec(1024)` рядом
-со старым JSONB-полем. Заливка 3.6 ГБ идёт батчами отдельным скриптом и
-занимает время, поэтому код обязан работать в ЛЮБОЙ точке перехода:
+Единственное хранилище вектора события. Старая JSONB-колонка `embedding`
+(~6.3 КБ на строку, ~3 ГБ TOAST) снята миграциями 038/039: код её не читает и
+не пишет, поэтому здесь нет ни проверок «есть ли колонка», ни запасных веток
+на Python — они существовали только на время перехода.
 
-* колонки ещё нет (миграция не накачена) → читаем JSONB;
-* колонка есть, но пустая → читаем JSONB;
-* колонка залита частично → у строки берём то, что есть;
-* залито и построен индекс → ANN-отбор (`ann_candidates_sql`).
-
-Проверки каталога кэшируются на процесс: они не меняются в рантайме,
-а спрашивать каталог на каждый запрос — тот же класс расточительства, что и
-кулдаун LLM (см. llm/circuit.py).
-
-На SQLite (тесты) колонки нет никогда, и это штатная ветка, а не заглушка.
+На SQLite (юнит-тесты) колонки `embedding_vec` нет: ORM-модель её не знает,
+SQL с векторами исполняется только в интеграционных тестах на Postgres+pgvector.
+Индекс ANN — `ix_event_embeddings_vec_bq`; если его снесли, а brain-search не
+перезапускали, запрос упирается в statement_timeout (`ANN_STATEMENT_TIMEOUT_MS`)
+и поиск деградирует до полнотекста (`brain_search.ann.fetch_ann_rows`).
 """
 from __future__ import annotations
 
-import json
-import logging
 from typing import Any
 
 from sqlalchemy import text
 
 from vera_shared.db.engine import get_session
-
-log = logging.getLogger(__name__)
 
 #: Размерность voyage-4 (scripts/reembed_voyage4.py). В выражении индекса
 #: она зашита (`::bit(1024)`), и запрос обязан повторить то же выражение по
@@ -38,57 +30,6 @@ VEC_DIMS = 1024
 #: на порядки ниже любого нашего порога.
 VEC_TYPE = "halfvec"
 ANN_INDEX = "ix_event_embeddings_vec_bq"
-
-_has_vector: bool | None = None
-_has_ann: bool | None = None
-
-
-def forget_capability() -> None:
-    """Сбросить кэш — для тестов и после наката миграции без рестарта."""
-    global _has_vector, _has_ann
-    _has_vector = None
-    _has_ann = None
-
-
-async def vector_column_available() -> bool:
-    """Есть ли `event_embeddings.embedding_vec`. Кэшируется на процесс."""
-    global _has_vector
-    if _has_vector is not None:
-        return _has_vector
-    try:
-        async with get_session() as s:
-            found = (await s.execute(text("""
-                SELECT 1 FROM information_schema.columns
-                WHERE table_name = 'event_embeddings'
-                  AND column_name = 'embedding_vec'
-            """))).scalar_one_or_none()
-        _has_vector = found is not None
-    except Exception as e:  # noqa: BLE001 — SQLite/каталог недоступен: живём на JSONB
-        log.debug("проверка колонки embedding_vec не удалась: %s", e)
-        _has_vector = False
-    if _has_vector:
-        log.info("эмбеддинги: колонка vector доступна, косинус считает Postgres")
-    else:
-        log.info("эмбеддинги: колонки vector нет, косинус считается на Python")
-    return _has_vector
-
-
-async def ann_index_available() -> bool:
-    """Построен ли и ВАЛИДЕН ли ANN-индекс. Кэшируется на процесс.
-
-    Индекс — выключатель ANN-отбора: без него «ближайшие ко всему корпусу»
-    стали бы seq scan'ом ~1 ГБ halfvec на каждый поиск. Недостроенный
-    CONCURRENTLY индекс остаётся в каталоге с indisvalid=false — его не
-    считаем. Включение после постройки — рестарт brain-search."""
-    global _has_ann
-    if _has_ann is not None:
-        return _has_ann
-    if not await vector_column_available():
-        _has_ann = False
-        return False
-    _has_ann = await index_is_valid(ANN_INDEX)
-    log.info("эмбеддинги: ANN-индекс %s", "доступен" if _has_ann else "не построен")
-    return _has_ann
 
 
 async def index_is_valid(name: str) -> bool:
@@ -163,32 +104,30 @@ ANN_SETTINGS_SQL = text(
 ANN_STATEMENT_TIMEOUT_MS = 5000
 
 
+#: Потолок ожидания блокировки в поиске: пока `VACUUM FULL event_embeddings`
+#: держит ACCESS EXCLUSIVE, запрос с JOIN по таблице не должен висеть минутами.
+LOCK_TIMEOUT_MS = 3000
+LOCK_TIMEOUT_SQL = text("SELECT set_config('lock_timeout', :lock_timeout, true)")
+
+
+def lock_timeout_params() -> dict[str, str]:
+    return {"lock_timeout": str(LOCK_TIMEOUT_MS)}
+
+
 def ann_settings_params(ann_k: int) -> dict[str, str]:
     """ef_search в пределах pgvector: 1..1000."""
     return {"ef": str(min(max(ann_k, 40), 1000)),
             "timeout": str(ANN_STATEMENT_TIMEOUT_MS)}
 
 
-def embedding_upsert(event_id: int, embedding: list[float],
-                     with_vec: bool) -> tuple[Any, dict[str, Any]]:
-    """(SQL, параметры) записи эмбеддинга во ВСЕ колонки, что есть. Пока идёт
-    бэкфил, новое событие обязано попасть и в halfvec, и в JSONB — иначе оно
-    окажется в дыре, которую бэкфил уже прошёл. Один источник для триажа и
-    /v1/claude/remember: раньше remember писал только JSONB."""
-    params: dict[str, Any] = {"eid": event_id, "emb": json.dumps(embedding)}
-    if not with_vec:
-        return text("""
-            INSERT INTO event_embeddings (event_id, embedding)
-            VALUES (:eid, CAST(:emb AS jsonb))
-            ON CONFLICT (event_id) DO UPDATE SET embedding = EXCLUDED.embedding
-        """), params
-    params["vec"] = as_pg_vector(embedding)
+def embedding_upsert(event_id: int, embedding: list[float]) -> tuple[Any, dict[str, Any]]:
+    """(SQL, параметры) записи вектора события. Один источник для триажа,
+    reembed и /v1/claude/remember."""
+    params: dict[str, Any] = {"eid": event_id, "vec": as_pg_vector(embedding)}
     return text(f"""
-        INSERT INTO event_embeddings (event_id, embedding, embedding_vec)
-        VALUES (:eid, CAST(:emb AS jsonb), CAST(:vec AS {VEC_TYPE}))
-        ON CONFLICT (event_id) DO UPDATE
-          SET embedding = EXCLUDED.embedding,
-              embedding_vec = EXCLUDED.embedding_vec
+        INSERT INTO event_embeddings (event_id, embedding_vec)
+        VALUES (:eid, CAST(:vec AS {VEC_TYPE}))
+        ON CONFLICT (event_id) DO UPDATE SET embedding_vec = EXCLUDED.embedding_vec
     """), params
 
 

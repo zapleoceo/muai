@@ -1,45 +1,22 @@
 """Ранжирование кандидатов.
 
-Косинус приходит двумя путями. Когда эмбеддинги в колонке halfvec
-(миграция 030), его считает Postgres и отдаёт колонкой `vec_sim` — JSONB не
-разбирается. Строке, до которой бэкфил ещё не дошёл, и всем строкам на базе
-без колонки (SQLite в тестах, прод до наката) косинус считается на Python
-из JSONB — штатная ветка, а не заглушка.
+Косинус считает Postgres по колонке halfvec и отдаёт колонкой `vec_sim`;
+строка без него (события без вектора, режимы без вектора запроса) получает 0.
 """
 from __future__ import annotations
 
-import json
 from typing import Any
 
 from brain_search.query_parse import BOT_AUTHOR_WEIGHT, source_weight
 from brain_search.rows import Candidate
 
 
-def cosine(a: list[float] | None, b: list[float] | None) -> float:
-    if not a or not b or len(a) != len(b):
-        return 0.0
-    # strict=True безопасен: разная длина отсеяна строкой выше
-    dot = sum(x * y for x, y in zip(a, b, strict=True))
-    na = sum(x * x for x in a) ** 0.5
-    nb = sum(y * y for y in b) ** 0.5
-    if na == 0 or nb == 0:
-        return 0.0
-    return dot / (na * nb)
-
-
 def row_similarity(row: Any, q_vec: list[float] | None) -> float:
-    """Сходство из БД, если оно есть, иначе косинус по JSONB."""
+    """Косинус из БД (`vec_sim`); у строки без него — 0."""
     if not q_vec:
         return 0.0
-    cand = Candidate.of(row)
-    if cand.vec_sim is not None:
-        return float(cand.vec_sim)
-    emb = cand.embedding
-    # asyncpg-диалект SQLAlchemy разбирает JSONB в list сам, SQLite отдаёт
-    # текстом — без разбора косинус молча выходил бы 0 на разнице длин
-    if isinstance(emb, str):
-        emb = json.loads(emb)
-    return cosine(q_vec, emb) if emb else 0.0
+    vec_sim = Candidate.of(row).vec_sim
+    return 0.0 if vec_sim is None else float(vec_sim)
 
 
 def score_candidates(rows, q_vec: list[float] | None,
