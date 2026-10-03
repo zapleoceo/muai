@@ -17,7 +17,7 @@ Cloudflare → nginx location /mcp (proxy_buffering off, read timeout 3600s)
 vera3-mcp :8000 (хост 127.0.0.1:8007)          services/mcp, пакет vera_mcp
   ├─ BearerAuthMiddleware (auth.py)            401 без/с неверным токеном
   ├─ FastMCP, stateless_http=True, json_response=True   (server.py)
-  ├─ read_tools.py   → vera_shared (events.queries, graph.*, search_client) + sql_guard.py
+  ├─ read_tools.py   → vera_shared (events.queries, graph.*, search_client) + sql_guard.py → ro_engine.py (роль vera_ro)
   └─ write_tools.py  → vera_shared (events.edit, graph.edit, memory.remember) + audit.py / undo.py
         │ БД: Postgres (тот же engine/репозитории, что у остальных сервисов)
         │ search: HTTP → brain-search:8000 (как /v1/search шлюза)
@@ -39,9 +39,13 @@ vera3-mcp :8000 (хост 127.0.0.1:8007)          services/mcp, пакет vera
   внутренние эндпоинты сервисов.
 - Env: `MCP_TOKENS="claude:<hex>,codex:<hex>"` (имя:токен, имя попадает в
   `mcp_audit.client`) и/или `MCP_TOKEN=<hex>` (имя `default`). Токен короче
-  16 символов отбрасывается. Генерация: `openssl rand -hex 32`.
+  32 символов не принимается, а сервис при старте падает с `WeakTokenError`,
+  называя клиента (`validate_tokens`). Генерация: `openssl rand -hex 32`.
 - Fail-closed: ни одного токена — любой запрос получает 401. `/healthz`
-  открыт (для healthcheck контейнера и монитора).
+  открыт (для healthcheck контейнера и монитора). Без аутентификации
+  проходят только `lifespan` и `/healthz`; websocket закрывается.
+- Лимиты: nginx режет частоту и параллелизм по токену и по IP
+  (`infra/nginx/vera3-mcp-zones.conf` + `limit_req` в location, ответ 429).
 - Токены живут только в `infra/.env` на сервере (в git не попадают).
   Отозвать клиента = убрать его пару и перезапустить сервис `mcp`.
 
@@ -68,8 +72,8 @@ vera3-mcp :8000 (хост 127.0.0.1:8007)          services/mcp, пакет vera
 
 | Tool | Что делает |
 |---|---|
-| `remember(text, kind, context, tags)` | Факт/решение/задача/предпочтение; та же семантика и двухслойный дедуп, что у `/v1/claude/remember` |
-| `update_event(event_id, content_text, metadata, category)` | Правка любого события; `metadata` сливается по ключам (`null` удаляет ключ); правка текста возвращает событие в очередь триажа (`pending`), и эмбеддинг пересчитывается |
+| `remember(text, kind, context, tags)` | Факт/решение/задача/предпочтение; та же семантика и двухслойный дедуп, что у `/v1/claude/remember`. Событие, вектор и строка журнала — одна транзакция. При точном дубле ничего не создаётся и `audit_id` = `null` (откатывать нечего); при смысловом дубле событие создаётся как `superseded` и журналируется |
+| `update_event(event_id, content_text, metadata, category)` | Правка события ЛЮБОГО источника (почта, Telegram, …); `metadata` сливается по ключам (`null` удаляет ключ); правка текста возвращает событие из `done`/`error` в очередь триажа (`pending`), и эмбеддинг пересчитывается; событие в `processing` или `media_pending` не правится и не скрывается (`EventBusy`, повторить через минуту) |
 | `hide_event(event_id)` / `unhide_event(event_id)` | Мягкое скрытие: `triage_status='hidden'` исключает событие из поиска, свежих и timeline; прежний статус хранится и возвращается |
 | `entity_rename(entity_id, name)` | Переименование сущности |
 | `entity_add_alias(entity_id, source, identifier, display_name)` | Алиас (`telegram`+`user:123`, `gmail`+адрес); чужой алиас отвергается (это слияние) |
@@ -90,22 +94,55 @@ vera3-mcp :8000 (хост 127.0.0.1:8007)          services/mcp, пакет vera
 Таблица `mcp_audit` (миграция `036_mcp_audit`, модель `McpAuditRow`):
 `client`, `tool`, `args`, `target_kind`/`target_id`, `before`/`after`
 (JSON), `status` (`applied` → `undone`), `undo_of`, `created_at`.
-`undo` возвращает состояние из `before`, а `remember` откатывает
-скрытием созданного события. Если объект с тех пор менялся (текущее
-состояние ≠ `after`), откат отказывает (`UndoRefused`), пока не передан
-`force=true`. Откат сам пишется в журнал и повторно не откатывается.
+
+`undo` возвращает ТОЛЬКО поля, которые менял этот инструмент: `update_event`
+— текст, метаданные, категорию; `hide_event`/`unhide_event` — статус и его
+метаданные; `remember` откатывается скрытием созданного события. Правка,
+сделанная после (текст при скрытом событии, скрытие после правки текста),
+остаётся. Если поля инструмента с тех пор менялись (текущее значение ≠
+`after`), откат отказывает (`UndoRefused`), пока не передан `force=true`;
+и тогда возвращаются только они. Строка журнала и объект берутся
+`SELECT … FOR UPDATE`, поэтому параллельные правки и откаты не затирают друг
+друга. Откат сам пишется в журнал и повторно не откатывается.
+
+Ретенция: журнал растёт на снимок текста на каждую правку. Чистка —
+`scripts/prune_mcp_audit.sql` (запускает оператор, по умолчанию 180 дней);
+после неё записи старше срока откатить нельзя.
 
 ### sql_query: как ограничен
 
-1. Разбор (`sql_guard.validate_sql`): комментарии и литералы вырезаются,
-   остаётся ровно один оператор на SELECT/WITH; отвергаются INSERT, UPDATE,
-   DELETE, MERGE, DDL, GRANT, COPY, SELECT INTO, SET/RESET, `FOR UPDATE/SHARE`,
-   несколько операторов и функции `set_config`, `pg_read_file`, `lo_*`,
-   `dblink`, `nextval`, advisory-локи и т.п. (`SqlRejected`).
-2. Выполнение (`run_readonly`): транзакция `SET TRANSACTION READ ONLY`,
-   `SET LOCAL statement_timeout = 10000`, потолок 500 строк (`LIMIT` снаружи
-   подзапроса, `truncated` честно сообщает об обрезке), ячейки до 2000 символов.
-   Это главный барьер: даже при обходе разбора Postgres откажет в записи.
+Главный барьер — РОЛЬ, а не разбор текста. Основная роль `vera` —
+суперпользователь, и любой список запретов обходится строковым литералом:
+`SELECT query_to_xml('select pg_read_file(''/etc/passwd'')', true, false, '')`.
+Поэтому `sql_query` ходит отдельным движком (`ro_engine.get_ro_engine`) под
+ролью `vera_ro`:
+
+- создаётся миграцией `037_mcp_ro_role` БЕЗ пароля: `NOSUPERUSER NOINHERIT
+  NOCREATEDB NOCREATEROLE`, `default_transaction_read_only=on`,
+  `statement_timeout=10s`, `CONNECT` и `USAGE` на `public`, `SELECT` только на
+  таблицы содержимого: `events`, `event_embeddings`, `event_chunk_embeddings`,
+  `entities`, `entity_aliases`, `memberships`, `relationships`,
+  `merge_suggestions`, `project_membership`, `patterns`, `identity_nodes`,
+  `usage_log`, `mcp_audit`. Секретных таблиц (`gmail_accounts`,
+  `telegram_sessions`, `instagram_sessions`, `slack_auth`, `trello_boards`,
+  `app_control`, очередей с текстом поручений) в списке нет, а `pg_authid`,
+  `pg_read_file` и т.п. недоступны не-суперпользователю;
+- оператор задаёт пароль и URL, один раз:
+  `ALTER ROLE vera_ro PASSWORD '<openssl rand -hex 24>';` и в `infra/.env`
+  `MCP_RO_DATABASE_URL=postgresql+asyncpg://vera_ro:<пароль>@postgres:5432/vera`;
+- без `MCP_RO_DATABASE_URL`, или если роль оказалась суперпользователем
+  (`SELECT rolsuper FROM pg_roles WHERE rolname = current_user`, проверка один
+  раз на URL), `sql_query` отказывает с понятной ошибкой
+  (`ReadOnlyUnavailable`); остальные инструменты работают.
+
+Остальные слои: транзакция `SET TRANSACTION READ ONLY` и
+`SET LOCAL statement_timeout = 10000`, потолок 500 строк (`LIMIT` снаружи
+подзапроса, `truncated` честно сообщает об обрезке), ячейки до 2000 символов,
+и разбор текста (`sql_guard.validate_sql`) как защита вглубь: комментарии и
+литералы вырезаются, остаётся один оператор на SELECT/WITH, отвергаются DML,
+DDL, GRANT, COPY, SELECT INTO, `FOR UPDATE/SHARE`, несколько операторов и
+функции `set_config`, `pg_read_file`, `lo_*`, `dblink`, `nextval`,
+advisory-локи, `query_to_xml` и родня (`SqlRejected`).
 
 Тексты событий в выдаче — данные, а не инструкции: письмо или сообщение
 может содержать попытку «приказать» агенту. Сервер говорит об этом в
@@ -186,10 +223,14 @@ bearer_token_env_var = "VERA_MCP_TOKEN"
   `/healthz` в образе, порт `127.0.0.1:8007`). Env: `MCP_TOKENS`/`MCP_TOKEN`,
   `INTERNAL_SECRET`, `SEARCH_URL`, `BROKER_URL`, `BROKER_PROJECT_KEY`,
   `DATABASE_URL`.
-- Миграция `036_mcp_audit` накатывается вручную (`scripts/apply_migration.sh`)
-  ДО первого вызова записывающих инструментов; деплой миграции не катит.
-- nginx: `include /var/www/vera3/infra/nginx/vera3-mcp.location.conf;`
-  внутри `server` хоста vera, затем `nginx -t && systemctl reload nginx`.
+- Миграции `036_mcp_audit` и `037_mcp_ro_role` накатываются вручную
+  (`scripts/apply_migration.sh`) ДО первого вызова записывающих инструментов и
+  `sql_query`; деплой миграции не катит. После 037 задать пароль роли
+  `vera_ro` и `MCP_RO_DATABASE_URL` (см. выше).
+- nginx: сначала один раз `include /var/www/vera3/infra/nginx/vera3-mcp-zones.conf;`
+  в `http {}` (зоны `limit_req`/`limit_conn`; без них следующий шаг не пройдёт
+  `nginx -t`), затем `include /var/www/vera3/infra/nginx/vera3-mcp.location.conf;`
+  внутри `server` хоста vera и `nginx -t && systemctl reload nginx`.
   Буферизация выключена и таймаут 3600с: Streamable HTTP может отвечать потоком.
 - CI: пакет установлен в оба воркфлоу (`pip install -e services/mcp`), образ
   собирается в матрицах `build`; пол покрытия `mcp` — 90%.
@@ -198,19 +239,21 @@ bearer_token_env_var = "VERA_MCP_TOKEN"
 ## Карта кода
 
 - `vera_mcp.server`: `build_mcp`, `build_app`; `healthz`.
-- `vera_mcp.auth`: `load_tokens`, `match_token`, `bearer_of`, `client_of`,
-  `BearerAuthMiddleware`.
+- `vera_mcp.auth`: `load_tokens`, `validate_tokens`, `match_token`, `bearer_of`,
+  `client_of`, `BearerAuthMiddleware`, `WeakTokenError`.
+- `vera_mcp.ro_engine`: `get_ro_engine`, `forget_ro_engine`, `ReadOnlyUnavailable`.
 - `vera_mcp.sql_guard`: `validate_sql`, `strip_literals`, `run_readonly`,
   `SqlRejected`.
 - `vera_mcp.audit`: `record`, `get_entry`, `list_entries`, `AuditNotFound`.
 - `vera_mcp.undo`: `undo_entry`, `UndoRefused`.
-- `vera_shared.events.edit`: `update_event`, `set_hidden`, `restore_event`,
-  `load_row`, `snapshot`, `merge_metadata`, `EventNotFound`;
-  `events.visibility`: `hide_values`, `unhide_values`; `events.queries`:
+- `vera_shared.events.edit`: `update_event`, `set_hidden`,
+  `load_row`, `snapshot`, `merge_metadata`, `restore_fields`, `EventNotFound`,
+  `EventBusy`;
+  `events.visibility`: `hide_values`, `unhide_values`, `not_hidden_sql`; `events.queries`:
   `recent_events`, `get_event_row`, `source_stats`, `event_preview`.
 - `vera_shared.graph.edit`: `rename_entity`, `add_alias`, `remove_alias`,
   `set_relationship`, `retire_relationship`, `restore_relationship`,
-  `relationship_snapshot`, `current_name`, `current_relationship`,
+  `relationship_snapshot`, `current_name`, `current_relationship`, `alias_owner`,
   `GraphEditError`; `graph.search`: `search_entities`; `graph.event_links`:
   `linked_entities`, `timeline_events`; `graph.context`:
   `entity_context_payload`.
@@ -218,13 +261,17 @@ bearer_token_env_var = "VERA_MCP_TOKEN"
   `vera_shared.search_client`: `search_brain`, `SearchUnavailable`;
   `vera_shared.timeutil`: `parse_iso_naive`.
 
-## Скрытые события в поиске
+## Скрытые события
 
-brain-search (`retrieval.py`, `agent.py`, `reports.py`) и смысловой дедуп
-`remember` добавляют условие `triage_status <> 'hidden'`
-(`events.visibility.NOT_HIDDEN_SQL`). Статус `hidden` не берёт ни триаж
-(клеймит только `pending`), ни сторож. Скрытие не трогает граф: связи
-снимаются отдельно (`relationship_retire`).
+Единый предикат `triage_status <> 'hidden'` (`events.visibility.NOT_HIDDEN_SQL`,
+`not_hidden_sql(alias)`) стоит везде, где события читаются как содержимое:
+brain-search (`retrieval.py`, `agent.py`, `reports.py`, история чата в
+`synthesis.py`), смысловой дедуп `remember`, досье и контекст сущностей
+(`graph/dossiers.py`, `graph/dedup.py`), счёт участия в чате
+(`chat_activity.py`), автор события для извлечения связей (`rel_extract.py`),
+`recent_events` и `timeline`. В дашборде статус показан как «скрыто».
+Статус `hidden` не берёт ни триаж (клеймит только `pending`), ни сторож.
+Скрытие не трогает граф: связи снимаются отдельно (`relationship_retire`).
 
 ## Legacy: локальный stdio `vera-mcp`
 
