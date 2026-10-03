@@ -37,8 +37,8 @@ def test_full_name_matches_in_any_case_and_alphabet():
 
 
 def test_distinct_surname_alone_links_but_lowercase_does_not():
-    assert found("Кронов сказал")[DIRECTOR] == (KIND_NAME, CONF_SURNAME)
-    assert DIRECTOR not in found("кронов сказал")
+    assert found("Это сказал Кронов")[DIRECTOR] == (KIND_NAME, CONF_SURNAME)
+    assert DIRECTOR not in found("это кронов сказал")
 
 
 def test_username_links_with_full_confidence():

@@ -5,7 +5,7 @@
         python /scripts/backfill_event_links.py --batch 500 --max-batches 200
 
 Идёт от больших id к меньшим (свежее важнее), курсор `backfill` в `link_cursor` —
-остановка и повтор безопасны. `--reset` начинает заново (после смены прозвищ, карты
+остановка и повтор безопасны. Новые события не трогает: их ведёт цикл `links_loop` (под замком). `--reset` начинает заново (после смены прозвищ, карты
 голосов или правил); `--status` печатает курсоры и ничего не меняет. Пачка пишется
 одной транзакцией; между пачками пауза `--pause`, чтобы не мешать триажу. Нужны
 DATABASE_URL и OWNER_TELEGRAM_ID.
@@ -17,37 +17,29 @@ import asyncio
 import sys
 import time
 
-from sqlalchemy import select
-from vera_shared.db.engine import close_engine, get_session, init_engine
-from vera_shared.db.models_links import LinkCursorRow
+from vera_shared.db.engine import close_engine, init_engine
 from vera_shared.links.context import ContextBuilder
 from vera_shared.links.index import (
     BACKFILL,
     DEFAULT_BATCH,
-    FORWARD,
     load_resources,
     max_event_id,
     reset_cursors,
     run_batch,
 )
-
-
-async def _cursors() -> dict[str, int]:
-    async with get_session() as s:
-        rows = (await s.execute(select(LinkCursorRow))).scalars().all()
-    return {r.name: r.event_id for r in rows}
+from vera_shared.links.index_store import read_cursors
 
 
 async def main(args: argparse.Namespace) -> int:
     await init_engine()
     try:
         if args.status:
-            print({"max_event_id": await max_event_id(), **await _cursors()})
+            print({"max_event_id": await max_event_id(), **await read_cursors()})
             return 0
         if args.reset:
             print(f"курсоры сброшены, max(id)={await reset_cursors()}")
         builder = ContextBuilder()
-        await builder.build([])
+        await builder.preload()
         res = await load_resources(builder.owner)
         started, events, links = time.monotonic(), 0, 0
         for number in range(1, args.max_batches + 1):
@@ -59,7 +51,6 @@ async def main(args: argparse.Namespace) -> int:
             print(f"пачка {number}: до id {result.last_id}, событий {events}, связей {links}, "
                   f"{time.monotonic() - started:.0f} с", flush=True)
             await asyncio.sleep(args.pause)
-        await run_batch(FORWARD, res, builder, args.batch)
     finally:
         await close_engine()
     return 0

@@ -31,29 +31,43 @@
 
 ## Сборка
 
-`links/index.py`: `load_resources` (люди графа, действующие прозвища, карта голосов,
-сильные контакты владельца → `Resources`), `index_events` (пачка событий → связи одной
-транзакцией: старые строки событий удаляются, новые вставляются — повтор безопасен),
-`links_for` (связи одного события), `reindex_event`.
-Контекст события (автор, адресаты, круг, рабочий ли чат) — `ContextBuilder`
-(`links/context.py`), `EventView`, `EventFacts`; `owner_entity_id` — сущность владельца,
-`established_contacts` — пары с устоявшимся общением (`pair_stats`).
-Связи по виду: `base_links` (автор, получатели), `mention_links`, `voice_links`
-(`links/builders.py`), `speakers_of` — ярлыки говорящих созвона, `is_anonymous` — «Собеседник N».
+Модули `links/`: `context_data` (SELECT'ы и чистые помощники: `EventView`, `addresses_of`,
+`sender_key`, `chat_key`, `wanted_aliases`, `alias_map`, `work_chat_keys`, `chat_authors`,
+`person_projects`), `context` (`ContextBuilder`, `EventFacts`), `index` (`index_views`,
+`index_events`, `links_for`, `run_batch`), `index_store` (курсоры `set_cursor` / `read_cursors`,
+`next_batch`, `load_views`, `view_of_row`, `write_links`), `index_resources` (`Resources`,
+`load_resources`), `index_voice` (`voice_guesses`, `voice_links_for`, `voice_body`).
+Ещё: `owner_entity_id` (сущность владельца), `established_contacts` (пары с устоявшимся общением), `LinkCursorRow`
+(курсор потока). Текстовые помощники сопоставления — `matcher_text` (`name_keys`, `text_words`, `same_word`,
+`find_word`, `sentence_initial`). Связи по виду: `base_links` (автор, получатели), `mention_links`, `voice_links` (`builders.py`),
+`speakers_of`, `is_anonymous`.
 
-- **Новые события** — шаг brain-triage `links_loop` (`run_links_cycle`): раз в минуту до пяти
-  пачек по 200 после курсора `forward` (`link_cursor`, `LinkCursorRow`), под advisory-замком —
-  реплик может быть несколько. Переменные: `TRIAGE_LINKS_INTERVAL_S`, `TRIAGE_LINKS_BATCH`,
-  `TRIAGE_LINKS_MAX_BATCHES`, `TRIAGE_LINKS_START_DELAY_S`.
-- **Старые события** — `scripts/backfill_event_links.py`: от больших id к меньшим, пачка за
-  пачкой (`run_batch`, `BatchResult`), курсор `backfill` резюмируем, `--reset`
-  (`reset_cursors`, `max_event_id`) начинает заново, `--status` ничего не меняет.
-  Регламент — `deploy-ops.md`, «Связи событий».
+- **Выборка и запись.** `next_batch` отдаёт id пачки, `load_views` читает ТОЛЬКО нужные колонки
+  (текст события и метаданные; `content_extra` и расшифровка — отдельным запросом и только у созвонов).
+  `write_links` заменяет ПРОИЗВОДНЫЕ связи событий пачки одной транзакцией; ручные (`manual`) не
+  удаляются, а производная с ключом, занятым ручной, не вставляется. Скрытые события связей не
+  получают, их старые производные связи удаляются.
+- **Круг не зависит от порядка.** `ContextBuilder.preload` один раз (и раз в час в долгоживущем
+  процессе) считает `chat_authors` — кто писал в каждом групповом чате за всю историю (площадки
+  с >60 авторов не берутся) — и `person_projects`; backfill от новых к старым видит тот же круг, что
+  и обработка по порядку.
+- **Плохое событие не стопорит курсор.** Пачка, на которой сборка упала, разбирается по одному
+  событию; упавшие пропускаются с записью в лог (`BatchResult.skipped`), курсор двигается. Сбои
+  базы и сети (`OperationalError`, `InterfaceError`, `OSError`, `TimeoutError`) — не плохое
+  событие, они пробрасываются, пачка повторится.
+- **Новые события** — `links_loop` (`run_links_cycle`): раз в минуту до пяти пачек по 200 после
+  курсора `forward` под advisory-замком; один `ContextBuilder` на процесс. Переменные:
+  `TRIAGE_LINKS_INTERVAL_S`, `TRIAGE_LINKS_BATCH`, `TRIAGE_LINKS_MAX_BATCHES`,
+  `TRIAGE_LINKS_START_DELAY_S`.
+- **Старые события** — `scripts/backfill_event_links.py`: от больших id к меньшим (`reset_cursors`,
+  `max_event_id` — `--reset` начинает заново, `--status` ничего не меняет). Новые события
+  скрипт не трогает (их ведёт цикл под замком). Регламент — `deploy-ops.md`.
 
 ## Упоминания: имена, круг, прозвища
 
 `MentionMatcher` (`links/matcher.py`, `PersonNames`, `Mention`) находит людей в тексте.
-Уверенность по виду улики: `@ник` 1.0; имя целиком 0.95; имя и отчество 0.9; характерная
+Фамилия без имени не засчитывается в начале предложения и если то же слово есть в тексте строчным;
+два человека с одним полным именем не называют никого (`NameResolver.full`). Уверенность по виду улики: `@ник` 1.0; имя целиком 0.95; имя и отчество 0.9; характерная
 фамилия одна (≥5 букв, в графе один носитель, с заглавной) 0.8; одиночное имя 0.6.
 
 **Круг разговора.** Одиночное имя («Дима») указывает на человека ТОЛЬКО внутри круга:
@@ -84,7 +98,8 @@
 
 Рабочую область можно сузить проектом: `scope_ids=['project:itstep']` оставляет чаты этого проекта
 (в Veranda — другой бизнес — «ДА» остаётся словом), а чаты без проекта (Slack-пространство) не
-исключаются (`ChatContext.project`). Вне области упоминание пишется с `scope_ok=false`.
+исключаются (`ChatContext.project`). В личке сужение тоже действует: прозвище проекта засчитывается, только если сам чат
+помечен этим проектом или собеседник писал в чатах проекта (`ChatContext.dm_partner_projects`). Вне области упоминание пишется с `scope_ok=false`.
 Прозвище из нескольких слов («Имя Отчество») ищется по основам слов без регистра — падежи не мешают.
 В расшифровках созвонов ищутся только прозвища области `global` («да» заглавными в речи — слово,
 а фраза «Дмитрий Александрович» — человек). **Предложения кода не применяются сами:**
@@ -113,7 +128,8 @@
 - **ASR-имена** (`links/asr.py`, `asr_matches`, `AsrMatch`): «Арчагин» → «Корчагин» только среди
   участников и сильных контактов владельца, слово ≥7 букв, сходство ≥0.8 и заметный отрыв от
   второго кандидата; результат — `mentioned`/`name_match` с уверенностью не выше 0.7 и
-  `span={asr: true}`. Стенограмма НЕ переписывается.
+  `span={asr: true}`. Стенограмма НЕ переписывается. Сравнение квадратично, поэтому перед `SequenceMatcher.ratio` стоят отсевы
+  (разница длин, `real_quick_ratio`, `quick_ratio`), а из цикла событий зовётся `asr_matches_async` (отдельный поток).
 
 ## Чтение и фильтры
 
@@ -158,6 +174,11 @@
 `scripts/clean_namesakes.py` (`--plan`, `--apply --report`, `--undo`, `--entity`).
 
 ## Откат и права
+
+**Слияние сущностей** (`graph/merge_links.py`: `merge_nicknames`, `merge_voice_map`, `merge_event_entities`) переносит
+прицелы к победителю: прозвища и карту голосов — поштучно с записью в `MergeReport` (`unmerge` вернёт),
+ручные связи — поштучно (`MergeReport.created` — строки, созданные слиянием, откат их удалит), производные —
+одним UPDATE без поштучного следа (точность возвращает `backfill_event_links.py --reset`).
 
 Правки `voice_speaker_set` и `entity_add_nickname` идут в `mcp_audit` (`target_kind` `speaker` /
 `nickname`) одной транзакцией с изменением. Таблицы `event_entities`, `entity_nicknames`,

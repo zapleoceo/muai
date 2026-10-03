@@ -30,6 +30,7 @@ class ChatContext:
     is_work: bool = False
     project: str | None = None             # проект рабочего чата (`project_membership`), если известен
     dm_partner: int | None = None          # собеседник личного чата (не владелец)
+    dm_partner_projects: frozenset[str] = field(default_factory=frozenset)   # проекты, где он писал
     participants: frozenset[int] = field(default_factory=frozenset)
     #: Второй круг: сильные контакты автора. К нему обращаемся, только если в первом
     #: (участники чата / собеседник лички / владелец) никто не подошёл.
@@ -53,11 +54,20 @@ def in_scope(rule: NicknameRule, ctx: ChatContext, strong_contacts: frozenset[in
         return ctx.chat_key is not None and ctx.chat_key in rule.scope_ids
     wanted = {i.removeprefix(PROJECT_PREFIX) for i in rule.scope_ids if i.startswith(PROJECT_PREFIX)}
     project_ok = not wanted or ctx.project is None or ctx.project in wanted
-    work = (ctx.is_work and project_ok) or (ctx.dm_partner is not None
-                                            and ctx.dm_partner in strong_contacts)
+    work = (ctx.is_work and project_ok) or _direct_work(ctx, strong_contacts, wanted)
     if rule.scope_kind == WORK:
         return work
     return work or len(ctx.participants & strong_contacts) >= MIN_STRONG_IN_GROUP
+
+
+def _direct_work(ctx: ChatContext, strong_contacts: frozenset[int], wanted: set[str]) -> bool:
+    """Личка с сильным контактом человека; при сужении проектом партнёр должен быть в круге
+    проекта: сам чат помечен проектом или партнёр писал в чатах проекта."""
+    if ctx.dm_partner is None or ctx.dm_partner not in strong_contacts:
+        return False
+    if not wanted:
+        return True
+    return bool(wanted & (ctx.dm_partner_projects | ({ctx.project} if ctx.project else set())))
 
 
 def token_pattern(rule: NicknameRule) -> re.Pattern[str]:

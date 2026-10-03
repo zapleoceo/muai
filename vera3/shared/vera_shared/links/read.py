@@ -15,7 +15,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
 from vera_shared.db.engine import get_session
-from vera_shared.events.visibility import not_hidden_sql
+from vera_shared.events.visibility import HIDDEN_STATUS, not_hidden_sql
 from vera_shared.ingest.envelope import message_body
 from vera_shared.links.builders import speakers_of
 from vera_shared.links.context import EventView, owner_entity_id
@@ -107,14 +107,15 @@ async def co_occurrence(entity_a: int, entity_b: int, start: datetime | None = N
 
 
 async def event_participants(event_id: int) -> dict[str, Any] | None:
-    """Кто связан с событием и как; None — события нет. Неопознанные ярлыки голосов
+    """Кто связан с событием и как; None — события нет или оно скрыто. Неопознанные ярлыки голосов
     созвона перечислены отдельно: их можно назвать через `voice_speaker_set`."""
     async with get_session() as s:
         ev = (await s.execute(text(
-            "SELECT id, source, occurred_at, metadata, content_extra FROM events WHERE id = :i"),
+            "SELECT id, source, occurred_at, metadata, content_extra, triage_status FROM events "
+            "WHERE id = :i"),
             {"i": event_id})).mappings().first()
-        if ev is None:
-            return None
+        if ev is None or ev["triage_status"] == HIDDEN_STATUS:
+            return None                       # скрытое событие и его участники — как несуществующие
         try:
             rows = (await s.execute(text(
                 "SELECT l.entity_id, e.name, l.role, l.source_of_link, l.confidence, l.token, "

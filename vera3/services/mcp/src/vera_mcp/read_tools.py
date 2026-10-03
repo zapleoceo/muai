@@ -19,6 +19,7 @@ from vera_shared.graph.context import entity_context_payload
 from vera_shared.graph.repo import find_entity_by_name, graph_snapshot
 from vera_shared.graph.search import search_entities
 from vera_shared.journal import audit
+from vera_shared.links.context import owner_entity_id
 from vera_shared.links.filters import to_dict
 from vera_shared.links.model import ROLES
 from vera_shared.links.read import entity_events, filtered_events
@@ -161,7 +162,10 @@ async def timeline(
     limit: Annotated[int, Field(ge=1, le=MAX_EVENTS)] = 50,
     roles: Annotated[list[Role] | None, Field(max_length=4)] = None,
 ) -> dict[str, Any]:
-    """События сущности за период (ISO-даты; по умолчанию последние 30 дней): написанные ею, адресованные ей, где она участвовала (созвоны) и где её упомянули (имя, фамилия, @ник, прозвище в области); roles сужает до author/recipient/participant/mentioned. У события — roles и via. Events by/about an entity in a date range."""
+    """События сущности за период (ISO-даты; по умолчанию последние 30 дней, но для сущности владельца период обязателен): написанные ею, адресованные ей, где она участвовала (созвоны) и где её упомянули (имя, фамилия, @ник, прозвище в области); roles сужает до author/recipient/participant/mentioned. У события — roles и via. Events by/about an entity in a date range."""
+    if start is None and end is None and entity_id == await owner_entity_id():
+        raise ValueError("timeline владельца требует период: передайте start и/или end "
+                         "(у владельца события — почти весь мозг)")
     now = utc_naive_now()
     t_end = parse_iso_naive(end) if end else now
     t_start = parse_iso_naive(start) if start else t_end - timedelta(days=30)

@@ -1,185 +1,74 @@
-"""Где, кем и кому написаны события пачки: `EventFacts` для построения связей.
+"""Контекст событий пачки: кто автор, кому адресовано, чей круг разговора.
 
-Автор и получатель определяются по алиасам (`telegram user:<id>`, адрес gmail). Получатели —
-только там, где адресат однозначен: личка Telegram / Slack im и письмо (To). В группе
-«все участники чата» не получатели: кто молчал, тот не был адресатом.
-
-Участники чата — те, кто писал в нём в уже обработанных пачках: запрос «все авторы
-чата» по 470 тысячам событий индекса не имеет, а для одиночных имён и прозвищ области
-`contacts` достаточно осторожной оценки — неизвестный участник просто не даёт связи.
+Получатели — только там, где адресат однозначен: личка Telegram / Slack im и письмо (To).
+В группе «все участники чата» не получатели: кто молчал, тот не был адресатом. Круг группового
+чата — все, кто писал в нём за историю (`chat_authors`, считается один раз и обновляется по
+возрасту), плюс члены группы из `memberships`: порядок обработки событий на него не влияет.
 """
 from __future__ import annotations
 
-import os
-import re
-from collections.abc import Iterable
-from dataclasses import dataclass, field
-from typing import Any
+import time
 
-from sqlalchemy import bindparam, text
-
-from vera_shared.db.engine import get_session
-from vera_shared.graph.connection_model import is_established
-from vera_shared.graph.pair_stats import WORK_PROJECTS, partner_stats
+from vera_shared.links.context_data import (
+    CHAT_SOURCES,
+    EventFacts,
+    EventView,
+    addresses_of,
+    alias_map,
+    chat_authors,
+    chat_id,
+    chat_key,
+    established_contacts,
+    is_private,
+    members,
+    owner_entity_id,
+    person_projects,
+    sender_key,
+    wanted_aliases,
+    work_chat_keys,
+)
 from vera_shared.links.scope import ChatContext
-from vera_shared.projects.rules import chat_key
 
-_EMAIL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+")
-_PRIVATE = ("user", "private")
-#: Источники с автором-человеком по алиасу. voice и прочие строятся иначе.
-CHAT_SOURCES = ("telegram", "slack", "instagram")
-ALIAS_SOURCES = (*CHAT_SOURCES, "gmail")
-#: Больше участников — площадка, а не круг знакомых (то же, что `MAX_CHAT_AUTHORS`).
-MAX_CIRCLE_MEMBERS = 60
+__all__ = ["CHAT_SOURCES", "ContextBuilder", "EventFacts", "EventView", "established_contacts",
+           "is_private", "owner_entity_id"]
 
-
-@dataclass(frozen=True)
-class EventView:
-    id: int
-    source: str
-    text: str
-    metadata: dict[str, Any]
-    extra: dict[str, Any] | None = None       # content_extra (стенограмма созвона)
-    transcript: str | None = None
-    occurred_at: Any = None
-
-
-@dataclass(frozen=True)
-class EventFacts:
-    ctx: ChatContext = field(default_factory=ChatContext)
-    author: int | None = None
-    recipients: tuple[int, ...] = ()
-
-
-def _addresses(value: Any) -> list[str]:
-    return [a.lower() for a in _EMAIL.findall(str(value or ""))]
-
-
-def _sender_key(view: EventView) -> tuple[str, str] | None:
-    if view.source == "gmail":
-        found = _addresses(view.metadata.get("from"))
-        return ("gmail", found[0]) if found else None
-    sender = view.metadata.get("sender_id")
-    return (view.source, f"user:{sender}") if sender not in (None, "") else None
-
-
-def _chat_id(view: EventView) -> str | None:
-    key = "channel_id" if view.source == "slack" else "chat_id"
-    value = view.metadata.get(key)
-    return None if value in (None, "") else str(value)
-
-
-def _chat_key(chat_id: str) -> str:
-    """Ключ чата в `project_membership`: модуль id без -100-префикса супергрупп."""
-    try:
-        return str(chat_key(chat_id))
-    except ValueError:
-        return chat_id
-
-
-def is_private(view: EventView) -> bool:
-    if view.source == "slack":
-        return view.metadata.get("channel_kind") == "im"
-    return view.source in ("telegram", "instagram") and view.metadata.get("chat_type") in _PRIVATE
-
-
-def _wanted_aliases(views: list[EventView]) -> set[tuple[str, str]]:
-    wanted: set[tuple[str, str]] = set()
-    for v in views:
-        if key := _sender_key(v):
-            wanted.add(key)
-        if v.source == "gmail":
-            wanted |= {("gmail", a) for a in _addresses(v.metadata.get("to"))}
-        elif v.source in CHAT_SOURCES and is_private(v) and v.source != "slack" and (c := _chat_id(v)):
-            wanted.add((v.source, f"user:{c}"))
-    return wanted
-
-
-async def _alias_map(keys: Iterable[tuple[str, str]]) -> dict[tuple[str, str], int]:
-    wanted = sorted({k[1] for k in keys})
-    if not wanted:
-        return {}
-    async with get_session() as s:
-        rows = (await s.execute(
-            text("SELECT source, identifier, entity_id FROM entity_aliases "
-                 "WHERE source IN :src AND identifier IN :ids")
-            .bindparams(bindparam("src", expanding=True), bindparam("ids", expanding=True)),
-            {"src": list(ALIAS_SOURCES), "ids": wanted})).all()
-    return {(r[0], r[1].lower() if r[0] == "gmail" else r[1]): r[2] for r in rows}
-
-
-async def _work_chat_keys() -> dict[str, str]:
-    """Рабочие чаты: ключ → проект (при нескольких проектах берётся первый по алфавиту)."""
-    async with get_session() as s:
-        rows = (await s.execute(
-            text("SELECT key, min(project) FROM project_membership WHERE kind = 'chat' "
-                 "AND project IN :p GROUP BY key")
-            .bindparams(bindparam("p", expanding=True)), {"p": list(WORK_PROJECTS)})).all()
-    return {r[0]: r[1] for r in rows}
-
-
-async def _members(chats: set[str]) -> dict[str, frozenset[int]]:
-    """Текущие участники telegram-групп по `memberships`; большие группы (публичные
-    площадки) не круг знакомых — их участники не берутся."""
-    if not chats:
-        return {}
-    async with get_session() as s:
-        rows = (await s.execute(
-            text("SELECT a.identifier, m.child_entity_id FROM entity_aliases a "
-                 "JOIN memberships m ON m.parent_entity_id = a.entity_id AND m.is_current "
-                 "WHERE a.source = 'telegram' AND a.identifier IN :ids")
-            .bindparams(bindparam("ids", expanding=True)),
-            {"ids": [f"chat:{c}" for c in sorted(chats)]})).all()
-    grouped: dict[str, set[int]] = {}
-    for identifier, child in rows:
-        grouped.setdefault(identifier.removeprefix("chat:"), set()).add(child)
-    return {c: frozenset(m) for c, m in grouped.items() if len(m) <= MAX_CIRCLE_MEMBERS}
-
-
-async def established_contacts(entity_id: int | None) -> frozenset[int]:
-    """Сильные контакты сущности: пары с устоявшимся общением (`pair_stats`)."""
-    if entity_id is None:
-        return frozenset()
-    stats = await partner_stats(entity_id)
-    return frozenset(p for p, st in stats.items() if is_established(st))
-
-
-async def owner_entity_id() -> int | None:
-    """Сущность владельца: алиас `telegram user:<OWNER_TELEGRAM_ID>`."""
-    owner = os.environ.get("OWNER_TELEGRAM_ID", "")
-    if not owner.strip("0"):
-        return None
-    async with get_session() as s:
-        return (await s.execute(text(
-            "SELECT entity_id FROM entity_aliases WHERE source = 'telegram' "
-            "AND identifier = :i LIMIT 1"), {"i": f"user:{owner}"})).scalar_one_or_none()
+PRELOAD_MAX_AGE_S = 3600.0
 
 
 class ContextBuilder:
-    """Копит участников чатов между пачками одного прогона."""
+    """Строит `EventFacts` для пачек; долгоживущий (цикл триажа) — обновляет круги по возрасту."""
 
     def __init__(self) -> None:
+        self._authors: dict[str, frozenset[int]] = {}
         self._seen: dict[str, set[int]] = {}
         self._members: dict[str, frozenset[int]] = {}
         self._partners: dict[int, frozenset[int]] = {}
+        self._person_projects: dict[str, frozenset[str]] = {}
         self._work: dict[str, str] | None = None
+        self._preloaded_at: float | None = None
         self.owner: int | None = None
-        self._owner_loaded = False
+
+    async def preload(self, max_age_s: float = PRELOAD_MAX_AGE_S) -> None:
+        """Круги чатов и рабочие проекты — один раз, затем по возрасту (дорогой проход по `events`)."""
+        if self._preloaded_at is not None and time.monotonic() - self._preloaded_at < max_age_s:
+            return
+        self._authors = await chat_authors()
+        self._work = await work_chat_keys()
+        self._person_projects = await person_projects()
+        self.owner = await owner_entity_id()
+        self._preloaded_at = time.monotonic()
 
     async def build(self, views: list[EventView]) -> dict[int, EventFacts]:
-        if self._work is None:
-            self._work = await _work_chat_keys()
-        if not self._owner_loaded:
-            self.owner, self._owner_loaded = await owner_entity_id(), True
-        aliases = await _alias_map(_wanted_aliases(views))
+        await self.preload()
+        aliases = await alias_map(wanted_aliases(views))
         fresh = {c for v in views if v.source == "telegram" and not is_private(v)
-                 and (c := _chat_id(v)) and c not in self._members}
-        await self._load_partners({a for v in views if (a := aliases.get(_sender_key(v) or ("", "")))})
-        loaded = await _members(fresh)
+                 and (c := chat_id(v)) and c not in self._members}
+        await self._load_partners({a for v in views if (a := aliases.get(sender_key(v) or ("", "")))})
+        loaded = await members(fresh)
         self._members.update({c: loaded.get(c, frozenset()) for c in fresh})
         for view in views:
-            author = aliases.get(_sender_key(view) or ("", ""))
-            chat = _chat_id(view)
+            author = aliases.get(sender_key(view) or ("", ""))
+            chat = chat_id(view)
             if author is not None and chat and view.source in CHAT_SOURCES:
                 self._seen.setdefault(f"{view.source}:{chat}", set()).add(author)
         return {v.id: self._facts(v, aliases) for v in views}
@@ -188,35 +77,44 @@ class ContextBuilder:
         for author in authors - self._partners.keys():
             self._partners[author] = await established_contacts(author)
 
+    def _project_of(self, view: EventView, chat: str) -> str | None:
+        return None if view.source == "slack" else (self._work or {}).get(chat_key(chat))
+
     def _facts(self, view: EventView, aliases: dict[tuple[str, str], int]) -> EventFacts:
-        author = aliases.get(_sender_key(view) or ("", ""))
+        author = aliases.get(sender_key(view) or ("", ""))
+        extended = self._partners.get(author or -1, frozenset())
         if view.source == "gmail":
-            to = tuple(dict.fromkeys(e for a in _addresses(view.metadata.get("to"))
+            to = tuple(dict.fromkeys(e for a in addresses_of(view.metadata.get("to"))
                                      if (e := aliases.get(("gmail", a))) not in (None, author)))
             return EventFacts(author=author, recipients=to)
-        chat = _chat_id(view)
+        chat = chat_id(view)
         if chat is None:
             return EventFacts(author=author)
         key = f"{view.source}:{chat}"
+        project = self._project_of(view, chat)
         if is_private(view):
-            partner = (aliases.get((view.source, f"user:{chat}")) if view.source != "slack"
-                       else next(iter(sorted(self._seen.get(key, set()) - {self.owner})), None))
-            other = self.owner if view.metadata.get("direction") == "received" else partner
-            if view.source == "slack":
-                other = self.owner if author != self.owner else partner
-            recipients = (other,) if other is not None and other != author else ()
-            circle = frozenset(e for e in (partner, self.owner) if e is not None)
-            project = (self._work or {}).get(_chat_key(chat)) if view.source != "slack" else None
-            return EventFacts(ChatContext(chat_key=key, is_work=project is not None, project=project,
-                                          dm_partner=partner, participants=circle,
-                                          extended=self._partners.get(author or -1, frozenset())),
-                              author, recipients)
-        project = (self._work or {}).get(_chat_key(chat)) if view.source != "slack" else None
-        work = view.source == "slack" or project is not None
-        circle = set(self._seen.get(key, ())) | self._members.get(chat, frozenset())
+            return self._direct(view, chat, key, project, author, aliases, extended)
+        circle = (set(self._seen.get(key, ())) | self._authors.get(key, frozenset())
+                  | self._members.get(chat, frozenset()))
         if self.owner is not None:      # события приходят из аккаунта владельца: он в каждом чате
             circle.add(self.owner)
-        return EventFacts(ChatContext(chat_key=key, is_work=work, project=project,
-                                      participants=frozenset(circle),
-                                      extended=self._partners.get(author or -1, frozenset())),
-                          author)
+        return EventFacts(ChatContext(
+            chat_key=key, is_work=view.source == "slack" or project is not None, project=project,
+            participants=frozenset(circle), extended=extended), author)
+
+    def _direct(self, view: EventView, chat: str, key: str, project: str | None, author: int | None,
+                aliases: dict[tuple[str, str], int], extended: frozenset[int]) -> EventFacts:
+        slack = view.source == "slack"
+        known = self._seen.get(key, set()) | self._authors.get(key, frozenset())
+        partner = (next(iter(sorted(known - {self.owner})), None) if slack
+                   else aliases.get((view.source, f"user:{chat}")))
+        if slack:
+            other = self.owner if author != self.owner else partner
+        else:
+            other = self.owner if view.metadata.get("direction") == "received" else partner
+        recipients = (other,) if other is not None and other != author else ()
+        projects = frozenset() if slack else self._person_projects.get(chat, frozenset())
+        circle = frozenset(e for e in (partner, self.owner) if e is not None)
+        return EventFacts(ChatContext(
+            chat_key=key, is_work=project is not None or slack, project=project, dm_partner=partner,
+            dm_partner_projects=projects, participants=circle, extended=extended), author, recipients)

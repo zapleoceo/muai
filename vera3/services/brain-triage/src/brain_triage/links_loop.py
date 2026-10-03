@@ -27,6 +27,8 @@ from brain_triage.config import (
 log = logging.getLogger(__name__)
 
 LINKS_LOCK_KEY = 7_340_042
+#: Один построитель на процесс: круги чатов считаются раз в час, а не на каждый проход.
+_builder = ContextBuilder()
 
 
 @asynccontextmanager
@@ -50,15 +52,16 @@ async def run_links_cycle() -> int:
     async with _cycle_lock() as got:
         if not got:
             return -1
-        builder = ContextBuilder()
-        await builder.build([])
-        res = await load_resources(builder.owner)
+        await _builder.preload()
+        res = await load_resources(_builder.owner)
         total = 0
         for _ in range(LINKS_MAX_BATCHES):
-            result = await run_batch(FORWARD, res, builder, LINKS_BATCH)
+            result = await run_batch(FORWARD, res, _builder, LINKS_BATCH)
             if result.last_id is None:
                 break
             total += result.events
+            if result.skipped:
+                log.warning("links: пропущено событий: %s", list(result.skipped))
         return total
 
 

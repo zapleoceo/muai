@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import select, update
+from sqlalchemy import delete, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.engine import get_session
@@ -23,6 +23,7 @@ from vera_shared.db.models_graph import (
     MergeSuggestionRow,
     RelationshipRow,
 )
+from vera_shared.db.models_links import EntityNicknameRow, EventEntityRow, VoiceSpeakerMapRow
 from vera_shared.graph.merge_codec import decode_values
 from vera_shared.graph.merge_report import MergeReport
 
@@ -34,6 +35,9 @@ _TABLES: dict[str, type] = {
     "identity_nodes": IdentityNodeRow,
     "merge_suggestions": MergeSuggestionRow,
     "connection_suppressions": ConnectionSuppressionRow,
+    "entity_nicknames": EntityNicknameRow,
+    "voice_speaker_map": VoiceSpeakerMapRow,
+    "event_entities": EventEntityRow,
 }
 
 
@@ -45,6 +49,13 @@ async def _set(s: AsyncSession, table: str, pk: str, pk_value: Any,
                values: dict[str, Any]) -> None:
     cls = _TABLES[table]
     await s.execute(update(cls).where(getattr(cls, pk) == pk_value).values(**values))
+
+
+async def _set_by_keys(s: AsyncSession, table: str, keys: dict[str, Any],
+                       values: dict[str, Any]) -> None:
+    cls = _TABLES[table]
+    await s.execute(update(cls).where(*(getattr(cls, k) == v for k, v in keys.items()))
+                    .values(**values))
 
 
 async def _drop_pruned_event_link(s: AsyncSession, row: dict[str, Any]) -> None:
@@ -74,10 +85,16 @@ async def _unmerge(s: AsyncSession, report: MergeReport) -> None:
     # у предложения на миг совпала бы с чужой и нарушила uq_merge_pair.
     grouped: dict[tuple[str, str, Any], dict[str, Any]] = {}
     for move in reversed(report.moved):
+        if "keys" in move:                       # таблица с составным ключом
+            await _set_by_keys(s, move["table"], move["keys"], {move["column"]: move["old"]})
+            continue
         grouped.setdefault((move["table"], move["pk"], move["pk_value"]), {})[
             move["column"]] = move["old"]
     for (table, pk, pk_value), values in grouped.items():
         await _set(s, table, pk, pk_value, values)
+    for made in report.created:                  # созданное слиянием удаляется до возврата удалённого
+        cls = _TABLES[made["table"]]
+        await s.execute(delete(cls).where(*(getattr(cls, k) == v for k, v in made["keys"].items())))
     for gone in reversed(report.deleted):
         row = decode_values(gone["row"])
         if gone["table"] == "relationships":
