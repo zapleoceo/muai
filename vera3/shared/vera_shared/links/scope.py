@@ -92,6 +92,8 @@ class ScopeError(ValueError):
 def scope_ids_for(scope_kind: str, chats: list[str] | None, project: str | None) -> list[str]:
     """Идентификаторы области: перечисленные чаты и, если задан, проект (`project:<slug>`)."""
     ids = list(chats or [])
+    if scope_kind == CHATS and not ids:
+        raise ScopeError("область chats без единого чата не сработает нигде — перечислите чаты")
     if project is None:
         return ids
     if not _PROJECT_SLUG.match(project):

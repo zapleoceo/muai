@@ -59,3 +59,8 @@ def test_cli_and_mcp_build_scope_ids_the_same_way():
     script = (Path(__file__).resolve().parents[2] / "scripts" / "manage_nicknames.py").read_text(encoding="utf-8")
     assert script.count("scope_ids_for(args.scope, args.chat, args.project)") == 2
     assert '"--project"' in script and "ScopeError" in script
+
+
+def test_chats_scope_without_chats_is_refused():
+    with pytest.raises(ScopeError):
+        scope_ids_for(CHATS, [], None)
