@@ -9,7 +9,7 @@ event_embeddings …`, различавшихся только WHERE и LIMIT (�
 бесполезна, ранжировать нечем. Агентский search_events идёт через тот же
 `fetch_candidates`, поэтому повторный поиск не отличается от первого.
 
-Поверх любого режима, когда есть вектор запроса и ANN-индекс, добавляются
+Поверх любого режима, когда есть вектор запроса, добавляются
 смысловые кандидаты из всего корпуса (ann.py) с тем же фильтром.
 """
 from __future__ import annotations
@@ -19,14 +19,12 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
+from vera_shared.db import vectors
 from vera_shared.db.engine import get_session
-from vera_shared.db.vectors import (
-    ann_index_available,
-    as_pg_vector,
-    vector_column_available,
-)
+from vera_shared.db.vectors import as_pg_vector
 
-from brain_search.ann import fetch_ann_rows, merge_candidates, vec_columns
+from brain_search.ann import fetch_ann_rows, merge_candidates, vec_sim_column
 from brain_search.fts import fts_match_sql, fts_rank_sql
 from brain_search.retrieval_filters import (
     NOT_A_WORLD_EVENT,
@@ -62,16 +60,35 @@ class Candidates:
 
 def _select(*, extra_cols: str, join: str, where: str, order: str,
             limit_sql: str, with_vec: bool = False) -> Any:
-    # первые девять колонок — по позициям (rows.Candidate), остальные по именам
-    emb, sim = vec_columns() if with_vec else ("ee.embedding", "")
+    # первые девять колонок — по позициям (rows.Candidate), остальные по именам;
+    # седьмая (embedding) зарезервирована и всегда NULL: вектор не покидает БД
+    sim = vec_sim_column() if with_vec else ""
+    join_sql = f"{join} event_embeddings ee ON ee.event_id = events.id" if with_vec else ""
     return text(f"""
-        SELECT {_BASE_COLUMNS}, {emb}, {extra_cols}{sim}, {META_COLUMNS}
+        SELECT {_BASE_COLUMNS}, NULL AS embedding, {extra_cols}{sim}, {META_COLUMNS}
         FROM events
-        {join} event_embeddings ee ON ee.event_id = events.id
+        {join_sql}
         WHERE {where}
         ORDER BY {order}
         LIMIT {limit_sql}
     """)
+
+
+async def _primary_with_degrade(s, **kw) -> tuple[Candidates, bool]:
+    """(кандидаты, считался ли косинус в БД). Пока event_embeddings держит
+    ACCESS EXCLUSIVE (VACUUM FULL из runbook), JOIN по ней ждёт блокировку;
+    lock_timeout обрывает ожидание, и поиск идёт без вектора — на одном
+    полнотексте, а не висит минутами."""
+    if kw["q_vec"] is None:
+        return await _primary(s, with_vec=False, **kw), False
+    try:
+        async with s.begin_nested():
+            await s.execute(vectors.LOCK_TIMEOUT_SQL, vectors.lock_timeout_params())
+            return await _primary(s, with_vec=True, **kw), True
+    except DBAPIError as e:
+        log.warning("retrieval: event_embeddings недоступна (%s) — поиск без вектора",
+                    type(e.orig).__name__ if e.orig is not None else type(e).__name__)
+    return await _primary(s, with_vec=False, **kw), False
 
 
 async def fetch_candidates(
@@ -79,14 +96,11 @@ async def fetch_candidates(
     q_vec: list[float] | None, limit: int, source: str | None = None,
 ) -> Candidates:
     """Кандидаты для скоринга: основной режим + смысловые из ANN."""
-    with_vec = q_vec is not None and await vector_column_available()
-    use_ann = with_vec and await ann_index_available()
     async with get_session() as s:
-        found = await _primary(s, ts_query=ts_query, acc_words=acc_words,
-                               time_range=time_range, project=project,
-                               q_vec=q_vec, with_vec=with_vec, limit=limit,
-                               source=source)
-        if use_ann and q_vec is not None:
+        found, with_vec = await _primary_with_degrade(
+            s, ts_query=ts_query, acc_words=acc_words, time_range=time_range,
+            project=project, q_vec=q_vec, limit=limit, source=source)
+        if with_vec and q_vec is not None:
             where, params = semantic_filter(project, time_range, source)
             semantic = await fetch_ann_rows(s, q_vec, where, params)
             before = len(found.rows)

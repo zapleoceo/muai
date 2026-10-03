@@ -1,24 +1,12 @@
-"""Перелить эмбеддинги из JSONB в halfvec, построить индекс, проверить recall.
+"""Обслуживание ANN-индекса event_embeddings: статус, постройка, recall.
 
-    python scripts/backfill_pgvector.py --status           # сколько осталось, индекс
-    python scripts/backfill_pgvector.py [--batch 1000]      # перелить хвост
+    python scripts/backfill_pgvector.py --status           # строки, индекс
     python scripts/backfill_pgvector.py --index             # ANN-индекс CONCURRENTLY
     python scripts/backfill_pgvector.py --recall 30         # ANN против точного перебора
 
-Почему не в миграции 030: 3.6 ГБ одной транзакцией заблокировали бы таблицу
-и раздули WAL. Здесь порции по 1000 строк, каждая — своя транзакция.
-
-Идём по первичному ключу (`event_id > :after`), а не `WHERE embedding_vec IS
-NULL LIMIT n`: без индекса по NULL такой запрос на каждой порции заново
-просматривает уже перелитое начало таблицы — квадратичная работа на 444 тыс.
-строк. Перезапуск безопасен: UPDATE трогает только `embedding_vec IS NULL`.
-
-Разбор JSON — в Postgres (`embedding::text` → halfvec), 7 КБ на строку не
-гоняются через сеть. Строки, которые перелить нельзя (на 2026-09-13 — 2496
-JSON `null`), пропускаются и остаются как есть: раньше скрипт их УДАЛЯЛ, а
-удаление данных прода — не дело скрипта миграции.
-
-Порядок на проде — docs/deploy-ops.md, «pgvector: накат и откат».
+Имя осталось от переливки JSONB → halfvec (миграция 030); JSONB-колонка снята
+миграциями 038/039, переливать больше нечего. Порядок на проде —
+docs/deploy-ops.md, «pgvector: накат и откат» и «Снятие JSONB-эмбеддингов».
 """
 from __future__ import annotations
 
@@ -48,12 +36,6 @@ log = logging.getLogger("backfill-pgvector")
 #: воркеры выключены: их граф живёт в /dev/shm (shm_size 256mb).
 INDEX_MEM_MB = 192
 
-#: CASE, а не AND: порядок вычисления AND в SQL не гарантирован, а
-#: jsonb_array_length на JSON `null` падает и уронил бы всю порцию.
-_FILLABLE = ("CASE WHEN jsonb_typeof(embedding) = 'array'"
-             " THEN jsonb_array_length(embedding) = :dims ELSE FALSE END")
-
-
 def index_build_statements(dims: int, mem_mb: int) -> list[str]:
     return [
         f"SET maintenance_work_mem = '{int(mem_mb)}MB'",
@@ -66,38 +48,16 @@ def recall_at_k(exact: list[int], approx: list[int]) -> float:
     return len(set(exact) & set(approx)) / len(exact) if exact else 1.0
 
 
-async def fill_batch(after: int, size: int, dims: int) -> tuple[int | None, int]:
-    """(последний просмотренный event_id или None в конце, сколько залито)."""
-    async with get_session() as s:
-        ids = list((await s.execute(text("""
-            SELECT event_id FROM event_embeddings
-            WHERE event_id > :after ORDER BY event_id LIMIT :n
-        """), {"after": after, "n": size})).scalars())
-        if not ids:
-            return None, 0
-        filled = (await s.execute(text(f"""
-            UPDATE event_embeddings
-            SET embedding_vec = CAST(embedding::text AS {VEC_TYPE}({dims}))
-            WHERE event_id = ANY(:ids) AND embedding_vec IS NULL AND {_FILLABLE}
-        """), {"ids": ids, "dims": dims})).rowcount
-    return ids[-1], filled
-
-
 async def status(dims: int) -> dict[str, Any]:
     async with get_session() as s:
         total, filled = (await s.execute(text(
             "SELECT COUNT(*), COUNT(embedding_vec) FROM event_embeddings"))).one()
-        unfillable = (await s.execute(text(f"""
-            SELECT COUNT(*) FROM event_embeddings
-            WHERE embedding_vec IS NULL AND NOT {_FILLABLE}
-        """), {"dims": dims})).scalar_one()
         index = (await s.execute(text("""
             SELECT i.indisvalid, pg_size_pretty(pg_relation_size(c.oid))
             FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid
             WHERE c.relname = :name
         """), {"name": ANN_INDEX})).first()
-    return {"total": total, "filled": filled, "unfillable": unfillable,
-            "remaining": total - filled - unfillable,
+    return {"total": total, "filled": filled,
             "index": "нет" if index is None
             else f"{'валиден' if index[0] else 'НЕВАЛИДЕН'}, {index[1]}"}
 
@@ -148,24 +108,8 @@ async def recall(samples: int, oversample: int, dims: int, k: int = 10) -> float
     return sum(scores) / len(scores) if scores else 0.0
 
 
-async def backfill(size: int, dims: int, pause_s: float) -> int:
-    after, moved, started = 0, 0, time.monotonic()
-    while True:
-        last, n = await fill_batch(after, size, dims)
-        if last is None:
-            return moved
-        after, moved = last, moved + n
-        rate = moved / max(time.monotonic() - started, 1e-9)
-        log.info("event_id ≤ %d: залито %d (%.0f строк/с)", after, moved, rate)
-        if pause_s:
-            # не насос: даём триажу и поиску дисковое окно между порциями
-            await asyncio.sleep(pause_s)
-
-
 async def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--batch", type=int, default=1000)
-    ap.add_argument("--pause", type=float, default=0.2)
     ap.add_argument("--dims", type=int, default=VEC_DIMS)
     ap.add_argument("--status", action="store_true")
     ap.add_argument("--index", action="store_true")
@@ -184,8 +128,6 @@ async def main() -> int:
         r = await recall(args.recall, args.oversample, args.dims)
         log.info("recall@10 = %.3f (%d запросов, oversample %d)",
                  r, args.recall, args.oversample)
-    elif not args.status:
-        log.info("залито за прогон: %d", await backfill(args.batch, args.dims, args.pause))
     log.info("статус: %s", await status(args.dims))
     return 0
 

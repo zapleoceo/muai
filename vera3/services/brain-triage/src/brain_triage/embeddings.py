@@ -4,19 +4,18 @@ from __future__ import annotations
 import logging
 
 from vera_shared.db.engine import get_session
-from vera_shared.db.vectors import embedding_upsert, vector_column_available
+from vera_shared.db.vectors import embedding_upsert
 
 log = logging.getLogger(__name__)
 
 
 async def write_embeddings(pairs: list[tuple[int, list[float]]]) -> int:
-    """Upsert (event_id, вектор) во ВСЕ колонки, что есть — см.
-    vectors.embedding_upsert. Возвращает число записанных строк."""
-    to_vec = await vector_column_available()
+    """Upsert (event_id, вектор) в embedding_vec — см. vectors.embedding_upsert.
+    Возвращает число записанных строк."""
     written = 0
     async with get_session() as s:
         for eid, emb in pairs:
-            sql, params = embedding_upsert(eid, emb, to_vec)
+            sql, params = embedding_upsert(eid, emb)
             try:
                 # Savepoint на строку: одно битое событие не должно
                 # откатывать весь батч эмбеддингов.

@@ -95,7 +95,7 @@ def test_remember_writes_embedding_immediately():
 
     from vera_shared.memory import remember as claude
     src = inspect.getsource(claude.remember_fact)
-    # общая с триажем запись во все колонки (см. vectors.embedding_upsert)
+    # общая с триажем запись вектора (см. vectors.embedding_upsert)
     assert "embedding_upsert(" in src
-    stmt, _ = claude.embedding_upsert(1, [0.1], True)
+    stmt, _ = claude.embedding_upsert(1, [0.1])
     assert "INSERT INTO event_embeddings" in str(stmt)

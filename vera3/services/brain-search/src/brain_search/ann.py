@@ -9,7 +9,7 @@ villa»), не находился никогда — до косинуса он 
 Здесь кандидаты берутся из ANN-индекса (`vectors.ann_candidates_sql`) с теми
 же фильтрами проекта/времени, что у основной выборки, и ОБЪЕДИНЯЮТСЯ с ней:
 режимы fts/time/project не теряются, смысловые строки добавляются сверху.
-Косинус приходит из БД колонкой `vec_sim` — JSONB не разбирается. Длинные
+Косинус приходит из БД колонкой `vec_sim`. Длинные
 события ищутся ещё и по кускам (vera_shared.db.chunk_vectors, миграция 032).
 """
 from __future__ import annotations
@@ -47,12 +47,9 @@ def q_cast() -> str:
     return f"CAST(:q AS {VEC_TYPE}({vectors.VEC_DIMS}))"
 
 
-def vec_columns() -> tuple[str, str]:
-    """(колонка эмбеддинга, хвост с vec_sim), когда есть halfvec: косинус
-    считает Postgres, а JSONB отдаётся только строкам, которые бэкфил ещё не
-    прошёл — так частично залитая колонка не теряет им сходство."""
-    return ("CASE WHEN ee.embedding_vec IS NULL THEN ee.embedding END AS embedding",
-            f", 1 - (ee.embedding_vec <=> {q_cast()}) AS vec_sim")
+def vec_sim_column() -> str:
+    """Хвост SELECT: косинус считает Postgres и отдаёт колонкой vec_sim."""
+    return f", 1 - (ee.embedding_vec <=> {q_cast()}) AS vec_sim"
 
 
 def ann_rows_sql(where: str, with_chunks: bool = False) -> Any:

@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import importlib.util
-import json
 from datetime import datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -18,6 +17,7 @@ from unittest.mock import AsyncMock
 import pytest
 from brain_search import ann, retrieval
 from brain_search.scoring import row_similarity, score_rows
+from sqlalchemy.exc import DBAPIError
 from vera_shared.db import vectors
 
 
@@ -87,7 +87,7 @@ def test_similarity_column_goes_last_so_positions_hold():
     assert select_list.index("AS vec_sim") < select_list.index("AS is_bot")
     plain = str(retrieval._select(extra_cols="0.0 AS rank", join="JOIN",
                                   where="TRUE", order="id", limit_sql="5"))
-    assert "vec_sim" not in plain and "ee.embedding," in plain
+    assert "vec_sim" not in plain and "NULL AS embedding" in plain
 
 
 def test_ann_rows_have_the_primary_shape():
@@ -147,30 +147,56 @@ def test_ann_sql_unions_chunks_and_keeps_one_row_per_event():
     assert sql.rstrip().endswith("LIMIT :ann_top")
 
 
-class _Ctx:
+class LockNotAvailable(Exception):
+    """Подставка asyncpg.LockNotAvailableError."""
+
+
+class _Savepoint:
     async def __aenter__(self):
-        return object()
+        return self
 
     async def __aexit__(self, *exc):
         return False
 
 
-def _patch_fetch(monkeypatch, *, column: bool, index: bool, semantic):
+class _Session:
+    def begin_nested(self):
+        return _Savepoint()
+
+    async def execute(self, *_a, **_kw):
+        return None
+
+
+class _Ctx:
+    async def __aenter__(self):
+        return _Session()
+
+    async def __aexit__(self, *exc):
+        return False
+
+
+def _patch_fetch(monkeypatch, *, semantic, primary_fails: bool = False):
     primary = retrieval.Candidates([_row(1)], "fts", ["itstep"])
+    modes: list[bool] = []
+
+    async def _primary(_s, *, with_vec, **_kw):
+        modes.append(with_vec)
+        if with_vec and primary_fails:
+            raise DBAPIError("SELECT", {}, LockNotAvailable())
+        return primary
+
     monkeypatch.setattr(retrieval, "get_session", lambda: _Ctx())
-    monkeypatch.setattr(retrieval, "_primary", AsyncMock(return_value=primary))
-    monkeypatch.setattr(retrieval, "vector_column_available", AsyncMock(return_value=column))
-    monkeypatch.setattr(retrieval, "ann_index_available", AsyncMock(return_value=index))
+    monkeypatch.setattr(retrieval, "_primary", _primary)
     fetch = AsyncMock(return_value=semantic)
     monkeypatch.setattr(retrieval, "fetch_ann_rows", fetch)
+    fetch.modes = modes
     return fetch
 
 
 @pytest.mark.asyncio
 async def test_ann_candidates_are_added_on_top_of_fts(monkeypatch):
     """Главный сценарий: строка без общих слов с вопросом доезжает до скоринга."""
-    fetch = _patch_fetch(monkeypatch, column=True, index=True,
-                         semantic=[_row(7, vec_sim=0.8)])
+    fetch = _patch_fetch(monkeypatch, semantic=[_row(7, vec_sim=0.8)])
     found = await retrieval.fetch_candidates(
         ts_query="аренда:*", acc_words=["itstep"], time_range=None, project=None,
         q_vec=[0.1, 0.2], limit=15)
@@ -180,65 +206,55 @@ async def test_ann_candidates_are_added_on_top_of_fts(monkeypatch):
     assert "to_tsquery" not in where
 
 
-@pytest.mark.parametrize(("column", "index", "q_vec"), [
-    (False, False, [0.1]),   # миграция не накачена / SQLite
-    (True, False, [0.1]),    # колонка есть, индекс ещё не построен (бэкфил идёт)
-    (True, True, None),      # брокер эмбеддингов лёг
-])
 @pytest.mark.asyncio
-async def test_no_ann_without_column_index_or_query_vector(monkeypatch, column, index, q_vec):
-    """Без индекса ANN-запрос стал бы seq scan'ом всего корпуса на каждый поиск."""
-    fetch = _patch_fetch(monkeypatch, column=column, index=index, semantic=[_row(9)])
+async def test_no_ann_without_query_vector(monkeypatch):
+    """Брокер эмбеддингов лёг — вектора запроса нет, ANN-запрос не нужен."""
+    fetch = _patch_fetch(monkeypatch, semantic=[_row(9)])
     found = await retrieval.fetch_candidates(
         ts_query="x:*", acc_words=[], time_range=None, project=None,
-        q_vec=q_vec, limit=15)
+        q_vec=None, limit=15)
     assert [r[0] for r in found.rows] == [1]
+    assert fetch.modes == [False]
     fetch.assert_not_awaited()
 
 
 @pytest.mark.asyncio
-async def test_sqlite_path_is_unchanged(sqlite_db):
-    """Штатная ветка без колонки: JSONB-эмбеддинг в позиции 6, vec_sim нет."""
-    from vera_shared.db.models import EventEmbeddingRow, EventRow
-
-    now = datetime(2026, 9, 1)
-    async with sqlite_db() as s:
-        ev = EventRow(source="telegram", source_event_id="a", content_text="x",
-                      occurred_at=now, received_at=now, triage_status="done")
-        s.add(ev)
-        await s.flush()
-        s.add(EventEmbeddingRow(event_id=ev.id, embedding=[1.0, 0.0]))
-
+async def test_locked_embeddings_table_degrades_to_text_search(monkeypatch):
+    """VACUUM FULL держит ACCESS EXCLUSIVE: JOIN по event_embeddings обрывается
+    по lock_timeout, поиск идёт без вектора и без ANN, а не виснет."""
+    fetch = _patch_fetch(monkeypatch, semantic=[_row(9)], primary_fails=True)
     found = await retrieval.fetch_candidates(
-        ts_query="", acc_words=[], time_range=None, project=None,
-        q_vec=[1.0, 0.0], limit=15)
-    assert found.mode == "vector"
-    row = found.rows[0]
-    emb = row[6] if isinstance(row[6], list) else json.loads(row[6])  # SQLite: текст
-    assert emb == [1.0, 0.0]
-    assert row_similarity(row, [1.0, 0.0]) == pytest.approx(1.0)
+        ts_query="x:*", acc_words=[], time_range=None, project=None,
+        q_vec=[0.1], limit=15)
+    assert [r[0] for r in found.rows] == [1]
+    assert fetch.modes == [True, False]
+    fetch.assert_not_awaited()
 
 
-@pytest.mark.asyncio
-async def test_ann_index_unavailable_without_column(sqlite_db):
-    vectors.forget_capability()
-    assert await vectors.ann_index_available() is False
+def test_lock_timeout_is_transaction_scoped_and_short():
+    assert "set_config('lock_timeout', :lock_timeout, true)" in str(vectors.LOCK_TIMEOUT_SQL)
+    assert 0 < vectors.LOCK_TIMEOUT_MS <= 10_000
+
+
+def test_primary_select_without_vector_has_no_join_and_null_embedding():
+    """Без вектора запроса event_embeddings не трогается вовсе — ни JOIN, ни
+    блокировки; позиция embedding зарезервирована и всегда NULL."""
+    sql = str(retrieval._select(extra_cols="0.0 AS rank", join="LEFT JOIN",
+                                where="TRUE", order="id", limit_sql="5"))
+    assert "event_embeddings" not in sql and "NULL AS embedding" in sql
 
 
 # ─── скоринг ────────────────────────────────────────────────────────────────
 
 
-def test_db_similarity_wins_over_jsonb():
+def test_similarity_comes_from_the_db_column():
     row = _row(1, emb=[0.0, 1.0], vec_sim=0.75)
     assert row_similarity(row, [1.0, 0.0]) == 0.75
 
 
-def test_unfilled_row_falls_back_to_jsonb_cosine():
-    """Частично залитая колонка: строка без halfvec не теряет сходство."""
-    row = _row(1, emb=[1.0, 0.0], vec_sim=None)
-    assert row_similarity(row, [1.0, 0.0]) == pytest.approx(1.0)
+def test_row_without_db_similarity_scores_zero():
     assert row_similarity(_row(2), [1.0, 0.0]) == 0.0
-    assert row_similarity(row, None) == 0.0
+    assert row_similarity(_row(2, vec_sim=0.5), None) == 0.0
 
 
 def test_semantic_only_row_outranks_unrelated_fts_row():
@@ -251,13 +267,12 @@ def test_semantic_only_row_outranks_unrelated_fts_row():
 # ─── запись и скрипт бэкфила ────────────────────────────────────────────────
 
 
-def test_embedding_upsert_writes_every_available_column():
-    stmt, params = vectors.embedding_upsert(5, [0.5, 0.25], True)
-    assert "embedding_vec" in str(stmt) and "halfvec" in str(stmt)
-    assert params == {"eid": 5, "emb": "[0.5, 0.25]", "vec": "[0.5,0.25]"}
-
-    stmt, params = vectors.embedding_upsert(5, [0.5], False)
-    assert "embedding_vec" not in str(stmt) and "vec" not in params
+def test_embedding_upsert_writes_only_the_vector_column():
+    stmt, params = vectors.embedding_upsert(5, [0.5, 0.25])
+    sql = str(stmt)
+    assert "embedding_vec" in sql and "halfvec" in sql
+    assert "jsonb" not in sql.lower() and "embedding," not in sql
+    assert params == {"eid": 5, "vec": "[0.5,0.25]"}
 
 
 def _backfill():
@@ -281,12 +296,6 @@ def test_recall_at_k():
     recall_at_k = _backfill().recall_at_k
     assert recall_at_k([1, 2, 3, 4], [4, 3, 9, 8]) == 0.5
     assert recall_at_k([], [1]) == 1.0
-
-
-def test_unfillable_rows_are_guarded_by_case_not_and():
-    """AND в SQL не гарантирует порядок: jsonb_array_length на JSON null
-    уронил бы всю порцию (на проде таких строк 2496)."""
-    assert _backfill()._FILLABLE.startswith("CASE WHEN jsonb_typeof(embedding) = 'array'")
 
 
 class _NestedSession:

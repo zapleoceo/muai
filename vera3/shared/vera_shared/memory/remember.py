@@ -27,7 +27,6 @@ from vera_shared.db.vectors import (
     VEC_TYPE,
     as_pg_vector,
     embedding_upsert,
-    vector_column_available,
 )
 from vera_shared.events import edit as event_edit
 from vera_shared.events.visibility import HIDDEN_STATUS
@@ -57,15 +56,6 @@ def _content_hash(text: str) -> str:
     return hashlib.sha256(text.strip().encode("utf-8")).hexdigest()[:16]
 
 
-def _cosine(a: list[float], b: list[float]) -> float:
-    if not a or not b or len(a) != len(b):
-        return 0.0
-    dot = sum(x * y for x, y in zip(a, b, strict=True))
-    na = sum(x * x for x in a) ** 0.5
-    nb = sum(y * y for y in b) ** 0.5
-    return dot / (na * nb) if na and nb else 0.0
-
-
 async def _find_semantic_neighbour(
     text: str,
 ) -> tuple[list[float] | None, tuple[int, float] | None]:
@@ -84,41 +74,20 @@ async def _find_semantic_neighbour(
     q_vec = vectors[0]
 
     since = utc_naive_now() - timedelta(days=SEMANTIC_LOOKBACK_DAYS)
-    has_vec = await vector_column_available()
-    best: tuple[int, float] | None = None
     visible = f"e.triage_status <> '{HIDDEN_STATUS}'"
     async with get_session() as s:
-        if has_vec:
-            # Оператор <=> — косинусное РАССТОЯНИЕ, сходство = 1 - расстояние.
-            # Индекс не нужен: claude-событий за 7 дней десятки.
-            row = (await s.execute(sa_text(f"""
-                SELECT e.id, 1 - (ee.embedding_vec <=> CAST(:q AS {VEC_TYPE})) AS sim
-                FROM events e
-                JOIN event_embeddings ee ON ee.event_id = e.id
-                WHERE e.source = 'claude' AND e.received_at >= :since
-                  AND {visible} AND ee.embedding_vec IS NOT NULL
-                ORDER BY ee.embedding_vec <=> CAST(:q AS {VEC_TYPE})
-                LIMIT 1
-            """), {"since": since, "q": as_pg_vector(q_vec)})).first()
-            if row is not None:
-                best = (row[0], float(row[1]))
-        # Без колонки — все строки; с колонкой — только те, до которых бэкфил
-        # ещё не дошёл, иначе частично залитая колонка молча сужала бы дедуп.
-        unfilled = " AND ee.embedding_vec IS NULL" if has_vec else ""
-        rows = (await s.execute(sa_text(f"""
-            SELECT e.id, ee.embedding
+        # Оператор <=> — косинусное РАССТОЯНИЕ, сходство = 1 - расстояние.
+        # Индекс не нужен: claude-событий за 7 дней десятки.
+        row = (await s.execute(sa_text(f"""
+            SELECT e.id, 1 - (ee.embedding_vec <=> CAST(:q AS {VEC_TYPE})) AS sim
             FROM events e
             JOIN event_embeddings ee ON ee.event_id = e.id
             WHERE e.source = 'claude' AND e.received_at >= :since
-              AND {visible}{unfilled}
-            ORDER BY e.received_at DESC
-            LIMIT 500
-        """), {"since": since})).all()
-
-    for row in rows:
-        sim = _cosine(q_vec, row[1])
-        if sim > (best[1] if best else 0.0):
-            best = (row[0], sim)
+              AND {visible}
+            ORDER BY ee.embedding_vec <=> CAST(:q AS {VEC_TYPE})
+            LIMIT 1
+        """), {"since": since, "q": as_pg_vector(q_vec)})).first()
+    best = None if row is None else (row[0], float(row[1]))
     if best is not None and best[1] >= SEMANTIC_DEDUP_THRESHOLD:
         return q_vec, best
     return q_vec, None
@@ -176,7 +145,6 @@ async def remember_fact(text: str, kind: Kind = "fact",
     # Смысловой дубль ищем ДО вставки: тогда событие пишется сразу в итоговом
     # статусе, и вставка, вектор и журнал уходят одной транзакцией.
     q_vec, neighbour = await _find_semantic_neighbour(text)
-    with_vec = await vector_column_available() if q_vec is not None else False
     values: dict[str, Any] = {
         "source": "claude", "source_event_id": src_id, "category": kind,
         "content_text": text, "metadata_": metadata,
@@ -201,7 +169,7 @@ async def remember_fact(text: str, kind: Kind = "fact",
             outcome = RememberOutcome(event_id, False)
             if q_vec is not None:
                 # Вектор уже посчитан для дедупа — пишем сразу, закрывая «слепое окно».
-                stmt, params = embedding_upsert(event_id, q_vec, with_vec)
+                stmt, params = embedding_upsert(event_id, q_vec)
                 await s.execute(stmt, params)
         if on_written is not None:
             await on_written(s, outcome)
