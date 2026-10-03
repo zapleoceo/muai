@@ -66,10 +66,21 @@ async def test_budget_cap_opens_short_probe_not_until_midnight(db):
     """Регресс инцидента 2026-07-31: кап в 00:25 глушил vision на 23.5 часа.
     Брокер сообщает о капе КОНКРЕТНОГО ключа — блокировать capability до
     полуночи нельзя, ждём короткую пробу."""
-    kind = await note_llm_failure("chat:fast", "daily budget cap reached — retry after 00:00 UTC")
+    import vera_shared.llm.circuit as circ
+    # Время закреплено днём: в 23:35+ UTC полночь ближе пробы, и проверка «проба 30 мин»
+    # падала по часам, а не по коду (поймано прогоном в 23:48 UTC 03.10.2026).
+    fake_now = datetime(2026, 7, 31, 12, 0, tzinfo=timezone.utc)
+
+    class _FakeDT(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return fake_now
+
+    with patch.object(circ, "datetime", _FakeDT):
+        kind = await note_llm_failure("chat:fast", "daily budget cap reached — retry after 00:00 UTC")
     assert kind == "budget_cap"
-    remaining = await llm_cooldown_remaining_s("chat:fast")
-    assert 25 * 60 < remaining <= 30 * 60          # проба 30 мин, НЕ до полуночи
+    until = datetime.fromisoformat(await circ.get_control("llm_cooldown:chat:fast", ""))
+    assert until == fake_now + timedelta(minutes=30)  # проба 30 мин, НЕ до полуночи
     # другая capability не затронута
     assert await llm_cooldown_remaining_s("vision") == 0
 
