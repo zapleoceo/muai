@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any, Literal
@@ -18,6 +19,7 @@ from typing import Any, Literal
 from sqlalchemy import select
 from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
@@ -120,67 +122,67 @@ async def _find_semantic_neighbour(
     return q_vec, None
 
 
-async def _insert_or_find(src_id: str, text: str, kind: str,
-                          metadata: dict[str, Any]) -> tuple[int | None, bool]:
-    """(event_id, created). created=False — точный дубль, id существующего."""
+WrittenHook = Callable[[AsyncSession, RememberOutcome], Awaitable[None]]
+
+
+async def _existing_id(src_id: str) -> int | None:
     async with get_session() as s:
-        stmt = (
-            pg_insert(EventRow)
-            .values(
-                source="claude", source_event_id=src_id, category=kind,
-                content_text=text, metadata_=metadata,
-                occurred_at=utc_naive_now(), triage_status="pending",
-            )
-            .on_conflict_do_nothing(index_elements=["source", "source_event_id"])
-            .returning(EventRow.id)
-        )
-        event_id = (await s.execute(stmt)).scalar_one_or_none()
-        if event_id is not None:
-            return event_id, True
-        existing = (await s.execute(
+        return (await s.execute(
             select(EventRow.id).where(EventRow.source == "claude",
                                       EventRow.source_event_id == src_id)
         )).scalar_one_or_none()
-        return existing, False
 
 
 async def remember_fact(text: str, kind: Kind = "fact",
                         context: str | None = None,
-                        tags: list[str] | None = None) -> RememberOutcome:
+                        tags: list[str] | None = None, *,
+                        on_written: WrittenHook | None = None) -> RememberOutcome:
+    """`on_written` вызывается в ТОЙ ЖЕ транзакции, что вставка события, и только
+    когда строка реально создана (не при точном дубле): запись журнала MCP
+    либо появляется вместе с событием, либо не появляется вовсе."""
     text = text.strip()
+    src_id = _content_hash(text)
+    existing = await _existing_id(src_id)
+    if existing is not None:
+        log.info("remember: exact dedup hit, event=%s", existing)
+        return RememberOutcome(existing, True, "exact")
+
     metadata: dict[str, Any] = {"kind": kind}
     if context:
         metadata["context"] = context
     if tags:
         metadata["tags"] = tags
 
-    event_id, created = await _insert_or_find(_content_hash(text), text, kind, metadata)
-    if not created:
-        log.info("remember: exact dedup hit, event=%s", event_id)
-        return RememberOutcome(event_id, True, "exact")
-
-    # Вставка уже сделана: при почти-дубле новая строка помечается
-    # `superseded`, чтобы триаж её пропустил. Эмбеддинг ДО вставки удвоил бы
-    # задержку в частом случае «дубля нет».
+    # Смысловой дубль ищем ДО вставки: тогда событие пишется сразу в итоговом
+    # статусе, и вставка, вектор и журнал уходят одной транзакцией.
     q_vec, neighbour = await _find_semantic_neighbour(text)
+    with_vec = await vector_column_available() if q_vec is not None else False
+    values: dict[str, Any] = {
+        "source": "claude", "source_event_id": src_id, "category": kind,
+        "content_text": text, "metadata_": metadata,
+        "occurred_at": utc_naive_now(), "triage_status": "pending",
+    }
     if neighbour is not None:
-        sim_id, sim = neighbour
-        async with get_session() as s:
-            await s.execute(
-                EventRow.__table__.update()
-                .where(EventRow.id == event_id)
-                .values(triage_status="superseded",
-                        triage_metadata={"superseded_by": sim_id, "similarity": sim})
-            )
-        log.info("remember: semantic dedup, event=%s superseded by %s (sim=%.3f)",
-                 event_id, sim_id, sim)
-        return RememberOutcome(event_id, True, "semantic", sim_id, sim)
-
-    # Вектор уже посчитан для дедупа — пишем сразу, закрывая слепое окно.
-    if q_vec is not None:
-        stmt, params = embedding_upsert(event_id, q_vec, await vector_column_available())
-        async with get_session() as s:
-            await s.execute(stmt, params)
-
-    log.info("remember: new event=%s kind=%s", event_id, kind)
-    return RememberOutcome(event_id, False)
+        values["triage_status"] = "superseded"
+        values["triage_metadata"] = {"superseded_by": neighbour[0],
+                                     "similarity": neighbour[1]}
+    async with get_session() as s:
+        event_id = (await s.execute(
+            pg_insert(EventRow).values(**values)
+            .on_conflict_do_nothing(index_elements=["source", "source_event_id"])
+            .returning(EventRow.id)
+        )).scalar_one_or_none()
+        if event_id is None:
+            return RememberOutcome(await _existing_id(src_id), True, "exact")
+        if neighbour is not None:
+            outcome = RememberOutcome(event_id, True, "semantic", *neighbour)
+        else:
+            outcome = RememberOutcome(event_id, False)
+            if q_vec is not None:
+                # Вектор уже посчитан для дедупа — пишем сразу, закрывая «слепое окно».
+                stmt, params = embedding_upsert(event_id, q_vec, with_vec)
+                await s.execute(stmt, params)
+        if on_written is not None:
+            await on_written(s, outcome)
+    log.info("remember: event=%s kind=%s dedup=%s", event_id, kind, outcome.dedup_reason)
+    return outcome

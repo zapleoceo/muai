@@ -1,13 +1,16 @@
 """Правка и скрытие события — примитивы, работающие в сессии вызывающего.
 
 Сессию открывает вызывающий, чтобы правка и запись в журнал (`mcp_audit`)
-фиксировались одной транзакцией. Никакого DELETE: «убрать» событие = статус
-`hidden` (`visibility`).
+фиксировались одной транзакцией; строка события берётся `FOR UPDATE`, чтобы
+параллельная правка или откат не затёрли друг друга.
 
-Правка текста возвращает событие в очередь триажа (`pending`): так же, как
-`claude_session`, иначе поиск продолжит находить прежний текст по старому
-embedding. У скрытого события очередь не трогаем — снятие скрытия вернёт
-его в работу.
+Никакого DELETE: «убрать» событие = статус `hidden` (`visibility`).
+
+Правка текста возвращает событие в очередь триажа (`pending`) только из
+`done`/`error`, как это делает `claude_session`, иначе поиск продолжит
+находить прежний текст по старому embedding. Событие, занятое воркером
+(`processing`, `media_pending`), не правится и не скрывается: воркер
+перезапишет результат, а прежним статусом мы бы сохранили чужой.
 """
 from __future__ import annotations
 
@@ -18,10 +21,17 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.models import EventRow
 from vera_shared.events.visibility import (
+    BUSY_STATUSES,
     HIDDEN_STATUS,
     hide_values,
     unhide_values,
 )
+
+REQUEUE_FROM = ("done", "error")
+#: поле снимка → атрибут ORM
+_ATTR = {"content_text": "content_text", "metadata": "metadata_",
+         "category": "category", "triage_status": "triage_status",
+         "triage_error": "triage_error", "triage_metadata": "triage_metadata"}
 
 
 class EventNotFound(LookupError):
@@ -29,28 +39,32 @@ class EventNotFound(LookupError):
         super().__init__(f"event {event_id} not found")
 
 
+class EventBusy(ValueError):
+    def __init__(self, event_id: int, status: str) -> None:
+        super().__init__(
+            f"event {event_id} is '{status}' (being processed); retry in a minute")
+
+
 async def load_row(s: AsyncSession, event_id: int) -> EventRow:
     row = (await s.execute(
-        select(EventRow).where(EventRow.id == event_id)
+        select(EventRow).where(EventRow.id == event_id).with_for_update()
     )).scalar_one_or_none()
     if row is None:
         raise EventNotFound(event_id)
     return row
 
 
+def _require_idle(row: EventRow) -> None:
+    if row.triage_status in BUSY_STATUSES:
+        raise EventBusy(row.id, row.triage_status)
+
+
 def snapshot(row: EventRow) -> dict[str, Any]:
-    return {
-        "content_text": row.content_text,
-        "metadata": row.metadata_,
-        "category": row.category,
-        "triage_status": row.triage_status,
-        "triage_error": row.triage_error,
-        "triage_metadata": row.triage_metadata,
-    }
+    return {key: getattr(row, attr) for key, attr in _ATTR.items()}
 
 
 def _requeue(row: EventRow) -> None:
-    if row.triage_status == HIDDEN_STATUS:
+    if row.triage_status not in REQUEUE_FROM:
         return
     row.triage_status = "pending"
     row.triage_error = None
@@ -75,6 +89,7 @@ async def update_event(
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """(до, после). Меняет только переданные поля."""
     row = await load_row(s, event_id)
+    _require_idle(row)
     before = snapshot(row)
     if content_text is not None and content_text != row.content_text:
         row.content_text = content_text
@@ -90,6 +105,8 @@ async def update_event(
 async def set_hidden(s: AsyncSession, event_id: int, *,
                      hidden: bool) -> tuple[dict[str, Any], dict[str, Any]]:
     row = await load_row(s, event_id)
+    if hidden:
+        _require_idle(row)
     before = snapshot(row)
     if hidden:
         row.triage_status, row.triage_metadata = hide_values(
@@ -100,18 +117,17 @@ async def set_hidden(s: AsyncSession, event_id: int, *,
     return before, snapshot(row)
 
 
-async def restore_event(s: AsyncSession, event_id: int,
-                        values: dict[str, Any]) -> dict[str, Any]:
-    """Вернуть поля из снимка; изменённый текст — повод пере-эмбеддить."""
+async def restore_fields(s: AsyncSession, event_id: int, values: dict[str, Any],
+                         keys: tuple[str, ...]) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Вернуть ТОЛЬКО перечисленные поля снимка (откат не трогает чужие правки).
+    Вернувшийся текст — повод пере-эмбеддить. (до, после)."""
     row = await load_row(s, event_id)
-    text_changed = values["content_text"] != row.content_text
-    row.content_text = values["content_text"]
-    row.metadata_ = values["metadata"]
-    row.category = values["category"]
-    row.triage_status = values["triage_status"]
-    row.triage_error = values["triage_error"]
-    row.triage_metadata = values["triage_metadata"]
+    _require_idle(row)
+    before = snapshot(row)
+    text_changed = "content_text" in keys and values["content_text"] != row.content_text
+    for key in keys:
+        setattr(row, _ATTR[key], values[key])
     if text_changed:
         _requeue(row)
     await s.flush()
-    return snapshot(row)
+    return before, snapshot(row)

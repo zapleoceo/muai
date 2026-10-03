@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
 from sqlalchemy import select
@@ -14,7 +14,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_graph import EntityAliasRow, EntityRow, RelationshipRow
 from vera_shared.db.models_mcp import McpAuditRow
-from vera_shared.events.edit import EventNotFound
+from vera_shared.events.edit import EventBusy, EventNotFound
 from vera_shared.graph.edit import GraphEditError
 from vera_shared.memory.remember import RememberOutcome
 
@@ -56,10 +56,20 @@ async def audit_rows() -> list[McpAuditRow]:
 # ─── remember ────────────────────────────────────────────────────────────────
 
 
+def fake_remember(outcome: RememberOutcome):
+    """Как настоящая remember_fact: журнал зовётся из её транзакции, но не при точном дубле."""
+    async def _fake(text, kind, context, tags, *, on_written=None):
+        if outcome.dedup_reason != "exact" and on_written is not None:
+            async with get_session() as s:
+                await on_written(s, outcome)
+        return outcome
+    return _fake
+
+
 async def test_remember_audits_new_event_and_undo_hides_it(sqlite_db):
-    await add_event(5, "fact", status="pending")
+    await add_event(5, "a fact worth keeping", status="pending")
     outcome = RememberOutcome(event_id=5, deduped=False)
-    with patch("vera_mcp.write_tools.remember_fact", AsyncMock(return_value=outcome)):
+    with patch("vera_mcp.write_tools.remember_fact", fake_remember(outcome)):
         res = await w.remember("a fact worth keeping", ctx("codex"), tags=["x"])
     assert res["event_id"] == 5 and res["audit_id"]
     (row,) = await audit_rows()
@@ -69,12 +79,25 @@ async def test_remember_audits_new_event_and_undo_hides_it(sqlite_db):
 
     await w.undo(res["audit_id"], ctx())
     assert (await event(5)).triage_status == "hidden"
-    assert (await event(5)).content_text == "fact"          # ничего не удалено
+    assert (await event(5)).content_text == "a fact worth keeping"   # ничего не удалено
+
+
+async def test_remember_undo_refused_after_the_event_was_edited(sqlite_db):
+    await add_event(5, "a fact worth keeping", status="done")
+    with patch("vera_mcp.write_tools.remember_fact",
+               fake_remember(RememberOutcome(event_id=5, deduped=False))):
+        res = await w.remember("a fact worth keeping", ctx())
+    await w.update_event(5, ctx(), content_text="edited later")
+    with pytest.raises(UndoRefused, match="force"):
+        await w.undo(res["audit_id"], ctx())
+    assert (await event(5)).triage_status == "pending"
+    await w.undo(res["audit_id"], ctx(), force=True)
+    assert (await event(5)).triage_status == "hidden"
 
 
 async def test_remember_exact_duplicate_writes_no_audit(sqlite_db):
     outcome = RememberOutcome(event_id=5, deduped=True, dedup_reason="exact")
-    with patch("vera_mcp.write_tools.remember_fact", AsyncMock(return_value=outcome)):
+    with patch("vera_mcp.write_tools.remember_fact", fake_remember(outcome)):
         res = await w.remember("already known", ctx())
     assert res["deduped"] is True and res["audit_id"] is None
     assert await audit_rows() == []
@@ -84,7 +107,7 @@ async def test_remember_semantic_duplicate_is_audited(sqlite_db):
     await add_event(9, "dup", status="superseded")
     outcome = RememberOutcome(event_id=9, deduped=True, dedup_reason="semantic",
                               similar_event_id=2, similarity=0.95)
-    with patch("vera_mcp.write_tools.remember_fact", AsyncMock(return_value=outcome)):
+    with patch("vera_mcp.write_tools.remember_fact", fake_remember(outcome)):
         res = await w.remember("almost the same", ctx())
     assert res["audit_id"] and res["similar_event_id"] == 2
 
@@ -156,13 +179,13 @@ async def test_update_event_validation(sqlite_db):
 
 
 async def test_hide_and_unhide_restore_the_exact_previous_status(sqlite_db):
-    await add_event(1, "photo", status="media_pending", triage_metadata={"k": 1})
+    await add_event(1, "broken", status="error", triage_metadata={"k": 1})
     res = await w.hide_event(1, ctx())
     assert res["hidden"] is True
     assert (await event()).triage_status == "hidden"
     await w.unhide_event(1, ctx())
     ev = await event()
-    assert (ev.triage_status, ev.triage_metadata) == ("media_pending", {"k": 1})
+    assert (ev.triage_status, ev.triage_metadata) == ("error", {"k": 1})
     assert [r.tool for r in await audit_rows()] == ["hide_event", "unhide_event"]
 
 
@@ -332,3 +355,73 @@ async def test_undo_unsupported_kind(sqlite_db):
         s.add(McpAuditRow(client="c", tool="x", args={}, target_kind="mystery"))
     with pytest.raises(UndoRefused, match="mystery"):
         await w.undo(1, ctx())
+
+
+# ─── откат трогает только свои поля ──────────────────────────────────────────
+
+
+async def test_hide_undo_does_not_overwrite_a_text_edit_made_while_hidden(sqlite_db):
+    await add_event(1, "v0", status="done")
+    hid = await w.hide_event(1, ctx())
+    await w.update_event(1, ctx(), content_text="v1", metadata={"k": "new"})
+    await w.undo(hid["audit_id"], ctx())
+    ev = await event()
+    assert (ev.content_text, ev.metadata_) == ("v1", {"k": "new"})   # правка жива
+    assert ev.triage_status == "done"
+
+
+async def test_text_undo_does_not_overwrite_a_later_hide(sqlite_db):
+    await add_event(1, "v0", status="done")
+    edit = await w.update_event(1, ctx(), content_text="v1")
+    await w.hide_event(1, ctx())
+    await w.undo(edit["audit_id"], ctx())
+    ev = await event()
+    assert ev.content_text == "v0"
+    assert ev.triage_status == "hidden"                             # скрытие не откачено
+
+
+async def test_unhide_undo_hides_again_and_refuses_after_later_change(sqlite_db):
+    await add_event(1, "x", status="done")
+    await w.hide_event(1, ctx())
+    shown = await w.unhide_event(1, ctx())
+    await w.undo(shown["audit_id"], ctx())
+    assert (await event()).triage_status == "hidden"
+
+    await add_event(2, "y", status="done")
+    await w.hide_event(2, ctx())
+    shown = await w.unhide_event(2, ctx())
+    await w.hide_event(2, ctx())
+    with pytest.raises(UndoRefused, match="force"):
+        await w.undo(shown["audit_id"], ctx())
+
+
+# ─── занятые воркером события ────────────────────────────────────────────────
+
+
+@pytest.mark.parametrize("status", ["processing", "media_pending"])
+async def test_busy_event_is_not_edited_or_hidden(sqlite_db, status):
+    await add_event(1, "x", status=status)
+    with pytest.raises(EventBusy, match=status):
+        await w.update_event(1, ctx(), content_text="y")
+    with pytest.raises(EventBusy):
+        await w.hide_event(1, ctx())
+    assert (await event()).content_text == "x"
+    assert await audit_rows() == []
+
+
+async def test_busy_event_blocks_undo_too(sqlite_db):
+    await add_event(1, "v0", status="done")
+    edit = await w.update_event(1, ctx(), content_text="v1")
+    async with get_session() as s:
+        (await s.get(EventRow, 1)).triage_status = "processing"
+    with pytest.raises(EventBusy):
+        await w.undo(edit["audit_id"], ctx())
+
+
+@pytest.mark.parametrize(("status", "expected"), [
+    ("done", "pending"), ("error", "pending"), ("pending", "pending"),
+    ("superseded", "superseded"), ("dead", "dead")])
+async def test_text_edit_requeues_only_from_done_or_error(sqlite_db, status, expected):
+    await add_event(1, "x", status=status)
+    await w.update_event(1, ctx(), content_text="y")
+    assert (await event()).triage_status == expected

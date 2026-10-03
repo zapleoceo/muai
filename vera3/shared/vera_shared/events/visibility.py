@@ -12,8 +12,15 @@ from typing import Any
 HIDDEN_STATUS = "hidden"
 #: Фрагмент WHERE для сырого SQL по `events` без алиаса.
 NOT_HIDDEN_SQL = f"triage_status <> '{HIDDEN_STATUS}'"
+#: Статусы, в которых событие занято воркером: править и скрывать нельзя.
+BUSY_STATUSES = ("processing", "media_pending")
 PREV_STATUS_KEY = "hidden_prev_status"
 DEFAULT_RESTORE_STATUS = "done"
+
+
+def not_hidden_sql(alias: str | None = None) -> str:
+    """То же условие для запроса с алиасом таблицы (`e.triage_status …`)."""
+    return f"{alias}.{NOT_HIDDEN_SQL}" if alias else NOT_HIDDEN_SQL
 
 
 def hide_values(status: str, meta: dict[str, Any] | None) -> tuple[str, dict[str, Any]]:

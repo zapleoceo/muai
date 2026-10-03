@@ -29,6 +29,7 @@ from sqlalchemy import bindparam, text, update
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_graph import EntityRow
+from vera_shared.events.visibility import NOT_HIDDEN_SQL
 from vera_shared.ingest.envelope import message_body
 
 
@@ -170,13 +171,14 @@ async def get_entity_dossiers(entity_ids: list[int]) -> dict[int, dict]:
         if not tgids:
             return by_id
 
-        sample_rows = (await s.execute(text("""
+        sample_rows = (await s.execute(text(f"""
             SELECT sender_id, content_text FROM (
               SELECT metadata->>'sender_id' AS sender_id, content_text,
                      row_number() OVER (PARTITION BY metadata->>'sender_id'
                                         ORDER BY occurred_at DESC) AS rn
               FROM events
               WHERE source='telegram' AND metadata->>'sender_id' IN :t
+                AND {NOT_HIDDEN_SQL}
             ) x WHERE rn <= 3
         """).bindparams(bindparam("t", expanding=True)), {"t": tgids})).all()
         for sid, content in sample_rows:
@@ -184,11 +186,12 @@ async def get_entity_dossiers(entity_ids: list[int]) -> dict[int, dict]:
             if snip:
                 by_id[tgid_to_eid[sid]]["samples"].append(snip)
 
-        chat_rows = (await s.execute(text("""
+        chat_rows = (await s.execute(text(f"""
             SELECT metadata->>'sender_id' AS sender_id,
                    metadata->>'chat_title' AS chat_title, count(*) AS n
             FROM events
             WHERE source='telegram' AND metadata->>'sender_id' IN :t
+              AND {NOT_HIDDEN_SQL}
             GROUP BY sender_id, chat_title
         """).bindparams(bindparam("t", expanding=True)), {"t": tgids})).all()
         chats_by_sid: dict[str, list[tuple[str, int]]] = {}
@@ -200,11 +203,11 @@ async def get_entity_dossiers(entity_ids: list[int]) -> dict[int, dict]:
             d["top_chats"] = chats[:3]
             d["msg_count"] = sum(n for _, n in chats)
 
-        proj_rows = (await s.execute(text("""
+        proj_rows = (await s.execute(text(f"""
             SELECT metadata->>'sender_id' AS sender_id, project, count(*) AS n
             FROM events
             WHERE source='telegram' AND metadata->>'sender_id' IN :t
-              AND project IS NOT NULL
+              AND project IS NOT NULL AND {NOT_HIDDEN_SQL}
             GROUP BY sender_id, project
         """).bindparams(bindparam("t", expanding=True)), {"t": tgids})).all()
         best: dict[str, tuple[str, int]] = {}
@@ -270,7 +273,8 @@ async def get_entity_context(entity_id: int) -> dict:
             r = await s.execute(text(
                 "SELECT COUNT(*) FROM events WHERE source='telegram' "
                 "AND metadata->>'sender_id' = ANY(:ids) "
-                "AND occurred_at > NOW() - interval '30 day'"
+                "AND occurred_at > NOW() - interval '30 day' "
+                f"AND {NOT_HIDDEN_SQL}"
             ), {"ids": identifiers})
             recent_count = r.scalar() or 0
 

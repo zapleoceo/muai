@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from sqlalchemy import text
 
 from vera_shared.db.engine import get_session
+from vera_shared.events.visibility import NOT_HIDDEN_SQL
 from vera_shared.graph.rel_validate import (
     REJECT_SELF,
     is_referential_name,
@@ -135,7 +136,7 @@ async def author_entity_of_event(event_id: int) -> int | None:
     from vera_shared.projects.rules import OWNER_TG_ID
     async with get_session() as s:
         row = (await s.execute(text(
-            "SELECT source, metadata FROM events WHERE id = :i"
+            f"SELECT source, metadata FROM events WHERE id = :i AND {NOT_HIDDEN_SQL}"
         ), {"i": event_id})).first()
     if row is None:
         return None

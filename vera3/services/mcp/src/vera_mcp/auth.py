@@ -16,18 +16,21 @@ from typing import Any
 
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
+from starlette.websockets import WebSocketClose
 
 log = logging.getLogger(__name__)
 
-MIN_TOKEN_LEN = 16
+MIN_TOKEN_LEN = 32
 DEFAULT_CLIENT = "default"
 HEALTH_PATH = "/healthz"
 CLIENT_SCOPE_KEY = "mcp_client"
 
 
-def load_tokens(env: Mapping[str, str] | None = None) -> dict[str, str]:
-    """{токен: имя клиента}. Слишком короткие токены отбрасываются."""
-    env = os.environ if env is None else env
+class WeakTokenError(ValueError):
+    """Токен короче MIN_TOKEN_LEN: сервис не должен стартовать с таким."""
+
+
+def _parse(env: Mapping[str, str]) -> dict[str, str]:
     named: dict[str, str] = {}
     single = (env.get("MCP_TOKEN") or "").strip()
     if single:
@@ -38,10 +41,25 @@ def load_tokens(env: Mapping[str, str] | None = None) -> dict[str, str]:
         if not sep:
             name, token = f"token{i + 1}", item
         named[token.strip()] = name.strip() or f"token{i + 1}"
-    good = {t: n for t, n in named.items() if len(t) >= MIN_TOKEN_LEN}
-    if len(good) != len(named):
-        log.error("MCP: токены короче %d символов отброшены", MIN_TOKEN_LEN)
-    return good
+    return named
+
+
+def load_tokens(env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """{токен: имя клиента}. Короткие токены отбрасываются (при старте их
+    ловит `validate_tokens`, здесь — защита на случай смены env на лету)."""
+    named = _parse(os.environ if env is None else env)
+    return {t: n for t, n in named.items() if len(t) >= MIN_TOKEN_LEN}
+
+
+def validate_tokens(env: Mapping[str, str] | None = None) -> dict[str, str]:
+    """Как load_tokens, но короткий токен — исключение с именем клиента."""
+    named = _parse(os.environ if env is None else env)
+    weak = sorted(n for t, n in named.items() if len(t) < MIN_TOKEN_LEN)
+    if weak:
+        raise WeakTokenError(
+            f"MCP tokens for {', '.join(weak)} are shorter than {MIN_TOKEN_LEN} "
+            "characters; generate with `openssl rand -hex 32`")
+    return named
 
 
 def match_token(provided: str | None, tokens: Mapping[str, str]) -> str | None:
@@ -75,8 +93,13 @@ class BearerAuthMiddleware:
         self.app = app
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or scope.get("path") == HEALTH_PATH:
+        if scope["type"] == "lifespan" or (
+                scope["type"] == "http" and scope.get("path") == HEALTH_PATH):
             await self.app(scope, receive, send)
+            return
+        if scope["type"] != "http":
+            # websocket и любой будущий тип сюда не ходят: закрываем, не пропуская
+            await WebSocketClose(code=1008)(scope, receive, send)
             return
         client = match_token(bearer_of(scope.get("headers", [])), load_tokens())
         if client is None:

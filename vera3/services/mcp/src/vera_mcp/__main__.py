@@ -6,7 +6,7 @@ import os
 
 import uvicorn
 
-from vera_mcp.auth import load_tokens
+from vera_mcp.auth import validate_tokens
 from vera_mcp.server import build_app
 
 log = logging.getLogger("vera_mcp")
@@ -14,7 +14,7 @@ log = logging.getLogger("vera_mcp")
 
 def main() -> None:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
-    names = sorted(set(load_tokens().values()))
+    names = sorted(set(validate_tokens().values()))
     if names:
         log.info("MCP clients configured: %s", ", ".join(names))
     else:

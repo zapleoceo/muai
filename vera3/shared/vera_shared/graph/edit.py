@@ -1,6 +1,7 @@
 """Ручная правка графа: имя сущности, алиасы, связи — в сессии вызывающего.
 
-Сессию открывает вызывающий (правка + запись аудита одной транзакцией).
+Сессию открывает вызывающий (правка + запись аудита одной транзакцией);
+строки берутся `FOR UPDATE`, чтобы параллельные правки и откаты не затирали друг друга.
 Слияние сущностей здесь НЕТ: это отдельная разрушительная операция
 (`graph.dedup.merge_entities`).
 """
@@ -22,7 +23,7 @@ class GraphEditError(ValueError):
 
 async def _entity(s: AsyncSession, entity_id: int) -> EntityRow:
     row = (await s.execute(
-        select(EntityRow).where(EntityRow.id == entity_id)
+        select(EntityRow).where(EntityRow.id == entity_id).with_for_update()
     )).scalar_one_or_none()
     if row is None:
         raise GraphEditError(f"entity {entity_id} not found")
@@ -59,6 +60,12 @@ async def add_alias(s: AsyncSession, entity_id: int, source: str,
     return alias.id, True
 
 
+async def alias_owner(s: AsyncSession, alias_id: int) -> int | None:
+    return (await s.execute(
+        select(EntityAliasRow.entity_id).where(EntityAliasRow.id == alias_id)
+    )).scalar_one_or_none()
+
+
 async def remove_alias(s: AsyncSession, alias_id: int) -> bool:
     alias = (await s.execute(
         select(EntityAliasRow).where(EntityAliasRow.id == alias_id)
@@ -78,7 +85,7 @@ def relationship_snapshot(row: RelationshipRow) -> dict[str, Any]:
 
 async def _relationship(s: AsyncSession, rel_id: int) -> RelationshipRow:
     row = (await s.execute(
-        select(RelationshipRow).where(RelationshipRow.id == rel_id)
+        select(RelationshipRow).where(RelationshipRow.id == rel_id).with_for_update()
     )).scalar_one_or_none()
     if row is None:
         raise GraphEditError(f"relationship {rel_id} not found")
@@ -102,7 +109,7 @@ async def set_relationship(
         select(RelationshipRow).where(
             RelationshipRow.subject_entity_id == subject_id,
             RelationshipRow.object_entity_id == object_id,
-            RelationshipRow.predicate == predicate)
+            RelationshipRow.predicate == predicate).with_for_update()
     )).scalar_one_or_none()
     before = relationship_snapshot(row) if row is not None else None
     if row is None:

@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from vera_shared.db.engine import get_session
 from vera_shared.events import edit as event_edit
 from vera_shared.graph import edit as graph_edit
-from vera_shared.memory.remember import remember_fact
+from vera_shared.memory.remember import RememberOutcome, remember_fact
 
 from vera_mcp import audit
 from vera_mcp.auth import client_of
@@ -46,21 +46,21 @@ async def remember(
     context: Annotated[str | None, Field(max_length=2000)] = None,
     tags: Annotated[list[str] | None, Field(max_length=10)] = None,
 ) -> dict[str, Any]:
-    """Запомнить факт/решение/задачу/предпочтение (с дедупом). Remember a self-contained fact; duplicates are detected server-side."""
-    outcome = await remember_fact(text, kind, context, tags)
-    result: dict[str, Any] = {
-        "ok": True, "event_id": outcome.event_id, "deduped": outcome.deduped,
-        "dedup_reason": outcome.dedup_reason, "similar_event_id": outcome.similar_event_id,
-        "audit_id": None}
-    if outcome.event_id is None or outcome.dedup_reason == "exact":
-        return result
-    async with get_session() as s:
+    """Запомнить факт/решение/задачу/предпочтение (с дедупом; audit_id=null при точном дубле — ничего не создано). Remember a self-contained fact; audit_id is null for an exact duplicate."""
+    result: dict[str, Any] = {"ok": True, "audit_id": None}
+    args = {"text": text, "kind": kind, "context": context, "tags": tags}
+
+    async def journal(s: AsyncSession, outcome: RememberOutcome) -> None:
+        # та же транзакция, что и вставка события (см. remember_fact)
         result["audit_id"] = await audit.record(
-            s, client=client_of(ctx), tool="remember",
-            args={"text": text, "kind": kind, "context": context, "tags": tags},
-            kind="event", target_id=outcome.event_id, before=None,
-            after={"created": True, "deduped": outcome.deduped})
-    return result
+            s, client=client_of(ctx), tool="remember", args=args, kind="event",
+            target_id=outcome.event_id, before=None,
+            after={"content_text": text.strip(), "deduped": outcome.deduped})
+
+    outcome = await remember_fact(text, kind, context, tags, on_written=journal)
+    return {**result, "event_id": outcome.event_id, "deduped": outcome.deduped,
+            "dedup_reason": outcome.dedup_reason,
+            "similar_event_id": outcome.similar_event_id}
 
 
 async def update_event(
@@ -69,7 +69,7 @@ async def update_event(
     metadata: dict[str, Any] | None = None,
     category: Annotated[str | None, Field(min_length=1, max_length=50)] = None,
 ) -> dict[str, Any]:
-    """Изменить текст/метаданные/категорию события; метаданные сливаются по ключам (null удаляет ключ); правка текста пере-индексирует событие. Edit an event; the previous version is kept in the audit log."""
+    """Изменить текст/метаданные/категорию события; метаданные сливаются по ключам (null удаляет ключ); правка текста пере-индексирует событие; события в обработке (processing/media_pending) не правятся. Edit an event of ANY source; the previous version is kept in the audit log."""
     if content_text is None and not metadata and category is None:
         raise ValueError("nothing to change: pass content_text, metadata or category")
 

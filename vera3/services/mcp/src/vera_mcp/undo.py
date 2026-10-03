@@ -1,7 +1,9 @@
-"""Откат записи журнала: по `before` возвращает состояние, ничего не удаляя.
+"""Откат записи журнала: возвращает ТОЛЬКО поля, которые менял этот инструмент.
 
-Если с момента правки объект изменился (текущее состояние ≠ `after`),
-откат отказывает без `force=True`, чтобы не затереть чужую свежую правку.
+Строка журнала и объект берутся `FOR UPDATE`. Если поля, изменённые
+инструментом, с тех пор менялись (текущее значение ≠ `after`), откат
+отказывает без `force=True`, чтобы не затереть чужую свежую правку; при
+`force` восстанавливаются те же поля — остальные не трогаются никогда.
 """
 from __future__ import annotations
 
@@ -14,12 +16,11 @@ from vera_shared.graph import edit as graph_edit
 
 from vera_mcp import audit
 
-#: какие поля снимка сверяются с `after` перед откатом (триаж меняет статус
-#: сам, поэтому для текстовой правки статус не сверяется)
-_EVENT_CHECK_KEYS = {
-    "update_event": ("content_text", "metadata", "category"),
-    "hide_event": ("triage_status",),
-}
+_TEXT_KEYS = ("content_text", "metadata", "category")
+_STATUS_KEYS = ("triage_status", "triage_metadata")
+#: инструмент → поля снимка события, которые он менял
+_EVENT_KEYS = {"update_event": _TEXT_KEYS, "hide_event": _STATUS_KEYS,
+               "unhide_event": _STATUS_KEYS}
 
 
 class UndoRefused(ValueError):
@@ -27,35 +28,43 @@ class UndoRefused(ValueError):
 
 
 def _diverged(current: dict[str, Any], expected: dict[str, Any],
-              keys: tuple[str, ...] | None) -> bool:
-    check = keys or tuple(expected)
-    return any(current.get(k) != expected.get(k) for k in check)
+              keys: tuple[str, ...]) -> bool:
+    return any(current.get(k) != expected.get(k) for k in keys)
+
+
+def _refuse_if_diverged(current: dict[str, Any], expected: dict[str, Any],
+                        keys: tuple[str, ...], what: str, force: bool) -> None:
+    if not force and _diverged(current, expected, keys):
+        raise UndoRefused(f"{what} changed since this edit; pass force=true to override")
 
 
 async def _undo_event(s: AsyncSession, row: McpAuditRow,
                       force: bool) -> tuple[dict[str, Any], dict[str, Any]]:
     event_id = int(row.target_id or 0)
-    if row.tool == "remember":
-        return await event_edit.set_hidden(s, event_id, hidden=True)
     current = event_edit.snapshot(await event_edit.load_row(s, event_id))
-    keys = _EVENT_CHECK_KEYS.get(row.tool)
-    if keys is not None and not force and _diverged(current, row.after or {}, keys):
-        raise UndoRefused("event changed since this edit; pass force=true to override")
-    return current, await event_edit.restore_event(s, event_id, row.before or {})
+    if row.tool == "remember":
+        _refuse_if_diverged(current, row.after or {}, ("content_text",), "event", force)
+        return await event_edit.set_hidden(s, event_id, hidden=True)
+    keys = _EVENT_KEYS[row.tool]
+    _refuse_if_diverged(current, row.after or {}, keys, "event", force)
+    return await event_edit.restore_fields(s, event_id, row.before or {}, keys)
 
 
 async def _undo_entity(s: AsyncSession, row: McpAuditRow,
                        force: bool) -> tuple[dict[str, Any], dict[str, Any]]:
     entity_id = int(row.target_id or 0)
     current = await graph_edit.current_name(s, entity_id)
-    if not force and current != row.after:
-        raise UndoRefused("entity was renamed again; pass force=true to override")
+    _refuse_if_diverged(current, row.after or {}, ("name",), "entity", force)
     return await graph_edit.rename_entity(s, entity_id, (row.before or {})["name"])
 
 
 async def _undo_alias(s: AsyncSession, row: McpAuditRow,
                       force: bool) -> tuple[dict[str, Any], dict[str, Any]]:
-    removed = await graph_edit.remove_alias(s, int(row.target_id or 0))
+    alias_id = int(row.target_id or 0)
+    owner = await graph_edit.alias_owner(s, alias_id)
+    if owner is not None and owner != (row.after or {}).get("entity_id") and not force:
+        raise UndoRefused("alias was moved to another entity; pass force=true to override")
+    removed = await graph_edit.remove_alias(s, alias_id)
     return {"exists": removed}, {"exists": False}
 
 
@@ -63,11 +72,10 @@ async def _undo_relationship(s: AsyncSession, row: McpAuditRow,
                              force: bool) -> tuple[dict[str, Any], dict[str, Any]]:
     rel_id = int(row.target_id or 0)
     current = await graph_edit.current_relationship(s, rel_id)
-    if not force and current != row.after:
-        raise UndoRefused("relationship changed since this edit; pass force=true to override")
+    expected = row.after or {}
+    _refuse_if_diverged(current, expected, tuple(expected), "relationship", force)
     if row.before is None:
-        retired, after = await graph_edit.retire_relationship(s, rel_id)
-        return retired, after
+        return await graph_edit.retire_relationship(s, rel_id)
     return current, await graph_edit.restore_relationship(s, rel_id, row.before)
 
 

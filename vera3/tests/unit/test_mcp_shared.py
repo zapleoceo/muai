@@ -66,7 +66,7 @@ def test_main_starts_uvicorn_and_warns_without_tokens(monkeypatch, caplog):
 def test_main_logs_configured_client_names(monkeypatch, caplog):
     from vera_mcp import __main__ as entry
 
-    monkeypatch.setenv("MCP_TOKENS", "claude:aaaaaaaaaaaaaaaaaaaa,codex:bbbbbbbbbbbbbbbbbbbb")
+    monkeypatch.setenv("MCP_TOKENS", "claude:" + "a" * 32 + ",codex:" + "b" * 32)
     with patch.object(entry.uvicorn, "run"), caplog.at_level("INFO", "vera_mcp"):
         entry.main()
     assert "claude, codex" in caplog.text

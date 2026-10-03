@@ -26,6 +26,7 @@ import logging
 from sqlalchemy import bindparam, text
 
 from vera_shared.db.engine import get_session
+from vera_shared.events.visibility import NOT_HIDDEN_SQL
 from vera_shared.ingest.envelope import message_body
 
 log = logging.getLogger(__name__)
@@ -74,12 +75,14 @@ async def _by_sender_id(source: str, keys: dict[str, int],
                      row_number() OVER (PARTITION BY metadata->>'sender_id'
                                         ORDER BY occurred_at DESC) AS rn
               FROM events WHERE source = :src AND metadata->>'sender_id' IN :k
+                AND {NOT_HIDDEN_SQL}
             ) x WHERE rn <= {SAMPLES_PER_ENTITY}
         """).bindparams(bindparam("k", expanding=True)),
             {"src": source, "k": ids})).all()
         places = (await s.execute(text(f"""
             SELECT metadata->>'sender_id', metadata->>'{place}', count(*), max(project)
             FROM events WHERE source = :src AND metadata->>'sender_id' IN :k
+              AND {NOT_HIDDEN_SQL}
             GROUP BY 1, 2
         """).bindparams(bindparam("k", expanding=True)),
             {"src": source, "k": ids})).all()
@@ -104,12 +107,12 @@ async def _by_email(keys: dict[str, int], out: dict[int, dict]) -> None:
         pattern = f"%{addr.lower()}%"
         async with get_session() as s:
             rows = (await s.execute(text(
-                "SELECT content_text, project FROM events "
-                "WHERE source='gmail' AND lower(metadata->>'from') LIKE :pat "
+                f"SELECT content_text, project FROM events WHERE {NOT_HIDDEN_SQL} "
+                "AND source='gmail' AND lower(metadata->>'from') LIKE :pat "
                 "ORDER BY occurred_at DESC LIMIT :n"
             ), {"pat": pattern, "n": SAMPLES_PER_ENTITY})).all()
             total = (await s.execute(text(
-                "SELECT count(*) FROM events WHERE source='gmail' "
+                f"SELECT count(*) FROM events WHERE {NOT_HIDDEN_SQL} AND source='gmail' "
                 "AND lower(metadata->>'from') LIKE :pat"
             ), {"pat": pattern})).scalar_one()
         d = out[entity_id]

@@ -8,15 +8,17 @@ import httpx
 import pytest
 from vera_mcp.auth import (
     BearerAuthMiddleware,
+    WeakTokenError,
     bearer_of,
     client_of,
     load_tokens,
     match_token,
+    validate_tokens,
 )
 from vera_mcp.server import build_app
 
-CLAUDE_TOKEN = "claude-token-0123456789"
-CODEX_TOKEN = "codex-token-abcdefghij"
+CLAUDE_TOKEN = "claude-token-0123456789-0123456789"
+CODEX_TOKEN = "codex-token-abcdefghij-abcdefghij"
 MCP_HEADERS = {"Accept": "application/json, text/event-stream",
                "Content-Type": "application/json"}
 
@@ -168,3 +170,38 @@ async def test_middleware_passes_lifespan_through():
 
     await BearerAuthMiddleware(app)({"type": "lifespan"}, None, None)
     assert seen == ["lifespan"]
+
+
+def test_validate_tokens_fails_on_a_short_token_naming_the_client():
+    with pytest.raises(WeakTokenError, match="codex"):
+        validate_tokens({"MCP_TOKENS": f"claude:{CLAUDE_TOKEN},codex:short-token"})
+    assert validate_tokens({"MCP_TOKENS": f"claude:{CLAUDE_TOKEN}"}) == {CLAUDE_TOKEN: "claude"}
+    assert validate_tokens({}) == {}
+
+
+def test_main_refuses_to_start_with_a_weak_token(monkeypatch):
+    from vera_mcp import __main__ as entry
+
+    monkeypatch.setenv("MCP_TOKEN", "tooshort")
+    with pytest.raises(WeakTokenError):
+        entry.main()
+
+
+@pytest.mark.asyncio
+async def test_websocket_is_rejected_not_passed_through():
+    reached = []
+    sent = []
+
+    async def app(scope, receive, send):
+        reached.append(scope["type"])
+
+    async def receive():
+        return {"type": "websocket.connect"}
+
+    async def send(message):
+        sent.append(message)
+
+    await BearerAuthMiddleware(app)({"type": "websocket", "path": "/mcp", "headers": []},
+                                    receive, send)
+    assert reached == []
+    assert sent[0]["type"] == "websocket.close" and sent[0]["code"] == 1008

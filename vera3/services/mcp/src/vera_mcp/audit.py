@@ -29,7 +29,7 @@ async def record(
 
 async def get_entry(s: AsyncSession, audit_id: int) -> McpAuditRow:
     row = (await s.execute(
-        select(McpAuditRow).where(McpAuditRow.id == audit_id)
+        select(McpAuditRow).where(McpAuditRow.id == audit_id).with_for_update()
     )).scalar_one_or_none()
     if row is None:
         raise AuditNotFound(audit_id)
