@@ -105,3 +105,14 @@ def test_api_graph_resolves_name_to_focus():
     fbn.assert_awaited_once()
     assert gs.await_args.kwargs["focus_id"] == 42
     assert r.json()["focus_id"] == 42
+
+
+def test_initials_take_whole_characters_not_surrogate_halves():
+    """Имя, начинающееся с эмодзи («🇺🇦Українці…»), давало w[0] — половинку
+    суррогатной пары; encodeURIComponent падал URIError и страница «Люди» не
+    грузилась целиком (04.10.2026). Инициалы берутся по символам и только из букв/цифр,
+    а сборка data-URI не может уронить граф."""
+    from dashboard.graph_script_core import CORE_SCRIPT as script
+    assert "Array.from(w)" in script
+    assert "w => w[0]" not in script
+    assert "catch (_)" in script

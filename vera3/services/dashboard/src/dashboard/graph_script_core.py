@@ -42,11 +42,15 @@ const info = $('g-info'), count = $('g-count'), legend = $('g-legend'), panel = 
 // если картинка не загрузилась (404, группа без фото), остаётся он, а не чёрный кружок.
 const INI_TINTS = ['#6d6fe8','#2fa37a','#c75a8a','#c9803a','#7d62d6','#2c9bb0','#b39a2a','#c76060'];
 function initialsUri(name, id){
-  const ini = String(name).trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?';
+  // Первый СИМВОЛ слова, а не первая половинка суррогатной пары: имя «🇺🇦Українці…»
+  // давало обрезанный эмодзи, encodeURIComponent падал URIError и граф не грузился (04.10.2026).
+  const ini = String(name).trim().split(/\s+/).slice(0, 2)
+    .map(w => Array.from(w).find(ch => /\p{L}|\p{N}/u.test(ch)) || '').join('').toUpperCase() || '?';
   const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="' +
     INI_TINTS[id % INI_TINTS.length] + '"/><text x="32" y="41" font-size="26" font-family="sans-serif" ' +
     'font-weight="600" fill="#fff" text-anchor="middle">' + esc(ini) + '</text></svg>';
-  return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+  try { return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg); }
+  catch (_) { return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg.replace(ini, '?')); }
 }
 const nodeSize = e => 16 + Math.min(40, Math.sqrt(e.data('degree')||1) * 4.5);
 
