@@ -197,7 +197,7 @@ async def test_search_unavailable_becomes_error(sqlite_db):
         await r.search("x")
 
 
-async def test_sql_query_tool_and_audit_log(sqlite_db):
+async def test_sql_query_tool_and_audit_log(sqlite_db, ro_env):
     await seed_events()
     out = await r.sql_query("SELECT source, COUNT(*) AS n FROM events GROUP BY source ORDER BY n DESC")
     assert out["rows"][0] == ["telegram", 2]

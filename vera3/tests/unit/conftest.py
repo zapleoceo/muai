@@ -94,3 +94,17 @@ async def sqlite_db(tmp_path):
     await engine.dispose()
     engine_mod._engine = None
     engine_mod.AsyncSessionLocal = None
+
+
+@pytest_asyncio.fixture
+async def ro_env(sqlite_db, monkeypatch):
+    """`MCP_RO_DATABASE_URL` на той же SQLite, что у теста: sql_query ходит
+    отдельным движком, а проверка роли на SQLite пропускается (роли там нет)."""
+    import vera_shared.db.engine as engine_mod
+    from vera_mcp.ro_engine import forget_ro_engine
+
+    url = engine_mod._engine.url.render_as_string(hide_password=False)
+    monkeypatch.setenv("MCP_RO_DATABASE_URL", url)
+    await forget_ro_engine()
+    yield
+    await forget_ro_engine()

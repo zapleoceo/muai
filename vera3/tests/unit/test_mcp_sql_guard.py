@@ -28,6 +28,8 @@ REJECTED = [
     "WITH d AS (DELETE FROM events RETURNING id) SELECT * FROM d",
     "WITH d AS (UPDATE events SET importance = 1 RETURNING id) SELECT id FROM d",
     "SET TRANSACTION READ WRITE",
+    "SELECT query_to_xml('select 1', true, false, '')",
+    "SELECT cursor_to_xml(c, 1, false, false, '') FROM x",
     "VACUUM",
     "EXPLAIN SELECT 1",
     "",
@@ -54,6 +56,8 @@ ACCEPTED = [
     "SELECT 'delete; drop table x' AS note",
     "SELECT $q$update; insert$q$ AS note",
     'SELECT 1 AS "set"',
+    "SELECT 1 AS set",
+    "SELECT 1 AS reset",
     "SELECT 'it''s; fine'",
     "SELECT 1 -- DELETE FROM events",
     "SELECT /* DROP TABLE x */ 1",
@@ -75,7 +79,7 @@ def test_strip_literals_blanks_strings_and_comments():
 
 
 @pytest.mark.asyncio
-async def test_runs_select_and_serializes_cells(sqlite_db):
+async def test_runs_select_and_serializes_cells(sqlite_db, ro_env):
     from vera_shared.db.engine import get_session
     from vera_shared.db.models import EventRow
 
@@ -91,7 +95,7 @@ async def test_runs_select_and_serializes_cells(sqlite_db):
 
 
 @pytest.mark.asyncio
-async def test_row_cap_sets_truncated(sqlite_db):
+async def test_row_cap_sets_truncated(sqlite_db, ro_env):
     out = await run_readonly(
         "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 50) "
         "SELECT i FROM n", max_rows=10)
@@ -100,7 +104,7 @@ async def test_row_cap_sets_truncated(sqlite_db):
 
 
 @pytest.mark.asyncio
-async def test_cap_never_exceeds_hard_limit(sqlite_db):
+async def test_cap_never_exceeds_hard_limit(sqlite_db, ro_env):
     out = await run_readonly(
         "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 800) "
         "SELECT i FROM n", max_rows=10_000)
@@ -108,7 +112,7 @@ async def test_cap_never_exceeds_hard_limit(sqlite_db):
 
 
 @pytest.mark.asyncio
-async def test_rejected_query_never_reaches_the_database(sqlite_db):
+async def test_rejected_query_never_reaches_the_database(sqlite_db, ro_env):
     with pytest.raises(SqlRejected):
         await run_readonly("DELETE FROM events")
 
@@ -123,3 +127,44 @@ def test_cell_conversions():
     assert sql_guard._cell(None) is None
     assert sql_guard._cell({"a": 1}) == {"a": 1}
     assert sql_guard._cell({"a": "x" * 3000}).endswith("…")
+
+
+@pytest.mark.asyncio
+async def test_refuses_when_the_read_only_url_is_not_configured(sqlite_db, monkeypatch):
+    from vera_mcp.ro_engine import ReadOnlyUnavailable, forget_ro_engine
+
+    await forget_ro_engine()
+    monkeypatch.delenv("MCP_RO_DATABASE_URL", raising=False)
+    with pytest.raises(ReadOnlyUnavailable, match="MCP_RO_DATABASE_URL is not set"):
+        await run_readonly("SELECT 1")
+
+
+@pytest.mark.asyncio
+async def test_ro_engine_is_cached_per_url_and_rebuilt_on_change(ro_env, monkeypatch, tmp_path):
+    from vera_mcp.ro_engine import get_ro_engine
+
+    first = await get_ro_engine()
+    assert await get_ro_engine() is first
+    monkeypatch.setenv("MCP_RO_DATABASE_URL", f"sqlite+aiosqlite:///{tmp_path / 'other.db'}")
+    assert await get_ro_engine() is not first
+
+
+@pytest.mark.asyncio
+async def test_superuser_role_is_refused(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    from vera_mcp import ro_engine
+
+    conn = MagicMock()
+    conn.execute = AsyncMock(return_value=MagicMock(scalar_one=lambda: True))
+    engine = MagicMock()
+    engine.dialect.name = "postgresql"
+    engine.connect.return_value.__aenter__ = AsyncMock(return_value=conn)
+    engine.connect.return_value.__aexit__ = AsyncMock(return_value=False)
+    engine.dispose = AsyncMock()
+    await ro_engine.forget_ro_engine()
+    monkeypatch.setenv("MCP_RO_DATABASE_URL", "postgresql+asyncpg://x:y@h/db")
+    with patch.object(ro_engine, "create_async_engine", return_value=engine), \
+         pytest.raises(ro_engine.ReadOnlyUnavailable, match="superuser"):
+        await ro_engine.get_ro_engine()
+    engine.dispose.assert_awaited_once()

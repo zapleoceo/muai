@@ -1,14 +1,17 @@
 """`sql_query`: произвольный SELECT/WITH только на чтение.
 
-Два независимых барьера:
+Три независимых барьера (главный — первый):
 
+0. Роль (`ro_engine`): запрос идёт под `vera_ro` — не суперпользователь, SELECT
+   только на таблицы с содержимым мозга. Что бы ни прошло разбор (опасный SQL
+   можно спрятать в строковом литерале: `query_to_xml('select …')`), права
+   роли не дают ни писать, ни читать секреты, ни файлы сервера.
 1. Разбор текста (`validate_sql`): комментарии и литералы вырезаются
    сканером, остаток — ровно один оператор, начинающийся с SELECT/WITH, без
    слов-мутаций (DML, DDL, COPY, INTO, SET, FOR UPDATE/SHARE) и без опасных
    функций (`set_config`, чтение файлов, advisory-локи и т.п.).
-2. Транзакция `READ ONLY` с `statement_timeout` (`run_readonly`): даже если
-   разбор что-то пропустит, Postgres откажет в записи. Это главный барьер,
-   разбор — защита вглубь и понятное сообщение об ошибке.
+2. Транзакция `READ ONLY` с `statement_timeout` (`run_readonly`).
+   Разбор — защита вглубь и понятное сообщение об ошибке.
 """
 from __future__ import annotations
 
@@ -18,7 +21,8 @@ from decimal import Decimal
 from typing import Any
 
 from sqlalchemy.ext.asyncio import AsyncConnection
-from vera_shared.db.engine import init_engine
+
+from vera_mcp.ro_engine import get_ro_engine
 
 STATEMENT_TIMEOUT_MS = 10_000
 MAX_ROWS = 500
@@ -26,13 +30,16 @@ MAX_CELL_CHARS = 2_000
 
 _FORBIDDEN_WORDS = (
     "insert", "update", "delete", "merge", "drop", "alter", "create", "truncate",
-    "grant", "revoke", "copy", "into", "set", "reset",
+    "grant", "revoke", "copy", "into",
 )
 _FORBIDDEN_FUNCS = (
     "set_config", "pg_read_file", "pg_read_binary_file", "pg_ls_dir", "pg_stat_file",
     "lo_import", "lo_export", "lo_get", "dblink", "pg_terminate_backend",
     "pg_cancel_backend", "pg_reload_conf", "pg_advisory_lock", "pg_advisory_xact_lock",
     "pg_try_advisory_lock", "pg_notify", "nextval", "setval",
+    # выполняют SQL из строки — обход разбора через литерал
+    "query_to_xml", "query_to_xml_and_xmlschema", "query_to_xmlschema",
+    "cursor_to_xml", "cursor_to_xmlschema",
 )
 _WORD_RE = re.compile(r"\b(" + "|".join(_FORBIDDEN_WORDS + _FORBIDDEN_FUNCS) + r")\b", re.I)
 _LOCKING_RE = re.compile(r"\bfor\s+(no\s+key\s+update|key\s+share|share)\b", re.I)
@@ -150,7 +157,7 @@ async def run_readonly(sql: str, max_rows: int = MAX_ROWS) -> dict[str, Any]:
     cap = max(1, min(max_rows, MAX_ROWS))
     # LIMIT снаружи подзапроса: лишняя строка нужна, чтобы честно сказать «обрезано»
     wrapped = f"SELECT * FROM ({statement}) AS _q LIMIT {cap + 1}"
-    engine = await init_engine()
+    engine = await get_ro_engine()
     async with engine.connect() as conn:
         await _enter_read_only(conn)
         result = await conn.exec_driver_sql(wrapped)
