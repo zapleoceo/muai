@@ -79,6 +79,29 @@ ul.sources{padding-left:1.1rem}ul.sources li{margin-bottom:.6rem}
 details>summary{cursor:pointer}
 """
 
+DUPES_CSS = """
+.pair{display:grid;grid-template-columns:1fr 1fr;gap:1rem;margin:.6rem 0}
+.cand-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(15rem,1fr));gap:1rem;margin:.6rem 0}
+.pair-card{background:var(--vera-surface);border:1px solid var(--vera-line);
+border-radius:var(--pico-border-radius);padding:1rem;margin:0 0 1rem}
+.pair-card h4{margin:0 0 .2rem;font-size:1rem}.pair-card p{margin:0 0 .4rem}
+.person{border:1px solid var(--vera-line);border-radius:var(--pico-border-radius);padding:.7rem;min-width:0}
+.person-head{display:flex;gap:.6rem;align-items:flex-start;overflow-wrap:anywhere}
+.person-head img{border-radius:50%;flex:none}
+.person .badge{margin-left:auto;font-size:.7rem;color:var(--vera-muted);white-space:nowrap}
+.person blockquote{margin:.4rem 0 0;padding:0 0 0 .6rem;border-left:2px solid var(--vera-line);
+font-size:.8rem;color:var(--vera-muted)}
+.chips{margin:.4rem 0}
+.actions,.bulk{display:flex;gap:.6rem;flex-wrap:wrap;align-items:center}
+.actions form,.bulk form,form.inline{margin:0;display:inline-flex;gap:.6rem}
+.actions button,.bulk button,form.inline button{margin:0;width:auto}
+.select-merge{display:flex;gap:.8rem;flex-wrap:wrap;align-items:end}
+.select-merge label,.select-merge select,.select-merge button{margin:0}
+.warning{border-left:3px solid var(--vera-warn);padding:.5rem .8rem;color:var(--vera-warn)}
+.bulk{margin:.6rem 0 1.2rem}
+@media (max-width:640px){.pair{grid-template-columns:1fr}}
+"""
+
 SOURCES_CSS = """
 .src-list { width:100%; border-collapse:collapse; font-size:14px; }
 .src-list th { font-size:11px; text-transform:uppercase; color:var(--vera-muted); font-weight:500;

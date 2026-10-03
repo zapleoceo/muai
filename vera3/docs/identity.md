@@ -133,7 +133,7 @@ status pending|accepted|rejected, UNIQUE(entity_a, entity_b).
 
 ## 3. UI (`/entities/duplicates`)
 
-Фиолетовая секция «🧠 Вера предлагает объединить»: кнопка
+Секция «Вера предлагает объединить»: кнопка
 `entities_analyze` (POST `/entities/analyze`) запускает раунд в фоне
 процесса дашборда; каждое предложение — два досье + улика Веры + кнопки
 `entities_suggestion` (POST `/entities/suggestion`): «оставить A» /

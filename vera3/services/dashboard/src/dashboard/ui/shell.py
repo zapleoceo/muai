@@ -22,10 +22,16 @@ _NAV_ALIASES = {"entities": "graph"}
 
 
 # Строка таблицы с data-href открывается кликом; ссылки и кнопки внутри живут своей жизнью.
+# Здесь же подтверждение опасных форм.
 ROW_LINK_SCRIPT = """<script>
 document.addEventListener('click',function(e){
   var r=e.target.closest('tr.row-link');
   if(r&&!e.target.closest('a,button,input,select,summary'))location.href=r.dataset.href;
+});
+// Опасные формы несут вопрос в data-confirm: имена в нём были бы кодом, а так это строка.
+document.addEventListener('submit',function(e){
+  var m=e.target.dataset&&e.target.dataset.confirm;
+  if(m&&!window.confirm(m))e.preventDefault();
 });
 </script>"""
 
