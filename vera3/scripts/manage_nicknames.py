@@ -28,7 +28,13 @@ from vera_shared.links.nicknames import (
     decide_suggestion,
     pending_suggestions,
 )
-from vera_shared.links.scope import SCOPE_KINDS, WORK, NicknameRule, ScopeError, scope_ids_for
+from vera_shared.links.scope import (
+    SCOPE_KINDS,
+    WORK,
+    NicknameRule,
+    ScopeError,
+    scope_ids_for,
+)
 
 
 async def _run(args: argparse.Namespace) -> int:
