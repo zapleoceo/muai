@@ -40,14 +40,17 @@ async def test_one_connection_per_counterpart_not_one_per_phrase(sqlite_db):
     only = out[0]
     assert only["main"]["predicate"] == "boss_of" and only["main"]["direction"] == "out"
     assert only["hidden"] + len(only["also"]) == 3
+    assert only["also"] == []
     assert only["interaction"]["established"] is False
 
 
 async def test_strong_contact_lifts_the_pair_and_is_reported(sqlite_db):
-    owner, lisa = await person("Игорь Тестов", "1"), await person("Лиза Ветрова", "2")
+    owner = await person("Игорь Тестов", "1", "i@corp.example")
+    lisa = await person("Лиза Ветрова", "2", "l@corp.example")
     await rel(lisa, "reports_to", owner)
     await stat(sqlite_db, owner, lisa, dm_msgs=400, dm_days=40, active_days=40)
-    quiet_owner, quiet = await person("Пётр Тихий", "3"), await person("Нина Тихая", "4")
+    quiet_owner = await person("Пётр Тихий", "3", "p@corp.example")
+    quiet = await person("Нина Тихая", "4", "n@corp.example")
     await rel(quiet, "reports_to", quiet_owner)
     busy = (await connections.entity_connections(owner))[0]
     calm = (await connections.entity_connections(quiet_owner))[0]

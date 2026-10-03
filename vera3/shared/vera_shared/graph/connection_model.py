@@ -2,10 +2,15 @@
 
 Модель владельца: между двумя сущностями ОДНА связь с параметрами и уликами, а не
 россыпь независимых предикатов. Роль («начальник», «клиент», «работает с»)
-берётся из записанных `relationships`, но её вес складывается из трёх вещей:
-сколько записей её подтверждают, как плотно пара общается и правил ли роль
-владелец руками. Работа вместе (`coworker_of`) может быть и ВЫВЕДЕНА из
-рабочих контактов без единой фразы про неё.
+берётся из записанных `relationships`; вес записанной роли — ТОЛЬКО от утверждений
+(сколько записей, какая уверенность, правил ли руками владелец). Общение —
+улика лишь для рабочих ролей (`WORK_ROLES`) и только в рабочем контексте (общий
+рабочий домен / Slack / рабочие чаты): личная переписка говорит о близости, а не о
+роли, и «супруга» из одной фразы не поднимет. Работа вместе (`coworker_of`) может
+быть ВЫВЕДЕНА из рабочих контактов без единой фразы про неё.
+Личные и коммерческие роли (`NEEDS_REPEAT`) без двух независимых записей или ручной
+правки не показываются; «также» требует тех же двух записей; противоречивая
+иерархия оставляет сторону с большей поддержкой.
 
 Пороги подобраны по прод-замеру 04.10.2026 (число дней, когда пара «в контакте»):
 владелец и коллеги с общим рабочим доменом — медиана 10 дней, p25 2, p75 24, p90
@@ -48,6 +53,14 @@ INFER_MIN_DAYS_CHAT = 6
 ALSO_MIN_WEIGHT = 0.35
 ALSO_RATIO = 0.6
 INFERRED_PREDICATE = "coworker_of"
+#: Роли, которым рабочее общение — прямая улика.
+WORK_ROLES = frozenset({"coworker_of", "boss_of", "works_at"})
+#: Личные и коммерческие роли: одна фраза — слишком шаткое основание (прод-замер
+#: 04.10: «супруга» и «поставщики» из одного упоминания перебивали 400 дней общих чатов).
+NEEDS_REPEAT = frozenset({"spouse_of", "parent_of", "client_of", "vendor_of"})
+MIN_REPEAT_SUPPORT = 2
+#: Иерархии, где обе стороны одновременно — противоречие.
+HIERARCHY = frozenset({"boss_of", "parent_of"})
 #: При равном весе главной становится роль, стоящая раньше: она точнее.
 ROLE_PRIORITY = ("spouse_of", "parent_of", "boss_of", "co_founder_of", "client_of",
                  "vendor_of", "friend_of", "coworker_of", "works_at", "lives_in")
@@ -85,7 +98,8 @@ class Role:
 class Connection:
     a: int
     b: int
-    roles: tuple[Role, ...]     # по убыванию веса
+    roles: tuple[Role, ...]     # показываемые, по убыванию веса
+    hidden_roles: int           # сколько ролей скрыто правилами показа
     interaction: float
     stats: PairStats
     shared_work: bool
@@ -101,11 +115,19 @@ class Connection:
     @property
     def also(self) -> tuple[Role, ...]:
         floor = max(ALSO_MIN_WEIGHT, ALSO_RATIO * self.weight)
-        return tuple(r for r in self.roles[1:] if r.weight >= floor)
+        return tuple(r for r in self.roles[1:] if r.weight >= floor and _corroborated(r))
 
     @property
     def hidden(self) -> int:
-        return len(self.roles) - 1 - len(self.also)
+        return self.hidden_roles + len(self.roles) - 1 - len(self.also)
+
+
+def _corroborated(role: Role) -> bool:
+    return role.manual or role.inferred or role.support >= MIN_REPEAT_SUPPORT
+
+
+def _qualifies(role: Role) -> bool:
+    return role.predicate not in NEEDS_REPEAT or _corroborated(role)
 
 
 def interaction_strength(stats: PairStats) -> float:
@@ -117,12 +139,22 @@ def is_established(stats: PairStats) -> bool:
     return interaction_strength(stats) >= ESTABLISHED_INTERACTION
 
 
+def _work_days(stats: PairStats, shared_work: bool) -> int:
+    return stats.active_days if shared_work else stats.work_co_days
+
+
+def work_strength(stats: PairStats, shared_work: bool) -> float:
+    """Насыщение РАБОЧЕГО общения: общий домен / Slack — все дни контакта, иначе дни
+    в рабочих чатах. Личная переписка без рабочего признака — 0."""
+    return 1.0 - math.exp(-_work_days(stats, shared_work) / DAYS_SCALE)
+
+
 def inferred_work_weight(stats: PairStats, shared_work: bool) -> float:
     """Вес выведенного «работает с»; 0 — оснований нет."""
-    days = stats.active_days if shared_work else stats.work_co_days
-    if days < (INFER_MIN_DAYS_IDENT if shared_work else INFER_MIN_DAYS_CHAT):
+    if _work_days(stats, shared_work) < (INFER_MIN_DAYS_IDENT if shared_work
+                                         else INFER_MIN_DAYS_CHAT):
         return 0.0
-    return INFER_MAX * (1.0 - math.exp(-days / DAYS_SCALE))
+    return INFER_MAX * work_strength(stats, shared_work)
 
 
 def could_infer_work(stats: PairStats) -> bool:
@@ -135,11 +167,12 @@ def _role_key(claim: Claim) -> RoleKey:
     return p, None if p in SYMMETRIC else s
 
 
-def _asserted_role(key: RoleKey, claims: list[Claim], interaction: float) -> Role:
+def _asserted_role(key: RoleKey, claims: list[Claim], work: float) -> Role:
     latest = max(claims, key=lambda c: (c.seen_at or datetime.min, len(c.fact or "")))
     manual = any(c.manual for c in claims)
     base = 1.0 - math.prod(1.0 - CLAIM_SUPPORT * c.confidence for c in claims)
-    weight = MANUAL_WEIGHT if manual else min(1.0, base * (1.0 + interaction))
+    boost = work if key[0] in WORK_ROLES else 0.0
+    weight = MANUAL_WEIGHT if manual else min(1.0, base * (1.0 + boost))
     return Role(key[0], key[1], weight, len(claims), manual, False,
                 max(c.confidence for c in claims), latest.fact,
                 tuple(sorted(c.rel_id for c in claims if c.rel_id is not None)))
@@ -151,14 +184,31 @@ def _priority(role: Role) -> tuple[float, int]:
     return -role.weight, order
 
 
+def _drop_contradictions(roles: dict[RoleKey, Role]) -> tuple[dict[RoleKey, Role], int]:
+    """Обе стороны иерархии сразу — оставляем ту, где больше поддержки (ручная — выше всего)."""
+    dropped = 0
+    for predicate in HIERARCHY:
+        sides = [k for k in roles if k[0] == predicate]
+        if len(sides) < 2:
+            continue
+        best = max(sides, key=lambda k: (roles[k].manual, roles[k].support, roles[k].weight))
+        for key in sides:
+            if key != best:
+                del roles[key]
+                dropped += 1
+    return roles, dropped
+
+
 def build_connection(a: int, b: int, claims: Iterable[Claim], stats: PairStats,
                      shared_work: bool = False) -> Connection | None:
-    """Связь пары из записей и статистики; None — у пары нет ни одной роли."""
+    """Связь пары из записей и статистики; None — показывать нечего."""
     interaction = interaction_strength(stats)
+    work = work_strength(stats, shared_work)
     grouped: dict[RoleKey, list[Claim]] = {}
     for claim in claims:
         grouped.setdefault(_role_key(claim), []).append(claim)
-    roles = {key: _asserted_role(key, group, interaction) for key, group in grouped.items()}
+    roles = {key: _asserted_role(key, group, work) for key, group in grouped.items()}
+    roles, hidden = _drop_contradictions(roles)
     inferred = inferred_work_weight(stats, shared_work)
     work_key: RoleKey = (INFERRED_PREDICATE, None)
     if inferred and work_key in roles:
@@ -167,11 +217,13 @@ def build_connection(a: int, b: int, claims: Iterable[Claim], stats: PairStats,
                                   inferred=True)
     elif inferred:
         roles[work_key] = Role(INFERRED_PREDICATE, None, inferred, 0, False, True, 0.0, None)
-    if not roles:
+    shown = [r for r in roles.values() if _qualifies(r)]
+    if not shown:
         return None
-    ranked = tuple(sorted(roles.values(), key=_priority))
+    hidden += len(roles) - len(shown)
     low, high = ordered(a, b)
-    return Connection(low, high, ranked, interaction, stats, shared_work)
+    return Connection(low, high, tuple(sorted(shown, key=_priority)), hidden, interaction,
+                      stats, shared_work)
 
 
 def role_payload(role: Role, viewer_id: int | None = None) -> dict[str, Any]:
