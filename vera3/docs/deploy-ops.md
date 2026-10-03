@@ -572,6 +572,51 @@ $RUN --undo /reports/rollback-2026-10-03.json
 - Не запускайте `--apply` по плану, составленному до деплоя фиксов
   первопричин: ингестор успеет завести новые дубли того же класса.
 
+## Чистка связей графа: план → проверка → применение → откат
+
+Правила — `identity.md`, раздел «Качество связей». Скрипт
+`scripts/clean_relationships.py` (рядом с `merge_graph_duplicates.py`, тот же
+образ `brain-triage` и тома `/scripts`, `/reports`) запускается разово, вручную,
+ПОСЛЕ деплоя кода с правилами записи — иначе rel-extract тут же допишет мусор
+обратно. Связи не удаляются: `is_current = false` либо приведение к канонической
+форме (`convert`).
+
+```bash
+cd /var/www/vera3/infra
+RUN="docker compose run --rm --no-deps -v /var/www/vera3/scripts:/scripts   -v /var/lib/vera3-reports:/reports brain-triage python /scripts/clean_relationships.py"
+
+# 0. страховка: дамп таблицы связей (читает, ничего не меняет)
+docker exec vera3-postgres pg_dump -U vera -d vera -t relationships   > /var/lib/vera3-reports/relationships-before-$(date +%F).sql
+
+# 1. план — БД не меняет (режим по умолчанию); в stdout счётчики и по 10 примеров на правило
+$RUN --plan /reports/rel_plan.json
+
+# 2. ПРОВЕРКА ГЛАЗАМИ: план содержит имена и факты — личные данные, храните вне репозитория
+# 3. применение; без --report скрипт откажется, существующий отчёт не перезаписывает
+$RUN --apply /reports/rel_plan.json --report /reports/rel_rollback-$(date +%F).json
+
+# 4. откат по отчёту
+$RUN --undo /reports/rel_rollback-2026-10-03.json
+```
+
+- Правила плана (счётчики в `counts`): `weak_name`, `fact_mismatch` и прочие
+  причины `relationship_reject_reason`; `symmetric_duplicate`,
+  `inverse_duplicate`, `contradiction`; `convert_inverse` (одиночная
+  `reports_to` / `child_of` переписывается в `boss_of` / `parent_of`);
+  `convert_blocked` (каноническая тройка уже занята погашенной строкой —
+  оставлено как есть, `action=skip`).
+- Связи без события-источника (`derived_from_event_id IS NULL`, заведены руками)
+  по правилам извлечения не судятся; при конфликте ручная побеждает.
+- Отчёт с намерениями пачки (по 200) пишется на диск с fsync ДО коммита.
+  `--undo` возвращает только строки, чьё состояние всё ещё равно «после»;
+  повторный запуск идемпотентен.
+- Строка, изменившаяся после составления плана, пропускается (`skipped`):
+  устаревший план применять нельзя, составьте новый.
+- План по SELECT-выгрузке без подключения к БД: `--plan out.json --snapshot
+  export.json`. Выгрузку делает `EXPORT_SQL` из
+  `vera_shared/graph/rel_cleanup_snapshot.py`
+  (`psql -At -v owner=<OWNER_TELEGRAM_ID> -f export.sql`, только SELECT).
+
 ## Secrets
 
 Server `.env` at `/var/www/vera3/infra/.env` (mode 600):
