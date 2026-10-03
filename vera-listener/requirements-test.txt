@@ -1,0 +1,8 @@
+# Единственный источник зависимостей тестов (локально и в CI).
+# Только кроссплатформенное: soundcard/pycaw/comtypes живут под Windows и
+# подменяются в tests/conftest.py.
+pytest>=8.0
+ruff
+numpy>=1.26
+psutil>=5.9
+pysilero-vad>=2.0

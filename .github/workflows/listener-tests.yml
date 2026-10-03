@@ -22,10 +22,11 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
+          cache-dependency-path: vera-listener/requirements-test.txt
       - name: Install test deps
-        # Пакет целиком не ставим: soundcard/pycaw — Windows-only, а покрыта
-        # тестами вся логика, которая от звука не зависит.
-        run: pip install pytest ruff
+        # Пакет целиком не ставим: soundcard/pycaw — Windows-only, их подменяет
+        # tests/conftest.py. Список зависимостей один — requirements-test.txt.
+        run: pip install -r requirements-test.txt
       - name: Pytest
         run: PYTHONPATH=src pytest tests -q
       - name: Ruff
