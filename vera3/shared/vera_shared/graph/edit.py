@@ -81,7 +81,8 @@ def relationship_snapshot(row: RelationshipRow) -> dict[str, Any]:
     return {"subject_entity_id": row.subject_entity_id,
             "object_entity_id": row.object_entity_id, "predicate": row.predicate,
             "fact": row.fact, "confidence": row.confidence,
-            "is_current": row.is_current}
+            "is_current": row.is_current,
+            "derived_from_event_id": row.derived_from_event_id}
 
 
 async def _relationship(s: AsyncSession, rel_id: int) -> RelationshipRow:
@@ -105,10 +106,11 @@ async def _locked_triple(s: AsyncSession, subject_id: int, object_id: int,
 
 async def set_relationship(
     s: AsyncSession, subject_id: int, object_id: int, predicate: str,
-    fact: str | None, confidence: float,
+    fact: str | None, confidence: float, manual: bool = False,
 ) -> tuple[int, dict[str, Any] | None, dict[str, Any]]:
     """(rel_id, до или None если новая, после). Существующую тройку обновляет
-    и делает текущей, иначе заводит."""
+    и делает текущей, иначе заводит. `manual` — запись владельца: событие-источник
+    сбрасывается, и модель связи считает её ручной (максимальный вес)."""
     if predicate not in PREDICATES:
         raise GraphEditError(f"unknown predicate '{predicate}'; one of {PREDICATES}")
     if subject_id == object_id:
@@ -131,6 +133,8 @@ async def set_relationship(
         before = relationship_snapshot(row) if row is not None else None
     row.fact, row.confidence = fact, confidence
     row.is_current, row.last_seen_at = True, now
+    if manual:
+        row.derived_from_event_id = None
     await s.flush()
     return row.id, before, relationship_snapshot(row)
 
@@ -150,6 +154,8 @@ async def restore_relationship(s: AsyncSession, rel_id: int,
     row = await _relationship(s, rel_id)
     row.fact, row.confidence = values["fact"], values["confidence"]
     row.is_current = values["is_current"]
+    if "derived_from_event_id" in values:
+        row.derived_from_event_id = values["derived_from_event_id"]
     await s.flush()
     return relationship_snapshot(row)
 

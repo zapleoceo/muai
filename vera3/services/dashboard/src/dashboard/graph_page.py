@@ -11,6 +11,7 @@ from __future__ import annotations
 from dashboard.graph_css import GRAPH_CSS
 from dashboard.graph_labels import predicate_labels_json, predicate_options_html
 from dashboard.graph_script import GRAPH_SCRIPT
+from dashboard.manual_roles_ui import manual_roles_json
 from dashboard.ui.theme import CYTOSCAPE_SRI, CYTOSCAPE_URL
 
 _BODY = """
@@ -74,4 +75,5 @@ def graph_body(predicates: list[str], pending: int | None) -> str:
             .replace("__PRED_OPTS__", predicate_options_html(predicates))
             .replace("__CY_URL__", CYTOSCAPE_URL).replace("__CY_SRI__", CYTOSCAPE_SRI)
             .replace("__SCRIPT__", GRAPH_SCRIPT)
+            .replace("__MANUAL_ROLES__", manual_roles_json())
             .replace("__PRED_LABELS__", predicate_labels_json([*predicates, "contact"])))

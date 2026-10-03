@@ -80,6 +80,8 @@ this project's own "~200 lines, one responsibility per file" convention):
 | `event_view.py` | Карточка `/events/{id}`: `event_card`, `header_pairs`, `service_pairs`, `transcript_html` (стенограмма в сворачиваемом блоке) |
 | `graph_page.py` / `graph_css.py` / `graph_script*.py` | Разметка, стили и скрипт «Людей» (`/graph`): `graph_body`, `dupes_label`; скрипт — четыре части в одной области видимости (`graph_script_core`: Cytoscape, стили, подсветка соседей, загрузка; `graph_script_panel`: карточка и разрыв связи; `graph_script_connections`: строка связи; `graph_script_ui`: легенда, поиск, зум). Цвета холста берутся из CSS-переменных темы, карточка рисуется из `/api/graph/entity/{id}` |
 | `connection_routes.py` / `csrf.py` | Правки связей из карточки: `/api/graph/connection/break`, `/reject`, `/api/journal/undo` — `owner_or_blank_401` + `same_origin_or_403`; логика в `vera_shared.graph.connection_actions` и `vera_shared.journal.undo` |
+| `source_panel.py` / `sources_script.py` | Подробности источника одним куском (`panel_html`, `panel_actions`, `disconnect_form`) для спойлера `/sources` и страницы `/sources/{key}`; скрипт спойлеров (`#open=` в адресе, ленивая подгрузка htmx) |
+| `manual_roles_ui.py` | Подписи ролей диалога «Указать связь» (`ROLE_TEXT`, `manual_roles_json`); ключи — `vera_shared.graph.manual_roles` |
 | `journal_routes.py` / `journal_view.py` | `/journal` — журнал правок с откатом |
 | `assets_routes.py` | `/ui/vera.css`, `/ui/vera.js` — статика темы с хэшем в адресе |
 | `search_view.py` | `sources_html` — «На чём основан ответ»: человеческая строка, дедуп по событию и цепочке писем; `headline`, `dedupe_key` |

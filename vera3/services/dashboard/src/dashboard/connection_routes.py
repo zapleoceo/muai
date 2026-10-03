@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 from vera_shared.db.engine import get_session
 from vera_shared.graph.connection_actions import break_role, reject_inferred
 from vera_shared.graph.edit import GraphEditError
+from vera_shared.graph.manual_roles import set_manual_role
 from vera_shared.journal.audit import AuditNotFound
 from vera_shared.journal.undo import UndoRefused, undo_entry
 
@@ -35,6 +36,12 @@ class BreakRole(BaseModel):
 class Pair(BaseModel):
     entity_a: EntityId
     entity_b: EntityId
+
+
+class SetRole(BaseModel):
+    entity_a: EntityId   # карточка, которую смотрят
+    entity_b: EntityId   # с кем связываем: владелец или выбранная связь
+    role: Annotated[str, Field(min_length=1, max_length=40)]
 
 
 class UndoRequest(BaseModel):
@@ -67,6 +74,17 @@ async def reject_connection(request: Request, body: Pair):
     except GraphEditError as e:
         return JSONResponse({"error": str(e)}, status_code=409)
     return JSONResponse({"ok": True, "audit_ids": [audit_id] if audit_id else []})
+
+
+@router.post("/api/graph/connection/set", response_class=JSONResponse)
+async def set_connection(request: Request, body: SetRole):
+    if (denied := _gate(request)) is not None:
+        return denied
+    try:
+        audit_id = await set_manual_role(body.entity_a, body.entity_b, body.role, CLIENT)
+    except GraphEditError as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+    return JSONResponse({"ok": True, "audit_ids": [audit_id]})
 
 
 @router.post("/api/journal/undo", response_class=JSONResponse)

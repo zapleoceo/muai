@@ -36,7 +36,8 @@ function renderPanel(p){
   const rels = p.connections.map(connRow).join('');
   const evs = p.events.map(e =>
     '<li><a href="/events/' + e.id + '">' + esc(SOURCE_RU[e.source] || e.source) + ' · ' +
-    esc(fmtStamp(e.occurred_at)) + '</a><div class="muted small">' + esc(e.snippet) + '</div></li>').join('');
+    esc(fmtStamp(e.occurred_at)) + '</a>' + (e.subject ? '<div class="small"><b>' + esc(e.subject) + '</b></div>' : '') +
+    '<div class="muted small">' + esc(e.snippet) + '</div></li>').join('');
   panel.innerHTML =
     '<div class="g-panel-head"><img src="/entities/' + p.id + '/avatar" alt="">' +
     '<div><h3>' + esc(p.name) + '</h3><span class="muted small">' +
@@ -45,7 +46,8 @@ function renderPanel(p){
     (p.profile.length ? '<p class="muted small">' + p.profile.map(esc).join(' · ') + '</p>' : '') +
     (chips.length ? '<div class="g-chips">' + chips.map(x => '<span class="chip">' + x + '</span>').join('') + '</div>' : '') +
     '<div class="g-stats">' + tiles + '</div>' +
-    (rels ? '<h4>Связи по людям</h4><ul class="g-list">' + rels + '</ul>' : '') +
+    '<h4>Связи по людям</h4>' + (rels ? '<ul class="g-list">' + rels + '</ul>' : '<p class="muted small">Связей пока нет.</p>') +
+    '<button type="button" class="secondary sm" data-act="addrel">＋ Указать связь</button>' +
     (evs ? '<h4>Последние события</h4><ul class="g-list">' + evs + '</ul>' : '') +
     '<div class="g-foot"><button type="button" class="secondary" data-focus-net="' + p.id + '">Показать окружение</button>' +
     (link ? '<a role="button" class="secondary" href="' + esc(link) + '"' +
@@ -120,6 +122,35 @@ function editConnection(btn){
   });
 }
 
+const MANUAL_ROLES = __MANUAL_ROLES__;
+
+// «Указать связь»: пара — открытая карточка и якорь (владелец или одна из её связей).
+function addRelationship(){
+  const anchors = [];
+  if (current.owner_id && current.owner_id !== current.id)
+    anchors.push({value: String(current.owner_id), label: (current.owner_name || 'Я') + ' (я)'});
+  for (const c of current.connections)
+    if (c.other_id !== current.owner_id) anchors.push({value: String(c.other_id), label: c.other_name});
+  if (!anchors.length){ VeraUI.toast('Не с кем связывать: у карточки нет собеседников.', {kind: 'err'}); return; }
+  const names = Object.fromEntries(anchors.map(a => [a.value, a.label.replace(/ \(я\)$/, '')]));
+  const roles = anchor => MANUAL_ROLES.map(r => ({value: r.key,
+    label: r.text.replace('{x}', current.name).replace('{y}', names[anchor])}));
+  const describe = v => 'Будет записано: ' + roles(v.anchor).find(r => r.value === v.role).label +
+    '. Связь получит максимальный вес; вернуть можно в журнале.';
+  const viewed = current;
+  VeraUI.choose({
+    title: 'Указать связь', confirmLabel: 'Указать',
+    fields: [{name: 'anchor', label: 'С кем', options: anchors},
+             {name: 'role', label: 'Какая связь', options: roles(anchors[0].value)}],
+    refresh: v => ({message: describe(v), options: {role: roles(v.anchor)}}),
+  }).then(v => {
+    if (!v) return;
+    VeraUI.post('/api/graph/connection/set', {entity_a: viewed.id, entity_b: Number(v.anchor), role: v.role})
+      .then(res => afterEdit('Связь указана', res.audit_ids))
+      .catch(err => VeraUI.toast('Не получилось: ' + err.message, {kind: 'err'}));
+  });
+}
+
 function focusOn(id){
   if (selectNode(id)){ openPanel(id); return; }
   info.textContent = 'Загружаю окружение…';
@@ -129,6 +160,7 @@ function focusOn(id){
 
 panel.addEventListener('click', ev => {
   const act = ev.target.closest('[data-act]');
+  if (act && act.dataset.act === 'addrel'){ addRelationship(); return; }
   if (act){ editConnection(act); return; }
   const focus = ev.target.closest('[data-focus]');
   if (focus){ ev.preventDefault(); focusOn(focus.dataset.focus); return; }

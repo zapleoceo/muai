@@ -7,7 +7,7 @@ from datetime import date, datetime
 from typing import Any
 from urllib.parse import urlencode
 
-from dashboard.event_text import describe, one_line, parse_content
+from dashboard.event_text import describe, one_line, parse_content, snippet_of
 from dashboard.events_filters import source_options, status_options
 from dashboard.render import data_table, esc, local_dt
 from dashboard.source_registry import resolve_source
@@ -84,7 +84,7 @@ def event_row(e: Mapping[str, Any], tech: bool) -> str:
     line = describe(parse_content(e["content_text"]), e.get("metadata"))
     who = esc(line.who or src.title)
     venue = f'<div class="muted small">{esc(line.venue)}</div>' if line.venue else ""
-    preview = esc(one_line(line.body or line.subject, PREVIEW_CHARS))
+    preview = esc(snippet_of(line.body, PREVIEW_CHARS) or one_line(line.subject, PREVIEW_CHARS))
     return (
         f'<tr class="ev row-link" data-href="/events/{e["id"]}" '
         f'data-utc="{esc(e["occurred_at"].isoformat())}Z">'

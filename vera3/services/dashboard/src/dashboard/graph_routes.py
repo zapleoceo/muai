@@ -19,9 +19,15 @@ from vera_shared.graph.clusters import get_clusters, recompute_clusters
 from vera_shared.graph.panel import entity_panel
 from vera_shared.graph.rel_canon import INVERSE
 from vera_shared.graph.rel_extract import PREDICATES
-from vera_shared.graph.repo import find_entity_by_name, graph_snapshot
+from vera_shared.graph.repo import (
+    find_entity_by_alias,
+    find_entity_by_name,
+    get_entity,
+    graph_snapshot,
+)
 from vera_shared.graph.suggestions import count_pending_suggestions
 
+from dashboard.auth import OWNER_ID
 from dashboard.graph_labels import predicate_label, role_label
 from dashboard.graph_page import graph_body
 from dashboard.render import _render, owner_or_auth_error, owner_or_blank_401
@@ -94,6 +100,13 @@ async def graph_recluster(request: Request):
     return RedirectResponse("/graph", status_code=303)
 
 
+async def _owner_fields() -> dict[str, object]:
+    """Владелец как сущность графа: от его лица указывается связь «со мной»."""
+    owner_id = await find_entity_by_alias("telegram", f"user:{OWNER_ID}")
+    owner = await get_entity(owner_id) if owner_id else None
+    return {"owner_id": owner.id if owner else None, "owner_name": owner.name if owner else None}
+
+
 @router.get("/api/graph/entity/{entity_id}", response_class=JSONResponse)
 async def graph_entity(request: Request, entity_id: int, raw: bool = False):
     """Карточка сущности для боковой панели: алиасы, счётчики, связи-пары, события.
@@ -103,6 +116,7 @@ async def graph_entity(request: Request, entity_id: int, raw: bool = False):
     panel = await entity_panel(entity_id, raw=raw)
     if panel is None:
         return JSONResponse({"error": "not found"}, status_code=404)
+    panel.update(await _owner_fields())
     for conn in panel["connections"]:
         for role in (conn["main"], *conn["also"]):
             role["label"] = role_label(role["predicate"], role["direction"])

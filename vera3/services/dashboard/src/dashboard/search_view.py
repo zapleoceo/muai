@@ -9,8 +9,8 @@ from dashboard.event_text import (
     EventLine,
     describe,
     normalize_subject,
-    one_line,
     parse_content,
+    snippet_of,
 )
 from dashboard.render import esc, local_dt
 from dashboard.source_registry import resolve_source
@@ -60,7 +60,7 @@ def sources_html(results: list[dict[str, Any]]) -> str:
         if key is not None and key == last_key:
             continue
         last_key = key
-        snippet = one_line(line.body)
+        snippet = snippet_of(line.body)
         tail = f'<div class="muted small">{esc(snippet)}</div>' if snippet else ""
         items.append(
             f'<li><a href="/events/{event_id}">{src.icon} {esc(headline(key_source, line, src.title))}</a>'
