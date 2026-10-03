@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
 
+from dashboard.source_freshness import EMPTY, SILENT, freshness_of
 from dashboard.source_registry import CATALOG
 
 # Очередь триажа, при которой «идёт, но отстаёт» превращается в «встало».
@@ -18,22 +19,22 @@ class Health:
     text: str
 
 
-def silent_sources(overview: dict[str, dict[str, Any]], now: datetime) -> list[str]:
-    """Названия источников с опросом, которые молчат дольше своего порога."""
+def silent_sources(overview: dict[str, dict[str, Any]], now: datetime,
+                   off: frozenset[str] = frozenset()) -> list[str]:
+    """Названия источников с опросом, которые молчат дольше своего порога.
+    Выключенные владельцем (`off`) молчать не могут — их не опрашивают."""
     out: list[str] = []
     for src in CATALOG:
         stat = overview.get(src.key)
-        if src.live_min is None or not stat or not stat.get("total"):
+        if src.key in off or src.live_min is None or not stat or not stat.get("total"):
             continue
-        last = stat.get("last")
-        limit = src.warn_min or src.live_min * 4
-        if last is None or (now - last).total_seconds() / 60 >= limit:
+        if freshness_of(src, stat.get("last"), now).state in (SILENT, EMPTY):
             out.append(src.title)
     return out
 
 
 def assess(stats: dict[str, Any], overview: dict[str, dict[str, Any]],
-           now: datetime) -> Health:
+           now: datetime, off: frozenset[str] = frozenset()) -> Health:
     queue = stats["pending"] + stats["error"]
     problems: list[str] = []
     level = "ok"
@@ -43,7 +44,7 @@ def assess(stats: dict[str, Any], overview: dict[str, dict[str, Any]],
     if stats["error"] or stats["dead"]:
         level = level if level == "err" else "warn"
         problems.append(f"сбоев разбора: {stats['error'] + stats['dead']:,}")
-    silent = silent_sources(overview, now)
+    silent = silent_sources(overview, now, off)
     if silent:
         level = level if level == "err" else "warn"
         problems.append("молчат: " + ", ".join(silent))

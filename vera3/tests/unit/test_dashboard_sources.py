@@ -109,7 +109,7 @@ class TestFreshness:
 
     def test_silent_stream(self):
         src = source_registry.BY_KEY["telegram"]
-        assert "молчит" in _freshness(NOW - timedelta(hours=5), NOW, src)
+        assert "молчит" in _freshness(NOW - timedelta(hours=7), NOW, src)
 
     def test_no_data_yet(self):
         src = source_registry.BY_KEY["slack"]

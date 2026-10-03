@@ -7,6 +7,7 @@ from vera_shared.timeutil import utc_naive_now
 
 from dashboard.health import assess
 from dashboard.render import _render, esc, owner_or_redirect
+from dashboard.source_state import disabled_optional
 from dashboard.stats import get_sources_overview, get_stats
 from dashboard.ui.components import status_dot
 
@@ -26,7 +27,8 @@ async def home(request: Request):
         return resp
 
     st = await get_stats()
-    health = assess(st, await get_sources_overview(), utc_naive_now())
+    health = assess(st, await get_sources_overview(), utc_naive_now(),
+                    await disabled_optional())
 
     return HTMLResponse(_render(
         "home",

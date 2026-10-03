@@ -24,7 +24,8 @@ class Source:
     title: str
     icon: str
     how: str                       # как получаем данные, одной строкой
-    #: минуты, после которых поток считается тихим / замолчавшим. None —
+    #: минуты, после которых поток считается тихим (live_min) / замолчавшим
+    #: (warn_min — порог тревоги; суббота и ночь «тихо», а не авария). None —
     #: источник событийный и «свежести» у него нет (внутренние, one-shot).
     live_min: int | None = None
     warn_min: int | None = None
@@ -36,27 +37,32 @@ class Source:
     reconnect_label: str = "Переподключить"
     detail: str | None = None      # ключ провайдера разбивок
     note: str = ""
+    #: источник включают по желанию (compose-профиль, ключ в .env). Пока он не
+    #: подключён, это выбор владельца, а не поломка: серая плашка `off_label`,
+    #: без тревоги в статусной строке.
+    optional: bool = False
+    off_label: str = "выключен"
 
 
 CATALOG: tuple[Source, ...] = (
     Source(
         key="telegram", title="Telegram", icon="✈️",
         how="userbot MTProto, поток в реальном времени",
-        live_min=5, warn_min=60,
+        live_min=5, warn_min=360,
         connect_url="/api/telegram/start", connect_label="Подключить",
         detail="telegram",
     ),
     Source(
         key="gmail", title="Gmail", icon="📧",
         how="OAuth + опрос API раз в 5 минут",
-        live_min=15, warn_min=180,
+        live_min=15, warn_min=2880,
         connect_url="/api/gmail/start", connect_label="Подключить",
         detail="gmail",
     ),
     Source(
         key="slack", title="Slack", icon="💬",
         how="Web API, опрос каналов и тредов раз в 5 минут",
-        live_min=15, warn_min=180,
+        live_min=15, warn_min=2880,
         connect_url="/api/slack/start", connect_label="Подключить",
         detail="slack",
         note="Ответы в тредах приходят отдельным обходом — history их не отдаёт.",
@@ -66,13 +72,13 @@ CATALOG: tuple[Source, ...] = (
         how="instagrapi, опрос личных сообщений",
         live_min=10, warn_min=120,
         connect_url="/api/instagram/start", connect_label="Подключить",
-        detail="instagram",
+        detail="instagram", optional=True, off_label="выключен",
     ),
     Source(
         key="trello", title="Trello", icon="📋",
         how="REST-опрос действий досок + суточный дайджест сроков",
-        live_min=15, warn_min=180,
-        detail="trello",
+        live_min=15, warn_min=2880,
+        detail="trello", optional=True, off_label="не настроен",
         note="Ключ и токен — в infra/.env, в БД их нет.",
     ),
     Source(
@@ -96,7 +102,7 @@ CATALOG: tuple[Source, ...] = (
     Source(
         key="claude_chat", title="Claude — переписка", icon="💻",
         how="scripts/claude_chat_sync.py на ноутбуке, транскрипты сессий",
-        live_min=90, warn_min=1440,
+        live_min=90, warn_min=2880,
         note="Шлёт по событию на сообщение. Саммари по сессии — отдельная задача.",
     ),
     Source(

@@ -5,22 +5,26 @@ from datetime import datetime
 
 from dashboard.render import data_table, esc
 from dashboard.source_detail import Block, Html
+from dashboard.source_freshness import EMPTY, LIVE, QUIET, SILENT, freshness_of
+from dashboard.source_registry import Source
 from dashboard.source_state import State
 
 
-def source_level(last: datetime | None, now: datetime, src, state: State) -> str | None:
-    """Одна точка на источник: красная — не подключён или замолчал, жёлтая —
-    тихо, зелёная — живой. Серая — у источника нет понятия «свежесть»."""
+def is_off(src: Source, state: State) -> bool:
+    """Необязательный источник, который владелец не включал."""
+    return src.optional and state.connected is False
+
+
+def source_level(last: datetime | None, now: datetime, src: Source, state: State) -> str | None:
+    """Одна точка на источник: красная — не подключён или замолчал, зелёная —
+    живой. Серая — у источника нет «свежести», он выключен по выбору или
+    просто тихий (ночь и выходные — не тревога)."""
+    if is_off(src, state):
+        return None
     if state.connected is False:
         return "err"
-    if src.live_min is None:
-        return None
-    if last is None:
-        return "err"
-    mins = max(0, int((now - last).total_seconds() / 60))
-    if mins < src.live_min:
-        return "ok"
-    return "warn" if mins < (src.warn_min or src.live_min * 4) else "err"
+    fresh = freshness_of(src, last, now).state
+    return {LIVE: "ok", SILENT: "err", EMPTY: "err", QUIET: None}.get(fresh)
 
 
 def cell(value) -> str:

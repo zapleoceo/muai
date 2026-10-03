@@ -18,9 +18,10 @@ from fastapi.responses import HTMLResponse
 from vera_shared.timeutil import utc_naive_now
 
 from dashboard.render import _render, esc, local_dt, owner_or_redirect
-from dashboard.source_registry import CATALOG, resolve_source
+from dashboard.source_freshness import EMPTY, LIVE, NO_POLLING, QUIET, freshness_of
+from dashboard.source_registry import CATALOG, Source, resolve_source
 from dashboard.source_state import State, can_disconnect, state_of
-from dashboard.sources_view import render_block, source_level
+from dashboard.sources_view import is_off, render_block, source_level
 from dashboard.stats import get_source_detail, get_sources_overview
 from dashboard.ui.components import collapsible, status_dot
 from dashboard.ui.theme import SOURCES_CSS
@@ -42,16 +43,16 @@ def ago(minutes: int) -> str:
 
 def _freshness(last: datetime | None, now: datetime, src) -> str:
     """Свежесть потока. Источникам без опроса (внутренние) она не положена."""
-    if src.live_min is None:
+    fresh = freshness_of(src, last, now)
+    if fresh.state == NO_POLLING:
         return '<span class="mute">—</span>'
-    if last is None:
+    if fresh.state == EMPTY:
         return '<span class="pill err">нет данных</span>'
-    mins = max(0, int((now - last).total_seconds() / 60))
-    if mins < src.live_min:
-        return f'<span class="pill ok">живой · {ago(mins)}</span>'
-    if mins < (src.warn_min or src.live_min * 4):
-        return f'<span class="pill warn">тихо · {ago(mins)}</span>'
-    return f'<span class="pill err">молчит · {ago(mins)}</span>'
+    if fresh.state == LIVE:
+        return f'<span class="pill ok">живой · {ago(fresh.minutes)}</span>'
+    if fresh.state == QUIET:
+        return f'<span class="pill">тихо · {ago(fresh.minutes)}</span>'
+    return f'<span class="pill err">молчит · {ago(fresh.minutes)}</span>'
 
 
 PROGRESS_BLOCK = (
@@ -68,12 +69,14 @@ def _sources_in_order(overview: dict) -> list:
     return known + [resolve_source(key) for key in extra]
 
 
-def connection_pill(state: State) -> str:
+def connection_pill(state: State, src: Source | None = None) -> str:
     """Подключение — не то же, что свежесть потока. Instagram с 353 событиями и
     мёртвой сессией «живым» не является, а только что подключённый Slack ещё
     ничего не принёс и всё равно подключён."""
     if state.connected is None:
         return '<span class="mute">—</span>'
+    if src is not None and is_off(src, state):
+        return f'<span class="pill off">{esc(src.off_label)}</span>'
     cls = "ok" if state.connected else "err"
     label = state.label or ("подключён" if state.connected else "не подключён")
     return f'<span class="pill {cls}">{esc(label)}</span>'
@@ -93,6 +96,12 @@ def actions(src, state: State) -> str:
     return ""
 
 
+def _freshness_cell(src: Source, stat: dict, state: State, now: datetime) -> str:
+    if is_off(src, state):
+        return '<span class="mute">—</span>'
+    return _freshness(stat.get("last"), now, src)
+
+
 def _row(src, stat: dict, state: State, now: datetime) -> str:
     total = stat.get("total", 0)
     cls = "" if total else "idle"
@@ -104,8 +113,8 @@ def _row(src, stat: dict, state: State, now: datetime) -> str:
         f'<td><div class="src-name">{status_dot(source_level(stat.get("last"), now, src, state))}'
         f'<span class="ico">{src.icon}</span>'
         f'<span>{detail}<div class="src-how">{esc(src.how)}</div></span></div></td>'
-        f'<td>{connection_pill(state)}</td>'
-        f'<td>{_freshness(stat.get("last"), now, src)}</td>'
+        f'<td>{connection_pill(state, src)}</td>'
+        f'<td>{_freshness_cell(src, stat, state, now)}</td>'
         f'<td class="num">{total:,}</td>'
         f'<td class="num">{stat.get("c24h", 0):,}</td>'
         f'<td>{local_dt(stat.get("last"), "datetime", "—")}</td>'
@@ -135,7 +144,8 @@ async def sources_page(request: Request):
       <div class="head"><h1>Источники</h1></div>
       <p class="note">Всё, откуда Вера берёт события. Имя источника —
          ссылка на подробности. Точка: зелёная — работает, жёлтая — тихо,
-         красная — не подключён или молчит.</p>
+         красная — не подключён или давно молчит, серая — выключен, не настроен
+         или просто тихо.</p>
 
       <div class="strip">
         <div><div class="k">Источников</div><div class="v">{len(sources)}</div></div>
@@ -188,8 +198,8 @@ async def source_page(key: str, request: Request):
       <p class="crumb"><a href="/sources">← источники</a></p>
       <div class="head">
         <h1>{src.icon} {esc(src.title)}</h1>
-        {connection_pill(state)}
-        {_freshness(stat.get("last"), now, src)}
+        {connection_pill(state, src)}
+        {_freshness_cell(src, stat, state, now)}
         <span style="margin-left:auto">{action}</span>
       </div>
       <p class="note">{esc(src.how)}</p>

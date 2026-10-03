@@ -26,6 +26,8 @@ from vera_shared.db.models_sources import (
     TelegramSessionRow,
 )
 
+from dashboard.source_registry import CATALOG
+
 log = logging.getLogger(__name__)
 
 
@@ -136,6 +138,12 @@ async def state_of(key: str) -> State:
     except Exception as e:  # noqa: BLE001 — один источник не роняет список
         log.warning("состояние источника %s не прочитал: %s", key, e)
         return State(False, _why(e))
+
+
+async def disabled_optional() -> frozenset[str]:
+    """Ключи необязательных источников, которые сейчас не подключены."""
+    return frozenset([s.key for s in CATALOG
+                      if s.optional and not (await state_of(s.key)).connected])
 
 
 def _why(error: Exception) -> str:
