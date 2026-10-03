@@ -14,6 +14,8 @@ from brain_triage.config import (
     REL_EXTRACT_TIMEOUT_S,
     STUCK_AFTER_S,
 )
+from brain_triage.links_loop import links_loop
+from brain_triage.pair_roles_loop import pair_roles_loop
 from brain_triage.pair_stats_loop import pair_stats_loop
 from brain_triage.reembed import reembed_loop
 
@@ -48,7 +50,9 @@ def start_background_loops() -> list[asyncio.Task]:
     return [track(asyncio.create_task(_watchdog_loop(), name="triage-watchdog")),
             track(asyncio.create_task(_retry_failed_loop(), name="triage-retry")),
             track(asyncio.create_task(reembed_loop(), name="triage-reembed")),
-            track(asyncio.create_task(pair_stats_loop(), name="triage-pair-stats"))]
+            track(asyncio.create_task(pair_stats_loop(), name="triage-pair-stats")),
+            track(asyncio.create_task(links_loop(), name="triage-links")),
+            track(asyncio.create_task(pair_roles_loop(), name="triage-pair-roles"))]
 
 
 # Потолок одновременных rel-extract на процесс. Создаётся лениво: семафор

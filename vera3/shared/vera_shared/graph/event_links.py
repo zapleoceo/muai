@@ -1,4 +1,4 @@
-"""Связь событий и сущностей. Явной таблицы связей нет — она выводится.
+"""Связь событий и сущностей. Автор события выводится по алиасу, остальное — из индекса `event_entities`.
 
 | источник | алиас сущности | где в событии |
 |---|---|---|
@@ -6,7 +6,9 @@
 | gmail | адрес почты | `metadata->>'from'` |
 
 Плюс связи графа, выведенные из события (`relationships.derived_from_event_id`),
-и упоминание полного имени сущности в тексте.
+и упоминание полного имени сущности в тексте. С миграцией 042 есть и явная таблица
+`event_entities` (автор, получатель, участник, упомянутый — `vera_shared.links`);
+`linked_entities` её тоже читает, а `timeline_events` остаётся прежним запасным путём.
 """
 from __future__ import annotations
 
@@ -15,6 +17,8 @@ from datetime import datetime
 from typing import Any
 
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.engine import get_session
 from vera_shared.events.queries import PREVIEW_CHARS
@@ -28,6 +32,20 @@ MIN_MENTION_NAME = 4
 
 def _like(value: str) -> str:
     return "%" + value.lower().replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_") + "%"
+
+
+async def _indexed_links(s: AsyncSession, event_id: int) -> list[Any]:
+    """Связи из индекса `event_entities`; пусто, пока миграция 042 не накачена
+    (SAVEPOINT: сбой запроса не должен рушить транзакцию вызывающего)."""
+    try:
+        async with s.begin_nested():
+            return list((await s.execute(text(
+                "SELECT e.id, e.name, e.type, l.role, l.source_of_link, l.confidence "
+                "FROM event_entities l JOIN entities e ON e.id = l.entity_id "
+                "WHERE l.event_id = :id AND l.scope_ok ORDER BY l.confidence DESC"),
+                {"id": event_id})).mappings())
+    except DBAPIError:
+        return []
 
 
 async def linked_entities(event_id: int) -> list[dict[str, Any]]:
@@ -59,6 +77,12 @@ async def linked_entities(event_id: int) -> list[dict[str, Any]]:
             "WHERE r.derived_from_event_id = :id"), {"id": event_id})).mappings():
             found.setdefault(r["id"], {"entity_id": r["id"], "name": r["name"],
                                        "type": r["type"], "via": "relationship"})
+        for r in await _indexed_links(s, event_id):
+            item = found.setdefault(r["id"], {"entity_id": r["id"], "name": r["name"],
+                                              "type": r["type"], "via": r["role"]})
+            item.setdefault("roles", []).append(
+                {"role": r["role"], "via": r["source_of_link"],
+                 "confidence": round(float(r["confidence"]), 2)})
     return list(found.values())
 
 

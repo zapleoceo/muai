@@ -35,6 +35,8 @@ class BreakRole(BaseModel):
 class Pair(BaseModel):
     entity_a: EntityId
     entity_b: EntityId
+    #: Какую выведенную роль отвергают; без поля — «работает с» (прежнее поведение).
+    predicate: Annotated[str | None, Field(max_length=80)] = None
 
 
 class SetRole(BaseModel):
@@ -63,7 +65,8 @@ async def reject_connection(request: Request, body: Pair):
     if (denied := _gate(request)) is not None:
         return denied
     try:
-        audit_id = await reject_inferred(body.entity_a, body.entity_b, CLIENT)
+        audit_id = await (reject_inferred(body.entity_a, body.entity_b, CLIENT, body.predicate)
+                          if body.predicate else reject_inferred(body.entity_a, body.entity_b, CLIENT))
     except GraphEditError as e:
         return JSONResponse({"error": str(e)}, status_code=409)
     return JSONResponse({"ok": True, "audit_ids": [audit_id] if audit_id else []})

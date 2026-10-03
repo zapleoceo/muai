@@ -22,6 +22,7 @@ from vera_shared.journal.undo import undo_entry
 from vera_shared.memory.remember import RememberOutcome, remember_fact
 
 from vera_mcp.auth import client_of
+from vera_mcp.link_write_tools import LINK_WRITE_TOOLS
 
 #: (target_id, before, after, extra-поля ответа)
 Applied = tuple[int | None, dict[str, Any] | None, dict[str, Any] | None, dict[str, Any]]
@@ -191,4 +192,4 @@ async def undo(audit_id: int, ctx: Context, force: bool = False) -> dict[str, An
 
 WRITE_TOOLS = (remember, update_event, hide_event, unhide_event, entity_rename,
                entity_add_alias, relationship_set, relationship_retire, entity_merge,
-               entity_unmerge, undo)
+               entity_unmerge, undo, *LINK_WRITE_TOOLS)

@@ -22,6 +22,7 @@ from vera_shared.graph.panel_events import (  # noqa: F401
     recent_events_status,
 )
 from vera_shared.graph.repo import get_entity, list_relationships
+from vera_shared.links.read import mentioning_events
 
 log = logging.getLogger(__name__)
 
@@ -83,10 +84,11 @@ async def entity_panel(entity_id: int, *, raw: bool = False, with_events: bool =
         "counts": counts,
         "connections": conns[:connections_limit],
         "connections_total": len(conns),
-        "events": [], "events_partial": False,
+        "events": [], "events_partial": False, "mentions": [],
     }
     if with_events:
         payload["events"], payload["events_partial"] = await recent_events_status(aliases)
+        payload["mentions"] = await mentioning_events(entity_id)
     if raw:
         rels = await list_relationships(entity_id, limit=RAW_RELATIONSHIPS_SHOWN)
         payload["relationships"] = [_relationship(r) for r in rels]

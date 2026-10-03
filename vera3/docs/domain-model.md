@@ -198,6 +198,15 @@ merging. It matches a person's messages by the numeric tg_id in
 `get_entity_dossier` would exhaust the dashboard connection pool on a
 ~200-candidate page).
 
+### Связи событий с людьми (migrations 042–044)
+
+- `event_entities` — `(event_id, entity_id, role, token)` + `source_of_link`, `confidence`, `span`,
+  `scope_ok`: автор / получатель / участник / упомянутый; производная таблица.
+- `entity_nicknames` — прозвища с областью действия и статусом (`suggested` / `active` / `rejected`).
+- `voice_speaker_map` — ярлык голоса в созвоне (или id отпечатка) → сущность.
+- `link_cursor` — до какого `events.id` построен индекс. Описание — `links.md`.
+- `pair_role_inferences` / `pair_role_runs` (045) — роли пары, выведенные моделью из переписки, и последний прогон (хэш пакета, маркер статистики, резюме, цена); производные. См. `identity.md`, «Роль по истории переписки».
+
 ### L2 — Patterns (reserved for future)
 
 - `patterns` — `(trigger_signature, action_kind, weight)` learned from feedback

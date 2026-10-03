@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from datetime import timedelta
 from typing import Annotated, Any
 
@@ -18,9 +19,14 @@ from vera_shared.graph.context import entity_context_payload
 from vera_shared.graph.repo import find_entity_by_name, graph_snapshot
 from vera_shared.graph.search import search_entities
 from vera_shared.journal import audit
+from vera_shared.links.context import owner_entity_id
+from vera_shared.links.filters import to_dict
+from vera_shared.links.model import ROLES
+from vera_shared.links.read import entity_events, filtered_events
 from vera_shared.search_client import SearchUnavailable, search_brain
 from vera_shared.timeutil import parse_iso_naive, utc_naive_now
 
+from vera_mcp.link_tools import LINK_TOOLS, IdList, Kind, Role, link_filter
 from vera_mcp.sql_guard import MAX_ROWS, run_readonly
 
 MAX_EVENTS = 200
@@ -37,11 +43,16 @@ def _search_conf() -> tuple[str, str]:
 async def search(
     query: Annotated[str, Field(min_length=1, max_length=500)],
     limit: Annotated[int, Field(ge=1, le=50)] = 10,
+    participant_ids: IdList = None, mentioned_ids: IdList = None, author_ids: IdList = None,
+    with_owner: bool = False, source: str | None = None, kind: Kind | None = None,
+    start: str | None = None, end: str | None = None,
 ) -> dict[str, Any]:
-    """Гибридный поиск (смысл + полнотекст) по всему мозгу. Hybrid semantic + full-text search over every event."""
+    """Гибридный поиск (смысл + полнотекст) по всему мозгу. Фильтры (все через AND): participant_ids — где были ВСЕ эти люди (автор/получатель/участник созвона), mentioned_ids — где их упомянули, author_ids — где писали они, with_owner — где был владелец, kind — call|message|email, source, start/end (ISO). Hybrid search; the people filters narrow candidates BEFORE ranking."""
+    flt = link_filter(participant_ids, mentioned_ids, author_ids, with_owner, source, kind, start, end)
     url, secret = _search_conf()
     try:
-        data = await search_brain(url, secret, query, limit)
+        data = await search_brain(url, secret, query, limit,
+                                  **({"filters": to_dict(flt)} if not flt.empty else {}))
     except SearchUnavailable as e:
         raise RuntimeError(e.detail) from e
     results = list(data.get("results") or [])
@@ -53,8 +64,16 @@ async def recent_events(
     hours: Annotated[int, Field(ge=1, le=720)] = 24,
     source: str | None = None, account: str | None = None, project: str | None = None,
     limit: Annotated[int, Field(ge=1, le=MAX_EVENTS)] = 50,
+    participant_ids: IdList = None, mentioned_ids: IdList = None, author_ids: IdList = None,
+    with_owner: bool = False, kind: Kind | None = None,
 ) -> dict[str, Any]:
-    """Свежие события с фильтрами по источнику/аккаунту/проекту. Recent events, newest first."""
+    """Свежие события с фильтрами по источнику/аккаунту/проекту и по людям (participant_ids, mentioned_ids, author_ids, with_owner, kind=call|message|email — через AND). Recent events, newest first."""
+    flt = link_filter(participant_ids, mentioned_ids, author_ids, with_owner, source, kind,
+                      start=(utc_naive_now() - timedelta(hours=hours)).isoformat())
+    if flt.uses_links or kind:
+        flt = replace(flt, account=account, project=project)
+        events, truncated = await filtered_events(flt, limit)
+        return {"count": len(events), "truncated": truncated, "events": events}
     events, truncated = await queries.recent_events(
         hours=hours, limit=limit, source=source, account=account, project=project)
     return {"count": len(events), "truncated": truncated, "events": events}
@@ -106,16 +125,17 @@ async def entity_find(
 async def entity_context(
     entity_id: int | None = None,
     name: Annotated[str | None, Field(min_length=2)] = None,
-    raw_relationships: bool = False,
+    raw_relationships: bool = False, include_mentions: bool = False,
 ) -> dict[str, Any]:
-    """Что известно о сущности: алиасы, членства, связи-пары (роли с весом и взаимодействиями), активность (по id или имени). raw_relationships=true добавляет записи relationships по одной (с id для relationship_retire). Everything known about one entity; connections are one per counterpart."""
+    """Что известно о сущности: алиасы, членства, связи-пары (роли с весом и взаимодействиями), активность (по id или имени). raw_relationships=true добавляет записи relationships по одной (с id для relationship_retire); include_mentions=true — события, где человека упомянули (не его сообщения), с источником связи, и счёт «в области / вне области» для прозвищ. Everything known about one entity; connections are one per counterpart."""
     if entity_id is None:
         if not name:
             raise ValueError("pass entity_id or name")
         entity_id = await find_entity_by_name(name)
         if entity_id is None:
             raise LookupError(f"no entity matching '{name}'")
-    payload = await entity_context_payload(entity_id, raw_relationships=raw_relationships)
+    payload = await entity_context_payload(entity_id, raw_relationships=raw_relationships,
+                                           include_mentions=include_mentions)
     if payload is None:
         raise LookupError(f"entity {entity_id} not found")
     members = payload["members"]
@@ -140,12 +160,22 @@ async def graph_neighbours(
 async def timeline(
     entity_id: int, start: str | None = None, end: str | None = None,
     limit: Annotated[int, Field(ge=1, le=MAX_EVENTS)] = 50,
+    roles: Annotated[list[Role] | None, Field(max_length=4)] = None,
 ) -> dict[str, Any]:
-    """События сущности за период (ISO-даты; по умолчанию последние 30 дней): её сообщения и упоминания по полному имени. Events by/about an entity in a date range."""
+    """События сущности за период (ISO-даты; по умолчанию последние 30 дней, но для сущности владельца период обязателен): написанные ею, адресованные ей, где она участвовала (созвоны) и где её упомянули (имя, фамилия, @ник, прозвище в области); roles сужает до author/recipient/participant/mentioned. У события — roles и via. Events by/about an entity in a date range."""
+    if start is None and end is None and entity_id == await owner_entity_id():
+        raise ValueError("timeline владельца требует период: передайте start и/или end "
+                         "(у владельца события — почти весь мозг)")
     now = utc_naive_now()
     t_end = parse_iso_naive(end) if end else now
     t_start = parse_iso_naive(start) if start else t_end - timedelta(days=30)
-    events = await event_links.timeline_events(entity_id, t_start, t_end, limit + 1)
+    events = await entity_events(entity_id, t_start, t_end, limit + 1,
+                                 tuple(roles) if roles else ROLES) or []
+    if not roles:   # события, до которых индекс ещё не дошёл, берёт прежний поиск по алиасу и имени
+        known = {e["id"] for e in events}
+        legacy = await event_links.timeline_events(entity_id, t_start, t_end, limit + 1)
+        events = sorted(events + [e for e in legacy if e["id"] not in known],
+                        key=lambda e: e["occurred_at"], reverse=True)
     return {"events": events[:limit], "truncated": len(events) > limit,
             "start": t_start.isoformat(), "end": t_end.isoformat()}
 
@@ -166,4 +196,4 @@ async def audit_log(
 
 
 READ_TOOLS = (search, recent_events, get_event, list_sources, entity_find,
-              entity_context, graph_neighbours, timeline, sql_query, audit_log)
+              entity_context, graph_neighbours, timeline, sql_query, audit_log, *LINK_TOOLS)

@@ -8,7 +8,8 @@
 идентификаторы (email, @handle) и `metadata.sender_id` как telegram-id, а
 `relationships.derived_from_event_id` указывает на событие, не на сущность.
 Поэтому переносить за пределами графа нечего, и этот модуль трогает ровно
-шесть таблиц: алиасы, членства, связи, аватары, узлы идентичности, предложения.
+шесть таблиц: алиасы, членства, связи, аватары, узлы идентичности, предложения; плюс отметки
+пар (041) и данные связей событий (042–044, `merge_links`).
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ from vera_shared.db.models_graph import EntityRow
 from vera_shared.graph import merge_children as children
 from vera_shared.graph.merge_codec import row_dict
 from vera_shared.graph.merge_errors import MergeError
+from vera_shared.graph.merge_links import merge_event_entities, merge_nicknames, merge_voice_map
 from vera_shared.graph.merge_report import MergeReport, Recorder
 from vera_shared.graph.merge_suppressions import merge_suppressions
 from vera_shared.timeutil import utc_naive_now
@@ -70,7 +72,7 @@ async def _merge(s: AsyncSession, keep_id: int, drop_ids: list[int],
     for step in (children.merge_aliases, children.merge_memberships,
                  children.merge_relationships, children.merge_avatars,
                  children.move_identity_nodes, children.merge_suggestions,
-                 merge_suppressions):
+                 merge_suppressions, merge_nicknames, merge_voice_map, merge_event_entities):
         await step(s, rec, keep_id, drop_ids)
 
     keep.attributes = union_attributes(dict(keep.attributes or {}), drops)

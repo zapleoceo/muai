@@ -29,8 +29,15 @@ from vera_shared.graph.connection_model import (
     could_infer_work,
     is_established,
     is_regular_contact,
-    role_payload,
 )
+from vera_shared.graph.pair_roles_hook import (
+    HistoryRole,
+    apply_history,
+    history_payload,
+    suppressed_predicates,
+    suppressed_predicates_within,
+)
+from vera_shared.graph.pair_roles_store import StoredRole, roles_of, roles_within
 from vera_shared.graph.pair_stats import PairStats, ordered, partner_stats, stats_within
 from vera_shared.graph.suppressions import suppressed_partners, suppressed_within
 
@@ -45,9 +52,12 @@ def _by_pair(claims: list[Claim]) -> dict[tuple[int, int], list[Claim]]:
 
 
 def _connection(a: int, b: int, claims: list[Claim], stats: PairStats | None,
-                idents: dict[int, WorkIdent], muted: bool = False) -> Connection | None:
-    return build_connection(a, b, claims, stats or PairStats(),
-                            shared_work(idents.get(a), idents.get(b)), suppress_inferred=muted)
+                idents: dict[int, WorkIdent], muted: bool = False,
+                history: list[StoredRole] | None = None,
+                history_muted: frozenset[str] = frozenset()) -> Connection | None:
+    shared = shared_work(idents.get(a), idents.get(b))
+    conn = build_connection(a, b, claims, stats or PairStats(), shared, suppress_inferred=muted)
+    return apply_history(conn, a, b, history or [], history_muted, stats or PairStats(), shared)
 
 
 def _interaction_payload(conn: Connection) -> dict[str, Any]:
@@ -59,8 +69,8 @@ def _card_payload(conn: Connection, viewer_id: int, card: Card) -> dict[str, Any
     other = conn.b if conn.a == viewer_id else conn.a
     return {"other_id": other, "other_name": card.name, "other_type": card.type,
             "weight": round(conn.weight, 2),
-            "main": role_payload(conn.main, viewer_id),
-            "also": [role_payload(r, viewer_id) for r in conn.also],
+            "main": history_payload(conn.main, viewer_id),
+            "also": [history_payload(r, viewer_id) for r in conn.also],
             "hidden": conn.hidden, "shared_work": conn.shared_work,
             "interaction": _interaction_payload(conn)}
 
@@ -71,16 +81,18 @@ async def _connections_of(entity_id: int) -> tuple[list[Connection], dict[int, C
                 for (a, b), claims in _by_pair(await claims_of(entity_id)).items()}
     stats = await partner_stats(entity_id)
     muted = await suppressed_partners(entity_id)
-    candidates = set(by_other) | {p for p, st in stats.items()
-                                  if (could_infer_work(st) or is_regular_contact(st))
-                                  and p not in muted}
+    history, history_muted = await roles_of(entity_id), await suppressed_predicates(entity_id)
+    candidates = set(by_other) | set(history) | {p for p, st in stats.items()
+                                                 if (could_infer_work(st) or is_regular_contact(st))
+                                                 and p not in muted}
     if not candidates:
         return [], {}
     cards = await entity_cards([entity_id, *candidates])
     idents = await work_idents([entity_id, *candidates])
     conns = [c for other in candidates if other in cards
              if (c := _connection(entity_id, other, by_other.get(other, []),
-                                  stats.get(other), idents, other in muted)) is not None]
+                                  stats.get(other), idents, other in muted, history.get(other),
+                                  history_muted.get(other, frozenset()))) is not None]
     conns.sort(key=lambda c: (-c.weight, -c.interaction))
     return conns, cards
 
@@ -116,6 +128,7 @@ def edge_payload(conn: Connection) -> dict[str, Any]:
     return {"source": source, "target": target, "predicate": main.predicate,
             "weight": round(conn.weight, 2), "confidence": round(conn.weight, 2),
             "support": main.support, "inferred": main.inferred,
+            **({"source": "history"} if isinstance(main, HistoryRole) else {}),
             "also": [r.predicate for r in conn.also]}
 
 
@@ -135,13 +148,14 @@ async def connections_among(ids: list[int], predicate: str | None = None,
                      if could_infer_work(st) and pair not in muted}
     else:
         inferable = set()
+    history, history_muted = await roles_within(ids), await suppressed_predicates_within(ids)
     if focus_id is not None and predicate is None:
         inferable |= {pair for pair, st in stats.items()
                       if focus_id in pair and is_regular_contact(st) and pair not in muted}
-    pairs = set(grouped) | inferable
+    pairs = set(grouped) | inferable | set(history)
     idents = await work_idents(sorted({i for pair in pairs for i in pair}))
     conns = (_connection(a, b, grouped.get((a, b), []), stats.get((a, b)), idents,
-                         (a, b) in muted)
+                         (a, b) in muted, history.get((a, b)), history_muted.get((a, b), frozenset()))
              for a, b in sorted(pairs))
     edges = [edge_payload(c) for c in conns if c is not None]
     return [e for e in edges if predicate is None or predicate == e["predicate"]

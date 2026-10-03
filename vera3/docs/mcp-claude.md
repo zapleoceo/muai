@@ -63,14 +63,16 @@ vera3-mcp :8000 (хост 127.0.0.1:8007)          services/mcp, пакет vera
 
 | Tool | Что делает |
 |---|---|
-| `search(query, limit)` | Гибридный поиск (смысл + полнотекст) через brain-search, как `/v1/search`; скрытые события не попадают |
-| `recent_events(hours, source, account, project, limit)` | Свежие события с фильтрами, новые первыми (до 200) |
+| `search(query, limit, participant_ids, mentioned_ids, author_ids, with_owner, source, kind, start, end)` | Гибридный поиск (смысл + полнотекст) через brain-search, как `/v1/search`; скрытые события не попадают. Фильтры по людям (через AND) сужают кандидатов ДО ранжирования: «где были ВСЕ эти люди», «где их упомянули», «где писали они», «где был владелец», `kind` = `call` / `message` / `email` |
+| `recent_events(hours, source, account, project, limit, participant_ids, mentioned_ids, author_ids, with_owner, kind)` | Свежие события с фильтрами, новые первыми (до 200); фильтры по людям — как у `search` |
 | `get_event(event_id, max_chars)` | Событие целиком: текст, метаданные, триаж, `hidden`, связанные сущности (автор по алиасу и концы связей, выведенных из события) |
 | `list_sources()` | Число событий, последнее событие и последний приём по каждому источнику |
 | `entity_find(query, type, limit)` | Нечёткий поиск сущностей по имени, алиасу, username, email |
-| `entity_context(entity_id или name, raw_relationships)` | Алиасы, членства, активность и `connections` — по одной связи на собеседника: главная роль с весом и числом подтверждений, «также», скрытые, взаимодействия (дни, личка, общие чаты), «возможно тот же человек»; у ролей `rel_ids` для `relationship_retire`. `raw_relationships=true` добавляет записи `relationships` по одной (с id) |
+| `entity_context(entity_id или name, raw_relationships, include_mentions)` | Алиасы, членства, активность и `connections` — по одной связи на собеседника: главная роль с весом и числом подтверждений, «также», скрытые, взаимодействия (дни, личка, общие чаты), «возможно тот же человек»; у ролей `rel_ids` для `relationship_retire`. `raw_relationships=true` добавляет записи `relationships` по одной (с id) |
 | `graph_neighbours(entity_id, predicate, limit, raw_edges)` | Соседи в графе на один шаг: одно ребро на пару (главная роль, `weight`, `also`, `inferred`), членства; `raw_edges=true` — по ребру на запись `relationships` |
-| `timeline(entity_id, start, end, limit)` | События сущности за период: её сообщения (по алиасу) и упоминания полного имени; по умолчанию 30 дней |
+| `timeline(entity_id, start, end, limit, roles)` | События сущности за период: написанные ею, адресованные ей, где она участвовала (созвоны) и где её упомянули (имя, фамилия, @ник, прозвище в области); `roles` сужает до `author` / `recipient` / `participant` / `mentioned`; для сущности владельца период обязателен (`start` и/или `end`); у события `roles` и `via`. События, до которых индекс связей ещё не дошёл, добирает прежний поиск по алиасу и имени. По умолчанию 30 дней |
+| `event_participants(event_id)` | Кто связан с событием и как: автор, получатели, участники созвона, упомянутые; у каждой связи источник (`alias` / `voiceprint` / `name_match` / `nickname` / `manual`), уверенность и ярлык; скрытое событие отдаётся как несуществующее; `unresolved_speakers` — голоса созвона без имени (назвать — `voice_speaker_set`) |
+| `co_occurrence(entity_a, entity_b, start, end, limit)` | События, где были ОБА (автор / получатель / участник): счёт по видам (звонки, переписка, письма) и список |
 | `sql_query(sql, max_rows)` | Escape hatch: один SELECT/WITH, только чтение (ниже) |
 | `audit_log(limit, client)` | Журнал правок агентов с `audit_id` для `undo` |
 
@@ -87,6 +89,8 @@ vera3-mcp :8000 (хост 127.0.0.1:8007)          services/mcp, пакет vera
 | `relationship_retire(relationship_id)` | `is_current=false` |
 | `entity_merge(keep_id, drop_ids, reason, dry_run, force)` | Слияние дублей (`graph.merge.merge_entities` в транзакции журнала): алиасы, членства, связи, аватары переезжают к победителю. По умолчанию `dry_run=true`: настоящее слияние в транзакции, которая откатывается, — отдаёт имена keep/drops и точные счётчики, ничего не меняя и не журналируя; выполнить — `dry_run=false`. Слияние с сущностью владельца или с сущностью, у которой есть identity-узлы, отклоняется без `force=true` (`MergeBlocked`; dry run перечисляет причины в `blockers`). В журнал (`before`) кладётся весь `MergeReport` |
 | `entity_unmerge(merge_audit_id, force)` | Обратное слияние по `unmerge`: удалённые сущности возвращаются с прежними id. То же делает `undo` записи слияния; отказ, если победителя переименовали после слияния (без `force`) или id уже занят |
+| `voice_speaker_set(event_id, label, entity_id)` | Назвать голос в созвоне: ярлык говорящего («Собеседник 2» из `unresolved_speakers`) → сущность; участник сразу появляется в связях события (`manual`). Откатывается `undo` |
+| `entity_add_nickname(entity_id, token, scope, chats, case_sensitive)` | Прозвище или инициалы с областью: `work` (рабочие чаты и личка с сильными контактами), `contacts`, `chats` (`telegram:<chat_id>`), `global`; регистрозависимо. Упоминания пересчитывает следующий backfill. Откатывается `undo` |
 | `undo(audit_id, force)` | Откат записи журнала |
 
 Событие скрывается, связь снимается, прежний текст лежит в

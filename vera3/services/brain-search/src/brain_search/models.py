@@ -27,6 +27,9 @@ class SearchQuery(BaseModel):
     #: ReAct-цикл с вызовом инструментов. По умолчанию включён.
     use_agent: bool = True
     max_steps: int = Field(default=6, ge=1, le=10)
+    #: Фильтр по людям / виду / периоду (`vera_shared.links.filters.to_dict`): сужает
+    #: кандидатов ДО ранжирования. Неверный фильтр — 422, а не молча пустой ответ.
+    filters: dict[str, Any] | None = None
 
 
 class SearchResult(BaseModel):

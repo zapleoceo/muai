@@ -129,13 +129,14 @@ function manageConnection(btn){
   connRoles(c).forEach((r, ri) => {
     const label = r.label || predLabel(r.predicate);
     if (r.rel_ids && r.rel_ids.length) choices.push({value: 'break:' + ri, label: 'Разорвать: ' + label});
-    if (r.inferred) choices.push({value: 'reject:' + ri, label: 'Это неверно (выведено из общения): ' + label});
+    if (r.source === 'history') choices.push({value: 'reject:' + ri, label: 'Это неверно (выведено из переписки): ' + label});
+    else if (r.inferred) choices.push({value: 'reject:' + ri, label: 'Это неверно (выведено из общения): ' + label});
   });
   const pairOf = ri => c.other_name + ' — ' + (connRoles(c)[ri].label || predLabel(connRoles(c)[ri].predicate)) + ' — ' + current.name;
   const describe = v => {
     const [act, ri] = v.what.split(':');
     return act === 'break' ? 'Связь ' + pairOf(Number(ri)) + ' будет погашена; вернуть можно в журнале.'
-      : 'Вера перестанет считать общение уликой связи ' + pairOf(Number(ri)) + '; вернуть можно в журнале.';
+      : 'Вера перестанет считать эту связь верной (улика — общение или переписка): ' + pairOf(Number(ri)) + '; вернуть можно в журнале.';
   };
   const viewed = current;
   VeraUI.choose({title: 'Изменить связь с ' + c.other_name, confirmLabel: 'Подтвердить', danger: true,
@@ -146,7 +147,7 @@ function manageConnection(btn){
     const r = connRoles(c)[Number(ri)];
     const pair = {entity_a: viewed.id, entity_b: c.other_id};
     const req = act === 'break' ? VeraUI.post('/api/graph/connection/break', {...pair, predicate: r.predicate, rel_ids: r.rel_ids})
-                                : VeraUI.post('/api/graph/connection/reject', pair);
+                                : VeraUI.post('/api/graph/connection/reject', r.source === 'history' ? {...pair, predicate: r.predicate} : pair);
     req.then(res => afterEdit(act === 'break' ? 'Связь разорвана' : 'Связь отмечена неверной', res.audit_ids))
        .catch(err => VeraUI.toast('Не получилось: ' + err.message, {kind: 'err'}));
   });

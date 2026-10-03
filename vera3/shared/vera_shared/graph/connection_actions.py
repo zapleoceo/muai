@@ -10,7 +10,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.engine import get_session
 from vera_shared.graph import edit as graph_edit
+from vera_shared.graph.connection_model import INFERRED_PREDICATE
 from vera_shared.graph.edit import GraphEditError
+from vera_shared.graph.pair_roles_types import PREDICATES
 from vera_shared.graph.pair_stats import ordered
 from vera_shared.graph.rel_canon import SYMMETRIC, canonical_edge
 from vera_shared.graph.suppressions import suppress_pair
@@ -58,17 +60,22 @@ async def break_role(a: int, b: int, predicate: str, rel_ids: list[int],
     return audit_ids
 
 
-async def reject_inferred(a: int, b: int, client: str) -> int | None:
-    """Отвергает выведенное «работает с» пары. None — уже было отвергнуто."""
+async def reject_inferred(a: int, b: int, client: str,
+                          predicate: str = INFERRED_PREDICATE) -> int | None:
+    """Отвергает выведенное «работает с» пары (или роль, выведенную по истории переписки —
+    тогда `predicate` её). None — уже было отвергнуто."""
     if a == b:
         raise GraphEditError("pair members must differ")
+    if predicate != INFERRED_PREDICATE and predicate not in PREDICATES:
+        raise GraphEditError(f"predicate must be one of {', '.join(PREDICATES)}")
     low, high = ordered(a, b)
     async with get_session() as s:
         for entity_id in (low, high):
             await graph_edit.current_name(s, entity_id)
-        if not await suppress_pair(s, low, high):
+        if not await suppress_pair(s, low, high, predicate):
             return None
         return await audit.record(
             s, client=client, tool="connection_suppress",
-            args={"entity_a": low, "entity_b": high}, kind="suppression",
-            target_id=None, before=None, after={"entity_a": low, "entity_b": high})
+            args={"entity_a": low, "entity_b": high, "predicate": predicate}, kind="suppression",
+            target_id=None, before=None,
+            after={"entity_a": low, "entity_b": high, "predicate": predicate})

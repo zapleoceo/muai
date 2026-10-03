@@ -34,6 +34,7 @@ class MergeReport:
     moved: list[dict[str, Any]] = field(default_factory=list)
     updated: list[dict[str, Any]] = field(default_factory=list)
     deleted: list[dict[str, Any]] = field(default_factory=list)
+    created: list[dict[str, Any]] = field(default_factory=list)   # строки, созданные слиянием
     version: int = REPORT_VERSION
 
     def to_dict(self) -> dict[str, Any]:
@@ -46,7 +47,7 @@ class MergeReport:
     def counts(self) -> dict[str, int]:
         out: dict[str, int] = {}
         for kind, items in (("moved", self.moved), ("updated", self.updated),
-                            ("deleted", self.deleted)):
+                            ("deleted", self.deleted), ("created", self.created)):
             for item in items:
                 key = f"{item['table']}_{kind}"
                 out[key] = out.get(key, 0) + 1
@@ -66,6 +67,16 @@ class Recorder:
             "table": row.__tablename__, "pk": pk, "pk_value": getattr(row, pk),
             "column": column, "old": old,
         })
+
+    def moved_by_keys(self, row: DeclarativeBase, keys: dict[str, Any], column: str,
+                      old: Any) -> None:
+        """Как `moved`, но для таблицы с составным ключом: строка найдётся по `keys`."""
+        self.report.moved.append({"table": row.__tablename__, "keys": keys,
+                                  "column": column, "old": old})
+
+    def created(self, table: str, keys: dict[str, Any]) -> None:
+        """Слияние создало строку: откат её удалит. `keys` — полный первичный ключ."""
+        self.report.created.append({"table": table, "keys": keys})
 
     def deleted(self, row: DeclarativeBase) -> None:
         self.report.deleted.append(

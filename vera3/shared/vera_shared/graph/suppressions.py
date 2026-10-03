@@ -52,22 +52,25 @@ async def suppressed_within(ids: list[int]) -> set[tuple[int, int]]:
     return set(map(tuple, rows))
 
 
-async def suppress_pair(s: AsyncSession, a: int, b: int) -> bool:
-    """True — запись создана, False — пара уже была отвергнута."""
+async def suppress_pair(s: AsyncSession, a: int, b: int,
+                        predicate: str = INFERRED_PREDICATE) -> bool:
+    """True — запись создана, False — пара уже была отвергнута. `predicate` — какую роль
+    отвергают: «работает с» (по умолчанию) или роль, выведенную по истории переписки."""
     low, high = ordered(a, b)
     try:
         async with s.begin_nested():
             s.add(ConnectionSuppressionRow(entity_a=low, entity_b=high,
-                                           predicate=INFERRED_PREDICATE))
+                                           predicate=predicate))
             await s.flush()
     except IntegrityError:
         return False
     return True
 
 
-async def lift_suppression(s: AsyncSession, a: int, b: int) -> bool:
+async def lift_suppression(s: AsyncSession, a: int, b: int,
+                           predicate: str = INFERRED_PREDICATE) -> bool:
     low, high = ordered(a, b)
     res = await s.execute(delete(ConnectionSuppressionRow).where(
         ConnectionSuppressionRow.entity_a == low, ConnectionSuppressionRow.entity_b == high,
-        ConnectionSuppressionRow.predicate == INFERRED_PREDICATE))
+        ConnectionSuppressionRow.predicate == predicate))
     return bool(res.rowcount)

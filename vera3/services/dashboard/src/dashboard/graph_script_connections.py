@@ -14,15 +14,16 @@ function connMeta(c){
   if (m.inferred && m.support) meta.push('подтверждено ' + m.support + ' + общение');
   else if (m.support) meta.push(m.support + ' подтв.');
   if (m.manual) meta.push('задано вручную');
+  else if (m.source === 'history') meta.push('выведено из переписки');
   else if (m.inferred && !m.support) meta.push('выведено из общения');
   if (c.interaction.active_days) meta.push(c.interaction.active_days + ' дн. общения');
   return meta.join(' · ');
 }
 
 const roleName = r => esc(r.label || predLabel(r.predicate)) +
-  (r.inferred ? (r.support ? ' (+ общение)' : ' (выведено)') : '');
+  (r.source === 'history' ? ' (из переписки)' : r.inferred ? (r.support ? ' (+ общение)' : ' (выведено)') : '');
 const connRoles = c => [c.main, ...c.also];
-const editable = r => (r.rel_ids && r.rel_ids.length) || r.inferred;
+const editable = r => (r.rel_ids && r.rel_ids.length) || r.inferred || r.source === 'history';
 
 function connRow(c, ci){
   const same = (c.possible_same || []).map(h =>

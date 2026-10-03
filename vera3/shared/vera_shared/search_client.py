@@ -25,12 +25,17 @@ class SearchUnavailable(Exception):
 
 
 async def search_brain(base_url: str, secret: str, q: str, limit: int = 15,
-                       use_agent: bool = False) -> dict[str, Any]:
+                       use_agent: bool = False,
+                       filters: dict[str, Any] | None = None) -> dict[str, Any]:
+    """`filters` — фильтр по людям/виду/периоду (`links.filters.to_dict`): сужает кандидатов
+    ДО ранжирования."""
     url = f"{base_url}/search"
+    body: dict[str, Any] = {"q": q, "limit": limit, "use_agent": use_agent}
+    if filters:
+        body["filters"] = filters
     try:
         async with httpx.AsyncClient(timeout=SEARCH_TIMEOUT_S) as c:
-            r = await c.post(url, json={"q": q, "limit": limit, "use_agent": use_agent},
-                             headers={"X-Internal-Secret": secret})
+            r = await c.post(url, json=body, headers={"X-Internal-Secret": secret})
     except httpx.HTTPError as e:
         raise SearchUnavailable(502, f"brain-search unreachable: {e}") from e
 
