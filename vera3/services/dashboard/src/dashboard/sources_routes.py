@@ -17,54 +17,17 @@ from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse
 from vera_shared.timeutil import utc_naive_now
 
-from dashboard.render import _render, data_table, esc, local_dt, owner_or_redirect
-from dashboard.source_detail import Block, Html
+from dashboard.render import _render, esc, local_dt, owner_or_redirect
 from dashboard.source_registry import CATALOG, resolve_source
 from dashboard.source_state import State, can_disconnect, state_of
+from dashboard.sources_view import render_block, source_level
 from dashboard.stats import get_source_detail, get_sources_overview
 from dashboard.ui.components import collapsible, status_dot
+from dashboard.ui.theme import SOURCES_CSS
 
 router = APIRouter()
 
-_STYLE = """<style>
-.src-list { width:100%; border-collapse:collapse; font-size:14px; }
-.src-list th { font-size:11px; text-transform:uppercase; color:var(--vera-muted); font-weight:500;
-               text-align:left; padding:0 12px 8px 0; white-space:nowrap; }
-.src-list td { padding:12px 12px 12px 0; background:none; border-top:1px solid var(--vera-line);
-               vertical-align:middle; }
-.src-list tr:hover td { background:var(--pico-card-background-color); }
-.src-name { display:flex; align-items:center; gap:10px; }
-.src-name .ico { font-size:17px; width:22px; text-align:center; }
-.src-name a { font-weight:600; }
-.src-how { color:var(--vera-muted); font-size:12px; margin-top:2px; }
-.num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
-.act { text-align:right; white-space:nowrap; }
-.act a { font-size:12px; padding:5px 11px; border:1px solid var(--vera-line); border-radius:7px;
-         color:var(--vera-muted); }
-.act a:hover { border-color:var(--pico-primary); color:var(--pico-primary); }
-.act a.danger:hover, a.btn.danger:hover { border-color:var(--vera-err); color:var(--vera-err); }
-a.btn { padding:8px 16px; border:1px solid var(--vera-line); border-radius:8px;
-        color:var(--vera-muted); font-size:13px; }
-a.btn:hover { border-color:var(--pico-primary); color:var(--pico-primary); }
-.idle td { opacity:.55; }
-.crumb { font-size:13px; color:var(--vera-muted); margin:0 0 10px; }
-.head { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin:0 0 4px; }
-.head h1 { margin:0; font-size:24px; }
-.strip { display:flex; gap:28px; flex-wrap:wrap; margin:18px 0 4px;
-         padding:16px 0; border-top:1px solid var(--vera-line); border-bottom:1px solid var(--vera-line); }
-.strip div { min-width:110px; }
-.strip .k { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--vera-muted); }
-.strip .v { font-size:22px; font-weight:600; margin-top:3px;
-            font-variant-numeric:tabular-nums; }
-.blocks { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr));
-          gap:18px; margin-top:22px; }
-.blk { background:var(--vera-surface); border:1px solid var(--vera-line); border-radius:12px; padding:16px 18px; }
-.blk.wide { grid-column:1/-1; }
-.blk h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em;
-          color:var(--vera-muted); margin:0 0 12px; }
-.blk .hint { color:var(--vera-muted); font-size:12px; margin-top:12px; line-height:1.45; }
-.note { color:var(--vera-muted); font-size:13px; margin:6px 0 0; }
-</style>"""
+_STYLE = f"<style>{SOURCES_CSS}</style>"
 
 
 def ago(minutes: int) -> str:
@@ -89,21 +52,6 @@ def _freshness(last: datetime | None, now: datetime, src) -> str:
     if mins < (src.warn_min or src.live_min * 4):
         return f'<span class="pill warn">тихо · {ago(mins)}</span>'
     return f'<span class="pill err">молчит · {ago(mins)}</span>'
-
-
-def source_level(last: datetime | None, now: datetime, src, state: State) -> str | None:
-    """Одна точка на источник: красная — не подключён или замолчал, жёлтая —
-    тихо, зелёная — живой. Серая — у источника нет понятия «свежесть»."""
-    if state.connected is False:
-        return "err"
-    if src.live_min is None:
-        return None
-    if last is None:
-        return "err"
-    mins = max(0, int((now - last).total_seconds() / 60))
-    if mins < src.live_min:
-        return "ok"
-    return "warn" if mins < (src.warn_min or src.live_min * 4) else "err"
 
 
 PROGRESS_BLOCK = (
@@ -208,31 +156,6 @@ async def sources_page(request: Request):
     """))
 
 
-def _cell(value) -> str:
-    return value if isinstance(value, Html) else esc(value)
-
-
-def _render_block(b: Block) -> str:
-    hint = f'<div class="hint">{esc(b["hint"])}</div>' if b.get("hint") else ""
-    title = f'<h2>{esc(b["title"])}</h2>' if b.get("title") else ""
-    if b["kind"] == "rows":
-        body = "".join(
-            f'<div class="row"><span>{esc(k)}</span>'
-            f'<span class="mute">{esc(v)}</span></div>'
-            for k, v in b["pairs"]
-        ) or '<div class="mute">нет данных</div>'
-        return f'<div class="blk">{title}{body}{hint}</div>'
-
-    # По умолчанию экранируем всё; разметку провайдер помечает типом Html.
-    # Обратное правило («провайдер сам не забудет esc») дало бы XSS на первом
-    # же чате с названием <script>…</script> — они приходят из БД как есть.
-    rows = "".join("<tr>" + "".join(f"<td>{_cell(c)}</td>" for c in r) + "</tr>"
-                   for r in b["rows"])
-    wide = " wide" if len(b["headers"]) > 3 else ""
-    table = data_table(b["headers"], rows, b.get("empty", "нет данных"))
-    return f'<div class="blk{wide}">{title}{table}{hint}</div>'
-
-
 @router.get("/sources/{key}", response_class=HTMLResponse)
 async def source_page(key: str, request: Request):
     if (resp := owner_or_redirect(request)) is not None:
@@ -256,7 +179,7 @@ async def source_page(key: str, request: Request):
                        f'href="/api/sources/{esc(key)}/disconnect">Отключить</a>')
     action = " ".join(buttons)
     note = f'<p class="note">{esc(src.note)}</p>' if src.note else ""
-    body = "".join(_render_block(b) for b in blocks) or \
+    body = "".join(render_block(b) for b in blocks) or \
         '<div class="blk"><div class="mute">Разбивок для этого источника нет — ' \
         'он не хранит своего состояния.</div></div>'
 

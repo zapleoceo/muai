@@ -6,7 +6,7 @@ from __future__ import annotations
 from html import escape
 
 from dashboard.ui.favicon import FAVICON_LINKS
-from dashboard.ui.theme import HTMX_URL, PICO_URL, VERA_CSS
+from dashboard.ui.theme import HTMX_SRI, HTMX_URL, PICO_SRI, PICO_URL, VERA_CSS
 from dashboard.ui.tz import TZ_FOOTER, TZ_SCRIPT
 
 # (ключ страницы, адрес, подпись). Путь «Входящее» и «Люди» остался прежним:
@@ -26,8 +26,8 @@ def head(title: str) -> str:
         f'<!DOCTYPE html><html lang="ru" data-theme="dark"><head><meta charset="utf-8">'
         f'<meta name="viewport" content="width=device-width, initial-scale=1">'
         f'<title>{escape(title)}</title>{FAVICON_LINKS}'
-        f'<link rel="stylesheet" href="{PICO_URL}">'
-        f'<script src="{HTMX_URL}"></script>'
+        f'<link rel="stylesheet" href="{PICO_URL}" integrity="{PICO_SRI}" crossorigin="anonymous">'
+        f'<script src="{HTMX_URL}" integrity="{HTMX_SRI}" crossorigin="anonymous"></script>'
         f'<style>{VERA_CSS}</style></head>'
     )
 
