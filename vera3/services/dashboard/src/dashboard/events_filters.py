@@ -13,7 +13,7 @@ gmail, telegram, instagram, monitor. Слушателя (`voice`), Slack, Trello
 """
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 
 from dashboard.render import esc
 from dashboard.source_registry import resolve_source
@@ -42,12 +42,14 @@ def source_options(present: Iterable[tuple[str, int]], selected: str | None) -> 
     return "".join(options)
 
 
-def status_options(statuses: Iterable[str], selected: str | None) -> str:
+def status_options(statuses: Iterable[str], selected: str | None,
+                   labels: Mapping[str, str] | None = None) -> str:
     """Как и у источников, выбранный статус не выпадает из списка: запрос его
     уже применил, и выпадающий список не должен показывать «любой»."""
     values = list(statuses)
     if selected and selected not in values:
         values.append(selected)
-    options = [_option("", "— любой статус —", not selected)]
-    options += [_option(s, s, s == selected) for s in values]
+    options = [_option("", "— любое состояние —", not selected)]
+    names = labels or {}
+    options += [_option(s, names.get(s, s), s == selected) for s in values]
     return "".join(options)
