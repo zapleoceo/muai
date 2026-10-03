@@ -16,6 +16,7 @@ async def reset_schema(conn: AsyncConnection) -> None:
     from vera_shared.db import (  # noqa: F401
         models,
         models_graph,
+        models_links,
         models_mcp,
         models_sources,
     )

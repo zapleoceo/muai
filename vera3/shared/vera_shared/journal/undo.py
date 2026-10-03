@@ -19,6 +19,7 @@ from vera_shared.graph.merge_report import MergeReport
 from vera_shared.graph.suppressions import lift_suppression
 from vera_shared.graph.unmerge import UnmergeError, unmerge
 from vera_shared.journal import audit
+from vera_shared.journal.undo_links import undo_nickname, undo_speaker
 
 _TEXT_KEYS = ("content_text", "metadata", "category")
 _STATUS_KEYS = ("triage_status", "triage_metadata")
@@ -110,6 +111,8 @@ _UNDO_BY_KIND = {
     "entity": _undo_entity,
     "alias": _undo_alias,
     "relationship": _undo_relationship,
+    "nickname": undo_nickname,
+    "speaker": undo_speaker,
 }
 
 

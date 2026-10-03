@@ -21,6 +21,7 @@ in the commit message (for cosmetic refactors only).
 | [domain-model.md](./domain-model.md) | Postgres schema (events, usage_log, gmail_accounts, …) |
 | [security.md](./security.md) | OAuth permanence, owner gate, encryption at rest |
 | [conventions.md](./conventions.md) | File layout, async, types, comments |
+| [links.md](./links.md) | Связи событий с людьми (`event_entities`): автор, получатель, участники созвона, упомянутые; прозвища в области; круг разговора; фильтры поиска и MCP |
 
 ## How to update
 
