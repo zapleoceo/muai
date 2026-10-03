@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from vera_shared.db.engine import get_session
 from vera_shared.journal import audit
 from vera_shared.links.nicknames import ACTIVE, NicknameError, put_nickname
-from vera_shared.links.scope import WORK
+from vera_shared.links.scope import WORK, ScopeError, scope_ids_for
 from vera_shared.links.speakers import SpeakerError, put_speaker
 
 from vera_mcp.auth import client_of
@@ -42,11 +42,15 @@ async def entity_add_nickname(
     entity_id: int, token: Annotated[str, Field(min_length=2, max_length=80)], ctx: Context,
     scope: ScopeKind = WORK, chats: Annotated[list[str] | None, Field(max_length=50)] = None,
     case_sensitive: bool = True,
+    project: Annotated[str | None, Field(max_length=40)] = None,
 ) -> dict[str, Any]:
-    """Добавить человеку прозвище или инициалы (например «ДА» = Дмитрий Александрович) с областью: work — рабочие чаты и личка с его сильными контактами, contacts — плюс группы с двумя его контактами, chats — только перечисленные (chats=['telegram:<chat_id>']), global — везде. Регистрозависимо по умолчанию: «ДА» не совпадёт со словом «да». Упоминания пересчитываются при следующем backfill. Add a scoped nickname; reversible via undo."""
-    scope_ids = chats or []
-    args = {"entity_id": entity_id, "token": token, "scope": scope, "chats": scope_ids,
-            "case_sensitive": case_sensitive}
+    """Добавить человеку прозвище или инициалы (например «ДА» = Дмитрий Александрович) с областью: work — рабочие чаты и личка с его сильными контактами, contacts — плюс группы с двумя его контактами, chats — только перечисленные (chats=['telegram:<chat_id>']), global — везде; project сужает work одним проектом (project='itstep': инициалы директора не ловятся в чатах другого бизнеса). Регистрозависимо по умолчанию: «ДА» не совпадёт со словом «да». Упоминания пересчитываются при следующем backfill. Add a scoped nickname; reversible via undo."""
+    try:
+        scope_ids = scope_ids_for(scope, chats, project)
+    except ScopeError as e:
+        return {"ok": False, "error": str(e)}
+    args = {"entity_id": entity_id, "token": token, "scope": scope, "chats": chats or [],
+            "case_sensitive": case_sensitive, "project": project}
 
     async def op(s: AsyncSession) -> int:
         nickname_id, before, after = await put_nickname(
