@@ -21,6 +21,7 @@ from vera_shared.memory.remember import RememberOutcome, remember_fact
 
 from vera_mcp import audit
 from vera_mcp.auth import client_of
+from vera_mcp.merge_guard import MergeBlocked, entity_names, merge_blockers
 from vera_mcp.undo import undo_entry
 
 #: (target_id, before, after, extra-поля ответа)
@@ -59,7 +60,7 @@ async def remember(
 
     outcome = await remember_fact(text, kind, context, tags, on_written=journal)
     return {**result, "event_id": outcome.event_id, "deduped": outcome.deduped,
-            "dedup_reason": outcome.dedup_reason,
+            "dedup_reason": outcome.dedup_reason, "unhidden": outcome.unhidden,
             "similar_event_id": outcome.similar_event_id}
 
 
@@ -165,17 +166,43 @@ async def relationship_retire(relationship_id: int, ctx: Context) -> dict[str, A
 async def entity_merge(
     keep_id: int, drop_ids: Annotated[list[int], Field(min_length=1, max_length=20)],
     reason: Annotated[str, Field(min_length=3, max_length=500)], ctx: Context,
+    dry_run: bool = True, force: bool = False,
 ) -> dict[str, Any]:
-    """Слить дубли сущностей: drop_ids вливаются в keep_id (алиасы, членства, связи переезжают); откат — entity_unmerge/undo. Merge duplicate entities into keep_id; the full MergeReport is kept for undo."""
+    """Слить дубли: drop_ids вливаются в keep_id. По умолчанию dry_run=true: возвращает имена и счётчики, ничего не меняя; выполнить — dry_run=false. Владелец и сущности с identity-узлами требуют force=true; откат — entity_unmerge/undo. Merge duplicate entities; dry run by default."""
+    ids = [keep_id, *drop_ids]
+    async with get_session() as s:
+        blockers = await merge_blockers(s, ids)
+    blocked = bool(blockers) and not force
+    if dry_run:
+        return await _merge_preview(keep_id, drop_ids, reason, blockers, blocked)
+    if blocked:
+        raise MergeBlocked("; ".join(blockers) + " — pass force=true to merge anyway")
+
     async def op(s: AsyncSession) -> Applied:
         report = await merge_entities(keep_id, drop_ids, reason, session=s)
         name = (await graph_edit.current_name(s, keep_id))["name"]
         return keep_id, report.to_dict(), {"name": name}, {
-            "keep_id": keep_id, "merged": report.drop_ids, "counts": report.counts()}
+            "dry_run": False, "keep_id": keep_id, "merged": report.drop_ids,
+            "counts": report.counts()}
 
     return await _audited(ctx, "entity_merge",
-                          {"keep_id": keep_id, "drop_ids": drop_ids, "reason": reason},
-                          "merge", op)
+                          {"keep_id": keep_id, "drop_ids": drop_ids, "reason": reason,
+                           "force": force}, "merge", op)
+
+
+async def _merge_preview(keep_id: int, drop_ids: list[int], reason: str,
+                         blockers: list[str], blocked: bool) -> dict[str, Any]:
+    """Настоящее слияние в транзакции, которая откатывается: счётчики точные."""
+    async with get_session() as s:
+        names = await entity_names(s, [keep_id, *drop_ids])
+        counts: dict[str, int] | None = None
+        if not blocked:
+            counts = (await merge_entities(keep_id, drop_ids, reason, session=s)).counts()
+            await s.rollback()
+    return {"ok": True, "dry_run": True, "keep": {"id": keep_id, "name": names.get(keep_id)},
+            "drops": [{"id": i, "name": names.get(i)} for i in drop_ids],
+            "counts": counts, "blockers": blockers, "would_be_refused": blocked,
+            "audit_id": None}
 
 
 async def entity_unmerge(merge_audit_id: int, ctx: Context,

@@ -29,6 +29,7 @@ from vera_shared.db.vectors import (
     embedding_upsert,
     vector_column_available,
 )
+from vera_shared.events import edit as event_edit
 from vera_shared.events.visibility import HIDDEN_STATUS
 from vera_shared.llm.client import LLMCallFailed, embed
 from vera_shared.timeutil import utc_naive_now
@@ -48,6 +49,7 @@ class RememberOutcome:
     dedup_reason: Literal["exact", "semantic", None] = None
     similar_event_id: int | None = None
     similarity: float | None = None
+    unhidden: bool = False
 
 
 def _content_hash(text: str) -> str:
@@ -125,12 +127,28 @@ async def _find_semantic_neighbour(
 WrittenHook = Callable[[AsyncSession, RememberOutcome], Awaitable[None]]
 
 
-async def _existing_id(src_id: str) -> int | None:
+async def _existing(src_id: str) -> tuple[int, str] | None:
+    """(id, triage_status) уже записанного факта с таким текстом."""
     async with get_session() as s:
-        return (await s.execute(
-            select(EventRow.id).where(EventRow.source == "claude",
-                                      EventRow.source_event_id == src_id)
-        )).scalar_one_or_none()
+        row = (await s.execute(
+            select(EventRow.id, EventRow.triage_status).where(
+                EventRow.source == "claude", EventRow.source_event_id == src_id)
+        )).first()
+    return None if row is None else (row[0], row[1])
+
+
+async def _revive_hidden(event_id: int,
+                         on_written: WrittenHook | None) -> RememberOutcome:
+    """Повторный remember текста, который скрыли (в т.ч. откатом remember):
+    без этого он молча ничего не делал бы — точный дубль скрытого события.
+    Событие возвращается из скрытия, и это тоже попадает в журнал."""
+    async with get_session() as s:
+        await event_edit.set_hidden(s, event_id, hidden=False)
+        outcome = RememberOutcome(event_id, True, "exact", unhidden=True)
+        if on_written is not None:
+            await on_written(s, outcome)
+    log.info("remember: hidden event=%s unhidden by repeated remember", event_id)
+    return outcome
 
 
 async def remember_fact(text: str, kind: Kind = "fact",
@@ -138,14 +156,16 @@ async def remember_fact(text: str, kind: Kind = "fact",
                         tags: list[str] | None = None, *,
                         on_written: WrittenHook | None = None) -> RememberOutcome:
     """`on_written` вызывается в ТОЙ ЖЕ транзакции, что вставка события, и только
-    когда строка реально создана (не при точном дубле): запись журнала MCP
+    когда строка создана или возвращена из скрытия (не при обычном точном дубле): запись журнала MCP
     либо появляется вместе с событием, либо не появляется вовсе."""
     text = text.strip()
     src_id = _content_hash(text)
-    existing = await _existing_id(src_id)
+    existing = await _existing(src_id)
     if existing is not None:
-        log.info("remember: exact dedup hit, event=%s", existing)
-        return RememberOutcome(existing, True, "exact")
+        if existing[1] == HIDDEN_STATUS:
+            return await _revive_hidden(existing[0], on_written)
+        log.info("remember: exact dedup hit, event=%s", existing[0])
+        return RememberOutcome(existing[0], True, "exact")
 
     metadata: dict[str, Any] = {"kind": kind}
     if context:
@@ -173,7 +193,8 @@ async def remember_fact(text: str, kind: Kind = "fact",
             .returning(EventRow.id)
         )).scalar_one_or_none()
         if event_id is None:
-            return RememberOutcome(await _existing_id(src_id), True, "exact")
+            raced = await _existing(src_id)
+            return RememberOutcome(raced[0] if raced else None, True, "exact")
         if neighbour is not None:
             outcome = RememberOutcome(event_id, True, "semantic", *neighbour)
         else:

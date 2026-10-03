@@ -440,7 +440,7 @@ async def test_entity_merge_audits_report_and_undo_restores_the_duplicate(sqlite
     keep, dup, other = await add_entity("Keep"), await add_entity("Dup"), await add_entity("O")
     await w.entity_add_alias(dup, "telegram", "user:9", ctx())
     await w.relationship_set(dup, other, "friend_of", ctx())
-    res = await w.entity_merge(keep, [dup], "same person", ctx("codex"))
+    res = await w.entity_merge(keep, [dup], "same person", ctx("codex"), dry_run=False)
     assert res["keep_id"] == keep and res["merged"] == [dup] and res["counts"]
     assert dup not in await _names()
     async with get_session() as s:
@@ -462,7 +462,7 @@ async def test_entity_merge_audits_report_and_undo_restores_the_duplicate(sqlite
 
 async def test_merge_undo_via_generic_undo_and_refusals(sqlite_db):
     keep, dup = await add_entity("Keep"), await add_entity("Dup")
-    res = await w.entity_merge(keep, [dup], "same person", ctx())
+    res = await w.entity_merge(keep, [dup], "same person", ctx(), dry_run=False)
     await w.entity_rename(keep, "Renamed", ctx())
     with pytest.raises(UndoRefused, match="force"):
         await w.undo(res["audit_id"], ctx())
@@ -474,7 +474,7 @@ async def test_merge_undo_via_generic_undo_and_refusals(sqlite_db):
 
 async def test_merge_undo_refused_when_the_dropped_id_is_taken(sqlite_db):
     keep, dup = await add_entity("Keep"), await add_entity("Dup")
-    res = await w.entity_merge(keep, [dup], "same person", ctx())
+    res = await w.entity_merge(keep, [dup], "same person", ctx(), dry_run=False)
     await add_entity("Newcomer", entity_id=dup)
     with pytest.raises(UndoRefused, match="заняты"):
         await w.undo(res["audit_id"], ctx())
@@ -483,11 +483,120 @@ async def test_merge_undo_refused_when_the_dropped_id_is_taken(sqlite_db):
 async def test_merge_validation_and_unmerge_of_other_tool(sqlite_db):
     keep = await add_entity("Keep")
     with pytest.raises(MergeError):
-        await w.entity_merge(keep, [keep], "self merge", ctx())
+        await w.entity_merge(keep, [keep], "self merge", ctx(), dry_run=False)
     with pytest.raises(MergeError, match="не найдена"):
-        await w.entity_merge(keep, [999], "ghost", ctx())
+        await w.entity_merge(keep, [999], "ghost", ctx(), dry_run=False)
     assert await audit_rows() == []
     hid = await add_event(1, "x")
     shown = await w.hide_event(hid, ctx())
     with pytest.raises(ValueError, match="not entity_merge"):
         await w.entity_unmerge(shown["audit_id"], ctx())
+
+
+async def test_merge_defaults_to_a_dry_run_that_changes_nothing(sqlite_db):
+    keep, dup, other = await add_entity("Keep"), await add_entity("Dup"), await add_entity("O")
+    await w.entity_add_alias(dup, "telegram", "user:9", ctx())
+    await w.relationship_set(dup, other, "friend_of", ctx())
+    before_audit = len(await audit_rows())
+    out = await w.entity_merge(keep, [dup], "same person", ctx())
+    assert out["dry_run"] is True and out["audit_id"] is None
+    assert out["keep"] == {"id": keep, "name": "Keep"}
+    assert out["drops"] == [{"id": dup, "name": "Dup"}]
+    assert out["counts"] and out["blockers"] == [] and out["would_be_refused"] is False
+    assert await _names() == {keep: "Keep", dup: "Dup", other: "O"}
+    async with get_session() as s:
+        aliases = (await s.execute(select(EntityAliasRow))).scalars().all()
+        assert [a.entity_id for a in aliases] == [dup]               # откатилось
+    assert len(await audit_rows()) == before_audit                   # журнал не тронут
+
+
+async def test_merge_of_the_owner_needs_force(sqlite_db):
+    from vera_mcp.merge_guard import MergeBlocked
+    from vera_shared.projects.rules import OWNER_TG_ID
+
+    owner, dup = await add_entity("Owner"), await add_entity("Owner duplicate")
+    async with get_session() as s:
+        s.add(EntityAliasRow(entity_id=owner, source="telegram", identifier=f"user:{OWNER_TG_ID}"))
+    preview = await w.entity_merge(owner, [dup], "same person", ctx())
+    assert preview["would_be_refused"] is True and "owner" in preview["blockers"][0]
+    assert preview["counts"] is None
+    with pytest.raises(MergeBlocked, match="force=true"):
+        await w.entity_merge(owner, [dup], "same person", ctx(), dry_run=False)
+    assert dup in await _names()
+    forced = await w.entity_merge(owner, [dup], "same person", ctx(), dry_run=False, force=True)
+    assert forced["merged"] == [dup]
+    assert dup not in await _names()
+
+
+async def test_merge_of_an_entity_with_identity_nodes_needs_force(sqlite_db):
+    from vera_mcp.merge_guard import MergeBlocked
+    from vera_shared.db.models_graph import IdentityNodeRow
+
+    keep, dup = await add_entity("Keep"), await add_entity("Dup")
+    async with get_session() as s:
+        s.add(IdentityNodeRow(type="style", label="tone", listener_entity_id=dup))
+    with pytest.raises(MergeBlocked, match="identity nodes"):
+        await w.entity_merge(keep, [dup], "same person", ctx(), dry_run=False)
+    forced = await w.entity_merge(keep, [dup], "same person", ctx(), dry_run=False, force=True)
+    assert forced["audit_id"]
+
+
+# ─── remember после undo ────────────────────────────────────────────────────
+
+
+async def test_remember_after_undo_revives_the_hidden_event_and_audits_it(sqlite_db):
+    from vera_shared.memory.remember import _content_hash
+
+    text = "a fact that was undone"
+    async with get_session() as s:
+        s.add(EventRow(id=3, source="claude", source_event_id=_content_hash(text),
+                       content_text=text, occurred_at=datetime(2026, 1, 1),
+                       triage_status="hidden", triage_metadata={"hidden_prev_status": "done"}))
+    res = await w.remember(text, ctx("codex"))
+    assert (res["event_id"], res["deduped"], res["unhidden"]) == (3, True, True)
+    assert res["audit_id"]
+    assert (await event(3)).triage_status == "done"                  # вернулся, не молчит
+    (row,) = await audit_rows()
+    assert (row.tool, row.target_id, row.client) == ("remember", 3, "codex")
+
+    await w.undo(res["audit_id"], ctx())                             # откат снова скрывает
+    assert (await event(3)).triage_status == "hidden"
+    again = await w.remember(text, ctx())
+    assert again["unhidden"] is True and (await event(3)).triage_status == "done"
+
+
+async def test_remember_exact_duplicate_of_a_visible_event_stays_a_noop(sqlite_db):
+    from vera_shared.memory.remember import _content_hash
+
+    text = "a visible fact"
+    async with get_session() as s:
+        s.add(EventRow(id=4, source="claude", source_event_id=_content_hash(text),
+                       content_text=text, occurred_at=datetime(2026, 1, 1),
+                       triage_status="done"))
+    res = await w.remember(text, ctx())
+    assert (res["deduped"], res["unhidden"], res["audit_id"]) == (True, False, None)
+
+
+# ─── новая тройка связи: INSERT ... ON CONFLICT ─────────────────────────────
+
+
+async def test_relationship_set_survives_a_concurrent_insert_of_the_same_triple(
+        sqlite_db, monkeypatch):
+    from vera_shared.graph import edit as graph_edit
+
+    a, b = await add_entity("A"), await add_entity("B")
+    first = await w.relationship_set(a, b, "friend_of", ctx(), fact="winner", confidence=0.4)
+    real = graph_edit._locked_triple
+    calls = []
+
+    async def blind_first(s, subject_id, object_id, predicate):
+        calls.append(1)
+        return None if len(calls) == 1 else await real(s, subject_id, object_id, predicate)
+
+    monkeypatch.setattr(graph_edit, "_locked_triple", blind_first)
+    second = await w.relationship_set(a, b, "friend_of", ctx(), fact="loser", confidence=0.9)
+    assert second["relationship_id"] == first["relationship_id"] and second["created"] is False
+    row = await rel_row(first["relationship_id"])
+    assert (row.fact, row.confidence) == ("loser", 0.9)
+    async with get_session() as s:
+        assert len((await s.execute(select(RelationshipRow))).scalars().all()) == 1

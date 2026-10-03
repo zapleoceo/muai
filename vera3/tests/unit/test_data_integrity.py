@@ -15,7 +15,7 @@ async def db(sqlite_db):
     # unique-индекс из миграции 017 — merge обязан работать при нём
     async with sqlite_db() as s:
         await s.execute(text(
-            "CREATE UNIQUE INDEX uq_relationships_spo ON relationships "
+            "CREATE UNIQUE INDEX IF NOT EXISTS uq_relationships_spo ON relationships "
             "(subject_entity_id, predicate, object_entity_id)"))
     yield sqlite_db
 

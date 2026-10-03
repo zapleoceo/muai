@@ -44,8 +44,12 @@ vera3-mcp :8000 (хост 127.0.0.1:8007)          services/mcp, пакет vera
 - Fail-closed: ни одного токена — любой запрос получает 401. `/healthz`
   открыт (для healthcheck контейнера и монитора). Без аутентификации
   проходят только `lifespan` и `/healthz`; websocket закрывается.
-- Лимиты: nginx режет частоту и параллелизм по токену и по IP
-  (`infra/nginx/vera3-mcp-zones.conf` + `limit_req` в location, ответ 429).
+- Лимиты: nginx режет частоту и параллелизм по токену и по реальному IP клиента
+  (`infra/nginx/vera3-mcp-zones.conf` + `limit_req` в location, ответ 429). Хост
+  за Cloudflare, поэтому в том же файле стоят `set_real_ip_from` с диапазонами
+  Cloudflare (cloudflare.com/ips-v4 и ips-v6) и `real_ip_header CF-Connecting-IP`,
+  а ключ зоны — `$binary_remote_addr`.
+- Роль `vera_ro` (sql_query) ограничена `CONNECTION LIMIT 4`.
 - Токены живут только в `infra/.env` на сервере (в git не попадают).
   Отозвать клиента = убрать его пару и перезапустить сервис `mcp`.
 
@@ -72,14 +76,14 @@ vera3-mcp :8000 (хост 127.0.0.1:8007)          services/mcp, пакет vera
 
 | Tool | Что делает |
 |---|---|
-| `remember(text, kind, context, tags)` | Факт/решение/задача/предпочтение; та же семантика и двухслойный дедуп, что у `/v1/claude/remember`. Событие, вектор и строка журнала — одна транзакция. При точном дубле ничего не создаётся и `audit_id` = `null` (откатывать нечего); при смысловом дубле событие создаётся как `superseded` и журналируется |
+| `remember(text, kind, context, tags)` | Факт/решение/задача/предпочтение; та же семантика и двухслойный дедуп, что у `/v1/claude/remember`. Событие, вектор и строка журнала — одна транзакция. При точном дубле видимого события ничего не создаётся и `audit_id` = `null` (откатывать нечего). Если такой текст был скрыт (в том числе откатом `remember`), событие возвращается из скрытия (`unhidden: true`) и это журналируется — повторный `remember` после `undo` не остаётся тихим no-op; при смысловом дубле событие создаётся как `superseded` и журналируется |
 | `update_event(event_id, content_text, metadata, category)` | Правка события ЛЮБОГО источника (почта, Telegram, …); `metadata` сливается по ключам (`null` удаляет ключ); правка текста возвращает событие из `done`/`error` в очередь триажа (`pending`), и эмбеддинг пересчитывается; событие в `processing` или `media_pending` не правится и не скрывается (`EventBusy`, повторить через минуту) |
 | `hide_event(event_id)` / `unhide_event(event_id)` | Мягкое скрытие: `triage_status='hidden'` исключает событие из поиска, свежих и timeline; прежний статус хранится и возвращается |
 | `entity_rename(entity_id, name)` | Переименование сущности |
 | `entity_add_alias(entity_id, source, identifier, display_name)` | Алиас (`telegram`+`user:123`, `gmail`+адрес); чужой алиас отвергается (это слияние) |
 | `relationship_set(subject_id, object_id, predicate, fact, confidence)` | Создать/обновить связь, предикат из `PREDICATES` (`boss_of`, `works_at`, `spouse_of`, …), делает её текущей |
 | `relationship_retire(relationship_id)` | `is_current=false` |
-| `entity_merge(keep_id, drop_ids, reason)` | Слияние дублей (`graph.merge.merge_entities` в транзакции журнала): алиасы, членства, связи, аватары переезжают к победителю. В журнал (`before`) кладётся весь `MergeReport` |
+| `entity_merge(keep_id, drop_ids, reason, dry_run, force)` | Слияние дублей (`graph.merge.merge_entities` в транзакции журнала): алиасы, членства, связи, аватары переезжают к победителю. По умолчанию `dry_run=true`: настоящее слияние в транзакции, которая откатывается, — отдаёт имена keep/drops и точные счётчики, ничего не меняя и не журналируя; выполнить — `dry_run=false`. Слияние с сущностью владельца или с сущностью, у которой есть identity-узлы, отклоняется без `force=true` (`MergeBlocked`; dry run перечисляет причины в `blockers`). В журнал (`before`) кладётся весь `MergeReport` |
 | `entity_unmerge(merge_audit_id, force)` | Обратное слияние по `unmerge`: удалённые сущности возвращаются с прежними id. То же делает `undo` записи слияния; отказ, если победителя переименовали после слияния (без `force`) или id уже занят |
 | `undo(audit_id, force)` | Откат записи журнала |
 
@@ -142,6 +146,11 @@ DDL, GRANT, COPY, SELECT INTO, `FOR UPDATE/SHARE`, несколько опера
 функции `set_config`, `pg_read_file`, `lo_*`, `dblink`, `nextval`,
 advisory-локи, `query_to_xml` и родня (`SqlRejected`).
 
+`sql_query` видит и скрытые события (`hidden`): это инструмент владельца для
+разбора базы, а не граница безопасности. Скрытие убирает событие из поиска и
+выдач для обычных потребителей, но не из SQL. Секреты от агента защищает роль
+`vera_ro`, а не `hidden`.
+
 Тексты событий в выдаче — данные, а не инструкции: письмо или сообщение
 может содержать попытку «приказать» агенту. Сервер говорит об этом в
 `instructions`, а агентам стоит держать это в голове.
@@ -199,6 +208,16 @@ bearer_token_env_var = "VERA_MCP_TOKEN"
 документацией Codex (раздел MCP) на 2026-10-03; если версия CLI другая,
 проверьте `codex mcp add --help`.
 
+## Какие инструменты не давать в auto-approve
+
+Чтение (`search`, `recent_events`, `get_event`, `entity_*`, `timeline`, `sql_query`,
+`audit_log`) безопасно держать в списке автоматического разрешения. Инструменты
+записи `entity_merge`, `hide_event`, `update_event` (а также `relationship_*` и
+`undo`) лучше оставить с подтверждением в настройках Claude Code и Codex: текст
+письма или сообщения в выдаче может содержать попытку заставить агента что-то
+изменить, а правка графа и событий видна всем потребителям мозга. Откат есть, но
+дешевле подтвердить, чем откатывать. `remember` можно разрешить автоматически.
+
 ## Блок для CLAUDE.md / AGENTS.md
 
 ```markdown
@@ -239,6 +258,7 @@ bearer_token_env_var = "VERA_MCP_TOKEN"
 - `vera_mcp.server`: `build_mcp`, `build_app`; `healthz`.
 - `vera_mcp.auth`: `load_tokens`, `validate_tokens`, `match_token`, `bearer_of`,
   `client_of`, `BearerAuthMiddleware`, `WeakTokenError`.
+- `vera_mcp.merge_guard`: `merge_blockers`, `entity_names`, `MergeBlocked`.
 - `vera_mcp.ro_engine`: `get_ro_engine`, `forget_ro_engine`, `ReadOnlyUnavailable`.
 - `vera_mcp.sql_guard`: `validate_sql`, `strip_literals`, `run_readonly`,
   `SqlRejected`.

@@ -26,6 +26,7 @@ END
 $$;
 
 ALTER ROLE vera_ro NOSUPERUSER NOINHERIT NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS LOGIN;
+ALTER ROLE vera_ro CONNECTION LIMIT 4;
 ALTER ROLE vera_ro SET default_transaction_read_only = on;
 ALTER ROLE vera_ro SET statement_timeout = '10s';
 ALTER ROLE vera_ro SET idle_in_transaction_session_timeout = '30s';

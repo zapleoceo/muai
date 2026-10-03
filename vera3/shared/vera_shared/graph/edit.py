@@ -10,6 +10,8 @@ from __future__ import annotations
 from typing import Any
 
 from sqlalchemy import select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.models_graph import EntityAliasRow, EntityRow, RelationshipRow
@@ -68,7 +70,7 @@ async def alias_owner(s: AsyncSession, alias_id: int) -> int | None:
 
 async def remove_alias(s: AsyncSession, alias_id: int) -> bool:
     alias = (await s.execute(
-        select(EntityAliasRow).where(EntityAliasRow.id == alias_id)
+        select(EntityAliasRow).where(EntityAliasRow.id == alias_id).with_for_update()
     )).scalar_one_or_none()
     if alias is None:
         return False
@@ -92,6 +94,16 @@ async def _relationship(s: AsyncSession, rel_id: int) -> RelationshipRow:
     return row
 
 
+async def _locked_triple(s: AsyncSession, subject_id: int, object_id: int,
+                         predicate: str) -> RelationshipRow | None:
+    return (await s.execute(
+        select(RelationshipRow).where(
+            RelationshipRow.subject_entity_id == subject_id,
+            RelationshipRow.object_entity_id == object_id,
+            RelationshipRow.predicate == predicate).with_for_update()
+    )).scalar_one_or_none()
+
+
 async def set_relationship(
     s: AsyncSession, subject_id: int, object_id: int, predicate: str,
     fact: str | None, confidence: float,
@@ -105,17 +117,26 @@ async def set_relationship(
     await _entity(s, subject_id)
     await _entity(s, object_id)
     now = utc_naive_now()
-    row = (await s.execute(
-        select(RelationshipRow).where(
-            RelationshipRow.subject_entity_id == subject_id,
-            RelationshipRow.object_entity_id == object_id,
-            RelationshipRow.predicate == predicate).with_for_update()
-    )).scalar_one_or_none()
+    row = await _locked_triple(s, subject_id, object_id, predicate)
     before = relationship_snapshot(row) if row is not None else None
     if row is None:
-        row = RelationshipRow(subject_entity_id=subject_id, object_entity_id=object_id,
-                              predicate=predicate, first_seen_at=now)
-        s.add(row)
+        # Параллельный вызов с той же тройкой не должен упасть на уникальном
+        # индексе uq_relationships_spo: проигравший перечитывает победителя.
+        insert = pg_insert if s.get_bind().dialect.name == "postgresql" else sqlite_insert
+        created = (await s.execute(
+            insert(RelationshipRow).values(
+                subject_entity_id=subject_id, object_entity_id=object_id,
+                predicate=predicate, fact=fact, confidence=confidence,
+                first_seen_at=now, last_seen_at=now, is_current=True)
+            .on_conflict_do_nothing(index_elements=["subject_entity_id", "predicate",
+                                                    "object_entity_id"])
+            .returning(RelationshipRow.id)
+        )).scalar_one_or_none()
+        if created is not None:
+            row = await _relationship(s, created)
+            return row.id, None, relationship_snapshot(row)
+        row = await _locked_triple(s, subject_id, object_id, predicate)
+        before = relationship_snapshot(row) if row is not None else None
     row.fact, row.confidence = fact, confidence
     row.is_current, row.last_seen_at = True, now
     await s.flush()
