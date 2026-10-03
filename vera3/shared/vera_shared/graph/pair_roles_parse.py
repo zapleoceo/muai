@@ -89,13 +89,19 @@ def valid_quotes(quotes: list[Any], corpus: str) -> tuple[str, ...]:
             out.append(trace.raw)
     return tuple(out[:MAX_QUOTES])
 
+#: Где слова владельца в роли «старшего» подтверждают роль сами по себе.
+OWNER_TRUSTED_PREDICATES = frozenset({"boss_of"})
+
 
 def _self_verdict(finding: RoleFinding, quotes: list[QuoteTrace], have_messages: bool,
                   owner: str | None = None) -> str:
     if finding.predicate not in SELF_ASSERTING or finding.direction == BOTH or not have_messages:
         return NOT_APPLICABLE
     superior = "A" if finding.direction == A_TO_B else "B"
-    if owner == superior and any(owner in q.authors for q in quotes):
+    # Доверие к словам владельца — только для рабочей иерархии: его поручения и есть
+    # доказательство. «Родителя» одно его «сынок» не делает (ревью 04.10.2026).
+    if (finding.predicate in OWNER_TRUSTED_PREDICATES and owner == superior
+            and any(owner in q.authors for q in quotes)):
         return f"{CONFIRMED} ({OWNER_TRUSTED})"
     authors: set[str] = set()
     for quote in quotes:

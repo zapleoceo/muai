@@ -89,6 +89,13 @@ def test_the_rule_stays_strict_for_a_non_owner_superior_and_for_the_wrong_owner_
     assert parse_traced(answer(own), CORPUS, MESSAGES, owner="A")[0] == []         # владелец — подчинённый, сказал не он
 
 
+def test_the_owners_word_alone_does_not_make_him_a_parent():
+    """Доверие к словам владельца — только для рабочей иерархии: одно его «сынок»
+    не делает его родителем (ревью 04.10.2026)."""
+    own = role(["Прошу подготовить отчёт до пятницы"], predicate="parent_of")
+    assert parse_traced(answer(own), CORPUS, MESSAGES, owner="B")[0] == []
+
+
 def test_the_owner_as_subordinate_is_the_other_party():
     reports = role(["Отправил, готово, Вы просили"], subject="B")                  # владелец A отчитывается
     roles, _, (t,) = parse_traced(answer(reports), CORPUS, MESSAGES, owner="A")
