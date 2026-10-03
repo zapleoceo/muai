@@ -100,8 +100,8 @@ def test_search_secret_fail_closed(monkeypatch):
 
 
 def test_graph_page_escapes_untrusted_html():
-    from dashboard.graph_routes import _GRAPH_BODY
-    assert "function esc(" in _GRAPH_BODY
-    assert "esc(labels[c])" in _GRAPH_BODY
-    assert "esc(f?f.name" in _GRAPH_BODY
-    assert "esc(f.username)" in _GRAPH_BODY
+    from dashboard.graph_script import GRAPH_SCRIPT
+    assert "function esc(" in GRAPH_SCRIPT
+    assert "esc(labels[c])" in GRAPH_SCRIPT
+    for field in ("p.name", "r.other_name", "e.snippet", "p.username", "p.email"):
+        assert f"esc({field})" in GRAPH_SCRIPT

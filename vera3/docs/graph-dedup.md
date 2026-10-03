@@ -24,9 +24,14 @@ name. Returns groups of ≥2 candidates ordered by size.
 Returns count of what moved. Idempotent on the uniqueness constraints.
 
 ### Owner UI — `/entities/duplicates`
-Lists top-50 duplicate groups. Per group: candidates table (id, name,
-alias count, recent 30d messages, membership count). Form: pick keeper +
-merged → POST `/entities/merge` (303 redirect back).
+Три секции простым русским: «Вера предлагает объединить» (пара карточек
+слева и справа: слева та, у которой больше сообщений, она «останется»;
+кнопки «Объединить», «Оставить правую», «Это разные люди»), «Точные
+совпадения» (один email или @username; пары — тоже карточками, группы из
+трёх и больше — выбор «Оставить» / «Влить в неё») и свёрнутые «Совпадения
+только по имени» (почти всегда разные люди). Массовые кнопки красные и
+спрашивают подтверждение (`data-confirm`). Слияние — POST `/entities/merge`
+(303 назад с `merged`); данные страницы собирает `load_duplicates`.
 
 Manual-by-design — auto-merge would be reckless given name collisions
 ("Алексей" the brother vs "Алексей" @mastermiks the colleague).

@@ -214,7 +214,8 @@ class TestBrokenSourceDoesNotKillThePage:
 
         async def one_broken(key):
             if key == "trello":
-                return source_state.State(False, "таблица не создана — миграция не накатана")
+                return source_state.State(False, "таблица не создана — миграция не накатана",
+                                          broken=True)
             return source_state.State(True, "ок")
 
         with patch("dashboard.sources_routes.get_sources_overview",

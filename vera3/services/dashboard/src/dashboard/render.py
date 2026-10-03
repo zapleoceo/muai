@@ -144,8 +144,8 @@ def data_table(headers: list[str], rows_html: str, empty: str = "нет данн
     """`<table class="data">` skeleton shared by events/gmail/telegram/instagram tables."""
     thead = "".join(f"<th>{h}</th>" for h in headers)
     tbody = rows_html or f'<tr><td colspan={len(headers)} class="mute">{empty}</td></tr>'
-    return (f'<table class="data"><thead><tr>{thead}</tr></thead>'
-            f'<tbody>{tbody}</tbody></table>')
+    return (f'<div class="overflow-auto"><table class="data"><thead><tr>{thead}</tr></thead>'
+            f'<tbody>{tbody}</tbody></table></div>')
 
 
 def freshness_pill(last_at: datetime | None, now: datetime,

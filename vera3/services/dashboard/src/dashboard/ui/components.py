@@ -34,3 +34,9 @@ def stat_card(label: str, value_html: str, sub: str = "") -> str:
 def collapsible(summary: str, body_html: str, open_: bool = False, dom_id: str = "") -> str:
     attrs = (" open" if open_ else "") + (f' id="{_esc(dom_id)}"' if dom_id else "")
     return f"<details{attrs}><summary>{_esc(summary)}</summary>{body_html}</details>"
+
+
+def kv_block(pairs: list[tuple[str, str]]) -> str:
+    """Поля «название — значение»; значения приходят готовым безопасным HTML."""
+    rows = "".join(f"<dt>{_esc(k)}</dt><dd>{v}</dd>" for k, v in pairs)
+    return f'<dl class="kv">{rows}</dl>'

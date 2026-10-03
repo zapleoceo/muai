@@ -1,10 +1,7 @@
 """Перевод <time data-utc> в часовой пояс браузера."""
 from __future__ import annotations
 
-TZ_FOOTER = (
-    '<div id="tz-note" class="mute" '
-    'style="margin-top:28px;font-size:11px;text-align:center"></div>'
-)
+TZ_FOOTER = '<footer id="tz-note" class="tz-note"></footer>'
 
 # Переводит все <time data-utc> в часовой пояс браузера. Запускается сразу
 # (скрипт в конце body — DOM уже готов) и после каждого htmx-swap (live-прогресс
@@ -40,8 +37,7 @@ TZ_SCRIPT = """<script>
       var offStr='UTC'+(off>=0?'+':'-')+oh+(om?':'+p(om):'');
       var zone='';
       try{zone=Intl.DateTimeFormat().resolvedOptions().timeZone;}catch(e){}
-      tz.textContent='🕐 время показано в вашем часовом поясе — '+offStr+
-        (zone?' (по данным браузера: '+zone+')':'');
+      tz.textContent='Время — в вашем часовом поясе, '+offStr+(zone?' ('+zone+')':'');
       tz.dataset.done='1';
     }
   }

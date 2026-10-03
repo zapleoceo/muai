@@ -5,10 +5,18 @@
 """
 from __future__ import annotations
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_graph import MergeSuggestionRow
+
+
+async def count_pending_suggestions() -> int:
+    """Сколько пар ждёт решения владельца — число для ссылки «Дубли (N)»."""
+    async with get_session() as s:
+        return int((await s.execute(
+            select(func.count()).select_from(MergeSuggestionRow)
+            .where(MergeSuggestionRow.status == "pending"))).scalar_one())
 
 
 async def propose_merge(entity_a: int, entity_b: int, *, confidence: float,

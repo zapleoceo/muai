@@ -218,7 +218,7 @@ class TestEvents:
 
     def test_rows_carry_utc_for_client_side_day_headers(self):
         r, _ = _events([_event(1, datetime(2026, 10, 3, 23, 30))])
-        assert 'class="ev" data-utc="2026-10-03T23:30:00Z"' in r.text
+        assert 'data-utc="2026-10-03T23:30:00Z"' in r.text and 'class="ev row-link"' in r.text
         assert 'class="day-fb"' in r.text and "tr.day-fb" in r.text
 
 

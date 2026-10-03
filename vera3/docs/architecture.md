@@ -74,11 +74,27 @@ this project's own "~200 lines, one responsibility per file" convention):
 | `events_view.py` | Разметка «Входящего»: `day_label`, `day_groups`, `event_row`, `events_table`, `status_cell`, `filter_form`, `more_link`; `PAGE_STEP` = 50, `STATUS_LABEL` — подписи статусов по-русски |
 | `ui/` | Оболочка и стили: `ui/theme.py` (`PICO_URL` — Pico CSS 2.1.1 с jsDelivr и `PICO_SRI`, `HTMX_URL` — htmx 1.9.10 с unpkg и `HTMX_SRI`; обе ссылки с `integrity` (sha384) и `crossorigin="anonymous"`, `SOURCES_CSS` — стили страницы источников, `VERA_CSS` — токены `--vera-*` поверх `--pico-*`, классы `.dot`, `.chip`, `.stat`, `.danger`, `.muted`), `ui/shell.py` (`head`, `nav`, `page`, `standalone_html`, `NAV_ITEMS`), `ui/components.py` (`status_dot`, `chip`, `stat_card`, `collapsible`), `ui/favicon.py`, `ui/tz.py` (включая `DAYS_SCRIPT` — заголовки дней по местному времени). `VERA_CSS` вставляется в `<style>` каждой страницы строкой, а не статикой: образ ставится `pip install -e` из `src/`, лишний монтируемый каталог ради 3 КБ не нужен. Страницы входа и подключения источников (`telegram_login`, `gmail_oauth`, `instagram_login`, `slack_connect`) собираются через `standalone_html` |
 | `sources_routes.py` | `/sources` — список источников, `/sources/{key}` — подробности. Имён источников не знает: список строится из `source_registry`, блоки — из данных провайдера. Экранирует всё, кроме помеченного `Html` |
-| `source_registry.py` | Каталог источников данными: ключ, название, как получаем, порог свежести, ссылка на подключение, провайдер подробностей |
+| `source_registry.py` | Каталог источников данными: ключ, название, как получаем, порог свежести, ссылка на подключение, провайдер подробностей. `optional` + `off_label` — источник по желанию (Instagram — compose-профиль, Trello — ключ в `.env`): пока не подключён, он серый «выключен» / «не настроен» (`is_off`, `disabled_optional`), а не красная тревога и не повод для статусной строки |
+| `source_freshness.py` | `Freshness` / `freshness_of` / `silence_limit_min` — один расчёт «живой / тихо / молчит» для точки, плашки и статусной строки. Между `live_min` и `warn_min` из каталога — нейтральное «тихо» (ночь, суббота), тревога только после `warn_min`: telegram 6 ч, gmail/slack/trello/claude_chat 48 ч |
+| `event_text.py` | `parse_content` / `describe` / `clean_name` / `normalize_subject` / `one_line` — `content_text` → заголовок + тело → «кто, где, что» для «Входящего», карточки события и источников под ответом |
+| `event_view.py` | Карточка `/events/{id}`: `event_card`, `header_pairs`, `service_pairs`, `transcript_html` (стенограмма в сворачиваемом блоке) |
+| `graph_page.py` / `graph_script.py` | Разметка и скрипт «Людей» (`/graph`): `graph_body`, `dupes_label`; цвета холста берутся из CSS-переменных темы, боковая панель рисуется из `/api/graph/entity/{id}` |
+| `search_view.py` | `sources_html` — «На чём основан ответ»: человеческая строка, дедуп по событию и цепочке писем; `headline`, `dedupe_key` |
 | `source_detail.py` | Провайдеры разбивок по источнику — отдают блоки `rows`/`table`, не разметку. `Html` помечает готовую разметку, всё прочее страница экранирует |
 | `slack_connect.py` | `/api/slack/start` — ввод user-токена Slack, проверка через `auth.test` ДО сохранения, шифрование в `slack_auth` |
 | `source_state.py` | Подключён источник или нет — из его таблицы доступа, а НЕ из числа событий. `state_of()`, `disconnect()`, `can_disconnect()` |
 | `source_actions.py` | `/api/sources/{key}/disconnect` — один общий маршрут отключения на все источники: подтверждение (GET) и гашение строки (POST) |
+
+Правила вёрстки дашборда (общие для всех страниц): цвета только токенами
+`--vera-*` / `--pico-*` из `ui/theme.py` — разовых `#rrggbb` в разметке страниц
+нет (исключение — палитра тем графа, это данные, а не оформление); таблицы
+(`data_table`) лежат в контейнере `overflow-auto` и скроллятся внутри него, а не
+раздвигают страницу; меню переносится по строкам (≥375 px); подвал с часовым
+поясом один на страницу (`#tz-note`, `.tz-note`, мелкий) и пишется скриптом один
+раз. Опасные кнопки: `.danger` — контурная (одиночное «Отключить»),
+`.danger-solid` — залитая, только для массовых действий, и они обязаны нести
+`data-confirm`. Страница подтверждения отключения (`source_actions`) тоже в теме
+и экранирует всё, что пришло из БД.
 
 Функции этого слоя, чтобы не искать глазами: каталог — `resolve_source()` и
 `unlisted()` (источник без записи в каталоге всё равно показывается строкой);
@@ -88,7 +104,9 @@ this project's own "~200 lines, one responsibility per file" convention):
 `mark_ok()` / `mark_dead()` пишут в `SlackAuthRow`, живой он или отозван.
 | `search_routes.py` | `/search-ui` — proxies to brain-search |
 | `settings_routes.py` | `/settings`, `/control/settings` — SETTINGS registry |
-| `entities_routes.py` | `/entities/duplicates`, `/entities/merge` |
+| `entities_routes.py` | Маршруты `/entities/duplicates`, `/entities/merge`, `/entities/suggestion`, массовые кнопки, аватарки. Один путь слияния — `_merge_with_report` → `vera_shared.graph.merge.merge_entities` с отчётом в лог |
+| `duplicates_repo.py` | `load_duplicates` → `DuplicatesData`: слой данных страницы дублей (точные совпадения, группы по имени, предложения Веры, досье кандидатов одним батч-вызовом). SQL остаётся в `vera_shared.graph` |
+| `entities_view.py` / `entities_cards.py` | Разметка дублей: `duplicates_body`, `vera_section`, `exact_section`, `name_section`, `merge_form`, `select_form`, `analysis_status`; карточки `person_card`, `pair_html`, `group_html`, `order_pair`, `msg_count`. Опасные формы несут вопрос в `data-confirm` (его показывает общий скрипт оболочки) |
 | `gmail_oauth.py`, `instagram_login.py`, `telegram_login.py` | OAuth/login flows — the pattern the above split follows. `telegram_login.py` re-auths the userbot StringSession when a revoked session crash-loops the ingestor: `telegram_start_form` (GET `/api/telegram/start`) shows the phone form, `telegram_start` (POST) sends the code, `telegram_verify` (POST `/api/telegram/verify`) takes the code and — if cloud 2FA is on — the password, then saves the new encrypted session |
 | `stats.py` | Cached (TTL 60s) DB aggregation feeding home/progress/sources. Темп распознавания берётся из `usage_log` как `COUNT(*) FILTER (WHERE workflow='media_vision' AND success …)`. Колонка именно `success` (boolean): у Веры своя `usage_log`, а у брокера — своя, и там на этом месте текстовый `status`. Перепутанная схема ловится только интеграционным тестом на живом Postgres (`tests/integration/test_postgres_sql.py`), потому что весь этот SQL на SQLite не исполняется |
 | `events_filters.py` | `source_options` / `status_options` — выпадающие фильтры `/events` из данных (выбранное значение из запроса не выпадает из списка): источники — те, у которых есть события (`stats.sources_all`, тот же GROUP BY из кэша), подписи — из `source_registry`, статусы — из `TRIAGE_STATUS_INFO`. До 2026-09-13 список был прибит в HTML (gmail/telegram/instagram/monitor): события слушателя (`voice`), Slack, Trello и Claude в журнале было не отфильтровать, а статусы ограничивались done/pending/error — без `media_pending`, где живёт очередь распознавания |
