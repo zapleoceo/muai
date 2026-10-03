@@ -143,7 +143,7 @@
 `Step` по общим функциям (`filtered_events`, `entity_events`, `event_participants`,
 `co_occurrence`, `mentioning_events`); `Case` хранит форму, разбор «что было до» (`before`:
 `yes` / `partial` / `no`, с причиной) и флаг `needs_owner` (суть показана, ответ даёт владелец).
-`run_case` исполняет цепочку, `after_level` оценивает результат, `render_question` подставляет
+`run_case` исполняет цепочку (результат — `CaseResult`), `after_level` оценивает его, `render_question` подставляет
 имена. CI гоняет набор на синтетическом мире (`test_links_eval.py`): после связей отвечаются все 12
 (11 yes + 1 partial — голос называет владелец); до — 2 yes, 6 partial, 4 no. На своих данных:
 `scripts/eval_owner_questions.py --lisa <id> --director <id> --oleg <id> --topic "<тема>"` (только чтение).
