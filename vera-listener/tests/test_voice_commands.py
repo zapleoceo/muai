@@ -6,11 +6,11 @@
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from vera_listener.commands import FOLLOWUP_S, CommandWatch
 
-T0 = datetime(2026, 9, 30, 10, 0, tzinfo=timezone.utc)
+T0 = datetime(2026, 9, 30, 10, 0, tzinfo=UTC)
 PHRASE = "Вера, мне нужна помощь, срочно напиши мне что-то в телеграм"
 
 

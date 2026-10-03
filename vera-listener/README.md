@@ -133,8 +133,15 @@ powershell -ExecutionPolicy Bypass -File .\install.ps1 -Uninstall
 ## Тесты
 
 ```bash
-pytest tests
+pip install -r requirements-test.txt
+PYTHONPATH=src pytest tests
 ```
+
+Зависимости тестов лежат в `requirements-test.txt` (его же ставит CI,
+`.github/workflows/listener-tests.yml`, ubuntu). Пакет целиком в CI не
+ставится: `soundcard`, `pycaw`, `comtypes` работают только под Windows. Если
+`soundcard` не импортируется, `tests/conftest.py` подставляет заглушку, чтобы
+модули импортировались; живой звук тестами не проверяется.
 
 Тестами покрыта вся логика, не требующая звука: нарезка сессий (включая
 предохранитель по времени), отсев, снятие эха, очередь, отправщик.

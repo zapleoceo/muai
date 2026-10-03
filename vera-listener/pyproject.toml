@@ -8,7 +8,8 @@ dependencies = [
     # именно soundcard. До 2026-08-26 здесь стоял sounddevice, которого не
     # импортирует никто — install.ps1 ставил пакет, и первый же запуск падал
     # с ModuleNotFoundError: No module named 'soundcard'. CI это поймать не
-    # может: listener-tests.yml ставит только pytest и ruff.
+    # может: он не ставит пакет (soundcard/pycaw только под Windows), а ставит
+    # requirements-test.txt и подменяет soundcard заглушкой в tests/conftest.py.
     "soundcard>=0.4.3",
     "numpy>=1.26",
     "pysilero-vad>=2.0",

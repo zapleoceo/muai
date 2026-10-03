@@ -8,9 +8,10 @@ Ship `master` to production (Vera 3 on Hetzner).
 git push origin master
 ```
 
-Push triggers `.github/workflows/deploy.yml`: **docs gate → test gate
-(coverage 70%) → quality gate (ruff `E,F,W,I,B,UP,SIM,C4,RET`, vulture,
-diff-cover 75%, docs name-sync) → deploy**. If any gate fails the deploy
+Push triggers `.github/workflows/deploy.yml`: **docs gate → quality gate
+(secret scan, ruff `E,F,W,I,B,UP,SIM,C4,RET`, vulture, docs name-sync) →
+test gate (per-package coverage floors, diff-cover 75%) → build gate (11
+images) → deploy**. If any gate fails the deploy
 is blocked. Watch the run before declaring success.
 
 ## Manual path — when CI is stuck
