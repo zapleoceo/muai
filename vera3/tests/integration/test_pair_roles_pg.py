@@ -79,7 +79,7 @@ async def _world(get_session) -> dict:
 
 def _llm():
     answer = json.dumps({"roles": [{"predicate": "boss_of", "subject": "B", "confidence": 0.9,
-                                    "rationale": "поручения", "quotes": [QUOTE],
+                                    "rationale": "поручения", "quotes": [QUOTE, "Виктор Павлович, отчёт готов"],
                                     "joke_or_irony_only": False}],
                          "relationship_summary": "руководитель и подчинённый"}, ensure_ascii=False)
     return patch("vera_shared.graph.pair_roles.chat_async",
@@ -112,10 +112,11 @@ async def test_inference_roundtrip_queue_and_card_on_postgres(pg_db):
     async with pg_db() as s:
         row = (await s.execute(select(PairRoleInferenceRow))).scalar_one()
         run = (await s.execute(select(PairRoleRunRow))).scalar_one()
-    assert (row.predicate, row.direction, row.quotes) == ("boss_of", "b_to_a", [QUOTE])   # jsonb → list
+    assert (row.predicate, row.direction, row.quotes) == (
+        "boss_of", "b_to_a", [QUOTE, "Виктор Павлович, отчёт готов"])   # jsonb → list
     assert run.roles_found == 1 and run.cost_usd == pytest.approx(0.01)
     card = (await connections.entity_connections(w["owner"]))[0]
-    assert card["main"]["source"] == "history" and card["main"]["quotes"] == [QUOTE]
+    assert card["main"]["source"] == "history" and card["main"]["quotes"][0] == QUOTE
     with _llm() as llm:
         same = await infer_pair(w["owner"], w["boss"])
     assert llm.await_count == 0 and same.skipped == "пакет улик не изменился"

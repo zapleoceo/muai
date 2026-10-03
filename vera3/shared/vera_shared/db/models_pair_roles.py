@@ -48,5 +48,7 @@ class PairRoleRunRow(Base):
     roles_found: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     model: Mapped[str] = mapped_column(String(120), nullable=False, default="")
     cost_usd: Mapped[float] = mapped_column(Float, nullable=False, default=0.0)
+    failures: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    retry_after: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     computed_at: Mapped[datetime] = mapped_column(DateTime, nullable=False,
                                                   server_default=func.now())

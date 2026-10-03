@@ -70,7 +70,7 @@ def test_quotes_must_be_substrings_of_the_pack_and_are_normalised():
 
 def test_invented_quotes_drop_the_role_and_keep_valid_ones_of_others():
     roles, _ = parse_answer(answer(role(quotes=("такого нет в переписке",)),
-                                   role("friend_of", "both", quotes=("готово",))), CORPUS)
+                                   role("friend_of", "both", quotes=("Отправил, готово",))), CORPUS)
     assert [r.predicate for r in roles] == ["friend_of"]
     partly, _ = parse_answer(answer(role(quotes=("выдумка", "Отправил, готово"))), CORPUS)
     assert partly[0].quotes == ("Отправил, готово",)
@@ -246,3 +246,57 @@ def test_specific_role_replaces_the_faceless_inferred_coworker_and_the_neutral_c
     assert neutral.main.predicate == "contact"
     assert apply_history(neutral, 1, 2, [stored()], frozenset(), est()).main.predicate == "boss_of"
     assert merged.interaction == interaction_strength(st)
+
+
+def test_short_quotes_do_not_count_as_evidence_and_the_floor_is_point_six():
+    assert valid_quotes(["готово", "прошу", "Отправил, готово"], CORPUS) == ("Отправил, готово",)
+    assert parse_answer(answer(role(confidence=0.55)), CORPUS)[0] == []
+    assert parse_answer(answer(role(confidence=0.6)), CORPUS)[0][0].confidence == 0.6
+
+
+def _msgs() -> list[PackMessage]:
+    return [msg(1, 1, "Прошу подготовить отчёт до пятницы", author="B"),
+            msg(2, 2, "Виктор Павлович, отчёт готов, отправил", author="A"),
+            msg(3, 3, "Наш директор сказал подготовить регламент", author="X")]
+
+
+def _corpus() -> str:
+    return " ".join(m.text for m in _msgs()) + " boss@corp.example"
+
+
+def test_a_role_backed_only_by_the_superiors_own_words_needs_corroboration():
+    own = role(quotes=("Прошу подготовить отчёт до пятницы",))
+    assert parse_answer(answer(own), _corpus(), _msgs())[0] == []                 # самоутверждение
+    confirmed = role(quotes=("Прошу подготовить отчёт до пятницы", "Виктор Павлович, отчёт готов"))
+    assert [r.predicate for r in parse_answer(answer(confirmed), _corpus(), _msgs())[0]] == ["boss_of"]
+    third = role(quotes=("Прошу подготовить отчёт до пятницы", "Наш директор сказал подготовить"))
+    assert parse_answer(answer(third), _corpus(), _msgs())[0]
+    structural = role(quotes=("Прошу подготовить отчёт до пятницы", "boss@corp.example"))
+    assert parse_answer(answer(structural), _corpus(), _msgs())[0]
+    by_name = role(quotes=("Прошу подготовить отчёт до пятницы", "Виктор Кронов"))   # имя — не сигнал
+    assert parse_answer(answer(by_name), _corpus() + " Виктор Кронов", _msgs())[0] == []
+
+
+def test_the_other_partys_claim_about_the_superior_is_not_self_assertion_and_symmetric_roles_are_exempt():
+    from_a = role(subject="B", quotes=("Виктор Павлович, отчёт готов, отправил",))
+    assert parse_answer(answer(from_a), _corpus(), _msgs())[0]                  # подчинённый признаёт
+    friend = role("friend_of", "both", quotes=("Прошу подготовить отчёт до пятницы",))
+    assert parse_answer(answer(friend), _corpus(), _msgs())[0]
+
+
+def test_the_digest_follows_the_graphs_recorded_roles():
+    base = [msg(i, i) for i in range(8)]
+    one = build_evidence(SIDE_A, SIDE_B, {"asserted_in_graph": []}, base).digest
+    two = build_evidence(SIDE_A, SIDE_B, {"asserted_in_graph": [{"predicate": "boss_of"}]}, base).digest
+    assert one != two
+
+
+def test_backoff_grows_and_the_queue_respects_the_pause():
+    from vera_shared.graph.pair_roles_store import backoff
+    assert [backoff(n).total_seconds() / 3600 for n in (1, 2, 3)] == [1, 2, 4]
+    assert backoff(50).days == 7
+    st = est()
+    paused = RunInfo("", marker_of(st), NOW - timedelta(hours=1), NOW + timedelta(hours=2))
+    assert pick_pairs({(1, 2): st}, {(1, 2): paused}, 1, 5, NOW) == []
+    ready = RunInfo("", marker_of(st), NOW - timedelta(hours=5), NOW - timedelta(hours=1))
+    assert pick_pairs({(1, 2): st}, {(1, 2): ready}, 1, 5, NOW) == [(1, 2)]

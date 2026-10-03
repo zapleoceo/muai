@@ -36,9 +36,11 @@ politeness, shared chats alone, a colleague passing on someone else's instructio
 sarcasm, quotes of other people and role-play are not evidence: if a role rests only on them, set
 "joke_or_irony_only" to true. Never return both directions of boss_of or parent_of.
 Confidence 0..1: 0.85+ explicit statement or a very consistent pattern; 0.6-0.85 strong pattern;
-below 0.5 - leave the role out.
-"quotes": 1-3 EXACT substrings copied from the pack (a message text, an e-mail address, a title) that
-support the role. A quote that is not in the pack is discarded; a role without a valid quote is dropped.
+below 0.6 - leave the role out.
+"quotes": 1-3 EXACT substrings (at least 12 characters) copied from the pack (a message text, an e-mail
+address, a title) that support the role. A quote that is not in the pack is discarded; a role without a
+valid quote is dropped. A superior's own claims or orders are NOT enough on their own: include a quote
+written by the other person or by a third person (X) that confirms the role, or a structural one.
 "rationale": one or two sentences in Russian naming the pattern (do not retell the messages).
 "relationship_summary": one line in Russian describing the relationship plainly, also when "roles" is empty.
 Answer with JSON only.

@@ -32,35 +32,35 @@ from vera_shared.links.read import json_dict
 
 FETCH_LIMIT = 3000
 MIN_MENTION_CONFIDENCE = 0.6
-_COLUMNS = ("e.id, e.source, e.occurred_at, e.content_text, e.metadata, e.project, "
-            "la.entity_id AS author_id")
+_COLUMNS = "e.id, e.source, e.occurred_at, e.content_text, e.metadata, e.project"
 _VISIBLE = not_hidden_sql("e")
-# Личка и письма: автор — один из пары, адресат — другой.
-_DIRECT = (f"SELECT {_COLUMNS} FROM event_entities la "
-           "JOIN event_entities lb ON lb.event_id = la.event_id AND lb.role = 'recipient' "
-           "JOIN events e ON e.id = la.event_id "
-           "WHERE la.role = 'author' AND la.entity_id IN (:a, :b) AND lb.entity_id IN (:a, :b) "
-           f"AND la.entity_id <> lb.entity_id AND {_VISIBLE} "
-           "ORDER BY e.occurred_at DESC LIMIT :n")
+_TAIL = f" AND {_VISIBLE} ORDER BY e.occurred_at DESC LIMIT :n"
+_MENTION_OK = "AND {t}.scope_ok AND {t}.confidence >= :minc"
+
+# Все запросы идут ОТ ЯКОРЯ — менее «густого» конца пары (для пары владельца это собеседник): по
+# индексу (entity_id, role, event_id) берутся только события якоря (сотни-тысячи), а второй конец
+# проверяется присоединением по event_id. Старт от владельца читал бы сотни тысяч строк.
+# Личка и письма: «кто-то» пишет, «кто-то» — адресат. `{author}` — столбец автора.
+_DIRECT = (f"SELECT {_COLUMNS}, {{author}} AS author_id FROM event_entities la "
+           "JOIN event_entities lb ON lb.event_id = la.event_id AND lb.entity_id = {other} "
+           "AND lb.role = '{rb}' JOIN events e ON e.id = la.event_id "
+           f"WHERE la.entity_id = :anchor AND la.role = '{{ra}}'{_TAIL}")
 # Один из пары пишет в чате и называет другого (имя, @ник, прозвище в области).
-_ADDRESS = (f"SELECT {_COLUMNS} FROM event_entities la "
-            "JOIN event_entities lb ON lb.event_id = la.event_id AND lb.role = 'mentioned' "
-            "AND lb.scope_ok AND lb.confidence >= :minc "
-            "JOIN events e ON e.id = la.event_id "
-            "WHERE la.role = 'author' AND la.entity_id IN (:a, :b) AND lb.entity_id IN (:a, :b) "
-            f"AND la.entity_id <> lb.entity_id AND e.source <> 'gmail' AND {_VISIBLE} "
-            "ORDER BY e.occurred_at DESC LIMIT :n")
-# Третьи лица говорят об одном из пары («ДА просил ознакомиться…»).
-_THIRD = ("SELECT e.id, e.source, e.occurred_at, e.content_text, e.metadata, e.project, "
-          "lm.entity_id AS about_id, "
+_ADDRESS = (f"SELECT {_COLUMNS}, {{author}} AS author_id FROM event_entities la "
+            "JOIN event_entities lb ON lb.event_id = la.event_id AND lb.entity_id = {other} "
+            "AND lb.role = '{rb}' {mention} JOIN events e ON e.id = la.event_id "
+            f"WHERE la.entity_id = :anchor AND la.role = '{{ra}}' AND e.source <> 'gmail' "
+            f"{{mention_a}}{_TAIL}")
+# Третьи лица говорят о ком-то из пары («ДА просил ознакомиться…»): якорь `:about`.
+_THIRD = (f"SELECT {_COLUMNS}, lm.entity_id AS about_id, "
           "(SELECT la.entity_id FROM event_entities la WHERE la.event_id = e.id "
           " AND la.role = 'author' LIMIT 1) AS author_id "
           "FROM event_entities lm JOIN events e ON e.id = lm.event_id "
-          "WHERE lm.role = 'mentioned' AND lm.scope_ok AND lm.confidence >= :minc "
-          "AND lm.entity_id IN (:a, :b) "
+          "WHERE lm.entity_id = :about AND lm.role = 'mentioned' AND lm.scope_ok "
+          "AND lm.confidence >= :minc "
           "AND NOT EXISTS (SELECT 1 FROM event_entities lx WHERE lx.event_id = e.id "
-          " AND lx.role = 'author' AND lx.entity_id IN (:a, :b)) "
-          f"AND {_VISIBLE} ORDER BY e.occurred_at DESC LIMIT :n")
+          " AND lx.role = 'author' AND lx.entity_id IN (:anchor, :other))"
+          f"{_TAIL}")
 _DATE = re.compile(r"\d{4}-\d{2}-\d{2}")
 
 
@@ -89,23 +89,46 @@ def _message(row: Any, kind: str, a: int, b: int, about: str = "") -> PackMessag
                        _label(row["author_id"], a, b), _body(row, meta), channel, about)
 
 
-async def _run(sql: str, a: int, b: int) -> list[Any]:
+async def _run(sql: str, **params: int) -> list[Any]:
     async with get_session() as s:
-        return list((await s.execute(text(sql), {"a": a, "b": b, "n": FETCH_LIMIT,
-                                                 "minc": MIN_MENTION_CONFIDENCE})).mappings())
+        return list((await s.execute(text(sql), {"n": FETCH_LIMIT, "minc": MIN_MENTION_CONFIDENCE,
+                                                 **params})).mappings())
 
 
-async def pair_messages(a: int, b: int) -> tuple[list[PackMessage], Counter[str]]:
-    """Все виды улик пары и счёт проектов событий (по колонке `events.project`)."""
+def _direct_sql() -> list[tuple[str, str]]:
+    """(SQL, вид): якорь — автор, другой — адресат; и наоборот."""
+    return [(_DIRECT.format(author="la.entity_id", other=":other", ra="author", rb="recipient"), "direct"),
+            (_DIRECT.format(author="lb.entity_id", other=":other", ra="recipient", rb="author"), "direct")]
+
+
+def _address_sql() -> list[tuple[str, str]]:
+    """(SQL, вид): якорь пишет и называет другого; якоря называет другой."""
+    return [(_ADDRESS.format(author="la.entity_id", other=":other", ra="author", rb="mentioned",
+                             mention=_MENTION_OK.format(t="lb"), mention_a=""), "address"),
+            (_ADDRESS.format(author="lb.entity_id", other=":other", ra="mentioned", rb="author",
+                             mention="", mention_a=_MENTION_OK.format(t="la")), "address")]
+
+
+async def pair_messages(a: int, b: int, owner: int | None = None
+                        ) -> tuple[list[PackMessage], Counter[str]]:
+    """Все виды улик пары и счёт проектов событий (по колонке `events.project`). Якорь —
+    конец пары не владелец (у владельца события — почти весь мозг); упоминания третьими лицами
+    берутся о якоре, а о втором конце — только если владельца в паре нет."""
+    anchor, other = (b, a) if owner == a else (a, b)
+    third = [anchor] + ([other] if owner not in (a, b) else [])
+    plan = [(sql, kind, {"anchor": anchor, "other": other}) for sql, kind in _direct_sql()]
+    plan += [(sql, KIND_CHAT, {"anchor": anchor, "other": other}) for sql, _ in _address_sql()]
+    plan += [(_THIRD, KIND_MENTION, {"about": t, "anchor": anchor, "other": other}) for t in third]
     messages: list[PackMessage] = []
     projects: Counter[str] = Counter()
     seen: set[int] = set()       # личное сообщение с обращением по имени — одно, а не «dm» и «chat»
-    for sql, kind in ((_DIRECT, None), (_ADDRESS, KIND_CHAT), (_THIRD, KIND_MENTION)):
-        for row in await _run(sql, a, b):
+    for sql, kind, params in plan:
+        for row in await _run(sql, **params):
             if row["id"] in seen:
                 continue
             seen.add(row["id"])
-            this = kind or (KIND_MAIL if row["source"] == "gmail" else KIND_DM)
+            this = kind if kind in (KIND_CHAT, KIND_MENTION) else (
+                KIND_MAIL if row["source"] == "gmail" else KIND_DM)
             about = _label(row["about_id"], a, b) if kind == KIND_MENTION else ""
             messages.append(_message(row, this, a, b, about))
             if row["project"]:

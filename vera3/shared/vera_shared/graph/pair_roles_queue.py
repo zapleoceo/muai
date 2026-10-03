@@ -25,6 +25,7 @@ class RunInfo:
     digest: str
     marker: str
     computed_at: datetime
+    retry_after: datetime | None = None   # пауза после сбоя формата: до неё пару не берём
 
 
 def marker_of(stats: PairStats) -> str:
@@ -35,6 +36,8 @@ def marker_of(stats: PairStats) -> str:
 def _due(stats: PairStats, run: RunInfo | None, now: datetime) -> bool:
     if run is None:
         return True
+    if run.retry_after is not None:
+        return now >= run.retry_after
     age = now - run.computed_at
     if age >= timedelta(days=MAX_AGE_DAYS):
         return True

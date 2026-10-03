@@ -8,7 +8,8 @@
 канонического набора, а `pair_roles_parse` оставляет только подтверждённые дословными цитатами.
 
 Звать модель дорого и незачем, если ничего не изменилось: хэш пакета совпал — только отметка
-о проверке. Сбой брокера (в том числе открытый брейкер) прекращает цикл, а не бьёт по очереди.
+о проверке. Сбой брокера (в том числе открытый брейкер) прекращает цикл, а не бьёт по очереди; ответ не по
+схеме — пауза для этой пары (`save_failure`) и следующая пара.
 """
 from __future__ import annotations
 
@@ -31,6 +32,7 @@ from vera_shared.graph.pair_roles_store import (
     all_pair_stats,
     all_runs,
     last_run,
+    save_failure,
     save_inference,
     touch_run,
 )
@@ -52,7 +54,7 @@ async def build_pair_evidence(a: int, b: int, stats: PairStats) -> Evidence:
     """Пакет улик пары: сообщения из `event_entities` + структурные сигналы."""
     owner = await owner_entity_id()
     side_a, side_b = await pair_sides(a, b, owner)
-    messages, projects = await pair_messages(a, b)
+    messages, projects = await pair_messages(a, b, owner)
     signals = {"pair_stats": stats_signals(stats), "shared_work_domain_or_slack": await work_context(a, b),
                "projects_of_events": dict(projects.most_common(5)),
                "asserted_in_graph": await asserted_roles(a, b),
@@ -87,13 +89,15 @@ async def infer_pair(a: int, b: int, *, force: bool = False, dry_run: bool = Fal
             messages=[{"role": "user", "content": prompt}], capability="structured",
             response_format=PAIR_ROLES_JSON_SCHEMA, max_tokens=MAX_OUTPUT_TOKENS, temperature=0.0,
             workflow="pair_roles", poll_deadline_s=poll_deadline_s)
-        roles, summary = parse_answer(raw, evidence.corpus)
+        roles, summary = parse_answer(raw, evidence.corpus, evidence.messages)
     except LLMCallFailed as e:
         log.warning("pair_roles %s-%s: LLM не ответила: %s", low, high, e)
         return PairInference(low, high, digest=evidence.digest, failed=True, skipped=str(e)[:200])
     except PairRolesFormatError as e:
         log.warning("pair_roles %s-%s: %s", low, high, e)
-        return PairInference(low, high, digest=evidence.digest, failed=True, skipped=str(e))
+        if not dry_run:
+            await save_failure(low, high, marker, str(e))
+        return PairInference(low, high, digest=evidence.digest, bad_format=True, skipped=str(e))
     cost = float((meta or {}).get("cost_usd") or 0.0)
     model = str((meta or {}).get("model") or (meta or {}).get("provider") or "")[:120]
     log.info("pair_roles %s-%s: ролей=%d сообщений=%d ≈токенов=%d cost_usd=%.6f", low, high,
@@ -113,6 +117,6 @@ async def run_cycle(limit: int, now: datetime | None = None) -> list[PairInferen
     for a, b in pairs:
         result = await infer_pair(a, b)
         out.append(result)
-        if result.failed:
+        if result.failed:       # брокер лежит — дальше бить бессмысленно; плохой формат — следующая пара
             break
     return out

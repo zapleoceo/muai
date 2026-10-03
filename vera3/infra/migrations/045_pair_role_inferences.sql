@@ -15,7 +15,8 @@
 --   b_to_a — «b <предикат> a», both — симметричная роль.
 -- pair_role_runs — по строке на пару: хэш пакета, маркер статистики пары (чтобы цикл не
 -- строил пакет по каждой паре зря), резюме, цена. Пара без найденных ролей тоже получает
--- строку, иначе её пересчитывали бы каждый цикл.
+-- строку, иначе её пересчитывали бы каждый цикл. Ответ модели не по схеме — `failures` + пауза
+-- `retry_after` (степень двойки часов, не больше недели): одна капризная пара не стопорит очередь.
 --
 -- Роли vera_ro таблицы НЕ выданы: в цитатах — личная переписка.
 --
@@ -52,6 +53,8 @@ CREATE TABLE IF NOT EXISTS pair_role_runs (
     roles_found   INTEGER NOT NULL DEFAULT 0,
     model         VARCHAR(120) NOT NULL DEFAULT '',
     cost_usd      DOUBLE PRECISION NOT NULL DEFAULT 0,
+    failures      INTEGER NOT NULL DEFAULT 0,
+    retry_after   TIMESTAMP,
     computed_at   TIMESTAMP NOT NULL DEFAULT NOW(),
     PRIMARY KEY (entity_a, entity_b),
     CHECK (entity_a < entity_b)

@@ -66,4 +66,5 @@ class PairInference:
     digest: str = ""
     cost_usd: float = 0.0
     skipped: str = ""          # причина, по которой модель не звали
-    failed: bool = False
+    failed: bool = False       # брокер не ответил (в том числе открытый брейкер): цикл стоит
+    bad_format: bool = False   # ответ не по схеме: пара уходит в паузу, цикл идёт дальше

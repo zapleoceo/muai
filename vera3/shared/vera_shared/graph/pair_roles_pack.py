@@ -91,7 +91,7 @@ def digest_of(a: PairSide, b: PairSide, signals: dict[str, Any],
     """Хэш того, что видит модель: версия промпта, концы, прозвища, адреса, id сообщений."""
     payload = {"v": PROMPT_VERSION, "a": [a.entity_id, a.addresses, a.nicknames],
                "b": [b.entity_id, b.addresses, b.nicknames],
-               "asserted": signals.get("asserted"), "ids": [m.id for m in messages]}
+               "asserted": signals.get("asserted_in_graph"), "ids": [m.id for m in messages]}
     return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str,
                                      ensure_ascii=False).encode()).hexdigest()
 

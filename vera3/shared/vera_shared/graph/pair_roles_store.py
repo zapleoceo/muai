@@ -8,7 +8,7 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 from sqlalchemy import bindparam, delete, select, text
@@ -69,6 +69,31 @@ async def save_inference(inference: PairInference, marker: str) -> None:
         run.evidence_hash, run.pair_marker, run.summary = inference.digest, marker, inference.summary
         run.roles_found, run.model, run.cost_usd, run.computed_at = (
             len(inference.roles), inference.model, inference.cost_usd, now)
+        run.failures, run.retry_after = 0, None
+
+
+BACKOFF_BASE_HOURS = 1
+BACKOFF_MAX_DAYS = 7
+
+
+def backoff(failures: int) -> timedelta:
+    return min(timedelta(hours=BACKOFF_BASE_HOURS * 2 ** min(max(0, failures - 1), 12)),
+               timedelta(days=BACKOFF_MAX_DAYS))
+
+
+async def save_failure(a: int, b: int, marker: str, reason: str) -> None:
+    """Ответ модели не по схеме: роли пары не трогаем, ставим паузу (растёт со сбоями подряд)."""
+    low, high = ordered(a, b)
+    now = utc_naive_now()
+    async with get_session() as s:
+        run = await s.get(PairRoleRunRow, (low, high))
+        if run is None:
+            run = PairRoleRunRow(entity_a=low, entity_b=high, evidence_hash="", failures=0)
+            s.add(run)
+        run.failures = (run.failures or 0) + 1
+        run.retry_after = now + backoff(run.failures)
+        run.pair_marker, run.summary, run.computed_at = marker, f"сбой формата: {reason}"[:300], now
+        run.evidence_hash = ""             # после паузы пара пересчитывается, даже если улики те же
 
 
 async def touch_run(a: int, b: int, marker: str) -> None:
@@ -88,7 +113,8 @@ async def last_run(a: int, b: int) -> RunInfo | None:
         except DBAPIError as e:
             log.warning("pair_role_runs не прочитана (миграция 045?): %s", e)
             return None
-    return RunInfo(run.evidence_hash, run.pair_marker, run.computed_at) if run else None
+    return (RunInfo(run.evidence_hash, run.pair_marker, run.computed_at, run.retry_after)
+            if run else None)
 
 
 async def all_runs() -> dict[Pair, RunInfo]:
@@ -98,8 +124,8 @@ async def all_runs() -> dict[Pair, RunInfo]:
         except DBAPIError as e:
             log.warning("pair_role_runs не прочитана (миграция 045?): %s", e)
             return {}
-    return {(r.entity_a, r.entity_b): RunInfo(r.evidence_hash, r.pair_marker, r.computed_at)
-            for r in rows}
+    return {(r.entity_a, r.entity_b): RunInfo(r.evidence_hash, r.pair_marker, r.computed_at,
+                                              r.retry_after) for r in rows}
 
 
 async def all_pair_stats() -> dict[Pair, PairStats]:

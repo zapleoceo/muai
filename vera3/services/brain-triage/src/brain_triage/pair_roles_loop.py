@@ -53,8 +53,8 @@ async def run_pair_roles_cycle() -> int:
         results = await run_cycle(PAIR_ROLES_BATCH)
         found = sum(len(r.roles) for r in results)
         cost = sum(r.cost_usd for r in results)
-        log.info("pair-roles: пар %d, ролей %d, cost_usd=%.6f, сбой=%s", len(results), found, cost,
-                 any(r.failed for r in results))
+        log.info("pair-roles: пар %d, ролей %d, cost_usd=%.6f, брокер=%s, формат=%d", len(results), found, cost,
+                 "сбой" if any(r.failed for r in results) else "ок", sum(r.bad_format for r in results))
         return len(results)
 
 

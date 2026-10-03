@@ -54,7 +54,7 @@ def _readable(result: PairInference, names: dict[int, str]) -> dict:
         return f"{first} -[{predicate}]-> {second}"
 
     return {"pair": [result.entity_a, result.entity_b, a, b], "skipped": result.skipped or None,
-            "failed": result.failed, "summary": result.summary, "model": result.model,
+            "failed": result.failed, "bad_format": result.bad_format, "summary": result.summary, "model": result.model,
             "cost_usd": round(result.cost_usd, 6),
             "roles": [{"edge": edge(r.direction, r.predicate), "confidence": r.confidence,
                        "rationale": r.rationale, "quotes": list(r.quotes)} for r in result.roles]}

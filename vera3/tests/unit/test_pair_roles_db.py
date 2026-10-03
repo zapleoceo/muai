@@ -46,9 +46,10 @@ def reply(*roles: dict, summary: str = "руководитель и подчин
 
 
 def boss_role(quote: str = QUOTE, subject: str = "B") -> dict:
+    # вторая цитата — слова подчинённого: подтверждение, без него роль была бы самоутверждением
     return {"predicate": "boss_of", "subject": subject, "confidence": 0.92,
             "rationale": "поручения, отчёт перед ним, обращение по имени-отчеству",
-            "quotes": [quote], "joke_or_irony_only": False}
+            "quotes": [quote, "Виктор Павлович, отчёт готов"], "joke_or_irony_only": False}
 
 
 async def person(name: str, tg: str) -> int:
@@ -116,12 +117,13 @@ async def test_role_is_stored_with_quotes_and_shown_in_the_card(world):
         result = await infer_pair(world["boss"], world["owner"])           # порядок пары неважен
     assert llm.await_count == 1 and (result.entity_a, result.entity_b) == (world["owner"], world["boss"])
     (row,), (run,) = await stored_rows(world["gs"])
-    assert (row.predicate, row.direction, row.quotes) == ("boss_of", "b_to_a", [QUOTE])
+    assert (row.predicate, row.direction, row.quotes) == (
+        "boss_of", "b_to_a", [QUOTE, "Виктор Павлович, отчёт готов"])
     assert run.roles_found == 1 and run.cost_usd == pytest.approx(0.012) and run.summary
     card = (await connections.entity_connections(world["owner"]))[0]
     assert card["main"]["predicate"] == "boss_of" and card["main"]["direction"] == "in"
     assert card["main"]["source"] == "history" and card["main"]["source_label"] == "выведено из переписки"
-    assert card["main"]["quotes"] == [QUOTE] and card["main"]["inferred"] is True
+    assert card["main"]["quotes"][0] == QUOTE and card["main"]["inferred"] is True
     edge = (await connections.connections_among([world["owner"], world["boss"]]))[0]
     assert (edge["predicate"], edge["source"], edge["source"] == "history") == ("boss_of", "history", True)
 
@@ -148,20 +150,30 @@ async def test_dry_run_calls_the_model_but_writes_nothing(world):
 
 
 async def test_invented_quote_gives_no_role_but_the_pair_is_not_retried_every_cycle(world):
-    with fake_llm(reply(boss_role(quote="Я твой директор, слушай меня"))):
+    invented = {**boss_role(quote="Я твой директор, слушай меня"),
+                "quotes": ["Я твой директор, слушай меня", "Он мой начальник и всё решает"]}
+    with fake_llm(reply(invented)):
         result = await infer_pair(world["owner"], world["boss"])
     assert result.roles == () and result.summary
     rows, runs = await stored_rows(world["gs"])
     assert rows == [] and runs[0].roles_found == 0
 
 
-async def test_broker_failure_and_bad_format_store_nothing_and_flag_the_cycle(world):
+async def test_broker_failure_stores_nothing_and_a_bad_format_pauses_only_that_pair(world):
     with fake_llm(LLMCallFailed("broker 503")):
         failed = await infer_pair(world["owner"], world["boss"])
-    assert failed.failed and "503" in failed.skipped
+    assert failed.failed and "503" in failed.skipped and await stored_rows(world["gs"]) == ([], [])
     with fake_llm(("не json", {})):
-        assert (await infer_pair(world["owner"], world["boss"])).failed
-    assert await stored_rows(world["gs"]) == ([], [])
+        bad = await infer_pair(world["owner"], world["boss"])
+    assert bad.bad_format and not bad.failed
+    rows, (run,) = await stored_rows(world["gs"])
+    assert rows == [] and run.failures == 1 and run.retry_after is not None and run.evidence_hash == ""
+    with fake_llm(("не json", {})):
+        await infer_pair(world["owner"], world["boss"])
+    assert (await stored_rows(world["gs"]))[1][0].failures == 2
+    with fake_llm(reply(boss_role())):                  # пауза закончилась, ответ верный: сбои сброшены
+        ok = await infer_pair(world["owner"], world["boss"])
+    assert ok.roles and (await stored_rows(world["gs"]))[1][0].failures == 0
 
 
 async def test_too_little_evidence_is_skipped_without_calling_the_model(sqlite_db):
@@ -205,3 +217,22 @@ async def test_manual_edit_and_owner_rejection_override_the_inferred_role(world)
     main = (await connections.entity_connections(world["owner"]))[0]["main"]
     assert main["manual"] is True and main["direction"] == "out" and main.get("source") != "history"
     assert (await roles_of(world["owner"]))[world["boss"]][0].predicate == "boss_of"   # данные остаются
+
+
+async def test_a_bad_format_does_not_stop_the_cycle_but_a_broker_failure_does(world):
+    other = await person("Олег Громов", "400")
+    for n in range(6):
+        await message(world["gs"], 40 + n, f"сообщение номер {n} с достаточным текстом", chat="400",
+                      sender="400", direction="received")
+    async with world["gs"]() as s:
+        s.add(PairStatsRow(entity_a=world["owner"], entity_b=other, dm_msgs=8, dm_days=8, active_days=20))
+    await rebuild_links(world["gs"])
+    with fake_llm(("не json", {}), reply(boss_role())) as llm:
+        done = await run_cycle(5)
+    assert llm.await_count == 2 and [r.bad_format for r in done] == [True, False]
+    async with world["gs"]() as s:
+        for row in (await s.execute(select(PairRoleRunRow))).scalars():
+            await s.delete(row)
+    with fake_llm(LLMCallFailed("outage"), reply(boss_role())) as llm:
+        done = await run_cycle(5)
+    assert llm.await_count == 1 and done[0].failed and len(done) == 1
