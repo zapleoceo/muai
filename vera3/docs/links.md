@@ -55,7 +55,7 @@
   событию; упавшие пропускаются с записью в лог (`BatchResult.skipped`), курсор двигается. Сбои
   базы и сети (`OperationalError`, `InterfaceError`, `OSError`, `TimeoutError`) — не плохое
   событие, они пробрасываются, пачка повторится.
-- **Новые события** — `links_loop` (`run_links_cycle`): раз в минуту до пяти пачек по 200 после
+- **Новые события** — `links_loop` (`run_links_cycle`): раз в минуту (без новых событий — выход до замка; ресурсы кэшируются на 10 минут; замок сессионный, на отдельном AUTOCOMMIT-соединении, без открытой транзакции) до пяти пачек по 200 после
   курсора `forward` под advisory-замком; один `ContextBuilder` на процесс. Переменные:
   `TRIAGE_LINKS_INTERVAL_S`, `TRIAGE_LINKS_BATCH`, `TRIAGE_LINKS_MAX_BATCHES`,
   `TRIAGE_LINKS_START_DELAY_S`.
