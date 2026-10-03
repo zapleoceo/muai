@@ -140,7 +140,23 @@ Returns `AnswerResponse` with `answer`, `results`, `provider`, `cost_usd`,
 | `/api/instagram/verify` | POST | owner cookie | Submit 2FA/challenge code (`instagram_verify`) → saves encrypted session |
 | `/tokens` | GET | owner cookie | Now redirects to AIbroker — see `llm-broker.md` |
 | `/entities/merge-email-dupes` | POST | owner cookie | Слить дубли по рабочему email (`entities_merge_email_dupes`) — детерминированные пары, группы 3+ не трогаются |
-| `/search-ui` | POST | owner cookie | Обработчик «Спросить Веру»: ответ плюс до пяти источников (`sources_html`: ссылка `/events/{id}`, источник, дата, фрагмент) из поля `results` ответа brain-search |
+| `/search-ui` | POST | owner cookie | Обработчик «Спросить Веру»: ответ модели через `render_markdown` (безопасное подмножество: жирный, курсив, `код`, списки, ссылки только http(s); всё остальное экранируется до разметки) плюс до пяти источников (`sources_html`: ссылка `/events/{id}`, человеческая строка, дата, фрагмент тела) из поля `results` ответа brain-search. Источники одного события или одной цепочки писем подряд не повторяются (`dedupe_key`) |
+
+### Readable event text (`dashboard/event_text.py`, `dashboard/ui/markdown.py`)
+
+`events.content_text` — это заголовок «Ключ: значение» (`Author`, `From`, `To`,
+`Subject`, `Chat`, `Where`, `Date`, `Direction`), строка `---` и тело. Показывать
+его сырым нельзя, поэтому `parse_content` делит текст на `ParsedText` (заголовки
+и тело; у фактов Claude, памяти агента и голоса заголовка нет — всё тело), а
+`describe` строит `EventLine`: кто (`From`/`Author` без `[роль]`, `<mail>` и
+`(@ник)` убирает `clean_name`; без заголовка берётся `author_label` из метаданных), где
+(чат, канал, тема письма, окно) и тело. Тему цепочки сравнивает
+`normalize_subject` (без `Re:`/`Fwd:`). Список источников под ответом
+(`headline`, `one_line`, `dedupe_key`) и «Входящее» берут поля оттуда, а не
+режут сырой префикс.
+
+`render_markdown` — единственное место, где текст модели превращается в HTML:
+экранирует всё, затем включает только свои теги.
 
 ### Graph visualizer (`dashboard/graph_routes.py`)
 

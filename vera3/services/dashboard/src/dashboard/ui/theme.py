@@ -52,6 +52,8 @@ table.data th{font-size:.72rem;text-transform:uppercase;color:var(--vera-muted)}
 .preview{color:#ccc;max-width:38rem;overflow:hidden;text-overflow:ellipsis}
 .answer{background:var(--pico-form-element-background-color);padding:1rem 1.2rem;border-radius:var(--pico-border-radius);
 border:1px solid var(--vera-line);line-height:1.6;margin:1rem 0}
+.answer ul{margin:.5rem 0}.answer li{margin-bottom:.2rem}.answer code{font-size:.85em}
+ul.sources{padding-left:1.1rem}ul.sources li{margin-bottom:.6rem}
 .meta{color:var(--vera-muted);font-size:.8rem}
 .error,.err{color:var(--vera-err)}
 .error{background:#4a1a1d;padding:.8rem 1rem;border-radius:var(--pico-border-radius)}
