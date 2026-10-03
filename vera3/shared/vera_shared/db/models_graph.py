@@ -173,6 +173,10 @@ class RelationshipRow(Base):
     __table_args__ = (
         Index("ix_rel_subject", "subject_entity_id"),
         Index("ix_rel_object", "object_entity_id"),
+        # то же, что миграция 017: на проде индекс есть, в схему тестов его
+        # приносит только модель
+        Index("uq_relationships_spo", "subject_entity_id", "predicate",
+              "object_entity_id", unique=True),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)

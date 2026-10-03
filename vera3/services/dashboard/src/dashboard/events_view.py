@@ -23,11 +23,13 @@ TRIAGE_STATUS_INFO: dict[str, tuple[str, str]] = {
     "dead": ("☠", "превышено число попыток — требует ручного разбора"),
     "superseded": ("≈", "заменено похожим более новым событием (семантический дедуп)"),
     "media_pending": ("🖼", "медиа (фото/голос) ждёт vision/распознавания через брокер"),
+    "hidden": ("⊘", "скрыто владельцем через MCP (hide_event): не попадает в поиск и выдачи"),
 }
 STATUS_LABEL: dict[str, str] = {
     "done": "обработано", "pending": "ждёт обработки", "processing": "обрабатывается",
     "error": "ошибка, повторим", "dead": "требует разбора",
     "superseded": "заменено новым", "media_pending": "ждёт распознавания медиа",
+    "hidden": "скрыто",
 }
 _STATUS_DOT = {"done": "ok", "pending": "warn", "processing": "warn",
                "media_pending": "warn", "error": "err", "dead": "err"}

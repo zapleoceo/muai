@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import timedelta
 from typing import Any
 
+from vera_shared.events.visibility import NOT_HIDDEN_SQL
 from vera_shared.timeutil import utc_naive_now
 
 #: events.project ставит триаж уже после вставки; свежие события ещё без
@@ -13,7 +14,8 @@ UNTRIAGED_GRACE = timedelta(days=2)
 #: Разговоры с Верой — не «события мира». Системно по nature (её проставляет
 #: триаж), source-фильтр остаётся для ещё не классифицированных.
 NOT_A_WORLD_EVENT = (" AND (nature IS NULL OR nature <> 'conversation_with_me')"
-                     " AND source <> 'vera_chat'")
+                     " AND source <> 'vera_chat'"
+                     f" AND {NOT_HIDDEN_SQL}")
 
 
 def source_clause(source: str | None) -> tuple[str, dict[str, Any]]:
@@ -28,7 +30,7 @@ def project_clause(project, time_range, source: str | None = None) -> tuple[str,
     и sync_projects (правила: vera_shared.projects.rules); на проде она
     заполнена у 99.8% событий, поэтому ящики и названия чатов не дублируем."""
     conds = ["(nature IS NULL OR nature NOT IN ('conversation_with_me', 'my_intent'))",
-             "source <> 'vera_chat'",
+             "source <> 'vera_chat'", NOT_HIDDEN_SQL,
              "(project = :pname OR (project IS NULL AND occurred_at > :fresh_after))"]
     params: dict[str, Any] = {"pname": project.name,
                               "fresh_after": utc_naive_now() - UNTRIAGED_GRACE}

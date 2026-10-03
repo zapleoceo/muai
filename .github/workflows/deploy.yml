@@ -297,7 +297,7 @@ jobs:
             --cov=vera_shared --cov=gateway --cov=media_worker \
             --cov=brain_search --cov=brain_triage --cov=dashboard \
             --cov=ingestor_gmail --cov=ingestor_slack --cov=ingestor_trello \
-            --cov=ingestor_telegram --cov=bot_telegram \
+            --cov=ingestor_telegram --cov=bot_telegram --cov=vera_mcp \
             --cov-report=term-missing \
             --cov-report=xml:coverage.xml
           python scripts/check_coverage.py coverage.xml
@@ -319,7 +319,7 @@ jobs:
           # четырёх пакетов: у файлов остальных пакетов в диффе по-прежнему
           # нет порога на строки (на них есть пакетные пороги check_coverage.py).
           python -m coverage xml \
-            --include='*/shared/vera_shared/*,*/services/gateway/*,*/services/media-worker/*,*/services/brain-search/*' \
+            --include='*/shared/vera_shared/*,*/services/gateway/*,*/services/media-worker/*,*/services/brain-search/*,*/services/mcp/*' \
             -o coverage-diffcover.xml
           diff-cover coverage-diffcover.xml \
             --compare-branch="$BASE" \
@@ -352,6 +352,7 @@ jobs:
           - brain-triage
           - dashboard
           - gateway
+          - mcp
           - ingestor-gmail
           - ingestor-instagram
           - ingestor-slack

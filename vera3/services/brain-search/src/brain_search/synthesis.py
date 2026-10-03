@@ -6,6 +6,7 @@ import logging
 
 from sqlalchemy import text
 from vera_shared.db.engine import get_session
+from vera_shared.events.visibility import NOT_HIDDEN_SQL
 from vera_shared.llm.client import LLMCallFailed, chat_async
 
 from brain_search.agent import run_agent
@@ -38,10 +39,10 @@ async def fetch_conversation_history(chat_id: int,
     доступен с любого устройства и сам попадает в FTS.
     """
     async with get_session() as s:
-        rows = (await s.execute(text("""
+        rows = (await s.execute(text(f"""
             SELECT category, content_text, occurred_at
             FROM events
-            WHERE source = 'vera_chat'
+            WHERE source = 'vera_chat' AND {NOT_HIDDEN_SQL}
               AND (metadata->>'chat_id')::bigint = :chat_id
               AND content_text != ''
             ORDER BY occurred_at DESC

@@ -95,6 +95,39 @@ services:
     restart: unless-stopped
     logging: *default-logging
 
+  # ─── Remote MCP (Streamable HTTP) ────────────────────────────────────────
+  # Публикуется наружу nginx'ом как https://dima.veranda.my/mcp (docs/mcp-claude.md).
+  # Без MCP_TOKEN/MCP_TOKENS сервис поднимается, но отвечает 401 на всё (fail-closed).
+  mcp:
+    build:
+      context: ..
+      dockerfile: services/mcp/Dockerfile
+    container_name: vera3-mcp
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
+      # отдельный секрет клиентов MCP, не INTERNAL_SECRET: "claude:<hex>,codex:<hex>"
+      MCP_TOKEN: ${MCP_TOKEN:-}
+      MCP_TOKENS: ${MCP_TOKENS:-}
+      # sql_query: роль vera_ro (миграция 037), НЕ суперпользователь vera.
+      # Пусто = sql_query отказывает (остальные инструменты работают).
+      MCP_RO_DATABASE_URL: ${MCP_RO_DATABASE_URL:-}
+      # search → brain-search; remember → эмбеддинг через брокер
+      INTERNAL_SECRET: ${INTERNAL_SECRET:?INTERNAL_SECRET must be set}
+      SEARCH_URL: http://brain-search:8000
+      BROKER_URL: ${BROKER_URL:-}
+      BROKER_PROJECT_KEY: ${BROKER_PROJECT_KEY:-}
+      DB_POOL_SIZE: "2"
+      LOG_LEVEL: INFO
+    ports:
+      - "127.0.0.1:8007:8000"
+    # starlette + mcp SDK + пул на 2 соединения
+    mem_limit: 256m
+    restart: unless-stopped
+    logging: *default-logging
+
   # ─── Brain: Triage Workers (scalable) ──────────────────────────────────
   # SELECT FOR UPDATE SKIP LOCKED исключает race condition между воркерами.
   # deploy.replicas — чтобы обычный `docker compose up -d` поднимал все реплики,

@@ -503,7 +503,7 @@ async def test_nearest_neighbour_by_index_matches_python_cosine(pg_db):
     if not await _apply_pgvector_migration():
         pytest.skip("расширение vector недоступно в этой сборке Postgres")
 
-    from gateway.claude import _cosine
+    from vera_shared.memory.remember import _cosine
 
     query = [1.0, 0.0, 0.0]
     corpus = {
@@ -537,7 +537,7 @@ async def test_nearest_neighbour_by_index_matches_python_cosine(pg_db):
     # та же величина, что дал бы питоновский перебор — знак не перепутан
     assert row[1] == pytest.approx(_cosine(query, corpus["почти то же"]), abs=1e-6)
     # и она проходит порог дедупа, ради которого всё это и считается
-    from gateway.claude import SEMANTIC_DEDUP_THRESHOLD
+    from vera_shared.memory.remember import SEMANTIC_DEDUP_THRESHOLD
     assert row[1] >= SEMANTIC_DEDUP_THRESHOLD
 
 
@@ -708,7 +708,7 @@ async def test_remember_dedup_uses_the_vector_branch(pg_db, monkeypatch):
     if not await _apply_pgvector_migration():
         pytest.skip("расширение vector недоступно в этой сборке Postgres")
 
-    from gateway import claude as gc
+    from vera_shared.memory import remember as gc
 
     near, far = [0.999, 0.026, 0.0], [0.0, 1.0, 0.0]
     now = utc_naive_now()
@@ -750,7 +750,7 @@ async def test_remember_dedup_returns_none_when_nothing_is_close(pg_db, monkeypa
     if not await _apply_pgvector_migration():
         pytest.skip("расширение vector недоступно в этой сборке Postgres")
 
-    from gateway import claude as gc
+    from vera_shared.memory import remember as gc
 
     now = utc_naive_now()
     async with get_session() as s:
