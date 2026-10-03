@@ -157,26 +157,32 @@ BACKOFF_MINUTES[retry_count]`, or straight to `dead` after
 the counter. The old single-UPDATE re-pended the first failure instantly
 and indexed the array off by one (1m step unused, ladder shifted).
 
-**Contentless events are not embedded (2026-10)**: `is_contentless()`
-(`vera_shared/text_quality.py`) judges only the body of `content_text`
-(after the `---` separator; header lines `Author:`/`From:`/`Chat:` do not
-count; an email `Subject:` of 11+ chars does). Placeholder tokens such as
-`[photo]` / `[voice]` / `[sticker]` are stripped and a remainder shorter than
-`MIN_CONTENT_CHARS` (11) is contentless. `process_pending()` skips the
-embedding for such events and keeps the event; `split_header_body()` is the
-shared header/body split. Existing vectors are not deleted.
+**Contentless events are not embedded (2026-10)**: `is_contentless(text,
+source)` (`vera_shared/text_quality.py`) applies only to the chat sources
+`telegram` / `slack` / `instagram` and only to text in their layout: header
+lines (`Author: ...`), the FIRST `---` separator, then the body
+(`split_header_body()` returns `None` for any other layout, so a markdown
+`---` inside a body is never a boundary). Deliberate records (`claude`,
+`vera_memory`, `voice`, `claude_chat`, gmail, text without that header) are
+never skipped: "Купил хлеб" from `claude` is embedded, `[photo]` from
+telegram is not. Placeholder tokens (`[photo]`, `[voice]`, `[sticker]`) are
+stripped and a body remainder shorter than `MIN_CONTENT_CHARS` (11) is
+contentless. `process_pending()` skips the embedding but keeps the event.
+Existing vectors are not deleted.
 
 **Re-embed loop (2026-10)**: `reembed_loop()` (`reembed.py`, started from
-`start_background_loops()` as `triage-reembed`) every
-`TRIAGE_REEMBED_INTERVAL_S` (600) picks up to `TRIAGE_REEMBED_BATCH` (50)
-`triage_status='done'` events with non-empty content and no
-`event_embeddings` row — newest first, `NOT EXISTS` on the PK — skipping
-`SKIP_EMBED_SOURCES` and contentless bodies, and writes them through
-`write_embeddings()` (`embeddings.py`, the same upsert path as triage,
-chunks included). A descending id cursor lets one sweep pass over
-placeholder rows once instead of re-selecting them forever; a sweep ends
-when the scan is shorter than the limit. `reembed_once()` does nothing while
-the `embed` circuit (including the broker-outage breaker) is open.
+`start_background_loops()` as `triage-reembed`) runs every
+`TRIAGE_REEMBED_INTERVAL_S` (600). Each pass is two id-range-bounded windows
+(plan verified on prod: bitmap scan of `events_pkey` over the range +
+anti-join on the `event_embeddings` PK, no walk of the whole table): the
+*head* — the last `HEAD_SPAN` ids, read whole so placeholder rows that never
+get a vector cannot crowd real gaps out, so a fresh gap closes in one cycle —
+and the *tail* — a `TAIL_SPAN` window below a descending cursor that slides
+down every cycle and resets at the bottom, picking up old gaps slowly. Up to
+`TRIAGE_REEMBED_BATCH` (50) per window are embedded via `write_embeddings()`
+(`embeddings.py`, the same upsert path as triage, chunks included), skipping
+`SKIP_EMBED_SOURCES` and contentless bodies. `reembed_once()` does nothing
+while the `embed` circuit (including the broker-outage breaker) is open.
 
 **Stale-worker fencing (2026-07-17)**: `_claim_batch()` returns
 `triage_started_at` and every final UPDATE in `process_pending()`

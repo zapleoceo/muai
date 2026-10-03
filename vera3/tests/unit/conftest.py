@@ -93,3 +93,13 @@ async def sqlite_db(tmp_path):
     await engine.dispose()
     engine_mod._engine = None
     engine_mod.AsyncSessionLocal = None
+
+
+@pytest.fixture(autouse=True)
+def _fresh_broker_outage():
+    """Брейкер сбоя брокера — состояние процесса: без сброса три отказа в
+    одном тесте закрывали бы вызовы в следующих."""
+    from vera_shared.llm.outage import reset_outage
+    reset_outage()
+    yield
+    reset_outage()

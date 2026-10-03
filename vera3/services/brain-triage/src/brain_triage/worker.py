@@ -83,7 +83,7 @@ async def process_pending() -> int:
     # остаётся, вектор — шум (vera_shared.text_quality).
     embed_idx = [i for i, r in enumerate(rows)
                  if r.source not in SKIP_EMBED_SOURCES
-                 and not is_contentless(r.content_text)]
+                 and not is_contentless(r.content_text, r.source)]
     embed_texts = [llm_excerpt(rows[i].content_text or "") for i in embed_idx]
     embed_vectors = await _embed_batch(embed_texts)
     # by event_id, НЕ by position — группировка ниже переупорядочивает rows

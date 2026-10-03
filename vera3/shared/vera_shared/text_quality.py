@@ -4,34 +4,39 @@
 пару символов; вектор такого текста — шум, который вытесняет настоящие
 совпадения. Событие остаётся в базе, не создаётся только его эмбеддинг.
 
-content_text: строки заголовка («Author: …», «From: …», «Chat: …»), затем
-разделитель «---» и тело. Судим тело; у писем смысл ещё и в «Subject:».
+Правило применяется только к источникам мессенджеров (CHAT_SOURCES) и только
+к тексту в их раскладке: строки заголовка («Author: …», «From: …»), первый
+разделитель «---», тело. Всё остальное — claude, vera_memory, voice, письма,
+текст без такого заголовка — сознательные записи или чужая раскладка, там
+«Купил хлеб» не шум; их не трогаем. Разделитель ищется только ПЕРВЫЙ и только
+после заголовка: «---» внутри тела (markdown) границей не считается.
 """
 from __future__ import annotations
 
 import re
 
 MIN_CONTENT_CHARS = 11
+CHAT_SOURCES = frozenset({"telegram", "slack", "instagram"})
 
 _SEPARATOR = "\n---\n"
+_HEADER_LINE = re.compile(r"^[A-Za-z][A-Za-z ]{0,20}: ")
 _PLACEHOLDER = re.compile(r"\[[A-Za-z_ ]{2,20}\]")
-_SUBJECT = re.compile(r"^Subject:[ \t]*(.*)$", re.MULTILINE)
 
 
-def split_header_body(text: str) -> tuple[str, str]:
+def split_header_body(text: str) -> tuple[str, str] | None:
+    """(заголовок, тело) для раскладки «заголовок --- тело», иначе None."""
     head, sep, body = text.partition(_SEPARATOR)
-    return (head, body) if sep else ("", text)
+    if not sep or not _HEADER_LINE.match(head.split("\n", 1)[0]):
+        return None
+    return head, body
 
 
-def _meaningful_len(fragment: str) -> int:
-    return len(_PLACEHOLDER.sub("", fragment).strip())
-
-
-def is_contentless(text: str | None) -> bool:
+def is_contentless(text: str | None, source: str) -> bool:
     if not text or not text.strip():
         return True
-    head, body = split_header_body(text)
-    if _meaningful_len(body) >= MIN_CONTENT_CHARS:
+    if source not in CHAT_SOURCES:
         return False
-    subject = _SUBJECT.search(head)
-    return not (subject and _meaningful_len(subject.group(1)) >= MIN_CONTENT_CHARS)
+    parts = split_header_body(text)
+    if parts is None:
+        return False
+    return len(_PLACEHOLDER.sub("", parts[1]).strip()) < MIN_CONTENT_CHARS
