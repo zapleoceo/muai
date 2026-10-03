@@ -2,6 +2,7 @@
 `/events/{id}`. Запрос и маршрутизация здесь, разметка списка — в `events_view`."""
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -10,9 +11,16 @@ from fastapi.responses import HTMLResponse
 from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 from vera_shared.db.engine import get_session
+from vera_shared.graph.repo import find_entity_by_alias
 from vera_shared.timeutil import utc_naive_now
 
-from dashboard.event_view import STREAM_LABEL, event_card, transcript_html  # noqa: F401
+from dashboard.event_text import clean_name, parse_content
+from dashboard.event_view import (  # noqa: F401
+    STREAM_LABEL,
+    event_card,
+    mail_addresses,
+    transcript_html,
+)
 from dashboard.events_view import (  # noqa: F401
     EVENTS_COLUMN_HINTS,
     PAGE_STEP,
@@ -148,4 +156,21 @@ async def event_page(request: Request, event_id: int):
     if row is None:
         return HTMLResponse(_render("events", "<h2>Событие не найдено</h2>"), 404)
 
-    return HTMLResponse(_render("events", event_card(row)))
+    if isinstance(row["metadata"], str):      # SQLite отдаёт JSON строкой, Postgres — словарём
+        row = {**row, "metadata": json.loads(row["metadata"])}
+    return HTMLResponse(_render("events", event_card(row, await _people_links(row))))
+
+
+async def _people_links(row) -> dict[str, int]:
+    """Кого из участников события граф уже знает: адрес (gmail) или автор по telegram id."""
+    links: dict[str, int] = {}
+    parsed = parse_content(row["content_text"])
+    for address in mail_addresses(parsed):
+        if entity := await find_entity_by_alias("gmail", address):
+            links[address] = entity
+    sender = (row["metadata"] or {}).get("sender_id")
+    if sender and (entity := await find_entity_by_alias(row["source"], f"user:{sender}")):
+        for key in ("Author", "From"):
+            if name := clean_name(parsed.headers.get(key, "")):
+                links[name.lower()] = entity
+    return links

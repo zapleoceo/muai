@@ -16,7 +16,9 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from sqlalchemy.exc import SQLAlchemyError
 from vera_shared.graph.clusters import get_clusters, recompute_clusters
-from vera_shared.graph.panel import entity_panel
+from vera_shared.graph.connections import CONNECTIONS_LIMIT
+from vera_shared.graph.panel import entity_aliases, entity_panel
+from vera_shared.graph.panel_events import recent_events
 from vera_shared.graph.rel_canon import INVERSE
 from vera_shared.graph.rel_extract import PREDICATES
 from vera_shared.graph.repo import (
@@ -107,13 +109,28 @@ async def _owner_fields() -> dict[str, object]:
     return {"owner_id": owner.id if owner else None, "owner_name": owner.name if owner else None}
 
 
+@router.get("/api/graph/entity/{entity_id}/events", response_class=JSONResponse)
+async def graph_entity_events(request: Request, entity_id: int):
+    """Последние события человека отдельно от карточки: запрос по алиасам медленнее остального."""
+    if (resp := owner_or_blank_401(request)) is not None:
+        return resp
+    aliases = await entity_aliases(entity_id)
+    return JSONResponse({"events": await recent_events(aliases)})
+
+
 @router.get("/api/graph/entity/{entity_id}", response_class=JSONResponse)
-async def graph_entity(request: Request, entity_id: int, raw: bool = False):
+async def graph_entity(request: Request, entity_id: int, raw: bool = False,
+                       events: bool = True, all: bool = False):
     """Карточка сущности для боковой панели: алиасы, счётчики, связи-пары, события.
     `raw=true` добавляет записи relationships по одной."""
     if (resp := owner_or_blank_401(request)) is not None:
         return resp
-    panel = await entity_panel(entity_id, raw=raw)
+    options: dict[str, object] = {}
+    if not events:
+        options["with_events"] = False
+    if all:
+        options["connections_limit"] = CONNECTIONS_LIMIT
+    panel = await entity_panel(entity_id, raw=raw, **options)
     if panel is None:
         return JSONResponse({"error": "not found"}, status_code=404)
     panel.update(await _owner_fields())

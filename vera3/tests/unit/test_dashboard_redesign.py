@@ -74,7 +74,7 @@ def _events(rows: list[dict], query: str = ""):
 class TestShell:
     def test_nav_labels_and_links(self):
         html = nav("home")
-        for label in ("Поиск", "Входящее", "Люди", "Источники", "Журнал", "Настройки", "выйти"):
+        for label in ("Поиск", "Входящее", "Люди", "Источники", "Журнал", "Настройки", "Выйти"):
             assert label in html
         for href in ('href="/"', 'href="/events"', 'href="/graph"',
                      'href="/sources"', 'href="/journal"', 'href="/settings"',

@@ -85,6 +85,21 @@ td.preview{max-width:0;width:100%;min-width:12rem;white-space:nowrap;overflow:hi
 td.preview a{color:inherit}
 .who-cell{min-width:9rem;max-width:14rem}.who-cell div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 td.day{padding:1.4rem .8rem .3rem;border-bottom:0}
+.filter-bar{display:flex;flex-wrap:wrap;gap:.6rem;align-items:center;margin:0 0 1rem}
+.filter-bar>*{margin:0}.filter-bar input[type=search]{flex:1 1 16rem;min-width:0;width:auto}
+.filter-bar select{flex:0 1 14rem;width:auto;min-width:0}.filter-bar label{display:flex;align-items:center;white-space:nowrap}
+.filter-bar button{flex:0 0 auto}
+@media (max-width:640px){
+table.data thead{display:none}table.data,table.data tbody{display:block}
+table.data tr.ev{display:grid;grid-template-columns:1.4rem 1fr auto auto;grid-template-areas:"text text text text" "src who time st";
+gap:.25rem .6rem;align-items:center;padding:.85rem .2rem;border-bottom:1px solid var(--line)}
+table.data tr.ev td{display:block;border:0;padding:0;min-width:0}
+table.data tr.ev td.preview{grid-area:text;white-space:normal;max-width:none;min-width:0;font-size:.95rem;display:-webkit-box;
+-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+table.data tr.ev td.c-src{grid-area:src}table.data tr.ev td.who-cell{grid-area:who;max-width:none}
+table.data tr.ev td.c-time{grid-area:time;font-size:.8rem}table.data tr.ev td.c-st{grid-area:st}
+table.data tr.ev td:nth-child(n+6){display:none}
+table.data tr.day-fb{display:block}}
 .htmx-indicator{display:none}.htmx-request .htmx-indicator,.htmx-request.htmx-indicator{display:block}
 .skeleton{position:relative;overflow:hidden;background:var(--surface-2);border-radius:var(--r-sm);min-height:1rem}
 .skeleton::after{content:"";position:absolute;inset:0;transform:translateX(-100%);

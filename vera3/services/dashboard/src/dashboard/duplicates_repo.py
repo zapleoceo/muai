@@ -5,6 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from vera_shared.graph.collisions import find_email_collisions
 from vera_shared.graph.dedup import (
     find_alias_collisions,
     find_duplicates_by_name,
@@ -23,6 +24,7 @@ class DuplicatesData:
     name_groups_total: int = 0
     suggestions: list[dict] = field(default_factory=list)
     dossiers: dict[int, dict] = field(default_factory=dict)
+    email_pairs: int = 0
 
 
 def _trim(group: dict) -> dict:
@@ -47,4 +49,5 @@ async def load_duplicates() -> DuplicatesData:
     # Досье всех кандидатов одним батч-вызовом: по запросу на сущность пул
     # соединений кончился бы на двухстах кандидатах.
     dossiers = await get_entity_dossiers(sorted(_entity_ids(collisions, suggestions, shown)))
-    return DuplicatesData(collisions, shown, len(groups), suggestions, dossiers)
+    email_pairs = sum(1 for g in await find_email_collisions(min_group=2) if len(g["candidates"]) == 2)
+    return DuplicatesData(collisions, shown, len(groups), suggestions, dossiers, email_pairs)

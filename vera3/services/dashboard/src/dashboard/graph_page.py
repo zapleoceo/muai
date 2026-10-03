@@ -27,7 +27,7 @@ _BODY = """
   <div id="cy" class="g-canvas" aria-label="Граф людей и связей"></div>
   <div class="g-toolbar">
     <form id="g-searchform" class="g-search" role="search">
-      <input id="g-search" type="search" placeholder="Найти человека…  ( / )"
+      <input id="g-search" type="search" placeholder="Найти человека…"
              autocomplete="off" data-hotkey-search aria-controls="g-suggest">
       <ul id="g-suggest" role="listbox" hidden></ul>
     </form>
@@ -51,7 +51,10 @@ _BODY = """
       </div>
     </details>
   </div>
-  <div id="g-legend" class="g-legend"></div>
+  <div class="g-legend-wrap">
+    <button type="button" id="g-legend-toggle" class="secondary sm" aria-expanded="false">Легенда</button>
+    <div id="g-legend" class="g-legend" hidden></div>
+  </div>
   <span id="g-count" class="g-count"></span>
   <div class="g-zoom">
     <button type="button" id="g-zoom-in" class="secondary" aria-label="Приблизить">+</button>

@@ -88,7 +88,24 @@ $('g-fit').onclick = () => cy.animate({fit: {eles: cy.elements(), padding: 40}},
 $('g-reset').onclick = () => { closePanel(); load(coreParams()); };
 $('g-mindeg').onchange = () => load(coreParams());
 $('g-pred').onchange = () => load(coreParams());
-document.addEventListener('keydown', ev => { if (ev.key === 'Escape' && current) closePanel(); });
+document.addEventListener('keydown', ev => {
+  if (ev.key !== 'Escape') return;
+  const menu = document.querySelector('.g-menu');
+  if (menu && menu.open) menu.open = false;
+  else if (current) closePanel();
+});
+// Меню фильтров и легенда — всплывающие: закрываются кликом мимо.
+document.addEventListener('click', ev => {
+  const menu = document.querySelector('.g-menu');
+  if (menu && menu.open && !ev.target.closest('.g-menu')) menu.open = false;
+  if (!legend.hidden && !ev.target.closest('.g-legend-wrap')) legend.hidden = true;
+});
+$('g-legend-toggle').onclick = () => {
+  legend.hidden = !legend.hidden;
+  $('g-legend-toggle').setAttribute('aria-expanded', String(!legend.hidden));
+};
 
-load(coreParams());
+const wanted = /person=(\d+)/.exec(location.hash);
+if (wanted) load(focusParams(wanted[1])).then(() => openPanel(wanted[1]));
+else load(coreParams());
 """

@@ -65,6 +65,8 @@ class TestRepository:
                           AsyncMock(return_value=groups)), \
              patch.object(duplicates_repo, "list_pending_suggestions",
                           AsyncMock(return_value=suggestions)), \
+             patch.object(duplicates_repo, "find_email_collisions", AsyncMock(return_value=[])), \
+             patch.object(duplicates_repo, "find_email_collisions", AsyncMock(return_value=[])), \
              patch.object(duplicates_repo, "get_entity_dossiers", dossiers):
             data = asyncio.run(duplicates_repo.load_duplicates())
         return data, dossiers
@@ -155,11 +157,12 @@ class TestExactAndNameSections:
         cands = [{"id": i, "name": f"Имя{i}", "type": "person"} for i in range(1, size + 1)]
         d = {c["id"]: _dossier(c["id"], c["name"], c["id"]) for c in cands}
         return DuplicatesData(collisions=[{"username": "u", "candidates": cands, "size": size}],
-                              dossiers=d)
+                              dossiers=d, email_pairs=3)
 
     def test_bulk_buttons_are_dangerous_and_ask_for_confirmation(self):
         html = exact_section(self._collision())
         assert html.count("danger-solid") == 2 and html.count("data-confirm=") >= 2
+        assert "по email (3)" in html and "по @username (1)" in html and "Объединить 3 пар" in html
         assert 'action="/entities/merge-email-dupes"' in html
         assert 'action="/entities/merge-collisions"' in html
 

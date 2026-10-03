@@ -73,7 +73,7 @@ function chooseDialog(opts){
   });
   var actions = el('div', 'dlg-actions');
   var no = el('button', 'secondary', 'Отмена');
-  var yes = el('button', '', opts.confirmLabel || 'Подтвердить');
+  var yes = el('button', opts.danger ? 'danger-solid' : '', opts.confirmLabel || 'Подтвердить');
   no.type = yes.type = 'button';
   actions.append(no, yes);
   dlg.append(msg, actions);

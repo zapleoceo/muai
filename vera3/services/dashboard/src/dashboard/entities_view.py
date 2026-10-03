@@ -11,9 +11,9 @@ from dashboard.ui.components import collapsible
 
 CONFIRM_MERGE = ("Объединить эти карточки? Все связи и алиасы перейдут в левую, "
                  "вторая исчезнет. Отменить можно только скриптом на сервере.")
-CONFIRM_BULK_EMAIL = ("Объединить ВСЕ пары с одинаковым рабочим email? "
+CONFIRM_BULK_EMAIL = ("Объединить {n} пар с одинаковым рабочим email? "
                       "Группы из трёх и больше не трогаем. Отменить массово нельзя.")
-CONFIRM_BULK_USERNAME = ("Объединить ВСЕ однозначные пары с одним @username? "
+CONFIRM_BULK_USERNAME = ("Объединить {n} однозначных пар с одним @username? "
                          "Отменить массово нельзя.")
 
 
@@ -24,19 +24,34 @@ def merge_form(keeper: int, merged: int, label: str = "Объединить") ->
             f'<button type="submit">{esc(label)}</button></form>')
 
 
-def _options(candidates: list[dict], selected: int) -> str:
+def option_label(c: dict, dossier: dict | None) -> str:
+    """Имя + то, что отличает однофамильцев: @username, сообщения, главный чат, id."""
+    d = dossier or {}
+    places = d.get("top_chats") or d.get("top_places") or []
+    bits = [c["name"]]
+    if d.get("username"):
+        bits.append(f"@{d['username']}")
+    if d.get("msg_count"):
+        bits.append(f"{d['msg_count']} сообщ.")
+    if places and places[0][0]:
+        bits.append(str(places[0][0])[:24])
+    bits.append(f"#{c['id']}")
+    return " · ".join(bits)
+
+
+def _options(candidates: list[dict], selected: int, dossiers: dict[int, dict]) -> str:
     return "".join(
         f'<option value="{c["id"]}"{" selected" if i == selected else ""}>'
-        f'{esc(c["name"])} · #{c["id"]}</option>' for i, c in enumerate(candidates))
+        f'{esc(option_label(c, dossiers.get(c["id"])))}</option>' for i, c in enumerate(candidates))
 
 
-def select_form(candidates: list[dict]) -> str:
+def select_form(candidates: list[dict], dossiers: dict[int, dict] | None = None) -> str:
     """Для групп из трёх и больше: выбрать, кого оставить и кого влить."""
     return (
         f'<form method="post" action="/entities/merge" class="select-merge" '
         f'data-confirm="{esc(CONFIRM_MERGE)}">'
-        f'<label>Оставить <select name="keeper_id">{_options(candidates, 0)}</select></label>'
-        f'<label>Влить в неё <select name="merged_id">{_options(candidates, 1)}</select></label>'
+        f'<label>Оставить <select name="keeper_id">{_options(candidates, 0, dossiers or {})}</select></label>'
+        f'<label>Влить в неё <select name="merged_id">{_options(candidates, 1, dossiers or {})}</select></label>'
         f'<button type="submit">Объединить</button></form>')
 
 
@@ -96,9 +111,11 @@ def vera_section(data: DuplicatesData, analysis: dict[str, Any]) -> str:
             f'ничего не объединяется.</p><p>{analysis_status(analysis)}</p>{cards}{empty}</section>')
 
 
-def _bulk(action: str, label: str, confirm: str) -> str:
-    return (f'<form method="post" action="{action}" data-confirm="{esc(confirm)}">'
-            f'<button type="submit" class="danger-solid">{esc(label)}</button></form>')
+def _bulk(action: str, label: str, confirm: str, count: int) -> str:
+    if not count:
+        return f'<span class="muted small">{esc(label)}: подходящих пар нет</span>'
+    return (f'<form method="post" action="{action}" data-confirm="{esc(confirm.format(n=count))}">'
+            f'<button type="submit" class="danger-solid">{esc(label)} ({count})</button></form>')
 
 
 def _username_group(g: dict, dossiers: dict[int, dict]) -> str:
@@ -107,19 +124,20 @@ def _username_group(g: dict, dossiers: dict[int, dict]) -> str:
     if len(ids) == 2:
         left, right = order_pair(ids[0], ids[1], dossiers)
         return pair_html(left, right, dossiers, head, merge_form(left, right))
-    return group_html(ids, dossiers, head, select_form(g["candidates"]))
+    return group_html(ids, dossiers, head, select_form(g["candidates"], dossiers))
 
 
 def exact_section(data: DuplicatesData) -> str:
     groups = "".join(_username_group(g, data.dossiers) for g in data.collisions)
+    username_pairs = sum(1 for g in data.collisions if g["size"] == 2)
     return (
         '<section><h3>Точные совпадения</h3>'
         '<p class="muted">Рабочий email и @username уникальны, поэтому два профиля с одним '
         'адресом — это один человек, попавший в граф дважды. Однозначные пары объединяются '
         'кнопкой; группы из трёх и больше — вручную.</p>'
         '<div class="bulk">'
-        f'{_bulk("/entities/merge-email-dupes", "Объединить все дубли по email", CONFIRM_BULK_EMAIL)}'
-        f'{_bulk("/entities/merge-collisions", "Объединить все пары по @username", CONFIRM_BULK_USERNAME)}'
+        f'{_bulk("/entities/merge-email-dupes", "Объединить дубли по email", CONFIRM_BULK_EMAIL, data.email_pairs)}'
+        f'{_bulk("/entities/merge-collisions", "Объединить пары по @username", CONFIRM_BULK_USERNAME, username_pairs)}'
         f'</div>{groups}</section>')
 
 
@@ -127,7 +145,7 @@ def _name_group(g: dict, dossiers: dict[int, dict]) -> str:
     more = f'<p class="muted small">…и ещё {g["hidden"]}</p>' if g["hidden"] else ""
     head = f'<h4>«{esc(g["normalized"])}» · кандидатов: {g["size"]}</h4>'
     ids = [c["id"] for c in g["candidates"]]
-    return group_html(ids, dossiers, head, more + select_form(g["candidates"]))
+    return group_html(ids, dossiers, head, more + select_form(g["candidates"], dossiers))
 
 
 def name_section(data: DuplicatesData) -> str:
@@ -146,5 +164,6 @@ def name_section(data: DuplicatesData) -> str:
 def duplicates_body(data: DuplicatesData, analysis: dict[str, Any], merged: int | None) -> str:
     notice = (f'<p class="pill ok">Объединено: карточка #{merged} влита в оставшуюся.</p>'
               if merged else "")
-    return (f'<h2>Дубли</h2><p class="crumb"><a href="/graph">← к людям</a></p>{notice}'
+    return (f'<h2>Дубли</h2><p class="crumb"><a href="/graph">← к людям</a> · '
+            f'предложений Веры: {len(data.suggestions)}</p>{notice}'
             f'{vera_section(data, analysis)}{exact_section(data)}{name_section(data)}')

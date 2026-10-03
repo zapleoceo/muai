@@ -33,6 +33,7 @@ from dashboard.sources_script import SOURCES_SCRIPT
 from dashboard.sources_view import source_level
 from dashboard.stats import get_source_detail, get_sources_overview
 from dashboard.ui.components import collapsible, status_dot
+from dashboard.ui.icons import source_icon
 
 router = APIRouter()
 
@@ -119,7 +120,7 @@ def _row(src, stat: dict, state: State, now: datetime) -> str:
         f'<button type="button" class="src-head" aria-expanded="false" aria-controls="src-body-{key}">'
         f'<span class="chev" aria-hidden="true"></span>'
         f'<span class="src-name">{status_dot(source_level(stat.get("last"), now, src, state))}'
-        f'<span class="ico">{src.icon}</span>'
+        f'<span class="ico">{source_icon(src.key)}</span>'
         f'<span class="src-title">{esc(src.title)}<span class="src-how">{esc(src.how)}</span></span></span>'
         f'<span class="src-cell c-conn">{connection_pill(state, src)}</span>'
         f'<span class="src-cell c-fresh">{_freshness_cell(src, stat, state, now)}</span>'
@@ -201,7 +202,7 @@ async def source_page(key: str, request: Request):
     return HTMLResponse(_render("sources", f"""
       <p class="crumb"><a href="/sources#open={esc(key)}">← источники</a></p>
       <div class="head">
-        <h1>{src.icon} {esc(src.title)}</h1>
+        <h1>{source_icon(src.key)} {esc(src.title)}</h1>
         {connection_pill(state, src)}
         {_freshness_cell(src, stat, state, now)}
       </div>

@@ -57,7 +57,8 @@ def _subject(content_text: str | None) -> str:
 
 
 def snippet(content_text: str | None) -> str:
-    return " ".join(strip_quoted(message_body(content_text)).split())[:SNIPPET_CHARS]
+    flat = " ".join(strip_quoted(message_body(content_text)).split())
+    return flat if len(flat) <= SNIPPET_CHARS else flat[:SNIPPET_CHARS - 1].rstrip() + "…"
 
 
 def queries_for(source: str, identifier: str, limit: int) -> list[tuple[str, dict[str, Any]]]:
