@@ -3,6 +3,7 @@ avatar serving (`/entities/{id}/avatar`)."""
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 
@@ -15,7 +16,6 @@ from vera_shared.graph.dedup import (
     find_duplicates_by_name,
     get_entity_context,
     get_entity_dossiers,
-    merge_entities,
     merge_username_collision_pairs,
 )
 from vera_shared.graph.identity import (
@@ -23,8 +23,16 @@ from vera_shared.graph.identity import (
     run_identity_analysis,
     set_suggestion_status,
 )
+from vera_shared.graph.merge import merge_entities
 
 log = logging.getLogger(__name__)
+
+
+async def _merge_with_report(keep_id: int, drop_id: int, reason: str) -> None:
+    """Один путь слияния с отчётом; отчёт пишем в лог — на странице его
+    негде хранить, а откат по нему делает `merge_graph_duplicates.py --undo`."""
+    report = await merge_entities(keep_id, [drop_id], reason)
+    log.info("merge report: %s", json.dumps(report.to_dict(), ensure_ascii=False))
 
 # Один анализ за раз; состояние живёт в процессе дашборда (single-owner UI).
 _analysis: dict = {"running": False, "last": None}
@@ -299,7 +307,7 @@ async def entities_suggestion(request: Request,
     if row and action in ("accept_a", "accept_b"):
         keeper = row["entity_a"] if action == "accept_a" else row["entity_b"]
         merged = row["entity_b"] if action == "accept_a" else row["entity_a"]
-        await merge_entities(keeper, merged)
+        await _merge_with_report(keeper, merged, f"dashboard: предложение {suggestion_id}")
     return RedirectResponse("/entities/duplicates", status_code=303)
 
 
@@ -384,8 +392,8 @@ async def entity_merge(request: Request,
                        merged_id: int = Form(...)):  # noqa: B008
     if (resp := owner_or_auth_error(request)) is not None:
         return resp
-    result = await merge_entities(keeper_id, merged_id)
+    await _merge_with_report(keeper_id, merged_id, "dashboard: ручное слияние")
     return RedirectResponse(
-        f"/entities/duplicates?merged={result}",
+        f"/entities/duplicates?merged={merged_id}",
         status_code=303,
     )

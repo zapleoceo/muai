@@ -24,6 +24,7 @@ from vera_shared.db.models_sources import SlackAuthRow
 
 from dashboard.auth import COOKIE_NAME, require_owner
 from dashboard.stats import drop_detail_cache
+from dashboard.ui.shell import standalone_html
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -77,25 +78,7 @@ async def save_token(token: str, who: dict) -> None:
 
 
 def _page(body: str, *, code: int = 200) -> HTMLResponse:
-    return HTMLResponse(f"""<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
-<title>Подключить Slack</title><style>
-body{{font-family:-apple-system,sans-serif;background:#0f1115;color:#e4e6eb;
-display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;padding:24px}}
-.box{{background:#1a1d24;padding:36px;border-radius:16px;max-width:520px;width:100%}}
-h1{{margin:0 0 6px;font-size:20px}}
-input{{width:100%;padding:11px 12px;margin:8px 0 16px;border-radius:8px;
-border:1px solid #2a2d34;background:#0f1115;color:#e4e6eb;font-size:14px;
-font-family:'SF Mono',Monaco,monospace;box-sizing:border-box}}
-button{{padding:11px 22px;border-radius:8px;border:none;background:#4dabf7;color:#fff;
-font-weight:600;font-size:15px;cursor:pointer}}
-label{{font-size:13px;color:#9aa0a8}}
-a{{color:#4dabf7;text-decoration:none}}
-.err{{background:#4a1a1d;color:#ffaaaa;padding:12px 14px;border-radius:8px;
-margin:0 0 16px;font-size:14px}}
-.mute{{color:#6b7280;font-size:13px;line-height:1.55}}
-ol{{color:#9aa0a8;font-size:13px;line-height:1.7;padding-left:20px;margin:14px 0 20px}}
-code{{background:#0f1115;padding:1px 5px;border-radius:4px;font-size:12px}}
-</style></head><body><div class="box">{body}</div></body></html>""", status_code=code)
+    return HTMLResponse(standalone_html("Подключить Slack", body), status_code=code)
 
 
 _FORM = """

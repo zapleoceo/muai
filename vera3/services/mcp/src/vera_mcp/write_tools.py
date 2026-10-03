@@ -1,10 +1,9 @@
 """MCP-инструменты записи. Каждая запись попадает в `mcp_audit` и откатывается `undo`.
 
-Ничего не удаляется: событие скрывается (`hidden`), связь снимается
-(`is_current=false`). Слияния сущностей здесь нет — это отдельный этап
-(`vera_shared.graph.merge`, ветка feat/graph-dedup-merge); когда он
-появится, `entity_merge` добавляется сюда новой функцией и записью в
-`WRITE_TOOLS`.
+Событие скрывается (`hidden`), связь снимается (`is_current=false`), прежние
+версии лежат в журнале. Слияние сущностей (`entity_merge`) — исключение: оно
+удаляет строки-дубли, но кладёт в журнал весь `MergeReport`, и
+`entity_unmerge`/`undo` возвращает их с прежними id.
 """
 from __future__ import annotations
 
@@ -17,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from vera_shared.db.engine import get_session
 from vera_shared.events import edit as event_edit
 from vera_shared.graph import edit as graph_edit
+from vera_shared.graph.merge import merge_entities
 from vera_shared.memory.remember import RememberOutcome, remember_fact
 
 from vera_mcp import audit
@@ -162,6 +162,32 @@ async def relationship_retire(relationship_id: int, ctx: Context) -> dict[str, A
                           {"relationship_id": relationship_id}, "relationship", op)
 
 
+async def entity_merge(
+    keep_id: int, drop_ids: Annotated[list[int], Field(min_length=1, max_length=20)],
+    reason: Annotated[str, Field(min_length=3, max_length=500)], ctx: Context,
+) -> dict[str, Any]:
+    """Слить дубли сущностей: drop_ids вливаются в keep_id (алиасы, членства, связи переезжают); откат — entity_unmerge/undo. Merge duplicate entities into keep_id; the full MergeReport is kept for undo."""
+    async def op(s: AsyncSession) -> Applied:
+        report = await merge_entities(keep_id, drop_ids, reason, session=s)
+        name = (await graph_edit.current_name(s, keep_id))["name"]
+        return keep_id, report.to_dict(), {"name": name}, {
+            "keep_id": keep_id, "merged": report.drop_ids, "counts": report.counts()}
+
+    return await _audited(ctx, "entity_merge",
+                          {"keep_id": keep_id, "drop_ids": drop_ids, "reason": reason},
+                          "merge", op)
+
+
+async def entity_unmerge(merge_audit_id: int, ctx: Context,
+                         force: bool = False) -> dict[str, Any]:
+    """Разделить слияние обратно по audit_id записи entity_merge (то же, что undo, но только для слияний). Reverse an entity_merge by its audit id."""
+    async with get_session() as s:
+        entry = await audit.get_entry(s, merge_audit_id)
+        if entry.tool != "entity_merge":
+            raise ValueError(f"audit entry {merge_audit_id} is '{entry.tool}', not entity_merge")
+        return await undo_entry(s, merge_audit_id, client_of(ctx), force)
+
+
 async def undo(audit_id: int, ctx: Context, force: bool = False) -> dict[str, Any]:
     """Откатить запись журнала по id (remember скрывает событие). Undo an audit entry; refuses if the object changed since unless force."""
     async with get_session() as s:
@@ -169,4 +195,5 @@ async def undo(audit_id: int, ctx: Context, force: bool = False) -> dict[str, An
 
 
 WRITE_TOOLS = (remember, update_event, hide_event, unhide_event, entity_rename,
-               entity_add_alias, relationship_set, relationship_retire, undo)
+               entity_add_alias, relationship_set, relationship_retire, entity_merge,
+               entity_unmerge, undo)

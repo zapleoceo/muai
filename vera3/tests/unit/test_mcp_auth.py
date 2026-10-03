@@ -134,7 +134,8 @@ async def test_right_token_lists_every_tool(mcp_client):
         "search", "recent_events", "get_event", "list_sources", "entity_find",
         "entity_context", "graph_neighbours", "timeline", "sql_query", "audit_log",
         "remember", "update_event", "hide_event", "unhide_event", "entity_rename",
-        "entity_add_alias", "relationship_set", "relationship_retire", "undo"}
+        "entity_add_alias", "relationship_set", "relationship_retire", "entity_merge",
+        "entity_unmerge", "undo"}
 
 
 @pytest.mark.asyncio

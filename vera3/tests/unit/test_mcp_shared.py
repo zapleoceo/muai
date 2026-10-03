@@ -43,12 +43,12 @@ def test_parse_iso_naive_variants():
 
 
 def test_search_filters_exclude_hidden_events():
-    from brain_search import retrieval
+    from brain_search import retrieval_filters as rf
 
-    assert NOT_HIDDEN_SQL in retrieval._NOT_A_WORLD_EVENT
-    assert NOT_HIDDEN_SQL in retrieval.semantic_filter(None, None)[0]
+    assert NOT_HIDDEN_SQL in rf.NOT_A_WORLD_EVENT
+    assert NOT_HIDDEN_SQL in rf.semantic_filter(None, None)[0]
     project = SimpleNamespace(name="p", account_like=[], chats=[])
-    assert NOT_HIDDEN_SQL in retrieval.project_clause(project, None)[0]
+    assert NOT_HIDDEN_SQL in rf.project_clause(project, None)[0]
 
 
 def test_main_starts_uvicorn_and_warns_without_tokens(monkeypatch, caplog):

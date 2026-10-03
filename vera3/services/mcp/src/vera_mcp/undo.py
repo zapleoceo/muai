@@ -13,6 +13,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from vera_shared.db.models_mcp import McpAuditRow
 from vera_shared.events import edit as event_edit
 from vera_shared.graph import edit as graph_edit
+from vera_shared.graph.merge_errors import MergeError
+from vera_shared.graph.merge_report import MergeReport
+from vera_shared.graph.unmerge import UnmergeError, unmerge
 
 from vera_mcp import audit
 
@@ -79,7 +82,21 @@ async def _undo_relationship(s: AsyncSession, row: McpAuditRow,
     return current, await graph_edit.restore_relationship(s, rel_id, row.before)
 
 
+async def _undo_merge(s: AsyncSession, row: McpAuditRow,
+                      force: bool) -> tuple[dict[str, Any], dict[str, Any]]:
+    """`before` — весь MergeReport; `after` — имя победителя на момент слияния."""
+    report = MergeReport.from_dict(row.before or {})
+    current = await graph_edit.current_name(s, report.keep_id)
+    _refuse_if_diverged(current, row.after or {}, ("name",), "entity", force)
+    try:
+        await unmerge(report, session=s)
+    except (UnmergeError, MergeError) as e:
+        raise UndoRefused(str(e)) from e
+    return {"dropped": report.drop_ids}, {"restored": report.drop_ids}
+
+
 _UNDO_BY_KIND = {
+    "merge": _undo_merge,
     "event": _undo_event,
     "entity": _undo_entity,
     "alias": _undo_alias,

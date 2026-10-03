@@ -29,6 +29,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models_sources import InstagramSessionRow
 
 from dashboard.auth import COOKIE_NAME, require_owner
+from dashboard.ui.shell import standalone_html
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -47,20 +48,7 @@ def _prune_flows() -> None:
 
 
 def _page(title: str, body_html: str, *, code: int = 200) -> HTMLResponse:
-    return HTMLResponse(f"""<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
-<title>{title}</title><style>
-body{{font-family:-apple-system,sans-serif;background:#0f1115;color:#e4e6eb;
-display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}}
-.box{{background:#1a1d24;padding:40px;border-radius:16px;max-width:440px;width:100%}}
-h1{{margin-top:0;font-size:20px}}
-input{{width:100%;padding:10px 12px;margin:6px 0 14px;border-radius:8px;border:1px solid #333;
-background:#0f1115;color:#e4e6eb;font-size:15px;box-sizing:border-box}}
-button{{padding:10px 20px;border-radius:8px;border:none;background:#4dabf7;color:#fff;
-font-weight:600;font-size:15px;cursor:pointer}}
-label{{font-size:13px;color:#9aa0a8}}
-a{{color:#4dabf7}} .err{{color:#ffaaaa}} .mute{{color:#9aa0a8;font-size:13px}}
-</style></head><body><div class="box">{body_html}</div></body></html>""",
-        status_code=code)
+    return HTMLResponse(standalone_html(title, body_html), status_code=code)
 
 
 _FORM = """

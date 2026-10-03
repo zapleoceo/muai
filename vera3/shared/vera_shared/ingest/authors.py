@@ -22,6 +22,7 @@ from collections.abc import Callable
 from typing import Any
 
 from vera_shared.graph.repo import upsert_entity, upsert_entity_linked
+from vera_shared.graph.twin_suggest import suggest_person_twin
 
 log = logging.getLogger(__name__)
 
@@ -55,12 +56,14 @@ async def sync_author_entities(
         known_as = fields.pop("known_as", None)
         try:
             if known_as:
-                _id, how = await upsert_entity_linked(
+                entity_id, how = await upsert_entity_linked(
                     source=source, known_as=list(known_as), **fields)
                 if how == "linked":
                     linked += 1
             else:
-                await upsert_entity(source=source, **fields)
+                entity_id = await upsert_entity(source=source, **fields)
+            if fields["type"] == "person":
+                await suggest_person_twin(entity_id, fields["name"])
         except Exception as e:  # noqa: BLE001 — сбой графа не останавливает приём событий
             log.warning("%s: не завёл сущность для %s: %s", source, identifier, e)
     if linked:

@@ -16,10 +16,11 @@ def test_alias_qualifies_the_shared_predicate():
 
 
 def test_dashboard_shows_hidden_in_russian():
-    from dashboard.events_routes import TRIAGE_STATUS_INFO
+    from dashboard.events_view import STATUS_LABEL, TRIAGE_STATUS_INFO
 
     icon, why = TRIAGE_STATUS_INFO["hidden"]
     assert icon and "скрыто" in why
+    assert STATUS_LABEL["hidden"] == "скрыто"
 
 
 @pytest.mark.asyncio

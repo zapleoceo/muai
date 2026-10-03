@@ -9,6 +9,7 @@ from fastapi.responses import HTMLResponse, RedirectResponse
 from vera_shared.control import SETTINGS, get_settings_values, set_control
 
 from dashboard.render import _render, esc, owner_or_redirect
+from dashboard.ui.components import collapsible
 
 router = APIRouter()
 
@@ -42,7 +43,7 @@ async def settings_page(request: Request):
                      f'<option value="0" {checked_off}>выкл</option></select>')
         else:
             field = (f'<input type="number" name="{s.key}" value="{esc(val)}" '
-                     f'style="width:120px">')
+                     f'>')
         rows.append(
             f'<div class="set-row"><div class="set-main">'
             f'<label>{esc(s.label)}</label>'
@@ -53,38 +54,38 @@ async def settings_page(request: Request):
 
     deploy_rows = "".join(
         f'<div class="row"><span>{esc(name)} '
-        f'<span class="mute" style="font-size:11px">{esc(desc)}</span></span>'
+        f'<span class="muted small">{esc(desc)}</span></span>'
         f'<span class="mute"><code>{esc(os.environ.get(name, dflt))}</code></span></div>'
         for name, dflt, desc in _DEPLOY_PARAMS
     )
 
-    body = f"""
-    <h2>⚙️ Настройки</h2>
-    <div class="section">
-      <h3 style="margin-top:0">Монитор и триаж (меняются на лету)</h3>
+    advanced = f"""
+      <h4>Монитор и разбор (меняются на лету)</h4>
       <form method="post" action="/control/settings">
         {''.join(rows)}
-        <button type="submit" style="margin-top:14px">Сохранить</button>
+        <button type="submit">Сохранить</button>
       </form>
-    </div>
-
-    <div class="section">
-      <h3 style="margin-top:0">Deploy-параметры (справочно)</h3>
-      <div class="mute" style="font-size:12px;margin-bottom:10px">
-        Задаются в <code>infra/.env</code> / docker-compose, меняются передеплоем.
-      </div>
+      <h4>Параметры развёртывания (только чтение)</h4>
+      <p class="muted small">Задаются в <code>infra/.env</code> и docker-compose,
+        меняются переразвёртыванием.</p>
       {deploy_rows}
-    </div>
+    """
+    body = f"""
+    <h2>Настройки</h2>
+    <p class="muted">Обычно сюда заходить не нужно: Вера работает с настройками по умолчанию.</p>
+    {collapsible("Дополнительно", advanced)}
+    <h4>Прочее</h4>
+    <p><a href="/entities/duplicates">Дубли людей</a>
+       <span class="muted small"> — объединение повторяющихся карточек</span></p>
 
     <style>
       .set-row {{ display:flex; justify-content:space-between; align-items:flex-start;
-                  gap:20px; padding:14px 0; border-bottom:1px solid #2a2d34; }}
-      .set-row:last-of-type {{ border-bottom:none; }}
-      .set-main label {{ font-weight:600; font-size:14px; }}
-      .set-desc {{ color:#8a94a0; font-size:12px; margin-top:4px; max-width:520px;
-                   line-height:1.5; }}
-      .set-field {{ white-space:nowrap; }}
-      .set-unit {{ color:#8a94a0; font-size:12px; margin-left:6px; }}
+                  gap:1.2rem; padding:.9rem 0; border-bottom:1px solid var(--vera-line); }}
+      .set-main label {{ font-weight:600; }}
+      .set-desc {{ color:var(--vera-muted); font-size:.85rem; margin-top:.2rem; max-width:32rem; }}
+      .set-field {{ white-space:nowrap; display:flex; align-items:center; gap:.4rem; }}
+      .set-field input, .set-field select {{ width:8rem; margin:0; }}
+      .set-unit {{ color:var(--vera-muted); font-size:.85rem; }}
     </style>
     """
     return HTMLResponse(_render("settings", body))

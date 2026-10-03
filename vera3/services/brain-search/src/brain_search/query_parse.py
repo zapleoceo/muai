@@ -11,66 +11,32 @@ from __future__ import annotations
 
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
+from vera_shared.projects.rules import QUERY_TRIGGERS, project_from_query
 from vera_shared.timeutil import utc_naive_now
 
 TZ_OFFSET_H = int(os.environ.get("VERA_TZ_OFFSET_H", "7"))
 
 
-# ─── Проекты: «по проекту Itstep» → реальные ящики + рабочие чаты ────────────
-# Брать «по проекту X» как текстовый поиск слова X — неверно: рабочий чат
-# «J Branch Internal» не содержит «itstep», но это сердце проекта Джакарта.
-# Реестр редактируемый — Дима может уточнить состав чатов.
+# ─── Проекты: «по проекту Itstep» → events.project, а не текст «itstep» ──────
+# Источник истины — vera_shared.projects.rules (QUERY_TRIGGERS). Колонку
+# events.project проставляют триаж и sync_projects: на проде заполнена у
+# 99.8% событий, так что отдельные реестры ящиков и чатов не нужны.
 
-@dataclass
+@dataclass(frozen=True)
 class ProjectScope:
     name: str
-    account_like: list[str] = field(default_factory=list)   # ILIKE паттерны
-    chats: list[str] = field(default_factory=list)          # точные chat_title
-
-
-PROJECT_ALIASES: dict[str, dict] = {
-    "itstep": {
-        # distinctive триггеры — низкий риск ложного срабатывания
-        "triggers": ["itstep", "it step", "it-step", "ит степ", "ит-степ",
-                     "айтистеп", "джакарт", "jakarta", "j branch"],
-        "account_like": ["itstep.org"],
-        "chats": [
-            "Старшие и отчеты",
-            "J Branch Internal",
-            "Studing Jakarta internal",
-            "IT-Step x TEO",
-            "Jakarta sales",
-        ],
-    },
-    "veranda": {
-        # стемы — ловят падежи: «веранде/веранды/веранду»
-        "triggers": ["verand", "веранд"],
-        "account_like": [],
-        "chats": [
-            "Veranda менеджмент",
-            "Веранда сотрудники",
-            "Veranda transactions",
-            "Veranda AI",
-            "GameZone & Veranda",
-        ],
-    },
-}
+    triggers: tuple[str, ...] = ()
 
 
 def resolve_project(q: str) -> ProjectScope | None:
-    """Определить упомянутый проект по триггерам. None — если не упомянут."""
-    ql = q.lower()
-    for name, cfg in PROJECT_ALIASES.items():
-        if any(t in ql for t in cfg["triggers"]):
-            return ProjectScope(
-                name=name,
-                account_like=list(cfg["account_like"]),
-                chats=list(cfg["chats"]),
-            )
-    return None
+    """Определить упомянутый проект. None — если не упомянут."""
+    name = project_from_query(q)
+    if name is None:
+        return None
+    return ProjectScope(name=name, triggers=QUERY_TRIGGERS[name])
 
 
 # ─── Намерение «сводка/что сделано» → шире выборка, синтез по сути ───────────
@@ -92,8 +58,17 @@ def is_summary_query(q: str) -> bool:
 SOURCE_WEIGHTS: dict[str, float] = {
     "perplexity": 0.25,
     "vera_chat": 0.5,
-    "vera_memory": 1.2,  # выведенные факты — наоборот ценнее
+    # vera_memory — 1.0, как у первичных событий. Было 1.2: вместе с
+    # importance/200 и бонусом account выведенный факт обгонял первичное
+    # свидетельство в 7 запросах из 10 (замер 2026-10-03), хотя он лишь
+    # пересказ; повышенный вес к тому же усиливал бы запись агента из
+    # недоверенного текста писем.
 }
+
+#: Сообщения Telegram-ботов (сервисные, оплаты, чат-менеджеры) — шум рядом
+#: с людьми и рабочими письмами, но не выбрасываем: в «Veranda transactions»
+#: единственный автор — бот оплат.
+BOT_AUTHOR_WEIGHT = 0.4
 
 SOURCE_PROMPT_NOTE = (
     "4) События с source=perplexity — это ЗАПРОСЫ Димы к Perplexity AI "
@@ -132,10 +107,20 @@ def extract_account_terms(words: list[str], *, limit: int = 5) -> list[str]:
 
 
 # Порядок важен + word boundary: «позавчера» содержит «вчера» как подстроку.
+_NOT_LETTER_BEFORE = r"(?<![\wа-яёіїєґ])"
+_NOT_LETTER_AFTER = r"(?![\wа-яёіїєґ])"
+
+
+def _day_words(*words: str) -> re.Pattern[str]:
+    alt = "|".join(words)
+    return re.compile(f"{_NOT_LETTER_BEFORE}(?:{alt}){_NOT_LETTER_AFTER}")
+
+
 _RELATIVE_DAY = [
-    (re.compile(r"(?<![а-яё])позавчера(?![а-яё])"), 2),
-    (re.compile(r"(?<![а-яё])вчера(?![а-яё])"), 1),
-    (re.compile(r"(?<![а-яё])сегодня(?![а-яё])"), 0),
+    (_day_words("позавчера", "позавчора", r"day\s+before\s+yesterday",
+                r"kemarin\s+dulu"), 2),
+    (_day_words("вчера", "вчора", "yesterday", "kemarin"), 1),
+    (_day_words("сегодня", "сьогодні", "today", r"hari\s+ini"), 0),
 ]
 
 # «за 3 дня», «за последние 5 дней», «3 дня назад»
@@ -152,7 +137,15 @@ _MONTHS = {
 _DATE_WORD_RE = re.compile(
     r"(\d{1,2})\s+(январ|феврал|март|апрел|ма[яе]|июн|июл|август|сентябр|октябр|ноябр|декабр)",
 )
-_DATE_NUM_RE = re.compile(r"\b(\d{4})-(\d{2})-(\d{2})\b|\b(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?\b")
+# dd.mm без года — только с двумя цифрами в обеих частях («09.06»): «3.5» и
+# «1.5 млн» — число, а не дата. Версии вроде v1.2.3 и суммы 1.250,5 тоже мимо.
+_AMOUNT_UNIT = (r"(?!\s*(?:млн|млрд|тыс|тис|k\b|m\b|jt\b|juta|ribu|rb\b|"
+                r"million|thousand|%|usd|\$|руб|₽))")
+_DATE_NUM_RE = re.compile(
+    r"(?<![\w.,])(?:(\d{4})-(\d{2})-(\d{2})"
+    r"|(\d{2})\.(\d{2})(?![\d.,]\d)" + _AMOUNT_UNIT +
+    r"|(\d{1,2})\.(\d{1,2})\.(\d{2,4}))(?![\w])"
+)
 
 
 def _local_day_bounds_utc(now_utc: datetime, days_ago: int) -> tuple[datetime, datetime]:
@@ -199,9 +192,10 @@ def parse_time_range(q: str, *, now_utc: datetime | None = None) -> tuple[dateti
         try:
             if m.group(1):  # ISO 2026-06-09
                 candidate = datetime(int(m.group(1)), int(m.group(2)), int(m.group(3)))
-            else:  # 09.06[.2026]
-                day, month = int(m.group(4)), int(m.group(5))
-                year_raw = m.group(6)
+            else:  # 09.06 или 9.6.2026
+                day = int(m.group(4) or m.group(6))
+                month = int(m.group(5) or m.group(7))
+                year_raw = m.group(8)
                 local_now = now_utc + timedelta(hours=TZ_OFFSET_H)
                 year = int(year_raw) if year_raw else local_now.year
                 if year < 100:

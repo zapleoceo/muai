@@ -16,6 +16,7 @@ from vera_shared.db.models_graph import EntityAliasRow, EntityRow, RelationshipR
 from vera_shared.db.models_mcp import McpAuditRow
 from vera_shared.events.edit import EventBusy, EventNotFound
 from vera_shared.graph.edit import GraphEditError
+from vera_shared.graph.merge_errors import MergeError
 from vera_shared.memory.remember import RememberOutcome
 
 pytestmark = pytest.mark.asyncio
@@ -425,3 +426,68 @@ async def test_text_edit_requeues_only_from_done_or_error(sqlite_db, status, exp
     await add_event(1, "x", status=status)
     await w.update_event(1, ctx(), content_text="y")
     assert (await event()).triage_status == expected
+
+
+# ─── слияние сущностей ──────────────────────────────────────────────────────
+
+
+async def _names() -> dict[int, str]:
+    async with get_session() as s:
+        return {e.id: e.name for e in (await s.execute(select(EntityRow))).scalars()}
+
+
+async def test_entity_merge_audits_report_and_undo_restores_the_duplicate(sqlite_db):
+    keep, dup, other = await add_entity("Keep"), await add_entity("Dup"), await add_entity("O")
+    await w.entity_add_alias(dup, "telegram", "user:9", ctx())
+    await w.relationship_set(dup, other, "friend_of", ctx())
+    res = await w.entity_merge(keep, [dup], "same person", ctx("codex"))
+    assert res["keep_id"] == keep and res["merged"] == [dup] and res["counts"]
+    assert dup not in await _names()
+    async with get_session() as s:
+        alias = (await s.execute(select(EntityAliasRow))).scalar_one()
+        assert alias.entity_id == keep                       # алиас переехал к победителю
+    row = (await audit_rows())[-1]
+    assert (row.tool, row.target_kind, row.client) == ("entity_merge", "merge", "codex")
+    assert row.before["drop_ids"] == [dup]                   # весь MergeReport
+
+    out = await w.entity_unmerge(res["audit_id"], ctx())
+    assert out["ok"] is True
+    assert (await _names())[dup] == "Dup"
+    async with get_session() as s:
+        alias = (await s.execute(select(EntityAliasRow))).scalar_one()
+        assert alias.entity_id == dup                        # вернулся на прежнее место
+        rel = (await s.execute(select(RelationshipRow))).scalar_one()
+        assert rel.subject_entity_id == dup
+
+
+async def test_merge_undo_via_generic_undo_and_refusals(sqlite_db):
+    keep, dup = await add_entity("Keep"), await add_entity("Dup")
+    res = await w.entity_merge(keep, [dup], "same person", ctx())
+    await w.entity_rename(keep, "Renamed", ctx())
+    with pytest.raises(UndoRefused, match="force"):
+        await w.undo(res["audit_id"], ctx())
+    await w.undo(res["audit_id"], ctx(), force=True)
+    assert await _names() == {keep: "Keep", dup: "Dup"}
+    with pytest.raises(UndoRefused, match="already undone"):
+        await w.entity_unmerge(res["audit_id"], ctx())
+
+
+async def test_merge_undo_refused_when_the_dropped_id_is_taken(sqlite_db):
+    keep, dup = await add_entity("Keep"), await add_entity("Dup")
+    res = await w.entity_merge(keep, [dup], "same person", ctx())
+    await add_entity("Newcomer", entity_id=dup)
+    with pytest.raises(UndoRefused, match="заняты"):
+        await w.undo(res["audit_id"], ctx())
+
+
+async def test_merge_validation_and_unmerge_of_other_tool(sqlite_db):
+    keep = await add_entity("Keep")
+    with pytest.raises(MergeError):
+        await w.entity_merge(keep, [keep], "self merge", ctx())
+    with pytest.raises(MergeError, match="не найдена"):
+        await w.entity_merge(keep, [999], "ghost", ctx())
+    assert await audit_rows() == []
+    hid = await add_event(1, "x")
+    shown = await w.hide_event(hid, ctx())
+    with pytest.raises(ValueError, match="not entity_merge"):
+        await w.entity_unmerge(shown["audit_id"], ctx())

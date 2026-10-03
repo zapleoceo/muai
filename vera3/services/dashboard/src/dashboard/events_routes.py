@@ -1,16 +1,26 @@
-"""Events log page (`/events`) — filterable table with per-event triage
-status, importance, and (via LATERAL join) the last broker call that
-triaged it (model/tokens/cost)."""
+"""Входящее (`/events`) — события по дням с фильтром, плюс карточка события
+`/events/{id}`. Запрос и маршрутизация здесь, разметка списка — в `events_view`."""
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy import text
+from sqlalchemy.exc import DBAPIError
 from vera_shared.db.engine import get_session
+from vera_shared.timeutil import utc_naive_now
 
-from dashboard.events_filters import source_options, status_options
+from dashboard.events_view import (  # noqa: F401
+    EVENTS_COLUMN_HINTS,
+    PAGE_STEP,
+    TRIAGE_STATUS_INFO,
+    events_table,
+    filter_form,
+    more_link,
+    parse_cursor,
+)
 from dashboard.render import (
     _render,
     esc,
@@ -21,127 +31,109 @@ from dashboard.render import (
 from dashboard.stats import get_stats
 
 router = APIRouter()
+log = logging.getLogger(__name__)
 
-# events.triage_status → (эмодзи в таблице, русское пояснение для title=).
-TRIAGE_STATUS_INFO: dict[str, tuple[str, str]] = {
-    "done": ("✓", "обработано триажем (важность/проект/темы проставлены)"),
-    "pending": ("⏳", "ждёт очереди на обработку триажем"),
-    "processing": ("⏳", "обрабатывается прямо сейчас"),
-    "error": ("✗", "ошибка при обработке, будет повторная попытка (см. triage_error)"),
-    "dead": ("☠", "превышено число попыток — требует ручного разбора"),
-    "superseded": ("≈", "заменено похожим более новым событием (семантический дедуп)"),
-    "hidden": ("⊘", "скрыто владельцем через MCP (hide_event): не попадает в поиск и выдачи"),
-    "media_pending": ("🖼", "медиа (фото/голос) ждёт vision/распознавания через брокер"),
-}
+SEARCH_TIMEOUT_S = 5
 
-# Заголовки колонок /events — подсказки на русском (title=, наведение мышью).
-EVENTS_COLUMN_HINTS: dict[str, str] = {
-    "id": "Внутренний ID события в базе",
-    "tr": "Статус триажа — обработки события ИИ. Наведите на значок в строке для деталей",
-    "imp": "Важность события, 0–100 — оценивает ИИ при триаже. «—» = ещё не оценено",
-    "src": "Источник события (events.source): telegram, gmail, slack, voice — слушатель, и т.д.",
-    "account": "Аккаунт, бот или ящик, через который пришло событие",
-    "time": "Когда событие произошло (occurred_at)",
-    "preview": "Первые символы текста события",
-    "req": "ID запроса к брокеру (request_id) — последний LLM-вызов по этому событию",
-    "model": "Какая модель отвечала на этот запрос (через aibroker)",
-    "tokens": "Токены запроса: вход → выход",
-    "cost": "Стоимость запроса к брокеру, USD",
-}
+
+def _like(raw: str) -> str:
+    escaped = raw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
+
+
+def _is_postgres(session: Any) -> bool:
+    dialect = getattr(getattr(session, "bind", None), "dialect", None)
+    return getattr(dialect, "name", "") == "postgresql"
+
+
+def _is_timeout(exc: DBAPIError) -> bool:
+    msg = str(exc).lower()
+    return "statement timeout" in msg or "canceling statement" in msg
+
+
+async def _fetch(where_sql: str, params: dict[str, Any], bounded: bool) -> list[Any] | None:
+    """Строки страницы; None — запрос не уложился в таймаут (текстовый поиск
+    по events без индекса)."""
+    sql = text(f"""
+        SELECT e.id, e.triage_status, e.importance, e.source, e.account,
+               e.occurred_at, e.content_text, e.nature,
+               EXISTS(SELECT 1 FROM event_embeddings ee WHERE ee.event_id = e.id) AS has_emb,
+               u.request_id, u.model, u.tokens_in, u.tokens_out, u.cost_usd
+        FROM events e
+        LEFT JOIN LATERAL (
+            SELECT request_id, model, tokens_in, tokens_out, cost_usd
+            FROM usage_log ul
+            WHERE ul.event_id = e.id
+            ORDER BY ul.created_at DESC
+            LIMIT 1
+        ) u ON true
+        {where_sql}
+        ORDER BY e.occurred_at DESC, e.id DESC
+        LIMIT :limit
+    """)
+    async with get_session() as s:
+        try:
+            if bounded and _is_postgres(s):
+                await s.execute(text(f"SET LOCAL statement_timeout = '{SEARCH_TIMEOUT_S}s'"))
+            return list((await s.execute(sql, params)).mappings().all())
+        except DBAPIError as e:
+            if not _is_timeout(e):
+                raise
+            log.warning("поиск во входящем не уложился в %sс", SEARCH_TIMEOUT_S)
+            return None
 
 
 @router.get("/events", response_class=HTMLResponse)
-async def events_page(request: Request, limit: int = Query(100, ge=1, le=500),  # noqa: B008
+async def events_page(request: Request,
+                       limit: int = Query(PAGE_STEP, ge=1, le=PAGE_STEP * 4),  # noqa: B008
                        source: str | None = None,
-                       status: str | None = None):
+                       status: str | None = None,
+                       q: str = "",
+                       tech: str = "",
+                       before: str = ""):
     if (resp := owner_or_redirect(request)) is not None:
         return resp
 
-    # LATERAL-джойн подтягивает ПОСЛЕДНИЙ брокер-вызов по каждому событию
-    # (request_id / модель / токены / цена) из usage_log — индекс ix_usage_event.
+    show_tech = tech == "1"
+    needle = q.strip()
     where = []
-    params: dict[str, Any] = {"limit": limit}
+    params: dict[str, Any] = {"limit": limit + 1}
     if source:
         where.append("e.source = :source")
         params["source"] = source
     if status:
         where.append("e.triage_status = :status")
         params["status"] = status
+    if needle:
+        where.append("e.content_text ILIKE :q ESCAPE '\\'")
+        params["q"] = _like(needle)
+    if (cursor := parse_cursor(before)) is not None:
+        where.append("(e.occurred_at, e.id) < (:before_at, :before_id)")
+        params["before_at"], params["before_id"] = cursor
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
 
-    async with get_session() as s:
-        rows = (await s.execute(text(f"""
-            SELECT e.id, e.triage_status, e.importance, e.source, e.account,
-                   e.occurred_at, e.content_text, e.nature,
-                   EXISTS(SELECT 1 FROM event_embeddings ee WHERE ee.event_id = e.id) AS has_emb,
-                   u.request_id, u.model, u.tokens_in, u.tokens_out, u.cost_usd
-            FROM events e
-            LEFT JOIN LATERAL (
-                SELECT request_id, model, tokens_in, tokens_out, cost_usd
-                FROM usage_log ul
-                WHERE ul.event_id = e.id
-                ORDER BY ul.created_at DESC
-                LIMIT 1
-            ) u ON true
-            {where_sql}
-            ORDER BY e.occurred_at DESC
-            LIMIT :limit
-        """), params)).mappings().all()
-
-    tbody = []
-    for e in rows:
-        emoji, desc = TRIAGE_STATUS_INFO.get(
-            e["triage_status"], ("?", "неизвестный статус триажа"))
-        status_title = esc(f"{e['triage_status'] or '(пусто)'} — {desc}")
-        imp = e["importance"] if e["importance"] is not None else "—"
-        preview = esc((e["content_text"] or "")[:160])
-        # Три состояния события: свой брокер-вызов / обработано в пачке / ещё не триажено.
-        has_own = e["model"] is not None
-        in_batch = (not has_own) and e["nature"] is not None and e["has_emb"]
-        req = e["request_id"]
-        req_cell = f'<span title="{esc(req)}">{esc(req[:8])}…</span>' if req else "—"
-        if has_own:
-            model = esc(e["model"])
-            tokens = f'{e["tokens_in"]}→{e["tokens_out"]}'
-            cost = f'${e["cost_usd"]:.5f}'
-        elif in_batch:
-            model = '<span class="mute" title="классифицировано групповым вызовом — токены учтены в строке первого события пачки">в пачке ✓</span>'
-            tokens = '<span class="mute">учтено в пачке</span>'
-            cost = "—"
-        else:
-            model = tokens = cost = "—"
-        tbody.append(
-            f'<tr><td><a href="/events/{e["id"]}">{e["id"]}</a></td>'
-            f'<td title="{status_title}">{emoji}</td><td>{imp}</td>'
-            f'<td>{esc(e["source"])}</td><td>{esc(e["account"] or "—")}</td>'
-            f'<td class="mute">{local_dt(e["occurred_at"], "datetime")}</td>'
-            f'<td class="preview">{preview}…</td>'
-            f'<td class="mute">{req_cell}</td><td>{model}</td>'
-            f'<td class="mute">{tokens}</td><td class="mute">{cost}</td></tr>'
-        )
-
+    fetched = await _fetch(where_sql, params, bounded=bool(needle))
+    timed_out = fetched is None
+    rows = fetched or []
+    has_more = len(rows) > limit
+    rows = rows[:limit]
     st = await get_stats()
-    filters = f"""
-      <form method="get" style="display:flex;gap:8px;margin-bottom:14px">
-        <select name="source">{source_options(st["sources_all"], source)}</select>
-        <select name="status">{status_options(TRIAGE_STATUS_INFO, status)}</select>
-        <input type="number" name="limit" value="{limit}" min="1" max="500" style="width:80px">
-        <button type="submit">фильтр</button>
-      </form>
-    """
-
-    thead = "".join(
-        f'<th title="{esc(hint)}">{col}</th>'
-        for col, hint in EVENTS_COLUMN_HINTS.items()
-    )
+    link = more_link({"source": source, "status": status, "q": needle, "limit": limit,
+                      "tech": "1" if show_tech else ""}, rows[-1]) if has_more else ""
+    notice = ('<p class="error">Слишком долгий поиск — уточните запрос '
+              'или выберите источник.</p>' if timed_out else "")
+    top = '<p><a href="/events">← к новым</a></p>' if cursor_given(before) else ""
     return HTMLResponse(_render("events", f"""
-        <h2>Log ({len(rows)})</h2>
-        {filters}
-        <table class="data">
-          <thead><tr>{thead}</tr></thead>
-          <tbody>{''.join(tbody)}</tbody>
-        </table>
+        <h2>Входящее</h2>
+        {filter_form(st["sources_all"], source, status, needle, show_tech)}
+        {notice}{top}
+        {events_table(rows, utc_naive_now().date(), show_tech)}
+        {link}
     """))
+
+
+def cursor_given(before: str) -> bool:
+    return parse_cursor(before) is not None
 
 
 #: Дорожка записи → кто говорил. Это и есть авторство на сегодня: своё
@@ -224,18 +216,18 @@ async def event_page(request: Request, event_id: int):
         ("важность", str(row["importance"]) if row["importance"] is not None else "—"),
         ("природа", esc(row["nature"] or "—")),
         ("проект", esc(row["project"] or "—")),
-        ("триаж", esc(row["triage_status"] or "—")),
+        ("разбор ИИ", esc(row["triage_status"] or "—")),
         ("где", esc(" / ".join(str(meta.get(k)) for k in ("app", "window_title")
                                if meta.get(k)) or "—")),
     ])
-    error = (f'<p class="err">Ошибка триажа: {esc(row["triage_error"])}</p>'
+    error = (f'<p class="err">Ошибка разбора: {esc(row["triage_error"])}</p>'
              if row["triage_error"] else "")
     return HTMLResponse(_render("events", f"""
         <h2>Событие {row['id']}</h2>
         {facts}
         {error}
         <h3>Выжимка</h3>
-        <pre class="wrap">{esc(row['content_text'] or '')}</pre>
+        <pre style="white-space:pre-wrap">{esc(row['content_text'] or '')}</pre>
         {transcript_html(row['content_extra'])}
-        <p><a href="/events">← в журнал</a></p>
+        <p><a href="/events">← во входящее</a></p>
     """))

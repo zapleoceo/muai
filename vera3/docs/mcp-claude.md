@@ -79,15 +79,13 @@ vera3-mcp :8000 (хост 127.0.0.1:8007)          services/mcp, пакет vera
 | `entity_add_alias(entity_id, source, identifier, display_name)` | Алиас (`telegram`+`user:123`, `gmail`+адрес); чужой алиас отвергается (это слияние) |
 | `relationship_set(subject_id, object_id, predicate, fact, confidence)` | Создать/обновить связь, предикат из `PREDICATES` (`boss_of`, `works_at`, `spouse_of`, …), делает её текущей |
 | `relationship_retire(relationship_id)` | `is_current=false` |
+| `entity_merge(keep_id, drop_ids, reason)` | Слияние дублей (`graph.merge.merge_entities` в транзакции журнала): алиасы, членства, связи, аватары переезжают к победителю. В журнал (`before`) кладётся весь `MergeReport` |
+| `entity_unmerge(merge_audit_id, force)` | Обратное слияние по `unmerge`: удалённые сущности возвращаются с прежними id. То же делает `undo` записи слияния; отказ, если победителя переименовали после слияния (без `force`) или id уже занят |
 | `undo(audit_id, force)` | Откат записи журнала |
 
-Слияния сущностей (`entity_merge`) пока нет: оно строится отдельно
-(`vera_shared/graph/merge.py`, ветка `feat/graph-dedup-merge`). Когда
-появится, инструмент добавляется функцией в `write_tools.py` и записью в
-`WRITE_TOOLS`; журнал и `undo` уже умеют хранить такие правки.
-
-Ничего не удаляется: событие скрывается, связь снимается, прежний текст
-лежит в `mcp_audit.before`.
+Событие скрывается, связь снимается, прежний текст лежит в
+`mcp_audit.before`. Единственное удаление строк — слияние сущностей: дубли
+уходят, но весь `MergeReport` в журнале позволяет вернуть их.
 
 ### Журнал и откат
 
