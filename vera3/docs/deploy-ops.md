@@ -826,8 +826,11 @@ systemd-юнитами, поэтому падающий юнит для него
    проверки читаемости). Восстановление — `pg_restore -c -t event_embeddings`.
 1. **Миграция 038** (мгновенно, ACCESS EXCLUSIVE на миллисекунды под
    `lock_timeout` 5 с): `scripts/apply_migration.sh infra/migrations/038_event_embeddings_jsonb_nullable.sql`.
-   Старый код продолжает работать. Накатывать ДО релиза нового кода (или в тот же
-   день перед ним): новый INSERT без JSONB иначе упал бы на NOT NULL.
+   Старый код продолжает работать. **Обязательно ДО пуша нового кода**: проверить
+   `SELECT 1 FROM schema_migrations WHERE version='038_event_embeddings_jsonb_nullable'`.
+   Без 038 новый INSERT без JSONB падает на NOT NULL; факт из `remember` при этом
+   не теряется (вектор пишется в отдельной точке сохранения, `_write_vector`), а
+   события без вектора доэмбеддит reembed, но окно лучше не открывать вовсе.
 2. **Релиз кода** обычным пушем в `master`. Не раньше, чем вся флотилия
    (gateway, brain-search, brain-triage-1/2, mcp) работает на новом образе:
    `docker ps --format '{{.Names}} {{.Image}}'`.
@@ -858,7 +861,9 @@ systemd-юнитами, поэтому падающий юнит для него
      5003 МБ → ~1.5 ГБ, возврат ~3.5 ГБ.
    - Перед: `docker stop vera3-brain-triage-1 vera3-brain-triage-2` (иначе
      записи встанут в очередь на блокировке; пауза безопасна, события ждут
-     в `pending`); при желании `docker stop vera3-brain-search`.
+     в `pending`). Остановка триажа **обязательна**; brain-search можно не
+     останавливать — поиск деградирует до полнотекста (см. ниже), но `remember`
+     в gateway/MCP и счётчики дашборда будут ждать конца VACUUM.
    - `docker exec vera3-postgres psql -U vera -d vera -c "SET maintenance_work_mem='192MB'; SET max_parallel_maintenance_workers=0; VACUUM (FULL, ANALYZE, VERBOSE) event_embeddings"`
      в `tmux`/`nohup`, не в голом ssh. Контейнер на 768m: смотреть `docker stats`.
    - После: `docker start vera3-brain-triage-1 vera3-brain-triage-2`;

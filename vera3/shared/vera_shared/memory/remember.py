@@ -19,6 +19,7 @@ from typing import Any, Literal
 from sqlalchemy import select
 from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.engine import get_session
@@ -168,10 +169,23 @@ async def remember_fact(text: str, kind: Kind = "fact",
         else:
             outcome = RememberOutcome(event_id, False)
             if q_vec is not None:
-                # Вектор уже посчитан для дедупа — пишем сразу, закрывая «слепое окно».
-                stmt, params = embedding_upsert(event_id, q_vec)
-                await s.execute(stmt, params)
+                await _write_vector(s, event_id, q_vec)
         if on_written is not None:
             await on_written(s, outcome)
     log.info("remember: event=%s kind=%s dedup=%s", event_id, kind, outcome.dedup_reason)
     return outcome
+
+
+async def _write_vector(s: AsyncSession, event_id: int, q_vec: list[float]) -> None:
+    """Вектор, уже посчитанный для дедупа, — сразу в event_embeddings."""
+    # Отдельная точка сохранения: отказ записи вектора не должен терять сам
+    # факт. Событие останется без вектора, его подберёт цикл доэмбеддинга
+    # brain-triage (reembed). Так факт переживает и окно накатки миграций
+    # эмбеддингов, где схема колонки на мгновение расходится с кодом.
+    stmt, params = embedding_upsert(event_id, q_vec)
+    try:
+        async with s.begin_nested():
+            await s.execute(stmt, params)
+    except DBAPIError as e:
+        log.warning("remember: вектор события %s не записан (%s) — доэмбеддит reembed",
+                    event_id, type(e).__name__)
