@@ -31,6 +31,15 @@ ACCOUNT_RULES: dict[str, list[str]] = {
     "itstep": ["%itstep.org%"],
 }
 
+# Проект → слова вопроса, по которым поиск понимает «по проекту X». Стемы
+# ловят падежи («веранде/веранды»); Джакарта — филиал IT STEP, поэтому
+# «в Джакарте» без слова itstep тоже про этот проект.
+QUERY_TRIGGERS: dict[str, tuple[str, ...]] = {
+    "itstep": ("itstep", "it step", "it-step", "ит степ", "ит-степ",
+               "айтистеп", "джакарт", "jakarta", "j branch"),
+    "veranda": ("verand", "веранд"),
+}
+
 VALID_PROJECTS = {"itstep", "veranda", "family", "personal", "news", "other"}
 
 
@@ -49,6 +58,15 @@ def match_name(chat_title: str | None) -> str | None:
     low = chat_title.lower()
     for project, subs in NAME_RULES.items():
         if any(s in low for s in subs):
+            return project
+    return None
+
+
+def project_from_query(question: str) -> str | None:
+    """Проект, упомянутый в вопросе, по QUERY_TRIGGERS (первое совпадение)."""
+    low = question.lower()
+    for project, triggers in QUERY_TRIGGERS.items():
+        if any(t in low for t in triggers):
             return project
     return None
 

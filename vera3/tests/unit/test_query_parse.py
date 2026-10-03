@@ -126,8 +126,8 @@ class TestSourceWeights:
         assert source_weight("telegram") == 1.0
         assert source_weight("instagram") == 1.0
 
-    def test_vera_memory_boosted(self):
-        assert source_weight("vera_memory") > 1.0
+    def test_vera_memory_not_above_primary_evidence(self):
+        assert source_weight("vera_memory") == 1.0
 
     def test_scoring_order_flips(self):
         """Главный сценарий бага: perplexity-событие с высоким FTS rank
@@ -174,8 +174,7 @@ class TestProjectResolution:
     def test_itstep_resolved(self):
         p = resolve_project("саммари по проекту Itstep за сегодня")
         assert p is not None and p.name == "itstep"
-        assert any("itstep.org" in a for a in p.account_like)
-        assert "J Branch Internal" in p.chats
+        assert "jakarta" in p.triggers
 
     def test_itstep_via_jakarta(self):
         p = resolve_project("что нового по Джакарте?")
@@ -184,15 +183,14 @@ class TestProjectResolution:
     def test_veranda_resolved(self):
         p = resolve_project("как дела в Веранде?")
         assert p is not None and p.name == "veranda"
-        assert "Veranda менеджмент" in p.chats
+        assert "веранд" in p.triggers
 
     def test_no_project_returns_none(self):
         assert resolve_project("кто такой Дмитрий Егоров?") is None
 
-    def test_chats_are_concrete_titles(self):
-        p = resolve_project("itstep")
-        # Чаты — точные title для exact-match по metadata->>'chat_title'
-        assert all(isinstance(c, str) and c for c in p.chats)
+    def test_triggers_come_from_the_shared_rules(self):
+        from vera_shared.projects.rules import QUERY_TRIGGERS
+        assert resolve_project("itstep").triggers == QUERY_TRIGGERS["itstep"]
 
 
 class TestSummaryIntent:

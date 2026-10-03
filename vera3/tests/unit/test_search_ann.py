@@ -84,7 +84,7 @@ def test_similarity_column_goes_last_so_positions_hold():
                                 with_vec=True))
     select_list = sql.split("FROM events")[0]
     assert select_list.index("AS embedding") < select_list.index("AS rank")
-    assert select_list.rstrip().endswith("AS vec_sim")
+    assert select_list.index("AS vec_sim") < select_list.index("AS is_bot")
     plain = str(retrieval._select(extra_cols="0.0 AS rank", join="JOIN",
                                   where="TRUE", order="id", limit_sql="5"))
     assert "vec_sim" not in plain and "ee.embedding," in plain
@@ -98,7 +98,7 @@ def test_ann_rows_have_the_primary_shape():
 
 
 def test_semantic_filter_keeps_project_and_window_but_not_text():
-    project = SimpleNamespace(name="itstep", account_like=["itstep.org"], chats=[])
+    project = SimpleNamespace(name="itstep")
     rng = (datetime(2026, 9, 1), datetime(2026, 9, 2))
 
     where, params = retrieval.semantic_filter(project, rng)
