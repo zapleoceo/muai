@@ -1,6 +1,5 @@
-"""Events log page (`/events`) — filterable table with per-event triage
-status, importance, and (via LATERAL join) the last broker call that
-triaged it (model/tokens/cost)."""
+"""Входящее (`/events`) — события по дням с фильтром, плюс карточка события
+`/events/{id}`. Запрос и маршрутизация здесь, разметка списка — в `events_view`."""
 from __future__ import annotations
 
 from typing import Any
@@ -9,8 +8,16 @@ from fastapi import APIRouter, Query, Request
 from fastapi.responses import HTMLResponse
 from sqlalchemy import text
 from vera_shared.db.engine import get_session
+from vera_shared.timeutil import utc_naive_now
 
-from dashboard.events_filters import source_options, status_options
+from dashboard.events_view import (  # noqa: F401
+    EVENTS_COLUMN_HINTS,
+    PAGE_STEP,
+    TRIAGE_STATUS_INFO,
+    events_table,
+    filter_form,
+    more_link,
+)
 from dashboard.render import (
     _render,
     esc,
@@ -22,50 +29,36 @@ from dashboard.stats import get_stats
 
 router = APIRouter()
 
-# events.triage_status → (эмодзи в таблице, русское пояснение для title=).
-TRIAGE_STATUS_INFO: dict[str, tuple[str, str]] = {
-    "done": ("✓", "обработано триажем (важность/проект/темы проставлены)"),
-    "pending": ("⏳", "ждёт очереди на обработку триажем"),
-    "processing": ("⏳", "обрабатывается прямо сейчас"),
-    "error": ("✗", "ошибка при обработке, будет повторная попытка (см. triage_error)"),
-    "dead": ("☠", "превышено число попыток — требует ручного разбора"),
-    "superseded": ("≈", "заменено похожим более новым событием (семантический дедуп)"),
-    "media_pending": ("🖼", "медиа (фото/голос) ждёт vision/распознавания через брокер"),
-}
 
-# Заголовки колонок /events — подсказки на русском (title=, наведение мышью).
-EVENTS_COLUMN_HINTS: dict[str, str] = {
-    "id": "Внутренний ID события в базе",
-    "tr": "Статус триажа — обработки события ИИ. Наведите на значок в строке для деталей",
-    "imp": "Важность события, 0–100 — оценивает ИИ при триаже. «—» = ещё не оценено",
-    "src": "Источник события (events.source): telegram, gmail, slack, voice — слушатель, и т.д.",
-    "account": "Аккаунт, бот или ящик, через который пришло событие",
-    "time": "Когда событие произошло (occurred_at)",
-    "preview": "Первые символы текста события",
-    "req": "ID запроса к брокеру (request_id) — последний LLM-вызов по этому событию",
-    "model": "Какая модель отвечала на этот запрос (через aibroker)",
-    "tokens": "Токены запроса: вход → выход",
-    "cost": "Стоимость запроса к брокеру, USD",
-}
+def _like(raw: str) -> str:
+    escaped = raw.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    return f"%{escaped}%"
 
 
 @router.get("/events", response_class=HTMLResponse)
-async def events_page(request: Request, limit: int = Query(100, ge=1, le=500),  # noqa: B008
+async def events_page(request: Request,
+                       limit: int = Query(PAGE_STEP, ge=1, le=500),  # noqa: B008
                        source: str | None = None,
-                       status: str | None = None):
+                       status: str | None = None,
+                       q: str = "",
+                       tech: str = ""):
     if (resp := owner_or_redirect(request)) is not None:
         return resp
 
+    show_tech = tech == "1"
     # LATERAL-джойн подтягивает ПОСЛЕДНИЙ брокер-вызов по каждому событию
     # (request_id / модель / токены / цена) из usage_log — индекс ix_usage_event.
     where = []
-    params: dict[str, Any] = {"limit": limit}
+    params: dict[str, Any] = {"limit": limit + 1}
     if source:
         where.append("e.source = :source")
         params["source"] = source
     if status:
         where.append("e.triage_status = :status")
         params["status"] = status
+    if q.strip():
+        where.append("e.content_text ILIKE :q ESCAPE '\\'")
+        params["q"] = _like(q.strip())
     where_sql = ("WHERE " + " AND ".join(where)) if where else ""
 
     async with get_session() as s:
@@ -87,59 +80,16 @@ async def events_page(request: Request, limit: int = Query(100, ge=1, le=500),  
             LIMIT :limit
         """), params)).mappings().all()
 
-    tbody = []
-    for e in rows:
-        emoji, desc = TRIAGE_STATUS_INFO.get(
-            e["triage_status"], ("?", "неизвестный статус триажа"))
-        status_title = esc(f"{e['triage_status'] or '(пусто)'} — {desc}")
-        imp = e["importance"] if e["importance"] is not None else "—"
-        preview = esc((e["content_text"] or "")[:160])
-        # Три состояния события: свой брокер-вызов / обработано в пачке / ещё не триажено.
-        has_own = e["model"] is not None
-        in_batch = (not has_own) and e["nature"] is not None and e["has_emb"]
-        req = e["request_id"]
-        req_cell = f'<span title="{esc(req)}">{esc(req[:8])}…</span>' if req else "—"
-        if has_own:
-            model = esc(e["model"])
-            tokens = f'{e["tokens_in"]}→{e["tokens_out"]}'
-            cost = f'${e["cost_usd"]:.5f}'
-        elif in_batch:
-            model = '<span class="mute" title="классифицировано групповым вызовом — токены учтены в строке первого события пачки">в пачке ✓</span>'
-            tokens = '<span class="mute">учтено в пачке</span>'
-            cost = "—"
-        else:
-            model = tokens = cost = "—"
-        tbody.append(
-            f'<tr><td><a href="/events/{e["id"]}">{e["id"]}</a></td>'
-            f'<td title="{status_title}">{emoji}</td><td>{imp}</td>'
-            f'<td>{esc(e["source"])}</td><td>{esc(e["account"] or "—")}</td>'
-            f'<td class="mute">{local_dt(e["occurred_at"], "datetime")}</td>'
-            f'<td class="preview">{preview}…</td>'
-            f'<td class="mute">{req_cell}</td><td>{model}</td>'
-            f'<td class="mute">{tokens}</td><td class="mute">{cost}</td></tr>'
-        )
-
+    has_more = len(rows) > limit
+    rows = rows[:limit]
     st = await get_stats()
-    filters = f"""
-      <form method="get" style="display:flex;gap:8px;margin-bottom:14px">
-        <select name="source">{source_options(st["sources_all"], source)}</select>
-        <select name="status">{status_options(TRIAGE_STATUS_INFO, status)}</select>
-        <input type="number" name="limit" value="{limit}" min="1" max="500" style="width:80px">
-        <button type="submit">фильтр</button>
-      </form>
-    """
-
-    thead = "".join(
-        f'<th title="{esc(hint)}">{col}</th>'
-        for col, hint in EVENTS_COLUMN_HINTS.items()
-    )
+    link = more_link({"source": source, "status": status, "q": q.strip(),
+                      "tech": "1" if show_tech else ""}, limit) if has_more else ""
     return HTMLResponse(_render("events", f"""
-        <h2>Log ({len(rows)})</h2>
-        {filters}
-        <table class="data">
-          <thead><tr>{thead}</tr></thead>
-          <tbody>{''.join(tbody)}</tbody>
-        </table>
+        <h2>Входящее</h2>
+        {filter_form(st["sources_all"], source, status, q.strip(), show_tech)}
+        {events_table(rows, utc_naive_now().date(), show_tech)}
+        {link}
     """))
 
 
@@ -223,18 +173,18 @@ async def event_page(request: Request, event_id: int):
         ("важность", str(row["importance"]) if row["importance"] is not None else "—"),
         ("природа", esc(row["nature"] or "—")),
         ("проект", esc(row["project"] or "—")),
-        ("триаж", esc(row["triage_status"] or "—")),
+        ("разбор ИИ", esc(row["triage_status"] or "—")),
         ("где", esc(" / ".join(str(meta.get(k)) for k in ("app", "window_title")
                                if meta.get(k)) or "—")),
     ])
-    error = (f'<p class="err">Ошибка триажа: {esc(row["triage_error"])}</p>'
+    error = (f'<p class="err">Ошибка разбора: {esc(row["triage_error"])}</p>'
              if row["triage_error"] else "")
     return HTMLResponse(_render("events", f"""
         <h2>Событие {row['id']}</h2>
         {facts}
         {error}
         <h3>Выжимка</h3>
-        <pre class="wrap">{esc(row['content_text'] or '')}</pre>
+        <pre style="white-space:pre-wrap">{esc(row['content_text'] or '')}</pre>
         {transcript_html(row['content_extra'])}
-        <p><a href="/events">← в журнал</a></p>
+        <p><a href="/events">← во входящее</a></p>
     """))
