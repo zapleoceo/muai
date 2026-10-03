@@ -137,7 +137,10 @@ async def test_database_refuses_even_when_the_parser_is_bypassed(pg_db, monkeypa
 
     await _seed()
     monkeypatch.setattr(sql_guard, "validate_sql", lambda s: s)
-    with pytest.raises(Exception, match="permission denied|read-only|must be"):
+    # Postgres отказывает разными словами: UPDATE внутри query_to_xml режется
+    # ещё до проверки прав («not allowed in a non-volatile function»). Важен
+    # отказ и неизменённые данные ниже, а не формулировка.
+    with pytest.raises(Exception, match="permission denied|read-only|must be|not allowed"):
         await sql_guard.run_readonly(sql)
     async with pg_db() as s:
         content = (await s.execute(text("SELECT content_text FROM events"))).scalar_one()
