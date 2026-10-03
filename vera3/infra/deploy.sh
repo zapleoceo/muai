@@ -111,6 +111,14 @@ verify_containers() {
 
     while IFS=$'\t' read -r service name state image; do
         [ -z "$name" ] && continue
+        # Разовый контейнер `docker compose run` (бэкфилл, скрипт обслуживания) — не
+        # сервис: живёт на образе, с которым его запустили, и пересоздавать его
+        # деплой не обязан. 04.10.2026 идущий бэкфилл связей забраковал выкладку
+        # кодом 12, хотя все сервисы уже были на свежих образах.
+        if [ "$(docker inspect -f '{{index .Config.Labels "com.docker.compose.oneoff"}}' "$name" 2>/dev/null || true)" = "True" ]; then
+            echo "пропуск $name: разовый контейнер compose run, не сервис"
+            continue
+        fi
         seen=$((seen + 1))
 
         if [ "$state" != "running" ]; then
@@ -250,4 +258,7 @@ main() {
     fi
 }
 
-main
+# Источник для тестов (`source deploy.sh` без запуска): main только при прямом вызове.
+if [ "${BASH_SOURCE[0]}" = "$0" ]; then
+    main
+fi
