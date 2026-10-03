@@ -310,7 +310,7 @@ brain-search отбирал ≤200 кандидатов полнотекстом
   вектор запроса. Снесённый индекс без рестарта по-прежнему не роняет поиск:
   смысловой шаг в точке сохранения с `statement_timeout` 5 с.
 - **Таблица заблокирована** (`VACUUM FULL event_embeddings`): основной запрос
-  с JOIN по ней идёт под `lock_timeout` 3 с (`vectors.LOCK_TIMEOUT_MS`,
+  с JOIN по ней идёт под `lock_timeout` 3 с (`vectors.LOCK_TIMEOUT_MS`, параметры — `lock_timeout_params`,
   `retrieval._primary_with_degrade`); по таймауту поиск повторяется без вектора
   и без ANN, то есть на полнотексте. Без вектора запроса `event_embeddings`
   в запросе не участвует вовсе.
@@ -501,7 +501,7 @@ processing is paused/paced.
 `services/brain-search/src/brain_search/app.py`
 
 - `POST /search` — entry point for the Telegram bot and dashboard.
-- Hybrid retrieval: FTS (`russian` OR `indonesian`, ts_rank — see below) AND cosine similarity over Voyage embeddings.
+- Hybrid retrieval: FTS (`russian` OR `indonesian`, ts_rank — see below) AND vector similarity (косинус) over Voyage embeddings.
 
 ### Полнотекст на нескольких языках (`fts.py`, миграция 031)
 
