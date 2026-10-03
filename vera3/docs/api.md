@@ -338,7 +338,7 @@ nginx проксирует наружу не только дашборд: `/` �
 ### Карточка: события и цитаты
 
 «Последние события» (`vera_shared.graph.panel_events`, `recent_events`) берутся по ВСЕМ алиасам:
-telegram — автор (`metadata.sender_id`, индекс `ix_events_tg_sender`) и личная переписка с
+telegram — автор (`metadata.sender_id`, составной индекс `ix_events_tg_sender_time` — (отправитель, время), миграция 046: с одним `ix_events_tg_sender` планировщик ошибался в оценке и шёл по всем событиям назад, 4.4 с вместо 1.6 мс; для личного чата — `ix_events_tg_chat_time`) и личная переписка с
 человеком в обе стороны (`metadata.chat_id`, окно `DM_WINDOW_DAYS` по `ix_events_occurred_at`),
 slack/instagram — `sender_id`, gmail — адрес в `from` ИЛИ `to`. Скрытые события не показываются,
 каждый запрос идёт под `statement_timeout` в своей сессии, итог — самые новые по всем источникам.
