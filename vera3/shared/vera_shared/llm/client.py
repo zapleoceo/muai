@@ -50,7 +50,7 @@ class LLMCoolingDown(LLMCallFailed):
         self.remaining_s = remaining_s
         super().__init__(
             f"LLM circuit open for {capability}: cooling down "
-            f"{remaining_s / 60:.0f} more min (budget cap / no provider)"
+            f"{remaining_s:.0f}s more (budget cap / no provider / broker outage)"
         )
 
 

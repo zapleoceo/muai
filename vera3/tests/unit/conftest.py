@@ -96,6 +96,16 @@ async def sqlite_db(tmp_path):
     engine_mod.AsyncSessionLocal = None
 
 
+@pytest.fixture(autouse=True)
+def _fresh_broker_outage():
+    """Брейкер сбоя брокера — состояние процесса: без сброса три отказа в
+    одном тесте закрывали бы вызовы в следующих."""
+    from vera_shared.llm.outage import reset_outage
+    reset_outage()
+    yield
+    reset_outage()
+
+
 @pytest_asyncio.fixture
 async def ro_env(sqlite_db, monkeypatch):
     """`MCP_RO_DATABASE_URL` на той же SQLite, что у теста: sql_query ходит

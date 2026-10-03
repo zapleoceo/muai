@@ -316,6 +316,12 @@ services:
   # Actions-фид всех досок владельца + суточный дайджест открытых сроков.
   # Ключ и токен — личные, из .env; состояние обхода в таблице trello_boards.
   ingestor-trello:
+    # Не подключён (ключей нет, событий 0, 2026-10): профиль `optional` держит
+    # сервис вне дефолтного `compose up -d`, а монитор берёт состав стека из
+    # `compose config`, где профильные сервисы не числятся — ложных тревог нет.
+    # Подключить: задать TRELLO_API_KEY/TRELLO_TOKEN в .env и
+    # `docker compose --profile optional up -d ingestor-trello`.
+    profiles: ["optional"]
     build:
       context: ..
       dockerfile: services/ingestor-trello/Dockerfile

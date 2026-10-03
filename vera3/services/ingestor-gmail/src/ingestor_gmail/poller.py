@@ -10,6 +10,7 @@ import base64
 import logging
 import os
 import re
+from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Any
 
@@ -31,6 +32,7 @@ CLIENT_SECRET = os.environ["GMAIL_CLIENT_SECRET"]
 POLL_S = int(os.environ.get("GMAIL_POLL_S", "300"))  # 5 минут
 # Предохранитель на прогон (не лимит выборки — идём по всем страницам до него).
 MAX_PER_RUN = int(os.environ.get("GMAIL_MAX_PER_RUN", "500"))
+CURSOR_OVERLAP = timedelta(hours=int(os.environ.get("GMAIL_CURSOR_OVERLAP_H", "24")))
 
 
 class TokenRevoked(Exception):
@@ -165,27 +167,35 @@ def _html_to_text(html: str) -> str:
     return _WS_RE.sub(" ", text).strip()
 
 
-def _extract_text(payload: dict) -> str:
+def _decode_part(payload: dict, message_id: str) -> str | None:
+    """Тело MIME-части из base64url; None — часть пустая или не декодируется
+    (тогда в журнал уходит id письма, а тело остаётся пустым: событие с
+    заголовками лучше потерянного письма)."""
+    data = payload.get("body", {}).get("data", "")
+    if not data:
+        return None
+    try:
+        return base64.urlsafe_b64decode(data + "===").decode("utf-8", errors="ignore")
+    except ValueError as e:
+        log.warning("gmail message %s: часть %s не декодируется: %s",
+                    message_id or "?", payload.get("mimeType"), e)
+        return None
+
+
+def _extract_text(payload: dict, message_id: str = "") -> str:
     """Recursive extract plain text from MIME parts."""
     if payload.get("mimeType") == "text/plain":
-        data = payload.get("body", {}).get("data", "")
-        if data:
-            try:
-                return base64.urlsafe_b64decode(data + "===").decode("utf-8", errors="ignore")
-            except Exception:
-                return ""
+        raw = _decode_part(payload, message_id)
+        if raw is not None:
+            return raw
     for part in payload.get("parts", []) or []:
-        txt = _extract_text(part)
+        txt = _extract_text(part, message_id)
         if txt:
             return txt
     if payload.get("mimeType") == "text/html":
-        data = payload.get("body", {}).get("data", "")
-        if data:
-            try:
-                html = base64.urlsafe_b64decode(data + "===").decode("utf-8", errors="ignore")
-                return _html_to_text(html)
-            except Exception:
-                return ""
+        raw = _decode_part(payload, message_id)
+        if raw is not None:
+            return _html_to_text(raw)
     return ""
 
 
@@ -242,7 +252,7 @@ def _format_event(account_email: str, msg: dict) -> dict[str, Any]:
     direction = "sent" if account_email.lower() in from_.lower() else "received"
     author_role = "self" if direction == "sent" else "counterparty"
     author_label = "Я" if author_role == "self" else (from_ or "(unknown)")
-    body = clip_content(_extract_text(msg.get("payload", {})))
+    body = clip_content(_extract_text(msg.get("payload", {}), msg.get("id", "")))
 
     content = (
         f"Author: {author_label} [{author_role}]\n"
@@ -270,6 +280,22 @@ def _format_event(account_email: str, msg: dict) -> dict[str, Any]:
             "to": to_,
         },
     }
+
+
+def build_query(last_polled_at: datetime | None) -> str:
+    """Поисковый запрос листинга.
+
+    `after:YYYY/MM/DD` — календарные сутки, и Gmail считает их не в UTC, в
+    котором хранится last_polled_at: письмо, пришедшее между UTC-полуночью и
+    полуночью по Gmail, после опроса в первые часы UTC-суток выпадало из
+    `after:` навсегда. Unix-время в секундах точное; отступ в CURSOR_OVERLAP
+    покрывает письма, проиндексированные с опозданием (дубли отсекает
+    filter_new_ids по БД).
+    """
+    if last_polled_at is None:
+        return "newer_than:7d"
+    since = last_polled_at.replace(tzinfo=UTC) - CURSOR_OVERLAP
+    return f"after:{int(since.timestamp())}"
 
 
 async def poll_account(acc: GmailAccountRow) -> int:
@@ -304,13 +330,7 @@ async def poll_account(acc: GmailAccountRow) -> int:
         return 0
     access_token = tok["access_token"]
 
-    # Build query: newer_than 7d на старте, потом — с last_polled
-    if acc.last_polled_at:
-        # Gmail accepts dates like 2024/01/15
-        ds = acc.last_polled_at.strftime("%Y/%m/%d")
-        query = f"after:{ds}"
-    else:
-        query = "newer_than:7d"
+    query = build_query(acc.last_polled_at)
 
     try:
         # id-only list дёшев — смотрим весь бэклог (до 10×MAX_PER_RUN), дедупим

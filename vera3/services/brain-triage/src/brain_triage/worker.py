@@ -28,9 +28,9 @@ from sqlalchemy import update
 from vera_shared.control import is_backfill_paused, reserve_backfill_allowance
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
-from vera_shared.db.vectors import embedding_upsert, vector_column_available
 from vera_shared.graph.rel_policy import rel_extract_skip_reason
 from vera_shared.text_chunks import llm_excerpt
+from vera_shared.text_quality import is_contentless
 
 from brain_triage.background_loops import (
     _safe_rel_extract,
@@ -52,6 +52,7 @@ from brain_triage.config import (
     REL_EXTRACT_MIN_IMPORTANCE,
     WORKER_ID,
 )
+from brain_triage.embeddings import write_embeddings
 from brain_triage.heartbeat import beat
 from brain_triage.postprocess import NATURE_BY_SOURCE, SKIP_EMBED_SOURCES
 from brain_triage.project_override import apply_project_override
@@ -78,7 +79,11 @@ async def process_pending() -> int:
 
     # Источники-намерения (vera_chat, perplexity) не эмбеддим — их вектора
     # засоряют семантический поиск. Эмбеддим только события мира.
-    embed_idx = [i for i, r in enumerate(rows) if r.source not in SKIP_EMBED_SOURCES]
+    # Тела-заглушки («[photo]») и реплики в пару символов тоже: событие
+    # остаётся, вектор — шум (vera_shared.text_quality).
+    embed_idx = [i for i, r in enumerate(rows)
+                 if r.source not in SKIP_EMBED_SOURCES
+                 and not is_contentless(r.content_text, r.source)]
     embed_texts = [llm_excerpt(rows[i].content_text or "") for i in embed_idx]
     embed_vectors = await _embed_batch(embed_texts)
     # by event_id, НЕ by position — группировка ниже переупорядочивает rows
@@ -87,7 +92,7 @@ async def process_pending() -> int:
     embeddings_by_id: dict[int, list[float] | None] = {r.id: None for r in rows}
     # strict=False сознательно: брокер может вернуть меньше векторов, чем
     # запрошено. Тогда часть событий останется без эмбеддинга (None) и будет
-    # доэмбеждена позже — это лучше, чем уронить весь батч триажа.
+    # доэмбеждена циклом reembed_loop — лучше, чем уронить весь батч триажа.
     for pos, vec in zip(embed_idx, embed_vectors, strict=False):
         embeddings_by_id[rows[pos].id] = vec
 
@@ -190,18 +195,7 @@ async def process_pending() -> int:
     # событие в event_embeddings не должно откатывать triage_status всего батча
     # (иначе события зависают в processing до watchdog). Savepoint на строку.
     if emb_writes:
-        # Во ВСЕ колонки, что есть — см. vectors.embedding_upsert.
-        to_vec = await vector_column_available()
-        async with get_session() as s:
-            for eid, emb in emb_writes:
-                sql, params = embedding_upsert(eid, emb, to_vec)
-                try:
-                    # Savepoint на строку: одно битое событие не должно
-                    # откатывать весь батч эмбеддингов.
-                    async with s.begin_nested():
-                        await s.execute(sql, params)
-                except Exception as e:
-                    log.warning("embedding upsert failed event=%s: %s", eid, e)
+        await write_embeddings(emb_writes)
         # Куски длинных — после вектора события (см. chunks.py).
         body_by_id = {r.id: r.content_text or "" for r in rows}
         await embed_event_chunks([(eid, body_by_id[eid]) for eid, _ in emb_writes])

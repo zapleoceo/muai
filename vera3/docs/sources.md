@@ -83,6 +83,13 @@ telegram/slack/trello свои `[:8000]` сохранили: у них до по
 - Identity graph: собеседник каждого нового письма становится person-сущностью
   с alias `(gmail, email)` — см. `docs/identity.md`. Кросс-канальное слияние
   с telegram-сущностями — через LLM-предложения Веры на `/entities/duplicates`.
+- Cursor (2026-10): the list query is `after:<unix seconds>` built by
+  `build_query()` from `last_polled_at` minus `GMAIL_CURSOR_OVERLAP_H` (24h);
+  duplicates are dropped by `filter_new_ids()`. The previous
+  `after:YYYY/MM/DD` is a calendar day in Gmail's time zone while
+  `last_polled_at` is UTC, so a message arriving between the two midnights
+  after an early-UTC poll was never listed. A body part that fails to decode
+  logs a WARNING with the message id and the event keeps an empty body.
 - Accounts: 3 (`demoniwwwe@gmail.com`, `zaporozec_d@itstep.org`, `zapleosoft@gmail.com`).
 - Critical caveat: tokens get revoked by Google if the OAuth app sits in
   "Testing" mode for >7 days idle. See `security.md` for re-auth flow.
@@ -126,7 +133,15 @@ telegram/slack/trello свои `[:8000]` сохранили: у них до по
 
 ## trello
 
-- Container: `vera3-ingestor-trello`
+- Container: `vera3-ingestor-trello`, compose profile **`optional`**
+  (2026-10: never configured, 0 events, was logging ERROR every 10 min). It is
+  outside the default `compose up -d`; `vera3-monitor.sh` reads the stack from
+  `compose config`, which omits profiled services, so there are no false
+  alarms. Enable: set `TRELLO_API_KEY`/`TRELLO_TOKEN` in `infra/.env`, then
+  `docker compose --profile optional up -d ingestor-trello`. Without
+  credentials `credentials_configured()` is false and the poller logs one
+  WARNING and idles instead of polling. A container started before the profile
+  change must be removed once by hand: `docker compose rm -sf ingestor-trello`.
 - Mechanism: REST-опрос (`api.trello.com/1`), раз в `TRELLO_POLL_S` (по
   умолчанию 300 с). Ключ и токен — личные, из `infra/.env`
   (`TRELLO_API_KEY`, `TRELLO_TOKEN`); в БД секретов Trello нет.

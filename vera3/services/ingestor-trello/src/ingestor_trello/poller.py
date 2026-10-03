@@ -17,7 +17,12 @@ from vera_shared.ingest import poll_forever
 from vera_shared.timeutil import utc_naive_now
 
 from ingestor_trello import digest, store
-from ingestor_trello.client import ACTIONS_PAGE, TrelloAuthError, TrelloClient
+from ingestor_trello.client import (
+    ACTIONS_PAGE,
+    TrelloAuthError,
+    TrelloClient,
+    credentials_configured,
+)
 from ingestor_trello.mapper import action_to_event
 
 log = logging.getLogger("trello")
@@ -130,6 +135,12 @@ class _Session:
 async def main_loop() -> None:
     logging.basicConfig(level=logging.INFO,
                         format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    if not credentials_configured():
+        # Один раз и тишина: ERROR раз в 10 минут по источнику, которого
+        # владелец не подключал, только прячет настоящие ошибки.
+        log.warning("Trello не настроен (TRELLO_API_KEY / TRELLO_TOKEN пусты) — "
+                    "опрос не запускаю, жду; задайте ключи в .env и перезапустите")
+        await asyncio.Event().wait()
     await init_engine()
     session = _Session()
 
