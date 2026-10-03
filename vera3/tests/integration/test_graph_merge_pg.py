@@ -189,17 +189,17 @@ async def test_undo_after_partial_apply(pg_db, tmp_path, monkeypatch):
     from vera_shared.graph.dupe_detect import build_plan
     from vera_shared.graph.dupe_snapshot import load_snapshot
 
+    from vera_shared.db.models_graph import EntityAliasRow, EntityRow
     await _world(pg_db)
+    # Три независимых сервисных отправителя → ровно три retype в плане; без
+    # этого план из одного действия никогда не доходил до точки отказа.
     async with pg_db() as s:
-        from vera_shared.db.models_graph import EntityAliasRow, EntityRow
-        for n in range(2):
-            a = EntityRow(type="person", name=f"Ivan Petrenko{n}", attributes={})
-            s.add(a)
-        s.add(EntityRow(type="person", name="Slack", attributes={}))
-        await s.flush()
-        ids = [r.id for r in (await s.execute(select(EntityRow).where(
-            EntityRow.name == "Slack"))).scalars()]
-        s.add(EntityAliasRow(entity_id=ids[0], source="gmail", identifier="no-reply@slack.com"))
+        for n, domain in enumerate(("alpha-corp.com", "beta-corp.com", "gamma-corp.com")):
+            ent = EntityRow(type="person", name=f"Brand{n}", attributes={})
+            s.add(ent)
+            await s.flush()
+            s.add(EntityAliasRow(entity_id=ent.id, source="gmail",
+                                 identifier=f"no-reply@{domain}"))
     plan = dupe_apply.plan_document(build_plan(await load_snapshot()), "pg")
     real, calls = dupe_apply._exec, []
 
@@ -212,9 +212,12 @@ async def test_undo_after_partial_apply(pg_db, tmp_path, monkeypatch):
     monkeypatch.setattr(dupe_apply, "_exec", flaky)
     async with pg_db() as s:
         before = (await s.execute(sa_text("SELECT id, type, name FROM entities ORDER BY id"))).all()
+    assert sum(1 for x in plan["actions"] if x["action"] == "retype") == 3
     with pytest.raises(RuntimeError):
         await apply_plan(plan, tmp_path / "r.json")
-    await undo_report(tmp_path / "r.json")
+    assert len(calls) == 2
+    assert await undo_report(tmp_path / "r.json") == 1
+    # первое действие откатано, вторая транзакция не закоммичена
     async with pg_db() as s:
         after = (await s.execute(sa_text("SELECT id, type, name FROM entities ORDER BY id"))).all()
     assert after == before
