@@ -260,7 +260,8 @@ bearer_token_env_var = "VERA_MCP_TOKEN"
 - `vera_mcp.server`: `build_mcp`, `build_app`; `healthz`.
 - `vera_mcp.auth`: `load_tokens`, `validate_tokens`, `match_token`, `bearer_of`,
   `client_of`, `BearerAuthMiddleware`, `WeakTokenError`.
-- `vera_mcp.merge_guard`: `merge_blockers`, `entity_names`, `MergeBlocked`.
+- `vera_shared.graph.merge_guard`: `merge_blockers`, `entity_names`, `MergeBlocked` (из `vera_mcp`);
+  `vera_shared.graph.merge_actions`: `preview_merge`, `apply_merge` — тот же путь у дашборда.
 - `vera_mcp.ro_engine`: `get_ro_engine`, `forget_ro_engine`, `ReadOnlyUnavailable`.
 - `vera_mcp.sql_guard`: `validate_sql`, `strip_literals`, `run_readonly`,
   `SqlRejected`.

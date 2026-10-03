@@ -63,6 +63,7 @@ _BODY = """
   </div>
   <aside id="g-panel" class="g-panel" hidden aria-live="polite"></aside>
 </div>
+<dialog id="merge-dlg" class="dlg dlg-wide" aria-label="Объединение людей"><div id="merge-body"></div></dialog>
 <script src="__CY_URL__" integrity="__CY_SRI__" crossorigin="anonymous"></script>
 <script>__SCRIPT__</script>
 """

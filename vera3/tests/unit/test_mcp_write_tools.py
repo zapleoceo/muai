@@ -511,7 +511,7 @@ async def test_merge_defaults_to_a_dry_run_that_changes_nothing(sqlite_db):
 
 
 async def test_merge_of_the_owner_needs_force(sqlite_db):
-    from vera_mcp.merge_guard import MergeBlocked
+    from vera_shared.graph.merge_guard import MergeBlocked
     from vera_shared.projects.rules import OWNER_TG_ID
 
     owner, dup = await add_entity("Owner"), await add_entity("Owner duplicate")
@@ -529,8 +529,8 @@ async def test_merge_of_the_owner_needs_force(sqlite_db):
 
 
 async def test_merge_of_an_entity_with_identity_nodes_needs_force(sqlite_db):
-    from vera_mcp.merge_guard import MergeBlocked
     from vera_shared.db.models_graph import IdentityNodeRow
+    from vera_shared.graph.merge_guard import MergeBlocked
 
     keep, dup = await add_entity("Keep"), await add_entity("Dup")
     async with get_session() as s:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+
 from vera_shared.db.models_graph import EntityAliasRow, EntityRow, IdentityNodeRow
 from vera_shared.projects.rules import OWNER_TG_ID
 

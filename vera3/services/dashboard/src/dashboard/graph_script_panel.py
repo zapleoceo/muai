@@ -58,7 +58,9 @@ function renderPanel(p){
     (chips.length ? '<div class="g-chips">' + chips.map(x => '<span class="chip">' + x + '</span>').join('') + '</div>' : '') +
     '<div class="g-stats">' + tiles + '</div>' +
     '<h4>Связи по людям</h4>' + (rels ? '<ul class="g-list">' + rels + '</ul>' : '<p class="muted small">Связей пока нет.</p>') +
-    more + '<button type="button" class="secondary sm" data-act="addrel">＋ Указать связь</button>' +
+    more + '<div class="g-tools"><button type="button" class="secondary sm" data-act="addrel">＋ Указать связь</button>' +
+    '<button type="button" class="secondary sm" data-act="samep">Это тот же человек…</button>' +
+    '<button type="button" class="secondary sm" data-act="movep" title="Аккаунт чужой, а связи про другого">Связи не про этого человека</button></div>' +
     '<h4>Последние события</h4><div id="g-events">' + eventsHtml(lastEvents) + '</div>' +
     '<div class="g-foot"><button type="button" class="secondary" data-focus-net="' + p.id + '">Показать окружение</button>' +
     (link ? '<a role="button" class="secondary" href="' + esc(link) + '"' +
@@ -146,35 +148,6 @@ function manageConnection(btn){
   });
 }
 
-const MANUAL_ROLES = __MANUAL_ROLES__;
-
-// «Указать связь»: пара — открытая карточка и якорь (владелец или одна из её связей).
-function addRelationship(){
-  const anchors = [];
-  if (current.owner_id && current.owner_id !== current.id)
-    anchors.push({value: String(current.owner_id), label: (current.owner_name || 'Я') + ' (я)'});
-  for (const c of current.connections)
-    if (c.other_id !== current.owner_id) anchors.push({value: String(c.other_id), label: c.other_name});
-  if (!anchors.length){ VeraUI.toast('Не с кем связывать: у карточки нет собеседников.', {kind: 'err'}); return; }
-  const names = Object.fromEntries(anchors.map(a => [a.value, a.label.replace(/ \(я\)$/, '')]));
-  const roles = anchor => MANUAL_ROLES.map(r => ({value: r.key,
-    label: r.text.replace('{x}', current.name).replace('{y}', names[anchor])}));
-  const describe = v => 'Будет записано: ' + roles(v.anchor).find(r => r.value === v.role).label +
-    '. Связь получит максимальный вес; вернуть можно в журнале.';
-  const viewed = current;
-  VeraUI.choose({
-    title: 'Указать связь', confirmLabel: 'Указать',
-    fields: [{name: 'anchor', label: 'С кем', options: anchors},
-             {name: 'role', label: 'Какая связь', options: roles(anchors[0].value)}],
-    refresh: v => ({message: describe(v), options: {role: roles(v.anchor)}}),
-  }).then(v => {
-    if (!v) return;
-    VeraUI.post('/api/graph/connection/set', {entity_a: viewed.id, entity_b: Number(v.anchor), role: v.role})
-      .then(res => afterEdit('Связь указана', res.audit_ids))
-      .catch(err => VeraUI.toast('Не получилось: ' + err.message, {kind: 'err'}));
-  });
-}
-
 function focusOn(id){
   if (selectNode(id)){ openPanel(id); return; }
   info.textContent = 'Загружаю окружение…';
@@ -186,6 +159,8 @@ panel.addEventListener('click', ev => {
   const act = ev.target.closest('[data-act]');
   if (act){
     if (act.dataset.act === 'addrel') addRelationship();
+    else if (act.dataset.act === 'samep') openMergeDialog('merge');
+    else if (act.dataset.act === 'movep') openMergeDialog('move');
     else if (act.dataset.act === 'manage') manageConnection(act);
     else if (act.dataset.act === 'moreconns') openPanel(current.id, null, true);
     return;

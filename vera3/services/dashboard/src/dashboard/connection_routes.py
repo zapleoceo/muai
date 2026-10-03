@@ -18,8 +18,7 @@ from vera_shared.graph.manual_roles import set_manual_role
 from vera_shared.journal.audit import AuditNotFound
 from vera_shared.journal.undo import UndoRefused, undo_entry
 
-from dashboard.csrf import same_origin_or_403
-from dashboard.render import owner_or_blank_401
+from dashboard.csrf import owner_post_gate as _gate
 
 router = APIRouter()
 CLIENT = "dashboard"
@@ -46,12 +45,6 @@ class SetRole(BaseModel):
 
 class UndoRequest(BaseModel):
     audit_ids: Annotated[list[EntityId], Field(min_length=1, max_length=20)]
-
-
-def _gate(request: Request) -> JSONResponse | None:
-    if owner_or_blank_401(request) is not None:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
-    return same_origin_or_403(request)
 
 
 @router.post("/api/graph/connection/break", response_class=JSONResponse)

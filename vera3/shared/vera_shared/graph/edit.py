@@ -13,6 +13,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.models_graph import EntityAliasRow, EntityRow, RelationshipRow
+from vera_shared.graph.rel_canon import canonical_edge
 from vera_shared.graph.rel_extract import PREDICATES
 from vera_shared.graph.rel_insert import insert_relationship_if_absent
 from vera_shared.timeutil import utc_naive_now
@@ -152,12 +153,38 @@ async def retire_relationship(
 async def restore_relationship(s: AsyncSession, rel_id: int,
                                values: dict[str, Any]) -> dict[str, Any]:
     row = await _relationship(s, rel_id)
+    for key, column in (("subject_entity_id", "subject_entity_id"),
+                        ("object_entity_id", "object_entity_id"), ("predicate", "predicate")):
+        if key in values:        # перенос связи меняет концы; откат возвращает их
+            setattr(row, column, values[key])
     row.fact, row.confidence = values["fact"], values["confidence"]
     row.is_current = values["is_current"]
     if "derived_from_event_id" in values:
         row.derived_from_event_id = values["derived_from_event_id"]
     await s.flush()
     return relationship_snapshot(row)
+
+
+async def repoint_relationship(
+    s: AsyncSession, rel_id: int, old_id: int, new_id: int,
+) -> tuple[str, dict[str, Any], dict[str, Any]]:
+    """Переносит конец связи `old_id` → `new_id` в канонической форме. Если получилась петля
+    или такая тройка уже есть — запись гасится ('retired'), иначе меняет концы ('moved').
+    Возвращает (исход, до, после)."""
+    row = await _relationship(s, rel_id)
+    before = relationship_snapshot(row)
+    subject = new_id if row.subject_entity_id == old_id else row.subject_entity_id
+    obj = new_id if row.object_entity_id == old_id else row.object_entity_id
+    subject, predicate, obj = canonical_edge(subject, row.predicate, obj)
+    twin = await _locked_triple(s, subject, obj, predicate) if subject != obj else None
+    if subject == obj or (twin is not None and twin.id != row.id):
+        row.is_current = False
+        outcome = "retired"
+    else:
+        row.subject_entity_id, row.predicate, row.object_entity_id = subject, predicate, obj
+        outcome = "moved"
+    await s.flush()
+    return outcome, before, relationship_snapshot(row)
 
 
 async def current_name(s: AsyncSession, entity_id: int) -> dict[str, Any]:

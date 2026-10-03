@@ -35,7 +35,13 @@ DUPES_CSS = """
 .select-merge{display:flex;gap:.8rem;flex-wrap:wrap;align-items:end}
 .select-merge select,.select-merge label{margin:0}
 .bulk{margin:.6rem 0 1.2rem}
-@media (max-width:640px){.pair{grid-template-columns:1fr}}
+.queue-pair{margin:1rem 0 .4rem}.queue-side{min-width:0}.queue-side .person{height:auto;padding:1rem}
+.queue-side .person-head img{width:3.2rem;height:3.2rem}.queue-side>.small{margin:.4rem .2rem 0}
+.why{margin:.8rem 0 0;color:var(--text)}
+.big-actions{display:grid;grid-template-columns:2fr 1fr 1fr;gap:.8rem;margin:1.2rem 0}
+.big-form{margin:0;display:block}.big{width:100%;min-height:3.6rem;font-size:1.05rem}
+a.big{display:flex}
+@media (max-width:640px){.pair{grid-template-columns:1fr}.big-actions{grid-template-columns:1fr}}
 """
 
 SOURCES_CSS = """

@@ -48,6 +48,10 @@ def entity_ids(rows: list[McpAuditRow], triples: Triples | None = None) -> list[
                 value = (snap or {}).get(key)
                 if isinstance(value, int):
                     found.add(value)
+    for r in rows:
+        if r.target_kind == "merge":
+            report = r.before or {}
+            found.update(i for i in [report.get("keep_id"), *report.get("drop_ids", [])] if isinstance(i, int))
     for subject, _, obj in (triples or {}).values():
         found.update((subject, obj))
     return sorted(found)
@@ -60,7 +64,8 @@ def _name(names: dict[int, str], entity_id: Any) -> str:
 
 
 def _triple_from_row(row: McpAuditRow) -> tuple[int, str, int] | None:
-    for snap in (row.before, row.after):
+    snaps = (row.after, row.before) if row.tool == "relationship_move" else (row.before, row.after)
+    for snap in snaps:
         s, p, o = (snap or {}).get("subject_entity_id"), (snap or {}).get("predicate"), \
             (snap or {}).get("object_entity_id")
         if isinstance(s, int) and isinstance(o, int) and p:
@@ -76,7 +81,8 @@ def _relationship_text(row: McpAuditRow, names: dict[int, str], triples: Triples
     if triple is None:
         rel = (row.args or {}).get("relationship_id") or row.target_id
         triple = triples.get(rel) if isinstance(rel, int) else None
-    verb = "Связь погашена" if row.tool == "relationship_retire" else "Связь задана"
+    verb = {"relationship_retire": "Связь погашена",
+            "relationship_move": "Связь перенесена"}.get(row.tool, "Связь задана")
     if triple is None:
         return f"{verb}: запись №{esc(row.target_id)}"
     s, p, o = triple
@@ -93,7 +99,9 @@ def describe_entry(row: McpAuditRow, names: dict[int, str], triples: Triples | N
         return (f"«Работает с» отвергнуто: {_name(names, after.get('entity_a'))} — "
                 f"{_name(names, after.get('entity_b'))}")
     if row.target_kind == "merge":
-        return "Слияние сущностей"
+        report = row.before or {}
+        drops = ", ".join(_name(names, i) for i in report.get("drop_ids", []))
+        return f"Объединены карточки: {_name(names, report.get('keep_id'))} ← {drops}"
     if row.target_kind == "entity":
         return f"Переименование: {esc((row.before or {}).get('name'))} → {esc((row.after or {}).get('name'))}"
     return f"{esc(row.tool)} · {esc(row.target_kind)} #{esc(row.target_id)}"

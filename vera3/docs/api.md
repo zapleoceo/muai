@@ -141,6 +141,12 @@ Returns `AnswerResponse` with `answer`, `results`, `provider`, `cost_usd`,
 | `/api/graph/connection/break` | POST | owner cookie + same-origin | Разорвать роль пары (`break_connection`): тело `{entity_a, entity_b, predicate, rel_ids}` (`BreakRole`; сервер проверяет, что все записи — ОДНА роль пары с этим каноническим предикатом), гасит записи `relationships` (`is_current=false`) через `connection_actions.break_role` — тот же `graph.edit.retire_relationship`, что у MCP, и строка `mcp_audit` с клиентом `dashboard`. Ответ `{ok, audit_ids}`; чужая или уже погашенная запись — 409 |
 | `/api/graph/connection/reject` | POST | owner cookie + same-origin | «Это неверно» для выведенного «работает с» (`reject_connection`): тело `Pair` `{entity_a, entity_b}`, `connection_actions.reject_inferred` пишет пару в `connection_suppressions` (миграция 041) и в журнал. Ответ `{ok, audit_ids}` (пусто, если уже отвергнуто) |
 | `/api/graph/connection/set` | POST | owner cookie + same-origin | «Указать связь» (`set_connection`): тело `SetRole` `{entity_a, entity_b, role}` — `entity_a` карточка, `entity_b` владелец или выбранная связь; `role` — ключ из `manual_roles.MANUAL_ROLES` (начальник в обе стороны, работают вместе, друзья, супруги, родитель/ребёнок, клиент/поставщик в обе стороны). `set_manual_role` пишет каноническую ручную строку (без события-источника, уверенность 1.0) через `graph.edit.set_relationship(manual=True)` и строку `mcp_audit` (`relationship_set`, клиент `dashboard`) — откат как у любой правки, виден в `/journal`. `/api/graph/entity/{id}` теперь отдаёт `owner_id`/`owner_name` |
+| `/api/graph/people/search` | GET | owner cookie | Подсказки людей для объединения (`search_people`): `q` ≥ 2 символов, `exclude` — открытая карточка; имя, `@username`, email, последняя активность, счётчики алиасов/связей/групп (`merge_candidates.entity_summaries`) |
+| `/api/graph/merge/preview` | POST | owner cookie + same-origin | Предпросмотр слияния (`merge_preview`, тело `MergePair` `{a, b, keep_id?}`): кто останется главной (по умолчанию та, где больше данных, `recommend_keep`), что переедет (`merge_actions.preview_merge` — настоящее слияние в откатываемой транзакции), причины отказа (`blockers`: владелец, узлы личности). Ничего не пишет |
+| `/api/graph/merge/apply` | POST | owner cookie + same-origin | Слияние (`merge_apply`, `MergeApply` `{keep_id, drop_id}`): `merge_actions.apply_merge` — тот же путь и журнал `mcp_audit` (`entity_merge`, клиент `dashboard`), что у MCP; откат — `/journal`, `/api/journal/undo`, MCP `undo`. Блокировки без `force` — 409 |
+| `/api/graph/move/preview` | POST | owner cookie + same-origin | «Связи не про этого человека» (`move_preview`, `MovePair` `{from_id, to_id}`): связи, основанные на упоминании имени (`relationship_move.name_evidence`), и исход каждой (`moved` / `retired`). Ничего не пишет |
+| `/api/graph/move/apply` | POST | owner cookie + same-origin | Перенос выбранных связей (`move_apply`, `MoveApply` `{from_id, to_id, rel_ids}`): `relationship_move.move_relationships`, по строке журнала на связь (`relationship_move` или `relationship_retire`), откат общий. Строка, не являющаяся упоминанием имени, — 409 |
+| `/entities/queue/merge`, `/entities/queue/reject` | POST | owner cookie + same-origin | Кнопки очереди дублей: «Это один человек» (`queue_merge` → `apply_merge`, журнал, возврат на ту же позицию с `merged=<audit_id>`) и «Разные люди» (`queue_reject`: `set_suggestion_status` или `suggestions.reject_pair` для точного совпадения) |
 | `/api/journal/undo` | POST | owner cookie + same-origin | Вернуть правки по `audit_ids` (`undo_edits`, тело `UndoRequest`): `journal.undo.undo_entry` на каждую, без `force`. Отказ откатa (`UndoRefused`) — 409 и список уже возвращённых |
 | `/journal` | GET | owner cookie | «Журнал правок» (`journal_page`, разметка `journal_body`, `entry_html`, `describe_entry`): последние 80 записей `mcp_audit` (дашборд и агенты MCP) с кнопкой «Вернуть»; имена людей — `entity_ids` + `entity_cards`, всё экранируется. Строки читает `journal.audit.recent_rows` |
 | `/ui/vera.css`, `/ui/vera.js` | GET | none | Статика дизайн-системы (`vera_css`, `vera_js`): адрес с `?v=<хэш>`, `Cache-Control: immutable`. Данных в них нет, поэтому без входа — ими оформлена и страница входа |
@@ -373,12 +379,40 @@ slack/instagram — `sender_id`, gmail — адрес в `from` ИЛИ `to`. С�
   `sender_id`), — ссылки `/graph#person=<id>` (граф открывает окружение и карточку).
 - **Журнал**: записи без снимка (правки из SQL и MCP) берут концы из `args` (`subject_id`/`object_id`) или из
   самой записи связи (`connection_data.relationship_triples`); `#None` не выводится никогда.
-- **Дубли**: кнопки массового слияния показывают число пар (`DuplicatesData.email_pairs`) и прячутся при
-  нуле; в списках выбора — `@username`, число сообщений и главный чат (`option_label`); число на странице и
-  в «Дубли (N)» графа — одно и то же (ожидающие `merge_suggestions`).
+- **Дубли**: страница стала очередью проверки (см. «Объединение людей» ниже); число в «Дубли (N)» графа — ожидающие
+  `merge_suggestions`, то же число показано на странице.
 - **Ответ поиска**: источники без автора и места (память агента) получают заголовок из начала текста,
   а не одинаковое название источника.
 
 Имена в коде этих правок: маршрут событий карточки — `graph_entity_events`; `event_view.mail_addresses`
 собирает адреса из From/To/Cc для ссылок на граф; `journal_view.relationship_ids` отбирает записи журнала,
 чьи концы нужно доставать из таблицы связей.
+
+
+### Объединение людей (2026-10-05)
+
+**В карточке** две кнопки. «Это тот же человек…»: поиск (`/api/graph/people/search`) → предпросмотр
+(две карточки «останется главной / вольётся», «⇄ Поменять местами», что переедет: алиасы, связи, дубли связей,
+участия в группах) → «Объединить» → тост «Вернуть». «Связи не про этого человека»: поиск правильного человека →
+список связей, взятых из УПОМИНАНИЙ имени, с флажками → «Перенести связи» → тост «Вернуть». В диалогах одна строка
+о разнице: объединить — один человек с двумя аккаунтами; перенести связи — аккаунт чужой, а связи про другого.
+
+**Что значит «упоминание имени».** `relationship_move.authored_by`: событие-источник связи написал НЕ сам этот
+человек (ни один его алиас не автор: telegram/slack/instagram — `metadata.sender_id`, gmail — адрес в
+`metadata.from`). Связи по его собственным сообщениям и ручные связи (без события) не переносятся, сервер
+отказывает в таких `rel_ids`. Перенос меняет концы записи в канонической форме (`graph.edit.repoint_relationship`);
+петля или уже существующая тройка гасит запись (`retired`). Откат возвращает концы (`restore_relationship`).
+
+**Очередь `/entities/duplicates`**: одна пара за раз (`?n=<позиция>`), «3 из 41», слева главная карточка (аватар, имя,
+@username/email, чаты, фразы, счётчики, «почему предложено»), три крупные кнопки «Это один человек» / «Разные
+люди» / «Пропустить», клавиши `Y` / `N` / `S` и `→`. Очередь — `duplicates_repo.load_queue`: ожидающие
+`merge_suggestions`, затем точные совпадения email и @username из двух карточек (`QueueItem`); решённые пары
+(`suggestions.list_decided_pairs`) не возвращаются. Дамп групп «по одному имени» убран — остальных людей находят
+поиском из карточки. Прежние POST (`/entities/merge`, `/entities/suggestion`, массовые, `analyze`, `roster-sync`)
+работают, но теперь тоже требуют same-origin. Слияние и предпросмотр — `merge_actions.preview_merge` /
+`apply_merge`; защита от слияния владельца и узлов личности (`merge_guard.merge_blockers`, `MergeBlocked`)
+переехала из `vera_mcp` в `vera_shared.graph`, MCP `entity_merge` вызывает те же функции.
+
+Вспомогательные имена: `csrf.owner_gate` (JSON-ручки для чтения) и `csrf.owner_post_gate` (владелец + same-origin) —
+общие ворота всех правок; `relationship_move.preview_move` считает исход переноса в откатываемой транзакции;
+`merge_candidates.data_weight` — сумма алиасов, связей и групп, по ней `recommend_keep` выбирает главную карточку.

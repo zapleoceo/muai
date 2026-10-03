@@ -36,3 +36,27 @@ async def propose_merge(entity_a: int, entity_b: int, *, confidence: float,
                                  confidence=confidence, reason=reason,
                                  status="pending"))
     return True
+
+
+async def reject_pair(entity_a: int, entity_b: int, reason: str) -> None:
+    """«Разные люди» для пары без предложения (точное совпадение идентификатора): записать
+    её отклонённой, чтобы очередь не показывала её снова. Есть строка — только меняет статус."""
+    a, b = sorted((entity_a, entity_b))
+    if a == b:
+        return
+    async with get_session() as s:
+        row = (await s.execute(select(MergeSuggestionRow).where(
+            MergeSuggestionRow.entity_a == a, MergeSuggestionRow.entity_b == b))).scalar_one_or_none()
+        if row is None:
+            s.add(MergeSuggestionRow(entity_a=a, entity_b=b, verdict="different",
+                                     confidence=1.0, reason=reason, status="rejected"))
+        else:
+            row.status = "rejected"
+
+
+async def list_decided_pairs() -> set[tuple[int, int]]:
+    """Пары, по которым уже есть решение (принято/отклонено): очередь их не повторяет."""
+    async with get_session() as s:
+        rows = (await s.execute(select(MergeSuggestionRow.entity_a, MergeSuggestionRow.entity_b)
+                                .where(MergeSuggestionRow.status != "pending"))).all()
+    return {tuple(r) for r in rows}

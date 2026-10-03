@@ -16,7 +16,6 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 import pytest  # noqa: E402
 from dashboard.app import app  # noqa: E402
 from dashboard.auth import COOKIE_NAME  # noqa: E402
-from dashboard.entities_view import option_label  # noqa: E402
 from dashboard.event_text import parse_content  # noqa: E402
 from dashboard.event_view import header_pairs  # noqa: E402
 from dashboard.journal_view import describe_entry, relationship_ids  # noqa: E402
@@ -125,14 +124,6 @@ class TestConsistency:
         from dashboard.ui.theme import VERA_CSS
         assert 'grid-template-areas:"text text text text" "src who time st"' in VERA_CSS
         assert "table.data thead{display:none}" in VERA_CSS and "min-height:44px" in VERA_CSS
-
-
-class TestDuplicatesLabels:
-    def test_option_shows_what_tells_namesakes_apart(self):
-        dossier = {"username": "dima_k", "msg_count": 120, "top_chats": [("Рабочий чат", 50)]}
-        label = option_label({"id": 5, "name": "Дима"}, dossier)
-        assert label == "Дима · @dima_k · 120 сообщ. · Рабочий чат · #5"
-        assert option_label({"id": 6, "name": "Дима"}, None) == "Дима · #6"
 
 
 class TestEventPageHeader:
