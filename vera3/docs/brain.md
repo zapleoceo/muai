@@ -486,9 +486,9 @@ processing is paused/paced.
 ### Полнотекст на нескольких языках (`fts.py`, миграция 031)
 
 Все FTS-выражения — в `brain_search/fts.py`: `FTS_CONFIGS`,
-`build_ts_query` (слова → `w1:* | w2:*`, общая для `app._ts_query` и
-агентского `search_events`), `fts_match_sql` (OR по конфигурациям) и
-`fts_rank_sql`. retrieval.py и agent.py только подставляют их.
+`build_ts_query` (слова → `w1:* | w2:*`, одна на `/search` и на агентский
+`search_events`: обе идут через `pipeline.query_terms`), `fts_match_sql` (OR
+по конфигурациям) и `fts_rank_sql`. retrieval.py только подставляет их.
 
 **Проблема (замер 2026-09-13).** Поиск стоял на одной `russian`. В базе 445
 тыс. событий: ~115 тыс. с украинскими буквами, ~31 тыс. без кириллицы
@@ -530,9 +530,8 @@ processing is paused/paced.
 в смешанной выдаче. Это цена покрытия второго языка, а не нарушение
 инварианта (порядок внутри русских совпадений сохранён); окончательный порядок
 всё равно задаёт скоринг brain-search поверх кандидатов, а не голый `ts_rank`. У `indonesian` в Postgres нет стоп-листа —
-английские/индонезийские служебные слова (`the`, `yang`, `dan`…)
-выкидываются в `build_ts_query`, иначе `the:*` матчил бы почти все
-английские письма.
+служебные слова ru/uk/en/id (`lang.py`, см. ниже) выкидываются до
+tsquery, иначе `the:*` матчил бы почти все английские письма.
 
 **Индексы.** `ix_events_fts_russian` (стоял на проде давно, ставился руками;
 031 фиксирует его для чистых баз) и новый `ix_events_fts_indonesian`, оба
@@ -655,3 +654,74 @@ from sums rather than silently treated as zero.
 - `workflow=` kwarg is REQUIRED — it's how we group calls in `usage_log`.
 - Capability is one of: `chat:fast`, `chat:smart`, `chat:code`, `prefilter`, `structured`, `vision`, `embedding`.
 - Cost guard is at the broker — don't duplicate in callers.
+
+### Качество поиска (ревью 2026-10-03, ветка `fix/search-quality`)
+
+Десять вопросов на четырёх языках оценивались по top-5; ниже — что починено
+и почему.
+
+**Замер на проде** (read-only: те же 10 вопросов, новый код из `/tmp`
+контейнера brain-search, старый сервис не трогали). Доля источников в
+суммарном top-5 (50 мест): `vera_memory` 23 → 6, telegram 13 → 20, gmail
+12 → 17; сообщений ботов `stepanv2bot`/`itSTEPan_bot` 4 → 0. «Проектный»
+вопрос про кальяны Веранды раньше отдавал свежие записи памяти и
+нерелевантный чат, теперь — сообщения «Veranda менеджмент» с договором.
+Цена снижения веса памяти: короткий выведенный факт, который был лучшим
+ответом (например, платёжный профиль Google Ads), теперь стоит наравне с
+письмами и может выпасть из top-5 — дальше его нужно подтягивать
+значимостью, а не множителем.
+
+**Модули brain-search.**
+
+| модуль | роль |
+|---|---|
+| `lang.py` | `STOPWORDS` ru/uk/en/id, `is_stopword`, `content_words` — единственный список служебных слов |
+| `pipeline.py` | `query_terms` (tsquery + имена для account), `embed_query`, `search_ranked` — общий путь `/search` и инструмента агента |
+| `retrieval.py` | режимы выборки (`fetch_candidates`) |
+| `retrieval_filters.py` | WHERE-фрагменты: `project_clause`, `account_clause`, `semantic_filter`, `source_clause`, `NOT_A_WORLD_EVENT` |
+| `rows.py` | `Candidate` (NamedTuple строки выборки) и `META_COLUMNS` |
+| `scoring.py` | `score_candidates` (строки) и `score_rows` (превью для ответа) |
+| `agent.py` / `agent_tools.py` | цикл ReAct / инструменты, их модели аргументов и `execute_tool` |
+
+**Служебные слова.** «bagaimana», «який», «who», «what» в OR-запросе
+расширяли выборку на пол-корпуса (`bagaimana:*`). `lang.py` объединяет
+стоп-слова четырёх языков; список знает и `build_ts_query`. Дефис в
+токенизатор не входит: он служебный символ tsquery.
+
+**Проектный режим.** Раньше `ORDER BY occurred_at DESC` без FTS: запрос
+«договор с поставщиком кальянов Веранда» получал 200 свежих сообщений
+проекта вне зависимости от слов. Теперь внутри фильтра проекта работают
+`fts_match_sql`/`fts_rank_sql` (и ANN-добавка, как везде); свежее — только
+если содержательных слов нет или они ничего не нашли. Слова-триггеры самого
+проекта («Веранда») в tsquery не попадают: внутри проекта они есть везде.
+Проект определяет `vera_shared.projects.rules` (`QUERY_TRIGGERS`,
+`project_from_query`) — те же правила, что у `sync_projects`; своих реестров
+ящиков и чатов (`PROJECT_ALIASES`, ILIKE по account, `chat_title = ANY`) у
+поиска больше нет: колонка `events.project` заполнена у 99.8% событий
+(532 из 471 тыс. — NULL; замер 2026-10-03).
+
+**Веса.** `vera_memory` был 1.2 и вместе с `importance/200` и бонусом account
+обгонял первичные события в 7 запросах из 10 — стал 1.0 (`SOURCE_WEIGHTS`
+хранит только понижающие). Агентская `memory.remember` пишет
+`metadata.written_by = "search_agent"` (`AGENT_WRITER`) и ровно того же
+веса, что первичное событие, не выше. Авторы-боты (`sender_username` на
+`bot`: autopay_telebot, stepanv2bot, itSTEPan_bot, ChatKeeperBot…)
+умножаются на `BOT_AUTHOR_WEIGHT` = 0.4, но не исключаются: в чате
+«Veranda transactions» бот оплат — единственный автор.
+
+**Агент.** `search_events` — не вторая реализация поиска, а вызов
+`pipeline.search_ranked` (ANN, куски, скоринг, фильтр `source`): повторный
+поиск равен первому. Аргументы инструментов — pydantic-модели
+`SearchEventsArgs` и `RememberArgs` с границами (`limit` ≤ `MAX_SEARCH_LIMIT`
+= 50, `fact` ≤ 2000 знаков, ≤ 10 тегов), лишние ключи игнорируются, ошибка
+аргументов или исполнения возвращается наблюдением (`execute_tool`), а не
+500: текст писем, попавший в промпт, не должен ронять `/search` или писать
+в память что угодно. `SearchQuery.limit` ≤ 100, `max_steps` ≤ 10;
+мёртвое `days_back` удалено. Описания инструментов (`ToolDescriptor`)
+встроенные плюс `load_remote_tool_specs` из `/tools/spec` ingestor-telegram;
+даты `date_from`/`date_to` разбирает `parse_iso_date`, окно локальных дней
+(Jakarta, включительно) строит `date_window`.
+
+**Даты.** `1.5 млн`, `3.5`, `v1.2.3` больше не даты: `dd.mm` без года
+требует две цифры («09.06»). Относительные дни — вчера/сегодня/позавчера на
+ru/uk/en/id («yesterday», «kemarin», «hari ini», «вчора», «сьогодні»).

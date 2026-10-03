@@ -346,3 +346,24 @@ async def test_out_of_steps_message_has_no_typo():
         trace = await agent.run_agent(user_query="q", initial_context="",
                                       self_context="", history_block="", max_steps=1)
     assert "уже́е" not in trace.answer and "уточнить" in trace.answer
+
+
+@pytest.mark.asyncio
+async def test_search_route_strips_project_words_and_passes_project(monkeypatch):
+    from brain_search import app as search_app
+    from brain_search.retrieval import Candidates
+
+    monkeypatch.setenv("INTERNAL_SECRET", "s")
+    fetch = AsyncMock(return_value=Candidates([], "project(veranda)+fts"))
+    answer = AsyncMock(return_value="ANSWER")
+    with patch.object(search_app, "_try_report", AsyncMock(return_value=None)), \
+         patch.object(search_app, "embed_query", AsyncMock(return_value=None)), \
+         patch.object(search_app, "fetch_candidates", fetch), \
+         patch.object(search_app, "synthesize", answer):
+        out = await search_app.search(
+            SearchQuery(q="договор с поставщиком кальянов Веранда"), "s")
+    assert out == "ANSWER"
+    kwargs = fetch.await_args.kwargs
+    assert kwargs["project"].name == "veranda"
+    assert "Веранда" not in kwargs["ts_query"] and "договор:*" in kwargs["ts_query"]
+    assert answer.await_args.kwargs["project"] == "veranda"
