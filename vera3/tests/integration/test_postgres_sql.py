@@ -114,15 +114,15 @@ async def test_usage_log_window_excludes_old_rows(pg_db):
 def _stub_llm(bs, monkeypatch):
     """Брокера в тесте нет. Шов синтеза живёт в synthesis, а не в app —
     после разбора app.py на модули подменять надо там."""
-    from brain_search import self_context, synthesis
+    from brain_search import pipeline, self_context, synthesis
 
     async def _no_embed(_texts):
-        raise bs.LLMCallFailed("нет брокера в тесте")
+        raise pipeline.LLMCallFailed("нет брокера в тесте")
 
     async def _synth(**_kw):
         return "ответ", {"provider": "test", "cost_usd": 0.0}
 
-    monkeypatch.setattr(bs, "embed", _no_embed)
+    monkeypatch.setattr(pipeline, "embed", _no_embed)
     monkeypatch.setattr(synthesis, "chat_async", _synth)
     monkeypatch.setenv("INTERNAL_SECRET", SECRET)
     self_context.forget()          # кэш переживает базу теста
@@ -388,11 +388,11 @@ async def test_find_project_chats_matches_membership_to_graph(pg_db):
 async def test_retrieval_picks_the_expected_branch(pg_db, question, mode):
     """Ветка выборки перестала быть неявной: раньше это были шесть похожих
     SELECT'ов подряд, и понять, в какой ты, можно было только сравнив их."""
-    from brain_search.app import _ts_query
+    from brain_search.pipeline import query_terms
     from brain_search.query_parse import parse_time_range
     from brain_search.retrieval import fetch_candidates
 
-    ts, acc = _ts_query(question)
+    ts, acc = query_terms(question)
     found = await fetch_candidates(
         ts_query=ts, acc_words=acc, time_range=parse_time_range(question),
         project=None, q_vec=None, limit=15,
@@ -908,3 +908,54 @@ async def test_triage_writes_chunks_only_for_long_events(pg_db, monkeypatch):
         left = (await s.execute(sa_text(
             "SELECT COUNT(*) FROM event_chunk_embeddings"))).scalar_one()
     assert left == 0
+
+
+@pytest.mark.asyncio
+async def test_project_mode_ranks_by_query_words_and_flags_bot_authors(pg_db):
+    """Проектная выборка применяет слова вопроса (раньше брала 200 свежих
+    подряд), а автор-бот помечается колонкой is_bot для скоринга."""
+    from brain_search.query_parse import ProjectScope
+    from brain_search.retrieval import fetch_candidates
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models import EventRow
+
+    now = utc_naive_now()
+    async with get_session() as s:
+        for i, (sid, body, proj, meta) in enumerate([
+            ("old-hit", "договор аренды помещения", "itstep", {}),
+            ("new-miss", "свежее сообщение про погоду", "itstep", {}),
+            ("other-proj", "договор аренды помещения", "veranda", {}),
+            ("bot-hit", "договор аренды оплачен", "itstep",
+             {"sender_username": "autopay_telebot"}),
+        ]):
+            s.add(EventRow(source="telegram", source_event_id=sid, content_text=body,
+                           occurred_at=now - timedelta(days=10 - 3 * i), received_at=now,
+                           triage_status="done", project=proj, metadata_=meta))
+    found = await fetch_candidates(
+        ts_query="аренды:*", acc_words=[], time_range=None,
+        project=ProjectScope(name="itstep"), q_vec=None, limit=15)
+    by_sid = {}
+    async with get_session() as s:
+        from sqlalchemy import select
+        by_sid = {r.id: r.source_event_id
+                  for r in (await s.execute(select(EventRow))).scalars().all()}
+    got = {by_sid[r.id]: r for r in found.rows}
+    assert found.mode.endswith("+fts")
+    assert set(got) == {"old-hit", "bot-hit"}
+    assert got["bot-hit"].is_bot is True and got["old-hit"].is_bot is False
+
+
+@pytest.mark.asyncio
+async def test_source_filter_limits_every_branch(pg_db):
+    from brain_search.retrieval import fetch_candidates
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models import EventRow
+
+    now = utc_naive_now()
+    async with get_session() as s:
+        for sid, src in (("t", "telegram"), ("g", "gmail")):
+            s.add(EventRow(source=src, source_event_id=sid, content_text="оплата счёта",
+                           occurred_at=now, received_at=now, triage_status="done"))
+    found = await fetch_candidates(ts_query="оплата:*", acc_words=[], time_range=None,
+                                   project=None, q_vec=None, limit=15, source="gmail")
+    assert {r.source for r in found.rows} == {"gmail"}

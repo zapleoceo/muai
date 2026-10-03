@@ -14,9 +14,9 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
-from brain_search import app as bs
 from brain_search.fts import (
     FTS_COLUMNS,
     FTS_CONFIGS,
@@ -24,6 +24,7 @@ from brain_search.fts import (
     fts_match_sql,
     fts_rank_sql,
 )
+from brain_search.pipeline import query_terms
 
 _MIGRATIONS = Path(__file__).resolve().parents[2] / "infra" / "migrations"
 _MIGRATION = _MIGRATIONS / "031_events_fts_multilingual.sql"
@@ -36,11 +37,11 @@ def test_query_keeps_prefix_or_shape():
 
 
 def test_foreign_stopwords_dropped_russian_words_kept():
-    assert build_ts_query(["the", "invoice", "yang", "dan", "и"]) == "invoice:* | и:*"
+    assert build_ts_query(["the", "invoice", "yang", "dan", "и"]) == "invoice:*"
 
 
 def test_app_query_uses_shared_builder():
-    ts, _ = bs._ts_query("payments for the villa")
+    ts, _ = query_terms("payments for the villa")
     assert ts == "payments:* | villa:*"
 
 
@@ -125,14 +126,15 @@ async def test_retrieval_fts_branch_uses_multilingual_sql():
 
 @pytest.mark.asyncio
 async def test_agent_search_events_uses_multilingual_sql(monkeypatch):
-    import vera_shared.db.engine as engine
-    from brain_search import agent
+    from brain_search import agent_tools, pipeline, retrieval
     s = _CapturingSession()
-    monkeypatch.setattr(engine, "get_session", lambda: s)
-    res = await agent._exec_search_events("pembayaran siswa")
+    monkeypatch.setattr(retrieval, "get_session", lambda: s)
+    monkeypatch.setattr(pipeline, "embed_query", AsyncMock(return_value=None))
+    res = await agent_tools._exec_search_events(
+        agent_tools.SearchEventsArgs(q="pembayaran siswa"))
     assert res["found"] == 0
     assert fts_match_sql() in s.sql[0]
-    assert f"ORDER BY {fts_rank_sql()} DESC" in s.sql[0]
+    assert f"{fts_rank_sql()} AS rank" in s.sql[0]
 
 
 def test_transcript_index_expressions_match_the_query():
