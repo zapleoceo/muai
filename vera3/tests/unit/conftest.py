@@ -61,6 +61,7 @@ async def sqlite_db(tmp_path):
         models_graph,
         models_links,
         models_mcp,
+        models_pair_roles,
         models_sources,
         models_voice,
     )

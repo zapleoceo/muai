@@ -36,7 +36,7 @@ def _iso(value: Any) -> str:
     return value.isoformat() if hasattr(value, "isoformat") else str(value)
 
 
-def _json(value: Any) -> dict[str, Any] | None:
+def json_dict(value: Any) -> dict[str, Any] | None:
     """Сырой text() на SQLite отдаёт JSON строкой, на Postgres — словарём."""
     if isinstance(value, str):
         try:
@@ -137,7 +137,7 @@ async def event_participants(event_id: int) -> dict[str, Any] | None:
                            "confidence": round(float(r["confidence"]), 2),
                            "token": r["token"] or None, "span": r["span"]})
     linked = {r["token"] for r in rows if r["token"]}
-    meta, extra = _json(ev["metadata"]) or {}, _json(ev["content_extra"])
+    meta, extra = json_dict(ev["metadata"]) or {}, json_dict(ev["content_extra"])
     view = EventView(ev["id"], ev["source"], "", meta, extra)
     unresolved = [{"label": label, "utterances": n} for label, n in speakers_of(view).items()
                   if label not in linked]
