@@ -2,6 +2,7 @@
 """Чистка связей графа: план → проверка глазами → применение → откат.
 
     python clean_relationships.py --plan plan.json                  # проход soft, БД не меняет
+    python clean_relationships.py --phase canonical --plan c.json   # только форма: канон для ВСЕХ текущих
     python clean_relationships.py --phase verify --plan v.json --limit 50   # одиночные имена: модель
     python clean_relationships.py --plan plan.json --snapshot export.json
     python clean_relationships.py --apply plan.json --report rollback.json
@@ -38,6 +39,7 @@ from vera_shared.graph.rel_cleanup import (
     weak_name_candidates,
 )
 from vera_shared.graph.rel_cleanup_apply import PlanError, apply_plan, undo_report
+from vera_shared.graph.rel_cleanup_canonical import canonical_plan
 from vera_shared.graph.rel_cleanup_snapshot import load_snapshot
 from vera_shared.graph.rel_cleanup_verify import verify_plan
 
@@ -52,8 +54,9 @@ def _parser() -> argparse.ArgumentParser:
     mode.add_argument("--undo", metavar="ROLLBACK.json", help="откатить по отчёту")
     p.add_argument("--report", metavar="ROLLBACK.json",
                    help="куда писать отчёт для отката (обязателен с --apply)")
-    p.add_argument("--phase", choices=("soft", "verify"), default="soft",
-                   help="soft — правила без модели; verify — модель по одиночным именам")
+    p.add_argument("--phase", choices=("soft", "canonical", "verify"), default="soft",
+                   help="soft — правила без модели; canonical — только привести форму к канону "
+                        "(для всех текущих); verify — модель по одиночным именам")
     p.add_argument("--limit", type=int, metavar="N",
                    help="verify: пробная партия из первых N связей")
     p.add_argument("--concurrency", type=int, default=4, help="verify: параллельных вызовов")
@@ -73,15 +76,16 @@ def _print_examples(doc: dict) -> None:
 
 
 async def _plan(out: Path, args: argparse.Namespace) -> None:
-    if args.snapshot and args.phase == "soft":
+    if args.snapshot and args.phase in ("soft", "canonical"):
         data = json.loads(Path(args.snapshot).read_text(encoding="utf-8"))
         source = f"snapshot:{Path(args.snapshot).name}"
     else:
         await init_engine()
         data = await load_snapshot(int(os.environ["OWNER_TELEGRAM_ID"]))
         source = "db"
-    if args.phase == "soft":
-        doc = plan_document(build_plan(data), source)
+    if args.phase in ("soft", "canonical"):
+        actions = build_plan(data) if args.phase == "soft" else canonical_plan(data)
+        doc = plan_document(actions, source, args.phase)
     else:
         cache = out.with_suffix(".verdicts.jsonl")
         if args.refresh_pair_stats:

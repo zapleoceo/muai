@@ -595,6 +595,11 @@ $RUN --plan /reports/rel_plan.json
 # 3. применение; без --report скрипт откажется, существующий отчёт не перезаписывает
 $RUN --apply /reports/rel_plan.json --report /reports/rel_rollback-$(date +%F).json
 
+# 3б. ПРОХОД canonical — только форма (канон) для ВСЕХ текущих, включая одиночные имена;
+#     модель не нужна. Тот же цикл: --plan, глазами, --apply с --report, --undo.
+$RUN --phase canonical --plan /reports/rel_canonical.json
+$RUN --apply /reports/rel_canonical.json --report /reports/rel_rollback-canonical-$(date +%F).json
+
 # 4. ПРОХОД verify — одиночные имена судит модель (нужны БД и брокер; запускать на
 #    сервере, не на ноутбуке). Сначала пробная партия:
 $RUN --phase verify --plan /reports/rel_verify.json --limit 50

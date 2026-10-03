@@ -399,7 +399,7 @@ async def graph_snapshot(
                 {"ids": ids},
             )).mappings().all())
 
-    pair_edges = await connections_among(ids, predicate) if want_rels and not raw_edges else []
+    pair_edges = await connections_among(ids, predicate, focus_id) if want_rels and not raw_edges else []
     taken = {ordered(e["source"], e["target"]) for e in pair_edges}
     edges = list(pair_edges)
     for r in edge_rows:

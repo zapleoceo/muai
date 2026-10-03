@@ -53,15 +53,27 @@ INFER_MIN_DAYS_CHAT = 6
 ALSO_MIN_WEIGHT = 0.35
 ALSO_RATIO = 0.6
 INFERRED_PREDICATE = "coworker_of"
-#: Роли, которым рабочее общение — прямая улика.
-WORK_ROLES = frozenset({"coworker_of", "boss_of", "works_at"})
+#: Роли, которым рабочее общение — прямая улика. Иерархии тут нет: рабочий контекст
+#: доказывает «работает с», а не «кто начальник» («принял приглашение» → вес 0.95
+#: у босса из одного сообщения, прод-QA 04.10).
+WORK_ROLES = frozenset({"coworker_of", "works_at"})
 #: Личные и коммерческие роли: одна фраза — слишком шаткое основание (прод-замер
 #: 04.10: «супруга» и «поставщики» из одного упоминания перебивали 400 дней общих чатов).
-NEEDS_REPEAT = frozenset({"spouse_of", "parent_of", "client_of", "vendor_of"})
+NEEDS_REPEAT = frozenset({"spouse_of", "parent_of", "client_of", "vendor_of", "boss_of"})
 MIN_REPEAT_SUPPORT = 2
 #: Пара с общением, но без показываемой роли, не пропадает: «общение без ясной роли».
 NEUTRAL_PREDICATE = "contact"
 NEUTRAL_MAX_WEIGHT = 0.3
+#: Сколько дней контакта достаточно, чтобы пара без записанных ролей показывалась как
+#: «общение без ясной роли»: рубеж «постоянный контакт» — p90 обычных собеседников
+#: владельца (16) и медиана его коллег (10); ≥10 дней у ~15% личных контактов, то есть
+#: список короткий, но 108 дней и 615 личных сообщений уже не теряются.
+CONTACT_MIN_DAYS = 10
+#: Более конкретная роль, показываемая главной, поглощает менее конкретные: начальник
+#: подразумевает «работает с», родитель и супруг — «дружит с». Поглощённая роль не
+#: идёт в «также», её подтверждения прибавляются к показанным.
+SPECIFIC_OVER = {"boss_of": frozenset({"coworker_of"}), "parent_of": frozenset({"friend_of"}),
+                 "spouse_of": frozenset({"friend_of"})}
 #: Иерархии, где обе стороны одновременно — противоречие.
 HIERARCHY = frozenset({"boss_of", "parent_of"})
 #: При равном весе главной становится роль, стоящая раньше: она точнее.
@@ -120,7 +132,9 @@ class Connection:
     @property
     def also(self) -> tuple[Role, ...]:
         floor = max(ALSO_MIN_WEIGHT, ALSO_RATIO * self.weight)
-        return tuple(r for r in self.roles[1:] if r.weight >= floor and _corroborated(r))
+        no_contact = self.stats.active_days == 0
+        return tuple(r for r in self.roles[1:] if r.weight >= floor and _corroborated(r)
+                     and not (no_contact and r.predicate in HIERARCHY))
 
     @property
     def hidden(self) -> int:
@@ -162,6 +176,10 @@ def inferred_work_weight(stats: PairStats, shared_work: bool) -> float:
     return INFER_MAX * work_strength(stats, shared_work)
 
 
+def is_regular_contact(stats: PairStats) -> bool:
+    return stats.active_days >= CONTACT_MIN_DAYS
+
+
 def could_infer_work(stats: PairStats) -> bool:
     """Хватает ли дней для вывода «работает с» при каком-нибудь рабочем признаке."""
     return (inferred_work_weight(stats, True) > 0 or inferred_work_weight(stats, False) > 0)
@@ -191,10 +209,10 @@ def _asserted_role(key: RoleKey, claims: list[Claim], work: float) -> Role:
                 latest.seen_at)
 
 
-def _priority(role: Role) -> tuple[float, int]:
+def _priority(role: Role) -> tuple[bool, float, int]:
     order = (ROLE_PRIORITY.index(role.predicate) if role.predicate in ROLE_PRIORITY
              else len(ROLE_PRIORITY))
-    return -role.weight, order
+    return role.predicate not in SPECIFIC_OVER, -role.weight, order
 
 
 def _survivor_rank(role: Role) -> tuple[object, ...]:
@@ -214,6 +232,20 @@ def _drop_contradictions(roles: dict[RoleKey, Role]) -> dict[RoleKey, Role]:
     return roles
 
 
+def _absorb(shown: dict[RoleKey, Role]) -> tuple[dict[RoleKey, Role], int]:
+    """Показанная конкретная роль забирает менее конкретные: вес — больший из двух,
+    подтверждения и id записей складываются. Возвращает роли и число поглощённых."""
+    folded = 0
+    for key in [k for k in shown if k[0] in SPECIFIC_OVER]:
+        for other in [k for k in shown if k[0] in SPECIFIC_OVER[key[0]]]:
+            small, big = shown.pop(other), shown[key]
+            shown[key] = replace(big, weight=max(big.weight, small.weight),
+                                 support=big.support + small.support,
+                                 rel_ids=tuple(sorted({*big.rel_ids, *small.rel_ids})))
+            folded += 1
+    return shown, folded
+
+
 def _neutral(stats: PairStats, interaction: float) -> Role | None:
     if stats.active_days <= 0:
         return None
@@ -224,8 +256,9 @@ def _neutral(stats: PairStats, interaction: float) -> Role | None:
 def build_connection(a: int, b: int, claims: Iterable[Claim], stats: PairStats,
                      shared_work: bool = False, suppress_inferred: bool = False) -> Connection | None:
     """Связь пары из записей и статистики; None — нет показываемой роли и не на что опереться
-    (записей нет вовсе либо нет общения). `suppress_inferred` — владелец отверг выведенное
-    «работает с»: общение не считается уликой, записанные роли остаются."""
+    (записей нет и общения меньше `CONTACT_MIN_DAYS`, либо роли скрыты и общения нет).
+    `suppress_inferred` — владелец отверг выведенное «работает с»: общение не считается
+    уликой, записанные роли остаются."""
     interaction = interaction_strength(stats)
     work = work_strength(stats, shared_work)
     grouped: dict[RoleKey, list[Claim]] = {}
@@ -241,10 +274,12 @@ def build_connection(a: int, b: int, claims: Iterable[Claim], stats: PairStats,
     elif inferred:
         roles[work_key] = Role(INFERRED_PREDICATE, None, inferred, 0, False, True, 0.0, None)
     qualified = {k: r for k, r in roles.items() if _qualifies(r)}
-    shown = list(_drop_contradictions(qualified).values())
-    hidden = len(roles) - len(shown)
+    kept, folded = _absorb(_drop_contradictions(qualified))
+    shown = list(kept.values())
+    hidden = len(roles) - len(shown) - folded
     if not shown:
-        neutral = _neutral(stats, interaction) if roles else None
+        neutral = (_neutral(stats, interaction)
+                   if roles or stats.active_days >= CONTACT_MIN_DAYS else None)
         if neutral is None:
             return None
         shown = [neutral]

@@ -32,14 +32,14 @@ async def stat(get_session, a: int, b: int, **kw: int) -> None:
 
 async def test_one_connection_per_counterpart_not_one_per_phrase(sqlite_db):
     owner, andrey = await person("Игорь Тестов", "1"), await person("Андрей", "2")
-    for predicate in ("reports_to", "client_of", "coworker_of", "vendor_of"):
-        await rel(owner if predicate != "reports_to" else andrey, predicate,
-                  andrey if predicate != "reports_to" else owner, event=len(predicate))
+    await rel(andrey, "reports_to", owner, event=None)
+    for predicate in ("client_of", "coworker_of", "vendor_of"):
+        await rel(owner, predicate, andrey, event=len(predicate))
     out = await connections.entity_connections(owner)
     assert [c["other_id"] for c in out] == [andrey]
     only = out[0]
     assert only["main"]["predicate"] == "boss_of" and only["main"]["direction"] == "out"
-    assert only["hidden"] + len(only["also"]) == 3
+    assert only["hidden"] + len(only["also"]) == 2
     assert only["also"] == []
     assert only["interaction"]["established"] is False
 
@@ -47,16 +47,16 @@ async def test_one_connection_per_counterpart_not_one_per_phrase(sqlite_db):
 async def test_strong_contact_lifts_the_pair_and_is_reported(sqlite_db):
     owner = await person("Игорь Тестов", "1", "i@corp.example")
     lisa = await person("Лиза Ветрова", "2", "l@corp.example")
-    await rel(lisa, "reports_to", owner)
+    await rel(lisa, "coworker_of", owner)
     await stat(sqlite_db, owner, lisa, dm_msgs=400, dm_days=40, active_days=40)
     quiet_owner = await person("Пётр Тихий", "3", "p@corp.example")
     quiet = await person("Нина Тихая", "4", "n@corp.example")
-    await rel(quiet, "reports_to", quiet_owner)
+    await rel(quiet, "coworker_of", quiet_owner)
     busy = (await connections.entity_connections(owner))[0]
     calm = (await connections.entity_connections(quiet_owner))[0]
     assert busy["weight"] > calm["weight"] * 1.8
     assert busy["interaction"]["dm_msgs"] == 400 and busy["interaction"]["established"] is True
-    assert busy["main"]["direction"] == "out"
+    assert busy["main"]["direction"] == "both"
 
 
 async def test_work_together_is_inferred_without_any_phrase(sqlite_db):
@@ -66,9 +66,11 @@ async def test_work_together_is_inferred_without_any_phrase(sqlite_db):
     await stat(sqlite_db, owner, lisa, dm_days=30, active_days=30)
     await stat(sqlite_db, owner, stranger, dm_days=30, active_days=30)
     out = await connections.entity_connections(owner)
-    assert [c["other_id"] for c in out] == [lisa]
-    assert out[0]["main"]["predicate"] == "coworker_of" and out[0]["main"]["inferred"]
-    assert out[0]["main"]["support"] == 0 and out[0]["shared_work"] is True
+    by_id = {c["other_id"]: c for c in out}
+    assert set(by_id) == {lisa, stranger}
+    assert by_id[lisa]["main"]["predicate"] == "coworker_of" and by_id[lisa]["main"]["inferred"]
+    assert by_id[lisa]["main"]["support"] == 0 and by_id[lisa]["shared_work"] is True
+    assert by_id[stranger]["main"]["predicate"] == "contact"           # 30 дней личного общения
 
 
 async def test_work_chats_alone_infer_work_only_with_enough_days(sqlite_db):
@@ -119,27 +121,28 @@ async def test_twin_must_be_stronger_than_the_fragment(sqlite_db):
 
 async def test_graph_snapshot_draws_one_edge_per_pair(sqlite_db):
     a, b = await person("Игорь Тестов", "1"), await person("Андрей", "2")
-    for predicate in ("boss_of", "client_of", "vendor_of"):
+    await rel(a, "boss_of", b, event=None)
+    for predicate in ("client_of", "vendor_of"):
         await rel(a, predicate, b, event=len(predicate))
     snap = await repo.graph_snapshot(min_degree=1, limit=50)
     assert len(snap["edges"]) == 1
     edge = snap["edges"][0]
     assert {edge["source"], edge["target"]} == {a, b} and edge["weight"] > 0
-    assert edge["predicate"] in {"boss_of", "client_of", "vendor_of"}
+    assert edge["predicate"] == "boss_of"
     raw = await repo.graph_snapshot(min_degree=1, limit=50, raw_edges=True)
     assert len(raw["edges"]) == 3
 
 
 async def test_graph_snapshot_edge_points_from_boss_to_subordinate(sqlite_db):
     boss, sub = await person("Игорь Тестов", "1"), await person("Пётр Тихий", "2")
-    await rel(sub, "reports_to", boss)
+    await rel(sub, "reports_to", boss, event=None)
     (edge,) = (await repo.graph_snapshot(focus_id=sub, limit=10))["edges"]
     assert (edge["source"], edge["target"], edge["predicate"]) == (boss, sub, "boss_of")
 
 
 async def test_graph_snapshot_predicate_filter_keeps_only_pairs_with_that_role(sqlite_db):
     a, b, c = await person("А Ааа", "1"), await person("Б Ббб", "2"), await person("В Ввв", "3")
-    await rel(a, "boss_of", b)
+    await rel(a, "boss_of", b, event=None)
     await rel(a, "friend_of", c)
     edges = (await repo.graph_snapshot(min_degree=1, limit=50, predicate="boss_of"))["edges"]
     assert [(e["source"], e["target"]) for e in edges] == [(a, b)]
@@ -168,10 +171,31 @@ async def test_established_pairs_follow_interaction_strength(sqlite_db):
 
 async def test_missing_pair_stats_table_degrades_to_recorded_roles(sqlite_db):
     a, b = await person("А Ааа", "1"), await person("Б Ббб", "2")
-    await rel(a, "boss_of", b)
+    await rel(a, "boss_of", b, event=None)
     async with sqlite_db() as s:
         await s.execute(text("DROP TABLE pair_stats"))
     out = await connections.entity_connections(a)
     assert out[0]["main"]["predicate"] == "boss_of"
     assert out[0]["interaction"]["active_days"] == 0
     assert await connections.established_pairs([(a, b)]) == set()
+
+
+async def test_strong_contact_without_rows_is_on_the_card_and_in_the_ego_graph_only(sqlite_db):
+    owner, friend = await person("Игорь Тестов", "1"), await person("Маша Тестова", "2")
+    third = await person("Пётр Третий", "3")
+    await stat(sqlite_db, owner, friend, dm_msgs=615, dm_days=108, active_days=108)
+    await stat(sqlite_db, third, friend, co_days=12, active_days=12)
+    (card,) = await connections.entity_connections(owner)
+    assert card["other_id"] == friend and card["main"]["predicate"] == "contact"
+    ego = await repo.graph_snapshot(focus_id=owner, limit=50)
+    assert {n["id"] for n in ego["nodes"]} == {owner, friend}
+    assert [(e["predicate"]) for e in ego["edges"]] == ["contact"]
+    await rel(owner, "friend_of", third)
+    core = await repo.graph_snapshot(min_degree=1, limit=50)
+    assert all(e["predicate"] != "contact" for e in core["edges"])
+
+
+async def test_contact_below_the_threshold_is_not_shown(sqlite_db):
+    a, b = await person("А Ааа", "1"), await person("Б Ббб", "2")
+    await stat(sqlite_db, a, b, dm_days=9, active_days=9)
+    assert await connections.entity_connections(a) == []
