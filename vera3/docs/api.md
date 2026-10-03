@@ -126,7 +126,7 @@ Returns `AnswerResponse` with `answer`, `results`, `provider`, `cost_usd`,
 | `/api/tg_login` | GET | TG widget signature | Callback → session cookie |
 | `/logout` | GET | none | Clear cookie |
 | `/` | GET | owner cookie | «Поиск» — главная, поиск вперёд: статусная строка (точка зелёная/жёлтая/красная из `health.assess`, «N событий · +M за сутки», ссылка на `/sources`) и поле «Спросить Веру» (`POST /search-ui`). Карточек конвейера и живого прогресса здесь больше нет |
-| `/events` | GET | owner cookie | «Входящее» — события по дням (Сегодня/Вчера/дата): время · иконка источника · кто (имя автора из `From`/`Author`, под ним приглушённо чат, канал или тема письма — не аккаунт ингеста) · текст (тело без заголовка, одной строкой с многоточием) · точка статуса. Вся строка кликабельна (`tr.row-link`, `ROW_LINK_SCRIPT`) и ведёт на `/events/{id}`; Параметры: `q` (текст, ILIKE), `source`, `status`, `tech=1` (колонки техданных: id, важность, запрос к брокеру, модель, токены, цена — по умолчанию скрыты), `limit` (размер страницы, 50 по умолчанию), `before` (курсор `occurred_at_id` для «Показать ещё»: keyset-страницы по `(occurred_at, id)`, `cursor_of` / `parse_cursor`, без растущего лимита; битый курсор игнорируется; ссылка «← к новым» показывается, когда курсор задан — `cursor_given`). Текстовый поиск идёт под `SET LOCAL statement_timeout` в `SEARCH_TIMEOUT_S` = 5 с: при таймауте страница показывает «Слишком долгий поиск — уточните запрос». Заголовки дней Сегодня/Вчера/дата строит браузер по местному времени из `data-utc` у строк (`DAYS_SCRIPT`); без JS остаются серверные заголовки в UTC (`tr.day-fb`). Пакетно обработанные события в техданных помечены «в пачке» (см. `domain-model.md`). Маршрут прежний, поменялась подпись в меню |
+| `/events` | GET | owner cookie | «Входящее» — события по дням (Сегодня/Вчера/дата): время · иконка источника · кто (имя автора из `From`/`Author`, под ним приглушённо чат, канал или тема письма — не аккаунт ингеста) · текст (тело без заголовка, одной строкой с многоточием) · точка статуса. Вся строка кликабельна (`tr.row-link`, обработчик в `ui/js_core`) и ведёт на `/events/{id}`; Параметры: `q` (текст, ILIKE), `source`, `status`, `tech=1` (колонки техданных: id, важность, запрос к брокеру, модель, токены, цена — по умолчанию скрыты), `limit` (размер страницы, 50 по умолчанию), `before` (курсор `occurred_at_id` для «Показать ещё»: keyset-страницы по `(occurred_at, id)`, `cursor_of` / `parse_cursor`, без растущего лимита; битый курсор игнорируется; ссылка «← к новым» показывается, когда курсор задан — `cursor_given`). Текстовый поиск идёт под `SET LOCAL statement_timeout` в `SEARCH_TIMEOUT_S` = 5 с: при таймауте страница показывает «Слишком долгий поиск — уточните запрос». Заголовки дней Сегодня/Вчера/дата строит браузер по местному времени из `data-utc` у строк (`DAYS_SCRIPT`); без JS остаются серверные заголовки в UTC (`tr.day-fb`). Пакетно обработанные события в техданных помечены «в пачке» (см. `domain-model.md`). Маршрут прежний, поменялась подпись в меню |
 | `/events/{id}` | GET | owner cookie | Карточка события (`event_card`): поля заголовка блоком «название — значение» (`header_pairs`: от, кому, тема, чат, направление; время — в поясе браузера), тело как читаемый текст с сохранёнными переносами строк, стенограмма голоса в сворачиваемом блоке (`transcript_html`), служебные поля — в сворачиваемом «Служебное» (`service_pairs`). Нет события — 404 |
 | `/sources` | GET | owner cookie | Список источников — статусная точка (`source_level`), состояние потока, объём, действие; сворачиваемый блок «Конвейер обработки» (`PROGRESS_BLOCK`: живой прогресс `/_progress` раз в 30 с, пауза и лимит разбора). Строится из `source_registry`, не из ручной разметки |
 | `/sources/{key}` | GET | owner cookie | Подробности источника: подключение, разбивки от провайдера `source_detail`. Источник без провайдера так и говорит |
@@ -134,9 +134,14 @@ Returns `AnswerResponse` with `answer`, `results`, `provider`, `cost_usd`,
 | `/api/slack/start` | POST | owner cookie | Проверка токена через `auth.test` и сохранение в `slack_auth` под шифрованием (`slack_start`). Токен не логируется и в ответ не возвращается |
 | `/api/sources/{key}/disconnect` | GET | owner cookie | Подтверждение отключения (`disconnect_confirm`): что именно погаснет и что события останутся |
 | `/api/sources/{key}/disconnect` | POST | owner cookie | Погасить строки доступа источника (`disconnect_apply`). Секрет НЕ удаляется — шаг обратим |
-| `/graph` | GET | owner cookie | «Люди» (`graph_page`, разметка — `graph_body`) — Cytoscape.js force layout. Поле поиска с кнопкой «Найти»; фильтры (связей ≥, тип связи, «Раскрасить по темам», «весь граф») свёрнуты под «Фильтры»; клик по узлу открывает правую панель вместо строки-подсказки; в шапке ссылка «Дубли (N)» (`dupes_label`) на `/entities/duplicates` с числом ожидающих `merge_suggestions` (`count_pending_suggestions`). See "Graph visualizer" below. |
+| `/graph` | GET | owner cookie | «Люди» (`graph_page`, разметка — `graph_body`; `graph_css`, скрипт — `graph_script` из частей `graph_script_core`, `graph_script_panel`, `graph_script_connections`, `graph_script_ui`) — Cytoscape.js 3.30.2 (закреплён, SRI) на всю ширину страницы; поверх холста плавают поиск с подсказками по именам, «Фильтры» (связей не меньше, тип связи, «Раскрасить по темам», «весь граф»), легенда, зум и карточка человека. Наведение подсвечивает узел и соседей, остальное гаснет; клик плавно приближает узел и открывает карточку, двойной клик грузит окружение. В шапке «Дубли (N)» (`dupes_label`) и «Журнал правок». See "Graph visualizer" below. |
 | `/api/graph/entity/{id}` | GET | owner cookie | Карточка сущности для боковой панели (`graph_entity` → `vera_shared.graph.panel.entity_panel`): имя, тип, @username / email / алиасы по источникам, счётчики (связей, групп, участников), `connections` — до двенадцати связей-пар, по одной на собеседника (`vera_shared.graph.connections.entity_connections`: `main` и `also` — роли с `weight`, `support`, `manual`, `inferred`, `direction` и русским `label` из `graph_labels.role_label`; `hidden`, `interaction` — дни и личка, `shared_work`, `possible_same`), и последние пять событий человека ссылками на `/events/{id}`. `?raw=true` добавляет `relationships` — записи по одной (`label` из `predicate_label`). 404 — нет сущности. События ищутся по алиасу источника (`recent_events`): telegram по индексу `ix_events_tg_sender`, остальные под таймаутом 2 с — при таймауте панель показывается без событий |
 | `/api/graph` | GET | owner cookie | Node/edge JSON for the visualizer (`graph_data`). Params: `min_degree`, `limit` (≤800), `predicate`, `focus` (entity id), `q` (name→focus). Рёбра-факты — одно на пару людей (`connections_among`, `edge_payload`): `predicate` — главная роль, `weight` (толщина линии), `also`, `support`, `inferred`; членство, дублирующее пару со связью, не рисуется. Схема связи как пары — `identity.md`, «Связь как пара». |
+| `/api/graph/connection/break` | POST | owner cookie + same-origin | Разорвать роль пары (`break_connection`): тело `{entity_a, entity_b, rel_ids}` (`BreakRole`), гасит записи `relationships` (`is_current=false`) через `connection_actions.break_role` — тот же `graph.edit.retire_relationship`, что у MCP, и строка `mcp_audit` с клиентом `dashboard`. Ответ `{ok, audit_ids}`; чужая или уже погашенная запись — 409 |
+| `/api/graph/connection/reject` | POST | owner cookie + same-origin | «Это неверно» для выведенного «работает с» (`reject_connection`): тело `Pair` `{entity_a, entity_b}`, `connection_actions.reject_inferred` пишет пару в `connection_suppressions` (миграция 041) и в журнал. Ответ `{ok, audit_ids}` (пусто, если уже отвергнуто) |
+| `/api/journal/undo` | POST | owner cookie + same-origin | Вернуть правки по `audit_ids` (`undo_edits`, тело `UndoRequest`): `journal.undo.undo_entry` на каждую, без `force`. Отказ откатa (`UndoRefused`) — 409 и список уже возвращённых |
+| `/journal` | GET | owner cookie | «Журнал правок» (`journal_page`, разметка `journal_body`, `entry_html`, `describe_entry`): последние 80 записей `mcp_audit` (дашборд и агенты MCP) с кнопкой «Вернуть»; имена людей — `entity_ids` + `entity_cards`, всё экранируется. Строки читает `journal.audit.recent_rows` |
+| `/ui/vera.css`, `/ui/vera.js` | GET | none | Статика дизайн-системы (`vera_css`, `vera_js`): адрес с `?v=<хэш>`, `Cache-Control: immutable`. Данных в них нет, поэтому без входа — ими оформлена и страница входа |
 | `/api/instagram/start` | GET | owner cookie | Instagram login form (`instagram_start_form`) |
 | `/api/instagram/start` | POST | owner cookie | Submit username/password (`instagram_start`) — may return a 2FA/challenge code form |
 | `/api/instagram/verify` | POST | owner cookie | Submit 2FA/challenge code (`instagram_verify`) → saves encrypted session |
@@ -187,6 +192,38 @@ renders "everything":
   injected into the page JS, so tapping an edge shows «A — label — B»).
   Node colour = entity
   type (person / group / channel), size ∝ degree.
+
+**Промахи мышью (исправлено 2026-10-04).** Cytoscape считает позицию указателя от
+КЭШИРОВАННОГО положения контейнера на странице (`containerBB`) и сбрасывает кэш
+только на `resize`/`scroll` окна. Любой сдвиг вёрстки выше холста (строка-подсказка,
+легенда, раскрытые «Фильтры») оставлял кэш устаревшим: на проде кэш держал top=282 px
+при реальных 391 px, и курсор «видел» узлы на 109 px выше. Вторая причина — боковая
+панель отнимала у холста ширину (flex) без `cy.resize()`: контейнер 740 px, холст 1198 px,
+граф рисовался обрезанным. Лечение: холст абсолютный внутри фиксированной по высоте
+сцены, панель/поиск/легенда плавают поверх и размер не меняют; `ResizeObserver` зовёт
+`cy.resize()`; кэш сбрасывается на `pointerenter`/`pointerdown`/`wheel`/`touchstart`/`scroll`
+(`invalidateContainerClientCoordsCache`). Проверка в консоли страницы: для каждого
+узла без соседей в радиусе послать `pointerenter` + `mousemove` в его экранные
+координаты (`rect.left + node.renderedPosition().x`) и сравнить id из события
+`mouseover` с ожидаемым; до правки на проде 0 из 44, после правки локально 68 из 68, в том
+числе после искусственного сдвига страницы на 109 px и с открытой панелью.
+
+Рендерер остался Cytoscape (canvas). На 300–800 узлах он держит 60 fps, а нативные
+картинки-аватарки узлов, подсветка соседей и пунктир работают из коробки; WebGL
+(sigma.js + graphology + force-layout) добавил бы три библиотеки без выигрыша на таком
+размере. Подписи не сталкиваются за счёт `min-zoomed-font-size`: на дальнем плане
+подписаны только «хабы» (верхние 12% по degree), остальные — при приближении и при наведении.
+
+**Разрыв связи.** В карточке у каждой роли пары (главной и «также») есть «✕ Разорвать»
+(если у роли есть записи `rel_ids`) и «Это неверно» (если роль выведена из общения).
+Действие идёт через диалог подтверждения (`VeraUI.confirm`: «Связь Ли — супруг(а) — Дима
+будет погашена; вернуть можно в журнале»), затем POST из таблицы выше; тост «Вернуть»
+вызывает `/api/journal/undo`, те же записи видны на `/journal`. Кнопки несут только индексы
+(`data-conn`, `data-role`) массива связей карточки, поэтому подмена разметки не подставит
+чужие id. Защита от CSRF: старые формы дашборда держатся лишь на `SameSite=Lax`
+сессионной cookie; новые POST дополнительно требуют `Sec-Fetch-Site: same-origin` либо
+`Origin`, равный `Host`/`X-Forwarded-Host` (`csrf.same_origin_or_403`) — чужая страница
+подделать эти заголовки не может.
 
 Two different degrees are in play, deliberately: node **selection** uses the
 degree *within the active predicate filter* (the `degree` CTE), while the

@@ -1137,3 +1137,16 @@ Short version:
    на `mem_limit` приложения не влияет — всё считает Postgres).
 6. **Откат:** `DROP TABLE pair_stats` и `DELETE FROM schema_migrations WHERE
    version='040_pair_stats'`; задача сама логирует WARNING и ждёт следующего периода.
+
+## Разрыв связей из дашборда: накат 041
+
+Кнопка «Это неверно» (выведенное «работает с») пишет в таблицу
+`connection_suppressions`. Код деплоится раньше миграции безопасно: чтение при отсутствии
+таблицы возвращает пусто (WARNING в логе), а запись отвечает 500 только на эту кнопку.
+
+1. `scripts/apply_migration.sh infra/migrations/041_connection_suppressions.sql`.
+2. Проверка: `\d connection_suppressions` в `docker exec vera3-postgres psql -U vera -d vera`;
+   запись в `schema_migrations` с версией `041_connection_suppressions`.
+3. Откат: `DROP TABLE connection_suppressions; DELETE FROM schema_migrations WHERE
+   version='041_connection_suppressions'`. Правки «Разорвать связь» таблицы не касаются
+   (они снимают `relationships.is_current` и идут через `mcp_audit`).

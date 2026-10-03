@@ -154,7 +154,7 @@ class TestGraphPage:
 
     def test_search_has_a_button_and_filters_are_collapsed(self):
         html = self._page(0)
-        assert 'id="g-searchform"' in html and ">Найти</button>" in html
+        assert 'id="g-searchform"' in html and 'id="g-suggest"' in html
         assert "<summary>Фильтры</summary>" in html
         assert html.index("<summary>Фильтры</summary>") < html.index('id="g-mindeg"')
         assert html.index("<summary>Фильтры</summary>") < html.index("Раскрасить по темам")

@@ -115,6 +115,6 @@ def test_role_labels_name_what_the_other_is_to_the_viewer():
 
 def test_page_script_carries_connection_rows_and_edge_weights():
     body = graph_body(["boss_of"], None)
-    assert "function connRow(c)" in body and "возможно тот же человек" in body
+    assert "function connRow(c, ci)" in body and "возможно тот же человек" in body
     assert "e.data('weight')" in body and "также:" in body
     assert "__SCRIPT__" not in body and "__PRED_LABELS__" not in body
