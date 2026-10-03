@@ -1150,3 +1150,34 @@ Short version:
 3. Откат: `DROP TABLE connection_suppressions; DELETE FROM schema_migrations WHERE
    version='041_connection_suppressions'`. Правки «Разорвать связь» таблицы не касаются
    (они снимают `relationships.is_current` и идут через `mcp_audit`).
+
+## Связи событий с людьми: накат 042–044
+
+Что и почему — `links.md`. Таблицы производные (кроме решений владельца), код без них работает:
+чтение возвращает пусто, фильтры по людям не сужают ничего лишнего, `timeline` идёт прежним путём.
+
+1. **Миграции** по порядку: `scripts/apply_migration.sh infra/migrations/042_event_entities.sql`,
+   затем `043_entity_nicknames.sql`, `044_voice_speaker_map.sql`. Все три — новые пустые таблицы,
+   блокировок на `events` нет.
+2. **Деплой кода** обычным мерджем. `brain-triage` стартует `links_loop`: через 2 минуты начинает
+   строить связи НОВЫХ событий (`TRIAGE_LINKS_INTERVAL_S`=60, `TRIAGE_LINKS_BATCH`=200,
+   `TRIAGE_LINKS_MAX_BATCHES`=5). Курсор `forward` при первом запуске ставится на конец:
+   старые события не трогаются.
+3. **Догон старых событий (ночью, резюмируемо):**
+   `docker compose run --rm --no-deps -v /var/www/vera3/scripts:/scripts brain-triage python /scripts/backfill_event_links.py --reset --batch 500 --max-batches 400`
+   — идёт от новых к старым, пауза между пачками 0.5 с; остановить и продолжить без `--reset`;
+   `--status` печатает курсоры и `max(id)`. Нагрузка — чтение `events` по первичному ключу и
+   запись в `event_entities`; на 470 тыс. событий порядок десятков минут.
+4. **Прозвища:** `python /scripts/manage_nicknames.py suggest --entity <id>` предлагает инициалы из
+   переписки (ничего не применяет); `report --entity <id> --token ДА --scope work` печатает, сколько
+   упоминаний в области и вне её (ничего не пишет); `decide --id N --approve` или `add` применяют.
+   После смены прозвищ — `backfill_event_links.py --reset`.
+5. **Чистка связей, ушедших к тёзке:** `python /scripts/clean_namesakes.py --plan /reports/namesake_plan.json --entity 1054`
+   (БД не меняет) → просмотреть → `--apply … --report /reports/namesake_rollback.json` →
+   при необходимости `--undo`. Отчёт на диск пишется до коммита; откат возвращает только
+   неизменившиеся строки.
+6. **Проверка:** `SELECT role, source_of_link, count(*) FROM event_entities GROUP BY 1, 2`;
+   в MCP `event_participants(<id события-созвона>)`; на `/graph` карточка человека — поле «Обсуждения».
+7. **Откат:** `DROP TABLE event_entities, link_cursor, entity_nicknames, voice_speaker_map` и
+   `DELETE FROM schema_migrations WHERE version IN ('042_event_entities', '043_entity_nicknames',
+   '044_voice_speaker_map')`; `links_loop` пишет WARNING и ждёт.

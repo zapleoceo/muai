@@ -23,6 +23,13 @@ REEMBED_BATCH = int(os.environ.get("TRIAGE_REEMBED_BATCH", "50"))
 PAIR_STATS_INTERVAL_S = float(os.environ.get("TRIAGE_PAIR_STATS_INTERVAL_S", "21600"))
 PAIR_STATS_START_DELAY_S = float(os.environ.get("TRIAGE_PAIR_STATS_START_DELAY_S", "300"))
 
+# Связи событий с сущностями (event_entities, links_loop.py): пачки новых событий после
+# курсора. 200 событий × 5 пачек за проход покрывает суточный поток (~2 000) за минуты.
+LINKS_INTERVAL_S = float(os.environ.get("TRIAGE_LINKS_INTERVAL_S", "60"))
+LINKS_START_DELAY_S = float(os.environ.get("TRIAGE_LINKS_START_DELAY_S", "120"))
+LINKS_BATCH = int(os.environ.get("TRIAGE_LINKS_BATCH", "200"))
+LINKS_MAX_BATCHES = int(os.environ.get("TRIAGE_LINKS_MAX_BATCHES", "5"))
+
 # ─── Групповой батчинг ───────────────────────────────────────────────────────
 # Rate limiter (backfill_max_per_hour) считает LLM-ВЫЗОВЫ, не события. Группы
 # (супергруппы + легаси Chat) — короткие сообщения (медиана ~260 симв.),

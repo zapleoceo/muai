@@ -20,6 +20,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.graph.connections import entity_connections
 from vera_shared.graph.repo import get_entity, list_relationships
 from vera_shared.ingest.envelope import message_body
+from vera_shared.links.read import mentioning_events
 
 log = logging.getLogger(__name__)
 
@@ -133,6 +134,7 @@ async def entity_panel(entity_id: int, *, raw: bool = False) -> dict[str, Any] |
         "counts": await _counts(entity_id),
         "connections": await entity_connections(entity_id, limit=CONNECTIONS_SHOWN),
         "events": await recent_events(aliases),
+        "mentions": await mentioning_events(entity_id),
     }
     if raw:
         rels = await list_relationships(entity_id, limit=RAW_RELATIONSHIPS_SHOWN)
