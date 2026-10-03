@@ -75,7 +75,8 @@ def test_project_clause_uses_the_project_column_only():
     assert "ILIKE" not in where and "chat_title" not in where
     # разговоры с Верой — не события мира
     assert "conversation_with_me" in where and "source <> 'vera_chat'" in where
-    assert params == {"pname": "itstep"}
+    assert params["pname"] == "itstep"
+    assert "project IS NULL AND occurred_at > :fresh_after" in where
 
 
 def test_project_clause_adds_time_window():

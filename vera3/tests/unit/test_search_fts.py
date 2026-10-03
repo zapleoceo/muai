@@ -14,11 +14,9 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-
 from unittest.mock import AsyncMock
 
 import pytest
-from brain_search.pipeline import query_terms
 from brain_search.fts import (
     FTS_COLUMNS,
     FTS_CONFIGS,
@@ -26,6 +24,7 @@ from brain_search.fts import (
     fts_match_sql,
     fts_rank_sql,
 )
+from brain_search.pipeline import query_terms
 
 _MIGRATIONS = Path(__file__).resolve().parents[2] / "infra" / "migrations"
 _MIGRATION = _MIGRATIONS / "031_events_fts_multilingual.sql"

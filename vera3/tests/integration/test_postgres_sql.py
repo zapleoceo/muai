@@ -114,15 +114,15 @@ async def test_usage_log_window_excludes_old_rows(pg_db):
 def _stub_llm(bs, monkeypatch):
     """Брокера в тесте нет. Шов синтеза живёт в synthesis, а не в app —
     после разбора app.py на модули подменять надо там."""
-    from brain_search import self_context, synthesis
+    from brain_search import pipeline, self_context, synthesis
 
     async def _no_embed(_texts):
-        raise bs.LLMCallFailed("нет брокера в тесте")
+        raise pipeline.LLMCallFailed("нет брокера в тесте")
 
     async def _synth(**_kw):
         return "ответ", {"provider": "test", "cost_usd": 0.0}
 
-    monkeypatch.setattr(bs, "embed", _no_embed)
+    monkeypatch.setattr(pipeline, "embed", _no_embed)
     monkeypatch.setattr(synthesis, "chat_async", _synth)
     monkeypatch.setenv("INTERNAL_SECRET", SECRET)
     self_context.forget()          # кэш переживает базу теста

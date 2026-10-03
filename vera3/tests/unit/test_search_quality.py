@@ -367,3 +367,30 @@ async def test_search_route_strips_project_words_and_passes_project(monkeypatch)
     assert kwargs["project"].name == "veranda"
     assert "Веранда" not in kwargs["ts_query"] and "договор:*" in kwargs["ts_query"]
     assert answer.await_args.kwargs["project"] == "veranda"
+
+
+def test_untriaged_fresh_events_stay_visible_in_project_mode():
+    from datetime import timedelta
+
+    from brain_search.retrieval_filters import UNTRIAGED_GRACE
+    from vera_shared.timeutil import utc_naive_now
+
+    where, params = project_clause(SimpleNamespace(name="itstep"), None)
+    assert "project IS NULL AND occurred_at > :fresh_after" in where
+    age = utc_naive_now() - params["fresh_after"]
+    assert abs(age - UNTRIAGED_GRACE) < timedelta(seconds=5)
+
+
+@pytest.mark.parametrize(("q", "expected"), [
+    ("edit step by step", None), ("что по IT Step", "itstep"),
+    ("порядок в itstep", "itstep"), ("как дела в Веранде", "veranda"),
+    ("my veranda", "veranda"), ("camelverand", None),
+])
+def test_project_triggers_match_at_word_start(q, expected):
+    p = resolve_project(q)
+    assert (p.name if p else None) == expected
+
+
+def test_bot_flag_covers_metadata_and_username():
+    from brain_search.rows import META_COLUMNS
+    assert "LIKE '%bot'" in META_COLUMNS and "'is_bot'" in META_COLUMNS

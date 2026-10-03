@@ -11,7 +11,9 @@
 """
 from __future__ import annotations
 
+import functools
 import os
+import re
 
 # Владелец (Дима) — ось всего, из «людей проекта» исключается.
 OWNER_TG_ID = int(os.environ.get("OWNER_TELEGRAM_ID", "169510539"))
@@ -62,11 +64,18 @@ def match_name(chat_title: str | None) -> str | None:
     return None
 
 
+@functools.cache
+def _trigger_re(trigger: str) -> re.Pattern[str]:
+    # Начало слова обязательно («edit step» не itstep); конец открыт — стемы
+    # «веранд», «джакарт» ловят падежи.
+    return re.compile(rf"(?<!\w){re.escape(trigger)}")
+
+
 def project_from_query(question: str) -> str | None:
     """Проект, упомянутый в вопросе, по QUERY_TRIGGERS (первое совпадение)."""
     low = question.lower()
     for project, triggers in QUERY_TRIGGERS.items():
-        if any(t in low for t in triggers):
+        if any(_trigger_re(t).search(low) for t in triggers):
             return project
     return None
 

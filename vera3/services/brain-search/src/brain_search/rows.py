@@ -13,7 +13,8 @@ from typing import Any, NamedTuple
 #: Колонки из events.metadata: признак бота-автора и авторство для агента.
 #: Через lower(...) LIKE, а не ILIKE — запрос идёт и на SQLite в тестах.
 META_COLUMNS = (
-    "lower(metadata->>'sender_username') LIKE '%bot' AS is_bot, "
+    "(lower(metadata->>'sender_username') LIKE '%bot' "
+    "OR metadata->>'is_bot' = 'true') AS is_bot, "
     "metadata->>'author_role' AS author_role, "
     "metadata->>'author_label' AS author_label, "
     "metadata->>'chat_title' AS chat_title"
