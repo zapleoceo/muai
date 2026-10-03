@@ -176,8 +176,8 @@ def format_eta(remaining: int, rate_per_hour: float) -> str:
 # ─── Page chrome ────────────────────────────────────────────────────────────
 
 
-def _render(active: str, body: str) -> str:
-    return page(active, body)
+def _render(active: str, body: str, wide: bool = False) -> str:
+    return page(active, body, wide)
 
 
 _LOGIN_HTML = standalone_html("Vera 3.0 — вход", """

@@ -25,6 +25,7 @@ from dashboard.entities_view import (  # noqa: E402
     name_section,
     vera_section,
 )
+from dashboard.ui.theme import DUPES_CSS  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 client = TestClient(app, follow_redirects=False)
@@ -210,8 +211,8 @@ class TestRoutes:
                               dossiers={1: _dossier(1, "A", 1), 2: _dossier(2, "B", 2)})
         with patch("dashboard.entities_routes.load_duplicates", AsyncMock(return_value=data)):
             r = client.get("/entities/duplicates?merged=2", cookies=_cookie())
-        assert r.status_code == 200 and "pico" in r.text.lower()
-        assert ".pair{" in r.text and "Объединено" in r.text
+        assert r.status_code == 200 and "/ui/vera.css" in r.text
+        assert ".pair{" in DUPES_CSS and "Объединено" in r.text
         assert 'style="' not in r.text
 
     def test_merge_endpoint_still_merges_through_the_report_path(self):

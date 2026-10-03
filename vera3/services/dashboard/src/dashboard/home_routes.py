@@ -34,13 +34,20 @@ async def home(request: Request):
         "home",
         f"""
         {status_line(st["total"], st["ingest_24h"], health.level, health.text)}
+        <section class="hero">
+          <h1>Что вы хотите вспомнить?</h1>
+          <p>Вера ищет по письмам, чатам и заметкам и отвечает с опорой на источники.</p>
+        </section>
         <form class="ask" hx-post="/search-ui" hx-target="#answer"
               hx-swap="innerHTML" hx-indicator="#spin">
           <input type="text" name="q" placeholder="Спросите Веру: кто такой Дмитрий Егоров?"
-                 autocomplete="off" required autofocus>
+                 autocomplete="off" required autofocus data-hotkey-search>
           <button type="submit">Спросить Веру</button>
-          <span id="spin" class="htmx-indicator muted"> ищу…</span>
         </form>
+        <p class="ask-hint">Нажмите <kbd>/</kbd>, чтобы встать в поле поиска.</p>
+        <div id="spin" class="htmx-indicator skel-stack" aria-hidden="true">
+          <div class="skeleton"></div><div class="skeleton"></div><div class="skeleton"></div>
+        </div>
         <div id="answer"></div>
         """
     ))

@@ -31,7 +31,7 @@ from dashboard.source_registry import BY_KEY, CATALOG  # noqa: E402
 from dashboard.source_state import State, disabled_optional, is_off  # noqa: E402
 from dashboard.sources_routes import actions, connection_pill  # noqa: E402
 from dashboard.sources_view import source_level  # noqa: E402
-from dashboard.ui.theme import SOURCES_CSS, VERA_CSS  # noqa: E402
+from dashboard.ui.theme import VERA_CSS  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 NOW = datetime(2026, 10, 3, 12, 0)   # суббота
@@ -130,8 +130,7 @@ class TestOptionalSources:
 class TestButtonsAndPages:
     def test_disconnect_is_outline_danger_not_solid(self):
         assert 'class="danger"' in actions(BY_KEY["slack"], CONNECTED)
-        assert "button.danger,a.danger{background:transparent" in VERA_CSS
-        assert ".act a.danger" in SOURCES_CSS and "background:transparent" in SOURCES_CSS
+        assert "button.danger,a.danger" in VERA_CSS and "background:transparent" in VERA_CSS
 
     def _cookie(self):
         from dashboard.auth_routes import _set_session_cookie

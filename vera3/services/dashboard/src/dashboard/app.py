@@ -12,6 +12,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Response
 from vera_shared.db.engine import close_engine, init_engine
 
+from dashboard.assets_routes import router as assets_router
 from dashboard.auth_routes import router as auth_router
 from dashboard.entities_routes import router as entities_router
 from dashboard.events_routes import router as events_router
@@ -43,6 +44,7 @@ for router in (
     sources_router, search_router, settings_router, entities_router,
     graph_router, gmail_oauth_router, instagram_login_router,
     telegram_login_router, slack_connect_router, source_actions_router,
+    assets_router,
 ):
     app.include_router(router)
 

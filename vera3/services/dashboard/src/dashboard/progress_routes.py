@@ -14,7 +14,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models_sources import GmailAccountRow
 from vera_shared.timeutil import utc_naive_now
 
-from dashboard.progress_view import PROGRESS_STYLE, pause_controls, rate_controls
+from dashboard.progress_view import pause_controls, rate_controls
 from dashboard.render import esc, local_dt, owner_or_blank_401
 from dashboard.stats import get_stats
 
@@ -185,5 +185,4 @@ async def _build_progress_fragment() -> str:
         {''.join(gmail_rows) if gmail_rows else '<div class="mute">нет аккаунтов</div>'}
       </div>
 
-      {PROGRESS_STYLE}
     """

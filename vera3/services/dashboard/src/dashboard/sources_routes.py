@@ -24,11 +24,8 @@ from dashboard.source_state import State, can_disconnect, is_off, state_of
 from dashboard.sources_view import render_block, source_level
 from dashboard.stats import get_source_detail, get_sources_overview
 from dashboard.ui.components import collapsible, status_dot
-from dashboard.ui.theme import SOURCES_CSS
 
 router = APIRouter()
-
-_STYLE = f"<style>{SOURCES_CSS}</style>"
 
 
 def ago(minutes: int) -> str:
@@ -141,7 +138,6 @@ async def sources_page(request: Request):
     last_24h = sum(v.get("c24h", 0) for v in overview.values())
 
     return HTMLResponse(_render("sources", f"""
-      {_STYLE}
       <div class="head"><h1>Источники</h1></div>
       <p class="note">Всё, откуда Вера берёт события. Имя источника —
          ссылка на подробности. Точка: зелёная — работает, жёлтая — тихо,
@@ -195,7 +191,6 @@ async def source_page(key: str, request: Request):
         'он не хранит своего состояния.</div></div>'
 
     return HTMLResponse(_render("sources", f"""
-      {_STYLE}
       <p class="crumb"><a href="/sources">← источники</a></p>
       <div class="head">
         <h1>{src.icon} {esc(src.title)}</h1>

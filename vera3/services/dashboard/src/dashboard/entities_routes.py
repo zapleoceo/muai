@@ -19,7 +19,6 @@ from vera_shared.graph.merge import merge_entities
 from dashboard.duplicates_repo import load_duplicates
 from dashboard.entities_view import duplicates_body
 from dashboard.render import _render, initials_avatar_svg, owner_or_auth_error
-from dashboard.ui.theme import DUPES_CSS
 
 log = logging.getLogger(__name__)
 
@@ -140,8 +139,7 @@ async def entity_duplicates_page(request: Request, merged: int | None = None):
     if (resp := owner_or_auth_error(request)) is not None:
         return resp
     data = await load_duplicates()
-    return HTMLResponse(_render("entities", f"<style>{DUPES_CSS}</style>"
-                                + duplicates_body(data, _analysis, merged)))
+    return HTMLResponse(_render("entities", duplicates_body(data, _analysis, merged)))
 
 
 @router.post("/entities/merge")
