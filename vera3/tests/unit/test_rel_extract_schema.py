@@ -103,8 +103,8 @@ async def test_extract_and_store_upserts_resolved_relationship():
     genuine inserts (upsert returns True)."""
     async def fake_chat(**kwargs):
         return json.dumps({"relationships": [
-            {"subject": "Дима", "predicate": "works_at", "object": "ITStep",
-             "fact": "работает в ITStep", "confidence": 0.9},
+            {"subject": "Дима Петров", "predicate": "works_at", "object": "ITStep",
+             "fact": "Дима Петров работает в ITStep", "confidence": 0.9},
         ]}), {"provider": "test"}
 
     with patch("vera_shared.graph.rel_extract.chat_async",
@@ -112,9 +112,11 @@ async def test_extract_and_store_upserts_resolved_relationship():
          patch("vera_shared.graph.rel_extract.resolve_entity_exact",
                AsyncMock(side_effect=[1, 2])), \
          patch("vera_shared.graph.rel_extract.get_entity",
-               AsyncMock(side_effect=[SimpleNamespace(name="Дима", type="person"),
+               AsyncMock(side_effect=[SimpleNamespace(name="Дима Петров", type="person"),
                                       SimpleNamespace(name="ITStep", type="organization")])),          patch("vera_shared.graph.rel_extract.upsert_relationship",
-               AsyncMock(return_value=True)) as up:
+               AsyncMock(return_value=True)) as up,          patch("vera_shared.graph.rel_extract.resolve_strong_identifier",
+               AsyncMock(return_value=None)),          patch("vera_shared.graph.rel_extract.entity_names",
+               AsyncMock(return_value={1: ["Дима Петров"], 2: ["ITStep"]})):
         n = await extract_and_store(7, "текст события длиннее тридцати символов точно")
 
     assert n.inserted == 1

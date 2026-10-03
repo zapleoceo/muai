@@ -25,7 +25,8 @@ async def _entity(type_: str, name: str, ident: str) -> int:
 
 def _reply(*rels: tuple[str, str, str]) -> str:
     return json.dumps({"relationships": [
-        {"subject": s, "predicate": p, "object": o, "fact": "f", "confidence": 0.9}
+        {"subject": s, "predicate": p, "object": o, "fact": f"{s} {p} {o}",
+         "confidence": 0.9}
         for s, p, o in rels]})
 
 
@@ -45,16 +46,16 @@ async def _rels(get_session) -> list[tuple[int, int, str]]:
 
 @pytest.mark.asyncio
 async def test_valid_written_junk_rejected_and_counted(sqlite_db, caplog):
-    olga = await _entity("person", "Ольга", "user:1")
+    olga = await _entity("person", "Ольга Иванова", "user:1")
     itstep = await _entity("organization", "IT STEP", "org:1")
-    await _entity("person", "Link", "user:2")
+    await _entity("person", "Link Smith", "user:2")
     await _entity("person", "OpenRouter, Inc", "user:3")
 
     with caplog.at_level("INFO"):
         out = await _run(_reply(
-            ("Ольга", "works_at", "IT STEP"),
-            ("Link", "works_at", "OpenRouter, Inc"),     # объект — персона
-            ("Никто", "friend_of", "Ольга"),             # в графе нет
+            ("Ольга Иванова", "works_at", "IT STEP"),
+            ("Link Smith", "works_at", "OpenRouter, Inc"),     # объект — персона
+            ("Никто", "friend_of", "Ольга Иванова"),             # в графе нет
         ))
 
     assert (out.returned, out.inserted, out.unresolved) == (3, 1, 1)

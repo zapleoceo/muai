@@ -24,6 +24,7 @@ import re
 from email.utils import parseaddr
 
 from vera_shared.graph.identity import entity_kind_for_email
+from vera_shared.graph.rel_validate import TOOL_TAG_RE
 from vera_shared.ingest.envelope import message_body
 
 #: Причины пропуска — пишутся в лог счётчиком, чтобы решение было видно.
@@ -42,9 +43,6 @@ _NO_RELATION_SOURCES = frozenset({"claude_chat", "vera_chat"})
 
 # «Viktor Havrylenko (JIRA)» — человек в имени, но пишет система: связи из
 # таких писем — «кто обновил задачу», а не кто на кого работает.
-_TOOL_TAG_RE = re.compile(
-    r"\((jira|confluence|github|gitlab|trello|slack|google calendar|"
-    r"календарь|calendar)\)", re.IGNORECASE)
 _TOOL_MAILBOXES = frozenset({"jira", "confluence", "calendar", "gitlab", "github"})
 
 # Лексические маркеры отношений (ru/uk/en/id — языки реальных чатов). Без
@@ -76,7 +74,7 @@ _MARKERS = (
     r"lives? in\b", r"moved to\b", r"joined\b", r"team\b",
     # id
     r"bekerja", r"kerja di\b", r"atasan", r"rekan", r"istri", r"suami",
-    r"teman", r"klien", r"pelanggan", r"bergabung", r"tim\b", r"bergabung", r"tim",
+    r"teman", r"klien", r"pelanggan", r"bergabung", r"tim\b",
 )
 _MARKER_RE = re.compile(r"\b(?:" + "|".join(_MARKERS) + ")", re.IGNORECASE)
 
@@ -99,7 +97,7 @@ def is_machine_sender(metadata: dict | None) -> bool:
     if not raw_from:
         return False
     name, addr = parseaddr(str(raw_from))
-    if _TOOL_TAG_RE.search(name or ""):
+    if TOOL_TAG_RE.search(name or ""):
         return True
     local = addr.lower().partition("@")[0]
     if local in _TOOL_MAILBOXES:
