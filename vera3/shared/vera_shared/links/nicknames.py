@@ -102,8 +102,8 @@ async def add_nickname(entity_id: int, token: str, **kwargs: Any) -> int:
         return (await put_nickname(s, entity_id, token, **kwargs))[0]
 
 
-async def suggest_nickname(entity_id: int, token: str, reason: str,
-                           scope_kind: str = WORK) -> bool:
+async def suggest_nickname(entity_id: int, token: str, reason: str, scope_kind: str = WORK,
+                           scope_ids: list[str] | None = None) -> bool:
     """Предложить владельцу. False — токен этого человека уже известен (любой статус)."""
     token = _clean(token, scope_kind)
     async with get_session() as s:
@@ -113,6 +113,7 @@ async def suggest_nickname(entity_id: int, token: str, reason: str,
         if known:
             return False
         s.add(EntityNicknameRow(entity_id=entity_id, token=token, scope_kind=scope_kind,
+                                scope_ids=[str(i) for i in scope_ids or []],
                                 status=SUGGESTED, source="auto", reason=reason))
     return True
 

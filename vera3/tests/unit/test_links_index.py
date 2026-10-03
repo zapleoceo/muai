@@ -214,3 +214,16 @@ async def test_backfill_resumes_and_forward_picks_up_new_events(world):
     forward = await index.run_batch(index.FORWARD, res, builder, 10)
     assert forward.events == 1 and (world["director"], "mentioned", "nickname") in await links_of(world, fresh)
     assert (await index.run_batch(index.FORWARD, res, builder, 10)).last_id is None
+
+
+async def test_first_name_and_patronymic_phrase_links_mail_and_calls_through_a_global_nickname(world):
+    await add_nickname(world["director"], "Виктор Павлович", scope_kind="global")
+    mail = await event(world["gs"], 40, "gmail", "Subject: план\n---\nСогласовано с Виктором Павловичем",
+                       day=9, meta={"from": "Лиза <lisa@corp.example>", "to": "owner@mine.example"})
+    await build_all(world)
+    assert (world["director"], "mentioned", "nickname") in await links_of(world, mail)
+    # в расшифровке звонка работает только область global; инициалы «ВП» (work) — нет
+    call = await event(world["gs"], 41, "voice", "созвон", day=9, meta={}, transcript_text="ВП и Виктор Павлович")
+    await build_all(world)
+    tokens = {r for r in await links_of(world, call) if r[1] == "mentioned"}
+    assert tokens == {(world["director"], "mentioned", "name_match")}

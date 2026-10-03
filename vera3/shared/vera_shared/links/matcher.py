@@ -107,12 +107,14 @@ class MentionMatcher:
                     self._by_stem.setdefault(key, []).append(eid)
 
     def find(self, text: str, ctx: ChatContext, author_id: int | None = None,
-             nicknames: bool = True) -> list[Mention]:
+             scopes: frozenset[str] | None = None) -> list[Mention]:
+        """`scopes` — какие виды областей прозвищ искать (None — все; пусто — прозвища не ищутся:
+        в расшифровках речи «да» заглавными — слово, а фраза «Имя Отчество» с областью global — человек)."""
         found: dict[tuple[int, str], Mention] = {}
         words = _text_words(_USERNAME.sub(" ", text))   # ник — не слова имени
         for mention in (*self._usernames_in(text), *self._names_in(words),
                         *self._first_names_in(words, ctx),
-                        *(self._nicknames_in(text, ctx) if nicknames else ())):
+                        *self._nicknames_in(text, ctx, scopes)):
             if mention.entity_id == author_id:
                 continue
             key = (mention.entity_id, mention.token)
@@ -179,10 +181,11 @@ class MentionMatcher:
         keys += [("g", g) for w in parts if (g := name_group(w)) is not None]
         return keys
 
-    def _nicknames_in(self, text: str, ctx: ChatContext) -> list[Mention]:
+    def _nicknames_in(self, text: str, ctx: ChatContext,
+                      scopes: frozenset[str] | None) -> list[Mention]:
         out = []
         for rule, pattern in self._rules:
-            if pattern.search(text):
+            if (scopes is None or rule.scope_kind in scopes) and pattern.search(text):
                 ok = in_scope(rule, ctx, self._strong.get(rule.entity_id, frozenset()))
                 out.append(Mention(rule.entity_id, rule.token, KIND_NICKNAME, 1.0, ok))
         return out

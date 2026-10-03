@@ -116,4 +116,31 @@ def test_chats_scope_lists_exact_chats_and_global_works_everywhere():
 
 
 def test_nicknames_can_be_switched_off_for_transcripts():
-    assert nickname_matcher().find("ВП", ChatContext(is_work=True), nicknames=False) == []
+    assert nickname_matcher().find("ВП", ChatContext(is_work=True), scopes=frozenset()) == []
+
+
+def test_work_scope_can_be_narrowed_to_a_project_but_not_by_chats_without_one():
+    rule = NicknameRule(DIRECTOR, "ВП", True, "work", ("project:itstep",))
+    m = MentionMatcher(PERSONS, [rule])
+    same = ChatContext(chat_key="telegram:1", is_work=True, project="itstep")
+    other = ChatContext(chat_key="telegram:2", is_work=True, project="veranda")
+    unknown = ChatContext(chat_key="slack:3", is_work=True)          # рабочее пространство без проекта
+    assert m.find("ВП звонил", same)[0].scope_ok is True
+    assert m.find("ВП звонил", other)[0].scope_ok is False
+    assert m.find("ВП звонил", unknown)[0].scope_ok is True
+
+
+def test_a_name_patronymic_phrase_matches_all_cases_without_regard_to_case_of_letters():
+    rule = NicknameRule(DIRECTOR, "Виктор Павлович", True, "global")
+    m = MentionMatcher(PERSONS, [rule])
+    for text in ("Виктор Павлович пришёл", "с Виктором Павловичем", "виктору павловичу"):
+        assert [x.entity_id for x in m.find(text, ChatContext())] == [DIRECTOR]
+    assert m.find("Виктор Петрович", ChatContext()) == []
+
+
+def test_only_global_nicknames_are_searched_in_transcripts():
+    ini = NicknameRule(DIRECTOR, "ВП", True, "work")
+    phrase = NicknameRule(DIRECTOR, "Виктор Павлович", True, "global")
+    m = MentionMatcher(PERSONS, [ini, phrase])
+    found = m.find("ВП и Виктор Павлович", ChatContext(is_work=True), scopes=frozenset({"global"}))
+    assert [x.token for x in found] == ["Виктор Павлович"]

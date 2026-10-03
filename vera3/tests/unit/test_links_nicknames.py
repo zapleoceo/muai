@@ -81,15 +81,16 @@ async def test_initials_and_patronymic_forms_are_found_in_addressing():
 
 
 async def test_suggestion_comes_from_the_addressing_and_waits_for_the_owner(world):
-    assert await suggest_initials(world["director"], "Виктор Корчагин") == ["ВП"]
+    assert await suggest_initials(world["director"], "Виктор Корчагин") == ["ВП", "Виктор Павлович"]
     assert await active_rules() == []               # само не применяется
-    (pending,) = await pending_suggestions()
-    assert pending["token"] == "ВП" and "3 раз" in pending["reason"]
+    initials_row, phrase_row = await pending_suggestions()
+    assert initials_row["token"] == "ВП" and "3 раз" in initials_row["reason"]
+    assert (phrase_row["token"], phrase_row["scope_kind"]) == ("Виктор Павлович", "global")
     assert await suggest_initials(world["director"], "Виктор Корчагин") == []     # повтор не плодит
-    assert await decide_suggestion(pending["id"], approve=True) is True
+    assert await decide_suggestion(initials_row["id"], approve=True) is True
     (rule,) = await active_rules()
     assert (rule.token, rule.scope_kind, rule.case_sensitive) == ("ВП", "work", True)
-    assert await decide_suggestion(pending["id"], approve=False) is False        # решение уже принято
+    assert await decide_suggestion(initials_row["id"], approve=False) is False   # решение уже принято
 
 
 async def test_rejected_suggestion_is_not_asked_again(world):
@@ -119,3 +120,15 @@ async def test_scope_report_splits_in_and_out_of_scope_and_ignores_case(world):
     strict = await scope_report(NicknameRule(world["director"], "KP", True, "work"))
     loose = await scope_report(NicknameRule(world["director"], "KP", False, "work"))
     assert (strict["in_scope"], loose["in_scope"]) == (1, 2)
+
+
+async def test_suggestion_narrows_the_work_scope_to_the_persons_own_project(world):
+    async with world["gs"]() as s:
+        await s.execute(text("UPDATE events SET project = 'itstep' WHERE source_event_id LIKE 'k1%' "
+                             "OR source_event_id IN ('k1', 'k2', 'k3')"))
+    await suggest_initials(world["director"], "Виктор Корчагин")
+    initials_row = (await pending_suggestions())[0]
+    async with world["gs"]() as s:
+        ids = (await s.execute(text("SELECT scope_ids FROM entity_nicknames WHERE id = :i"),
+                               {"i": initials_row["id"]})).scalar_one()
+    assert "project:itstep" in str(ids)

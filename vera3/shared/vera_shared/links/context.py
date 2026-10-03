@@ -108,12 +108,14 @@ async def _alias_map(keys: Iterable[tuple[str, str]]) -> dict[tuple[str, str], i
     return {(r[0], r[1].lower() if r[0] == "gmail" else r[1]): r[2] for r in rows}
 
 
-async def _work_chat_keys() -> frozenset[str]:
+async def _work_chat_keys() -> dict[str, str]:
+    """Рабочие чаты: ключ → проект (при нескольких проектах берётся первый по алфавиту)."""
     async with get_session() as s:
         rows = (await s.execute(
-            text("SELECT key FROM project_membership WHERE kind = 'chat' AND project IN :p")
+            text("SELECT key, min(project) FROM project_membership WHERE kind = 'chat' "
+                 "AND project IN :p GROUP BY key")
             .bindparams(bindparam("p", expanding=True)), {"p": list(WORK_PROJECTS)})).all()
-    return frozenset(r[0] for r in rows)
+    return {r[0]: r[1] for r in rows}
 
 
 async def _members(chats: set[str]) -> dict[str, frozenset[int]]:
@@ -160,7 +162,7 @@ class ContextBuilder:
         self._seen: dict[str, set[int]] = {}
         self._members: dict[str, frozenset[int]] = {}
         self._partners: dict[int, frozenset[int]] = {}
-        self._work: frozenset[str] | None = None
+        self._work: dict[str, str] | None = None
         self.owner: int | None = None
         self._owner_loaded = False
 
@@ -204,14 +206,17 @@ class ContextBuilder:
                 other = self.owner if author != self.owner else partner
             recipients = (other,) if other is not None and other != author else ()
             circle = frozenset(e for e in (partner, self.owner) if e is not None)
-            return EventFacts(ChatContext(chat_key=key, dm_partner=partner, participants=circle,
+            project = (self._work or {}).get(_chat_key(chat)) if view.source != "slack" else None
+            return EventFacts(ChatContext(chat_key=key, is_work=project is not None, project=project,
+                                          dm_partner=partner, participants=circle,
                                           extended=self._partners.get(author or -1, frozenset())),
                               author, recipients)
-        work = view.source == "slack" or _chat_key(chat) in (self._work or frozenset())
+        project = (self._work or {}).get(_chat_key(chat)) if view.source != "slack" else None
+        work = view.source == "slack" or project is not None
         circle = set(self._seen.get(key, ())) | self._members.get(chat, frozenset())
         if self.owner is not None:      # события приходят из аккаунта владельца: он в каждом чате
             circle.add(self.owner)
-        return EventFacts(ChatContext(chat_key=key, is_work=work,
+        return EventFacts(ChatContext(chat_key=key, is_work=work, project=project,
                                       participants=frozenset(circle),
                                       extended=self._partners.get(author or -1, frozenset())),
                           author)

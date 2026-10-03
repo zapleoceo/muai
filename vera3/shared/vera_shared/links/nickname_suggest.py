@@ -61,17 +61,31 @@ async def _dialogue_texts(entity_id: int) -> list[str]:
     return [message_body(r[0]) for r in rows]
 
 
+async def dominant_project(entity_id: int) -> str | None:
+    """Проект, в котором человек чаще всего пишет и получает сообщения (по `events.project`)."""
+    async with get_session() as s:
+        row = (await s.execute(text(
+            "SELECT e.project FROM event_entities l JOIN events e ON e.id = l.event_id "
+            "WHERE l.entity_id = :i AND l.role IN ('author', 'recipient') AND e.project IS NOT NULL "
+            "GROUP BY e.project ORDER BY count(*) DESC LIMIT 1"), {"i": entity_id})).first()
+    return row[0] if row else None
+
+
 async def suggest_initials(entity_id: int, entity_name: str) -> list[str]:
-    """Записать предложения-инициалы; → токены, которых раньше не знали."""
+    """Записать предложения по обращениям «Имя Отчество»: инициалы (область work, суженная
+    проектом человека) и сама фраза (область global: по основам слов, падежи не мешают).
+    → токены, которых раньше не знали."""
     forms = patronymic_forms(await _dialogue_texts(entity_id), entity_name)
+    project = await dominant_project(entity_id)
     created: list[str] = []
     for (first, patronymic), uses in forms.most_common():
         if uses < MIN_PATRONYMIC_USES:
             continue
-        token = initials(first, patronymic)
         reason = f"обращение «{first} {patronymic}» в переписке: {uses} раз"
-        if await suggest_nickname(entity_id, token, reason, WORK):
-            created.append(token)
+        for token, scope, ids in ((initials(first, patronymic), WORK, [f"project:{project}"] if project else []),
+                                  (f"{first} {patronymic}", "global", [])):
+            if await suggest_nickname(entity_id, token, reason, scope, ids):
+                created.append(token)
     return created
 
 

@@ -31,6 +31,7 @@ from vera_shared.links.matcher import MentionMatcher, PersonNames
 from vera_shared.links.model import MANUAL, MENTIONED, NAME_MATCH, VOICEPRINT, Link
 from vera_shared.links.names import NameResolver
 from vera_shared.links.nicknames import active_rules
+from vera_shared.links.scope import GLOBAL
 
 log = logging.getLogger(__name__)
 
@@ -109,7 +110,7 @@ def _voice(view: EventView, owner: int | None, res: Resources) -> list[Link]:
         return found[0] if found else None
 
     body = (view.transcript or view.text)[:MAX_VOICE_CHARS]
-    exact = res.matcher.find(body, EventFacts().ctx, owner, nicknames=False)
+    exact = res.matcher.find(body, EventFacts().ctx, owner, scopes=frozenset({GLOBAL}))
     guessed = asr_matches(body, res.asr_candidates)
     known = {m.entity_id for m in exact}
     links = voice_links(view, owner, speaker, counterpart,
