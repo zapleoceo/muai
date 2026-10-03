@@ -80,9 +80,22 @@ def token_pattern(rule: NicknameRule) -> re.Pattern[str]:
     return re.compile(rf"(?<!\w){re.escape(rule.token)}(?!\w)", flags)
 
 
-def scope_ids_for(chats: list[str] | None, project: str | None) -> list[str]:
+_PROJECT_SLUG = re.compile(r"^[a-z0-9_-]{1,40}$")
+#: Области, где сужение проектом что-то значит (в chats/global оно молча бы не действовало).
+PROJECT_SCOPES = (WORK, CONTACTS)
+
+
+class ScopeError(ValueError):
+    """Область задана так, что правило не сработало бы как задумано."""
+
+
+def scope_ids_for(scope_kind: str, chats: list[str] | None, project: str | None) -> list[str]:
     """Идентификаторы области: перечисленные чаты и, если задан, проект (`project:<slug>`)."""
     ids = list(chats or [])
-    if project:
-        ids.append(PROJECT_PREFIX + project)
-    return ids
+    if project is None:
+        return ids
+    if not _PROJECT_SLUG.match(project):
+        raise ScopeError(f"проект — короткое имя латиницей (например itstep), а не {project!r}")
+    if scope_kind not in PROJECT_SCOPES:
+        raise ScopeError(f"сужение проектом действует только в областях {', '.join(PROJECT_SCOPES)}")
+    return [*ids, PROJECT_PREFIX + project]

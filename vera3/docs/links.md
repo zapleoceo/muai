@@ -96,7 +96,7 @@
 | `chats` | только чаты из `scope_ids` (`telegram:<chat_id>`) |
 | `global` | везде |
 
-Рабочую область можно сузить проектом: `scope_ids=['project:itstep']` (задаётся параметром `project` — `--project itstep` в `manage_nicknames.py add|report`, `project=` в MCP `entity_add_nickname`; оба собирают идентификаторы одной функцией `scope_ids_for`) оставляет чаты этого проекта
+Рабочую область можно сузить проектом: `scope_ids=['project:itstep']` (задаётся параметром `project` — `--project itstep` в `manage_nicknames.py add|report`, `project=` в MCP `entity_add_nickname`; оба собирают идентификаторы одной функцией `scope_ids_for`; проект — короткое имя латиницей и только для областей `PROJECT_SCOPES` = work/contacts, иначе `ScopeError` с объяснением: в chats/global сужение молча бы не действовало) оставляет чаты этого проекта
 (в Veranda — другой бизнес — «ДА» остаётся словом), а чаты без проекта (Slack-пространство) не
 исключаются (`ChatContext.project`). В личке сужение тоже действует: прозвище проекта засчитывается, только если сам чат
 помечен этим проектом или собеседник писал в чатах проекта (`ChatContext.dm_partner_projects`). Вне области упоминание пишется с `scope_ok=false`.

@@ -28,7 +28,7 @@ from vera_shared.links.nicknames import (
     decide_suggestion,
     pending_suggestions,
 )
-from vera_shared.links.scope import SCOPE_KINDS, WORK, NicknameRule, scope_ids_for
+from vera_shared.links.scope import SCOPE_KINDS, WORK, NicknameRule, ScopeError, scope_ids_for
 
 
 async def _run(args: argparse.Namespace) -> int:
@@ -37,7 +37,7 @@ async def _run(args: argparse.Namespace) -> int:
                           "suggested": await pending_suggestions()}, ensure_ascii=False, indent=1))
     elif args.cmd == "add":
         print("id:", await add_nickname(args.entity, args.token, scope_kind=args.scope,
-                                        scope_ids=scope_ids_for(args.chat, args.project),
+                                        scope_ids=scope_ids_for(args.scope, args.chat, args.project),
                                         case_sensitive=not args.ignore_case))
     elif args.cmd == "suggest":
         entity = await get_entity(args.entity)
@@ -49,7 +49,7 @@ async def _run(args: argparse.Namespace) -> int:
         print("решено:", await decide_suggestion(args.id, args.approve))
     else:
         rule = NicknameRule(args.entity, args.token, not args.ignore_case, args.scope,
-                            tuple(scope_ids_for(args.chat, args.project)))
+                            tuple(scope_ids_for(args.scope, args.chat, args.project)))
         print(json.dumps(await scope_report(rule), ensure_ascii=False, indent=1))
     return 0
 
@@ -76,7 +76,7 @@ def main() -> int:
         await init_engine()
         try:
             return await _run(args)
-        except NicknameError as e:
+        except (NicknameError, ScopeError) as e:
             print(f"отказ: {e}", file=sys.stderr)
             return 2
         finally:
