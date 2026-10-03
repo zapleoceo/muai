@@ -616,8 +616,8 @@ $RUN --undo /reports/rel_rollback-2026-10-03.json
 - Автор сообщения для проверки факта вычисляется из события (`event_source`,
   `event_meta` в срезе); `EXPORT_SQL` отдаёт для этого ключи авторства и алиасы
   концов. Скрытое или пропавшее событие и текст без единого конца — `unverified`.
-- **Verify-план:** `retire` (правило `weak_name`) для «no» и «unclear»;
-  `skip` (`weak_name_verified`) с цитатой для «yes». Применять можно
+- **Verify-план:** `retire` (правило `weak_name`) только для «no»;
+  `skip` (`weak_name_verified`) для «yes» (с цитатой) и «unclear». Применять можно
   частями — действие по строке, изменившейся после плана, пропускается.
 - Правила soft-плана (счётчики в `counts`): `fact_mismatch` и прочие причины
   `relationship_reject_reason` (одиночное имя здесь не гасится); `symmetric_duplicate`,

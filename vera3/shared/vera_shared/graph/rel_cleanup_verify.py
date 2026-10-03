@@ -60,7 +60,9 @@ async def event_texts(event_ids: list[int]) -> dict[int, str]:
 
 
 def _action(row: Row, verdict: Verdict) -> Action:
-    if verdict.verdict in (NO, UNCLEAR):
+    # «unclear» связь не гасит: среди связей с одиночным именем есть правда
+    # («Маша — дочь»), и сомнение модели — не повод её терять (решение 04.10.2026).
+    if verdict.verdict == NO:
         return {**retire_action(row, RULE_WEAK), "verdict": verdict.verdict}
     return {"action": "skip", "rule": RULE_VERIFIED, "rel_id": row["id"], "keep_id": None,
             "brief": f"{row['subject_name']} -[{row['predicate']}]-> {row['object_name']}",

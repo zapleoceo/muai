@@ -524,8 +524,8 @@ Timur; остаётся `tim`) и дубль `bergabung`; регулярка м
 `ingest.authorship`; алиасы концов отдаёт `repo_relationships.alias_index`)
 считается названным и сильным: «я» в факте — это он, а не только владелец.
 `--phase verify` — связи с одиночным именем, прошедшие soft
-(`rel_cleanup.weak_name_candidates`), по одной идут в `rel_verify`; «no» и
-«unclear» гасятся, «yes» остаётся (в плане `skip` с цитатой). Оркестрация —
+(`rel_cleanup.weak_name_candidates`), по одной идут в `rel_verify`; гасится только
+«no», «yes» и «unclear» остаются (в плане `skip`; у «yes» — цитата). Оркестрация —
 `rel_cleanup_verify.verify_plan`: тексты событий читает `event_texts`, кэш
 вердиктов — файл JSON Lines рядом с планом (`load_cache`), прерванный прогон
 продолжается. Действия формирует `retire_action`. Применение и откат —

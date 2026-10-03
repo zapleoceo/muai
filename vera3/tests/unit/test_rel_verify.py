@@ -210,3 +210,16 @@ async def test_verify_plan_retires_no_keeps_yes_skips_outage_and_resumes(sqlite_
     with patch(BROKER, again):
         _, stats2 = await verify_plan(cands, cache, limit=2)
     assert again.await_count == 0 and stats2["from_cache"] == 2
+
+
+def test_unclear_verdict_keeps_the_edge():
+    """Сомнение модели — не повод гасить: среди связей с одиночным именем есть
+    правда («Маша — дочь»). Гасит только явное «no» (решение 04.10.2026)."""
+    from vera_shared.graph.rel_cleanup_verify import _action
+    from vera_shared.graph.rel_verify import Verdict
+
+    row = {"id": 7, "subject_name": "Дима", "predicate": "parent_of",
+           "object_name": "Маша", "subject_entity_id": 1, "object_entity_id": 2,
+           "is_current": True}
+    assert _action(row, Verdict("unclear"))["action"] == "skip"
+    assert _action(row, Verdict("no"))["action"] == "retire"
