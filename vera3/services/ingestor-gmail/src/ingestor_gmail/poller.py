@@ -19,7 +19,7 @@ from vera_shared.crypto import decrypt
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import GmailAccountRow
-from vera_shared.graph.identity import entity_kind_for_email
+from vera_shared.graph.sender_entity import sender_entity
 from vera_shared.ingest import AuthorExtractor, insert_events, sync_author_entities
 from vera_shared.text_chunks import clip_content
 from vera_shared.timeutil import utc_naive_now
@@ -210,22 +210,14 @@ def _correspondent_entity_of(account_email: str) -> AuthorExtractor:
     """Экстрактор для `ingest.sync_author_entities`: письмо → сущность автора.
 
     Служебные ящики (no-reply@, invoice@, crm@) заводятся организациями, а не
-    людьми: иначе граф людей засоряется, а одна компания с нескольких адресов
-    выглядит как несколько одноимённых «персон». См. identity.py.
+    людьми, и организация одна на ДОМЕН, а не на адрес. См. sender_entity.py.
     """
     def extract(spec: dict[str, Any]) -> dict[str, Any] | None:
         meta = spec.get("metadata_") or {}
         who = correspondent_of(account_email, meta.get("from", ""), meta.get("to", ""))
         if who is None:
             return None
-        addr, display = who
-        return {
-            "type": entity_kind_for_email(addr),
-            "name": display,
-            "identifier": addr,
-            "display_name": display,
-            "attributes": {"email": addr},
-        }
+        return sender_entity(*who)
 
     return extract
 
