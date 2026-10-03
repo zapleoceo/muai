@@ -45,12 +45,6 @@ MIN_SURNAME_CHARS = 5
 MIN_FIRST_CHARS = 3
 _STEM = 4
 
-KIND_NAME, KIND_NICKNAME, KINDUSERNAME = "name", "nickname", "username"
-CONF_FULL, CONF_PATRONYMIC, CONF_SURNAME, CONF_FIRST = 0.95, 0.9, 0.8, 0.6
-MIN_SURNAME_CHARS = 5
-MIN_FIRST_CHARS = 3
-_STEM = 4
-
 
 @dataclass(frozen=True)
 class PersonNames:
@@ -113,7 +107,7 @@ class MentionMatcher:
         return list(found.values())
 
     def _usernames_in(self, text: str) -> list[Mention]:
-        return [Mention(eid, "@" + u, KINDUSERNAME, 1.0)
+        return [Mention(eid, "@" + u, KIND_USERNAME, 1.0)
                 for u in USERNAME.findall(text) if (eid := self._usernames.get(u.lower()))]
 
     def _names_in(self, words: list[tuple[str, str]], text: str) -> list[Mention]:
