@@ -15,6 +15,12 @@
 # Зовётся монитором (vera3-monitor.sh --check-migrations и проверка 12) и
 # деплоем (deploy.sh, предупреждение без провала деплоя).
 #
+# Намеренно отложенная миграция (файл уже в репозитории, накат — по регламенту
+# позже) помечается в самом файле строкой `-- deferred-until: ГГГГ-ММ-ДД`. До этой
+# даты включительно её отсутствие в учёте не тревога: 04.10.2026 монитор дважды в
+# сутки слал про 039, которую сознательно держали сутки после выкатки кода.
+# После даты — обычное расхождение: забытая отсрочка не прячется навсегда.
+#
 # Ограничение разбора: имена объектов ищутся только неквалифицированные и без
 # кавычек (`ix_foo`, не `public.ix_foo` и не `"IxFoo"`). Такой объект просто не
 # будет посчитан — проверка занизит «есть N из M», но никогда не объявит
@@ -59,6 +65,15 @@ describe_unrecorded() {
     fi
 }
 
+# Истина, если в файле стоит `-- deferred-until: ДАТА` и сегодня (UTC) не позже неё.
+deferred_until() {
+    local until today
+    until=$(grep -m1 -oE '^-- deferred-until: [0-9]{4}-[0-9]{2}-[0-9]{2}' "$1" | awk '{print $NF}')
+    [ -n "$until" ] || return 1
+    today="${TODAY:-$(date -u +%F)}"
+    [[ ! "$today" > "$until" ]]
+}
+
 main() {
     local applied file version problems=0
     [ -d "$MIGRATIONS_DIR" ] || { echo "нет каталога миграций $MIGRATIONS_DIR"; return 1; }
@@ -73,6 +88,7 @@ main() {
         [ -f "$file" ] || continue
         version=$(basename "$file" .sql)
         grep -qxF "$version" <<< "$applied" && continue
+        deferred_until "$file" && continue
         describe_unrecorded "$file" "$version"
         problems=$(( problems + 1 ))
     done

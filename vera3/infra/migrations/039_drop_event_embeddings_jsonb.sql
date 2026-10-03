@@ -1,3 +1,5 @@
+-- deferred-until: 2026-10-05
+-- (накат по регламенту deploy-ops.md «Снятие JSONB-эмбеддингов»: сутки после релиза кода)
 -- Migration 039: снять JSONB-колонку event_embeddings.embedding, embedding_vec
 -- сделать NOT NULL.
 --

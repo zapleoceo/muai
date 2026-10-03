@@ -49,7 +49,8 @@ exit 0
 
 
 def _run(tmp_path: Path, *, applied: list[str], existing: list[str],
-         files: list[str], db_down: bool = False) -> tuple[int, list[str]]:
+         files: list[str], db_down: bool = False,
+         src: Path | None = None) -> tuple[int, list[str]]:
     bindir = tmp_path / "bin"
     bindir.mkdir(parents=True, exist_ok=True)
     # Байтами: на Windows write_text дал бы CRLF, а psql печатает LF.
@@ -64,7 +65,7 @@ def _run(tmp_path: Path, *, applied: list[str], existing: list[str],
     mig = tmp_path / "migrations"
     mig.mkdir()
     for name in files:
-        shutil.copy(REAL_MIGRATIONS / f"{name}.sql", mig / f"{name}.sql")
+        shutil.copy((src or REAL_MIGRATIONS) / f"{name}.sql", mig / f"{name}.sql")
 
     env = dict(os.environ)
     env["PATH"] = f"{bindir.as_posix()}{os.pathsep}{env['PATH']}"
@@ -135,3 +136,28 @@ def test_migration_without_probeable_objects_is_still_reported(tmp_path):
     assert code == 1
     assert lines == ["020_canonical_message_view: не записана в учёт "
                      "(объекты автоматически не проверяются)"]
+
+
+def _deferred(tmp_path: Path, until: str, today: str) -> tuple[int, list[str]]:
+    """Миграция с пометкой `-- deferred-until:` и подставленной сегодняшней датой."""
+    src = tmp_path / "src"
+    src.mkdir()
+    (src / "099_deferred.sql").write_bytes(
+        f"-- deferred-until: {until}\nSELECT 1;\n".encode())
+    os.environ["TODAY"] = today
+    try:
+        return _run(tmp_path, applied=[], existing=[], files=["099_deferred"], src=src)
+    finally:
+        os.environ.pop("TODAY", None)
+
+
+def test_deferred_migration_is_quiet_until_its_date(tmp_path):
+    """04.10.2026 монитор дважды в сутки слал про 039, которую держали намеренно."""
+    assert _deferred(tmp_path, until="2026-10-05", today="2026-10-05") == (0, [])
+
+
+def test_deferred_migration_alerts_after_its_date(tmp_path):
+    """Забытая отсрочка не прячет миграцию навсегда."""
+    code, lines = _deferred(tmp_path, until="2026-10-05", today="2026-10-06")
+    assert code == 1
+    assert lines == ["099_deferred: не записана в учёт (объекты автоматически не проверяются)"]
