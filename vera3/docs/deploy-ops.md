@@ -580,7 +580,7 @@ Server `.env` at `/var/www/vera3/infra/.env` (mode 600):
 |---|---|
 | `POSTGRES_PASSWORD` | postgres root |
 | `TOKEN_SECRET` | Fernet for Gmail refresh tokens & session cookies (no `tokens` table) |
-| `INTERNAL_SECRET` | gateway X-Internal-Secret |
+| `INTERNAL_SECRET` | `X-Internal-Secret` для gateway, brain-search и tools-сервера юзербота; обязан быть у каждого, кто их зовёт, в том числе у дашборда (без него «Спросить Веру» отвечала 502, 03.10.2026; держит `test_compose_internal_secret.py`) |
 | `OWNER_TELEGRAM_ID` | `169510539` |
 | `TELEGRAM_BOT_TOKEN` / `_USERNAME` | `@Dimondra_Ai_Bot` |
 | `TELEGRAM_API_ID` / `_HASH` / `_PHONE` | Telethon MTProto |
