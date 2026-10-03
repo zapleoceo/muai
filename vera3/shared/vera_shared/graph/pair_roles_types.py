@@ -68,3 +68,4 @@ class PairInference:
     skipped: str = ""          # причина, по которой модель не звали
     failed: bool = False       # брокер не ответил (в том числе открытый брейкер): цикл стоит
     bad_format: bool = False   # ответ не по схеме: пара уходит в паузу, цикл идёт дальше
+    trace: tuple[Any, ...] = ()   # след разбора по каждой роли модели (`pair_roles_trace.RoleTrace`)

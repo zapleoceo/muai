@@ -37,6 +37,7 @@ from vera_shared.graph.pair_roles import (
 from vera_shared.graph.pair_roles_prompt import pack_payload, render_prompt
 from vera_shared.graph.pair_roles_queue import pick_pairs
 from vera_shared.graph.pair_roles_store import all_pair_stats, all_runs
+from vera_shared.graph.pair_roles_trace import explain_payload
 from vera_shared.graph.pair_roles_types import A_TO_B, BOTH, PairInference
 from vera_shared.graph.pair_stats import PairStats, ordered, stats_within
 from vera_shared.links.context import owner_entity_id
@@ -44,7 +45,7 @@ from vera_shared.llm.broker_client import broker_enabled
 from vera_shared.timeutil import utc_naive_now
 
 
-def _readable(result: PairInference, names: dict[int, str]) -> dict:
+def _readable(result: PairInference, names: dict[int, str], explain: bool = False) -> dict:
     a, b = names.get(result.entity_a, "?"), names.get(result.entity_b, "?")
 
     def edge(direction: str, predicate: str) -> str:
@@ -57,7 +58,8 @@ def _readable(result: PairInference, names: dict[int, str]) -> dict:
             "failed": result.failed, "bad_format": result.bad_format, "summary": result.summary, "model": result.model,
             "cost_usd": round(result.cost_usd, 6),
             "roles": [{"edge": edge(r.direction, r.predicate), "confidence": r.confidence,
-                       "rationale": r.rationale, "quotes": list(r.quotes)} for r in result.roles]}
+                       "rationale": r.rationale, "quotes": list(r.quotes)} for r in result.roles],
+            **({"explain": explain_payload(result)} if explain else {})}
 
 
 async def _names(ids: list[int]) -> dict[int, str]:
@@ -91,16 +93,16 @@ async def main(args: argparse.Namespace) -> int:
                 for a, b in pairs:
                     await _show_pack(a, b)
                 return 0
-            results = [await infer_pair(a, b, force=args.force, dry_run=args.dry_run) for a, b in pairs]
+            results = [await infer_pair(a, b, force=args.force or args.explain, dry_run=args.dry_run) for a, b in pairs]
         elif args.dry_run:
             picked = pick_pairs(await all_pair_stats(), await all_runs(), await owner_entity_id(),
                                 args.limit, utc_naive_now())
-            results = [await infer_pair(a, b, force=args.force, dry_run=True) for a, b in picked]
+            results = [await infer_pair(a, b, force=args.force or args.explain, dry_run=True) for a, b in picked]
         else:
             results = await run_cycle(args.limit)
         names = await _names(sorted({i for r in results for i in (r.entity_a, r.entity_b)}))
         for result in results:
-            print(json.dumps(_readable(result, names), ensure_ascii=False, indent=1))
+            print(json.dumps(_readable(result, names, args.explain), ensure_ascii=False, indent=1))
         total = sum(r.cost_usd for r in results)
         print(f"пар: {len(results)}, ролей: {sum(len(r.roles) for r in results)}, cost_usd: {total:.6f}"
               f"{' (dry-run, ничего не записано)' if args.dry_run else ''}")
@@ -116,4 +118,7 @@ if __name__ == "__main__":
     p.add_argument("--dry-run", action="store_true", help="спросить модель, но ничего не записывать")
     p.add_argument("--show-pack", action="store_true", help="только пакет улик; модель не зовётся")
     p.add_argument("--force", action="store_true", help="игнорировать «пакет не изменился»")
+    p.add_argument("--explain", action="store_true",
+                   help="показать сырые роли модели и исход каждой проверки (цитаты, авторы, "
+                        "самоутверждение, порог, шутка); подразумевает --force, лучше с --dry-run")
     sys.exit(asyncio.run(main(p.parse_args())))

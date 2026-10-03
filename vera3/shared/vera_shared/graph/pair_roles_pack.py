@@ -23,7 +23,7 @@ from vera_shared.graph.pair_roles_types import (
     PairSide,
 )
 
-PROMPT_VERSION = "1"
+PROMPT_VERSION = "2"
 MAX_PACK_CHARS = 24_000
 QUOTA = {KIND_DM: 40, KIND_CHAT: 15, KIND_MENTION: 30, KIND_MAIL: 15}
 MAX_CHARS = {KIND_DM: 500, KIND_CHAT: 500, KIND_MENTION: 450, KIND_MAIL: 900}
