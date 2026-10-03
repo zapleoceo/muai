@@ -17,6 +17,10 @@ RETRIES = 3
 ACTIONS_PAGE = 1000
 
 
+def credentials_configured() -> bool:
+    return bool(os.environ.get("TRELLO_API_KEY") and os.environ.get("TRELLO_TOKEN"))
+
+
 class TrelloAuthError(Exception):
     """Ключ или токен не приняты (401/403) — дальше долбиться бессмысленно."""
 
