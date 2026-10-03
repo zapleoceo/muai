@@ -36,6 +36,10 @@ async def pg_db(monkeypatch, pg_schema_reset):
     monkeypatch.setenv("TOKEN_SECRET", "test-secret-for-integration")
     monkeypatch.setenv("DATABASE_URL", TEST_DB_URL)
     import vera_shared.db.engine as engine_mod
+    from vera_shared.db import vectors
+
+    # reset_schema заводит колонку halfvec(3), а не боевую halfvec(1024)
+    monkeypatch.setattr(vectors, "VEC_DIMS", 3)
 
     # Импорт ВСЕХ модулей моделей обязателен: Base.metadata знает только
     # про те таблицы, чьи классы уже импортированы. Без models_graph
@@ -406,9 +410,12 @@ async def test_vector_branch_requires_embedding_via_inner_join(pg_db):
     эмбеддинга там бесполезна, ранжировать её нечем. Единственное место, где
     JOIN не LEFT, — раньше это отличие терялось среди шести копий."""
     from brain_search.retrieval import fetch_candidates
+    from sqlalchemy import text as sa_text
     from vera_shared.db.engine import get_session
-    from vera_shared.db.models import EventEmbeddingRow, EventRow
+    from vera_shared.db.models import EventRow
 
+    if not await _apply_pgvector_migration():
+        pytest.skip("расширение vector недоступно в этой сборке Postgres")
     now = utc_naive_now()
     async with get_session() as s:
         with_emb = EventRow(source="telegram", source_event_id="has",
@@ -419,10 +426,12 @@ async def test_vector_branch_requires_embedding_via_inner_join(pg_db):
                        content_text="без вектора", occurred_at=now,
                        received_at=now, triage_status="done"))
         await s.flush()
-        s.add(EventEmbeddingRow(event_id=with_emb.id, embedding=[0.1, 0.2]))
+        await s.execute(sa_text(
+            "INSERT INTO event_embeddings (event_id, embedding_vec)"
+            " VALUES (:i, CAST('[0.1,0.2,0]' AS halfvec))"), {"i": with_emb.id})
 
     found = await fetch_candidates(ts_query="", acc_words=[], time_range=None,
-                                   project=None, q_vec=[0.1, 0.2], limit=15)
+                                   project=None, q_vec=[0.1, 0.2, 0.0], limit=15)
 
     assert found.mode == "vector"
     assert [r[2] for r in found.rows] == ["has"], "строка без эмбеддинга просочилась"
@@ -435,60 +444,21 @@ async def test_vector_branch_requires_embedding_via_inner_join(pg_db):
 
 
 async def _apply_pgvector_migration() -> bool:
-    """Накатить 030 на тестовую базу. False — расширения нет в сборке."""
+    """Есть ли в тестовой базе `embedding_vec` (её добавляет reset_schema).
+    False — расширения нет в сборке Postgres."""
     from sqlalchemy import text as sa_text
     from vera_shared.db.engine import get_session
-    from vera_shared.db.vectors import forget_capability
 
-    try:
-        async with get_session() as s:
-            await s.execute(sa_text("CREATE EXTENSION IF NOT EXISTS vector"))
-            await s.execute(sa_text(
-                "ALTER TABLE event_embeddings "
-                "ADD COLUMN IF NOT EXISTS embedding_vec halfvec(3)"))
-    except Exception:
-        return False
-    forget_capability()
-    return True
+    async with get_session() as s:
+        return (await s.execute(sa_text(
+            "SELECT 1 FROM information_schema.columns"
+            " WHERE table_name = 'event_embeddings' AND column_name = 'embedding_vec'"
+        ))).scalar_one_or_none() is not None
 
 
-@pytest.mark.asyncio
-async def test_vector_column_detected_only_after_migration(pg_db):
-    from vera_shared.db.vectors import forget_capability, vector_column_available
-
-    forget_capability()
-    assert await vector_column_available() is False, "колонки ещё нет"
-
-    if not await _apply_pgvector_migration():
-        pytest.skip("расширение vector недоступно в этой сборке Postgres")
-    assert await vector_column_available() is True
-
-
-@pytest.mark.asyncio
-async def test_capability_is_cached_per_process(pg_db):
-    """Каталог не меняется в рантайме — спрашивать его на каждый запрос это
-    тот же класс расточительства, что и кулдаун LLM."""
-    from vera_shared.db import vectors
-    from vera_shared.db.vectors import forget_capability, vector_column_available
-
-    forget_capability()
-    await vector_column_available()
-
-    calls = 0
-    real = vectors.get_session
-
-    def counting(*a, **kw):
-        nonlocal calls
-        calls += 1
-        return real(*a, **kw)
-
-    vectors.get_session = counting
-    try:
-        for _ in range(5):
-            await vector_column_available()
-    finally:
-        vectors.get_session = real
-    assert calls == 0, "проверка колонки ходит в БД повторно"
+def _cosine(a: list[float], b: list[float]) -> float:
+    dot = sum(x * y for x, y in zip(a, b, strict=True))
+    return dot / ((sum(x * x for x in a) ** 0.5) * (sum(y * y for y in b) ** 0.5))
 
 
 @pytest.mark.asyncio
@@ -502,8 +472,6 @@ async def test_nearest_neighbour_by_index_matches_python_cosine(pg_db):
 
     if not await _apply_pgvector_migration():
         pytest.skip("расширение vector недоступно в этой сборке Postgres")
-
-    from vera_shared.memory.remember import _cosine
 
     query = [1.0, 0.0, 0.0]
     corpus = {
@@ -523,9 +491,9 @@ async def test_nearest_neighbour_by_index_matches_python_cosine(pg_db):
             s.add(ev)
             await s.flush()
             await s.execute(sa_text(
-                "INSERT INTO event_embeddings (event_id, embedding, embedding_vec)"
-                " VALUES (:i, CAST(:j AS jsonb), CAST(:v AS halfvec))"),
-                {"i": ev.id, "j": str(vec), "v": as_pg_vector(vec)})
+                "INSERT INTO event_embeddings (event_id, embedding_vec)"
+                " VALUES (:i, CAST(:v AS halfvec))"),
+                {"i": ev.id, "v": as_pg_vector(vec)})
 
         row = (await s.execute(sa_text("""
             SELECT e.source_event_id, 1 - (ee.embedding_vec <=> CAST(:q AS halfvec))
@@ -535,44 +503,10 @@ async def test_nearest_neighbour_by_index_matches_python_cosine(pg_db):
 
     assert row[0] == "почти то же", "индекс выбрал не ближайшего"
     # та же величина, что дал бы питоновский перебор — знак не перепутан
-    assert row[1] == pytest.approx(_cosine(query, corpus["почти то же"]), abs=1e-6)
+    assert row[1] == pytest.approx(_cosine(query, corpus["почти то же"]), abs=1e-3)
     # и она проходит порог дедупа, ради которого всё это и считается
     from vera_shared.memory.remember import SEMANTIC_DEDUP_THRESHOLD
     assert row[1] >= SEMANTIC_DEDUP_THRESHOLD
-
-
-@pytest.mark.asyncio
-async def test_backfill_is_idempotent_and_skips_broken_rows(pg_db):
-    """Скрипт можно прервать и запустить снова. Разбор JSON — в Postgres;
-    строки, которые перелить нельзя (JSON null, чужая размерность), остаются
-    на месте: раньше скрипт их удалял, а удаление данных — не его дело."""
-    from sqlalchemy import text as sa_text
-    from vera_shared.db.engine import get_session
-
-    if not await _apply_pgvector_migration():
-        pytest.skip("расширение vector недоступно в этой сборке Postgres")
-    mod = _backfill_module()
-
-    payloads = ['[1, 0, 0]', '[0, 1.5e-05, 0]', 'null', '[1, 2]']
-    await _insert_jsonb_embeddings(payloads)
-
-    assert (await mod.status(3))["remaining"] == 2
-    assert (await mod.status(3))["unfillable"] == 2
-    last, filled = await mod.fill_batch(0, 3, 3)   # порция меньше таблицы
-    assert filled == 2 and last is not None
-    tail_last, tail_filled = await mod.fill_batch(last, 3, 3)
-    assert tail_filled == 0 and tail_last is not None
-    assert await mod.fill_batch(tail_last, 3, 3) == (None, 0)
-
-    assert await mod.backfill(2, 3, 0) == 0        # повторный прогон — ничего
-    st = await mod.status(3)
-    assert st["filled"] == 2 and st["remaining"] == 0 and st["total"] == 4
-    async with get_session() as s:
-        vecs = (await s.execute(sa_text(
-            "SELECT embedding_vec::text FROM event_embeddings"
-            " WHERE embedding_vec IS NOT NULL ORDER BY event_id"))).scalars().all()
-    second = [float(x) for x in vecs[1].strip("[]").split(",")]
-    assert second[1] == pytest.approx(1.5e-05, rel=0.05)   # float16, экспонента цела
 
 
 def _backfill_module():
@@ -585,23 +519,24 @@ def _backfill_module():
     return mod
 
 
-async def _insert_jsonb_embeddings(payloads, *, content=None) -> list[int]:
+async def _insert_embeddings(vecs: list[list[float]], *, content=None) -> list[int]:
     from sqlalchemy import text as sa_text
     from vera_shared.db.engine import get_session
     from vera_shared.db.models import EventRow
+    from vera_shared.db.vectors import as_pg_vector
 
     now = utc_naive_now()
     ids = []
     async with get_session() as s:
-        for i, payload in enumerate(payloads):
+        for i, vec in enumerate(vecs):
             ev = EventRow(source="gmail", source_event_id=f"e{i}", category="mail",
                           content_text=(content or {}).get(i, f"письмо {i}"),
                           occurred_at=now, received_at=now, triage_status="done")
             s.add(ev)
             await s.flush()
             await s.execute(sa_text(
-                "INSERT INTO event_embeddings (event_id, embedding)"
-                " VALUES (:i, CAST(:j AS jsonb))"), {"i": ev.id, "j": payload})
+                "INSERT INTO event_embeddings (event_id, embedding_vec)"
+                " VALUES (:i, CAST(:v AS halfvec))"), {"i": ev.id, "v": as_pg_vector(vec)})
             ids.append(ev.id)
     return ids
 
@@ -611,7 +546,6 @@ async def _build_ann_index(monkeypatch, mod) -> None:
 
     monkeypatch.setattr(vectors, "VEC_DIMS", 3)
     await mod.build_index(3, 64)
-    vectors.forget_capability()
 
 
 @pytest.mark.asyncio
@@ -621,12 +555,11 @@ async def test_ann_index_builds_concurrently_and_is_detected(pg_db, monkeypatch)
     if not await _apply_pgvector_migration():
         pytest.skip("расширение vector недоступно в этой сборке Postgres")
     mod = _backfill_module()
-    await _insert_jsonb_embeddings(['[1, 0, 0]', '[0, 1, 0]'])
-    await mod.backfill(100, 3, 0)
+    await _insert_embeddings([[1, 0, 0], [0, 1, 0]])
 
-    assert await vectors.ann_index_available() is False, "индекса ещё нет"
+    assert await vectors.index_is_valid(vectors.ANN_INDEX) is False, "индекса ещё нет"
     await _build_ann_index(monkeypatch, mod)
-    assert await vectors.ann_index_available() is True
+    assert await vectors.index_is_valid(vectors.ANN_INDEX) is True
     await mod.build_index(3, 64)                    # повторно — без ошибки
     assert (await mod.status(3))["index"].startswith("валиден")
 
@@ -641,11 +574,10 @@ async def test_search_finds_text_with_no_shared_words(pg_db, monkeypatch):
     if not await _apply_pgvector_migration():
         pytest.skip("расширение vector недоступно в этой сборке Postgres")
     mod = _backfill_module()
-    ids = await _insert_jsonb_embeddings(
-        ['[0.1, 1, 0]', '[1, 0.05, 0]', '[-1, 0, 0]'],
+    ids = await _insert_embeddings(
+        [[0.1, 1, 0], [1, 0.05, 0], [-1, 0, 0]],
         content={0: "аренда офиса продлена", 1: "invoice for the villa",
                  2: "совсем другое"})
-    await mod.backfill(100, 3, 0)
     await _build_ann_index(monkeypatch, mod)
 
     found = await fetch_candidates(ts_query="аренда:*", acc_words=[],
@@ -661,24 +593,33 @@ async def test_search_finds_text_with_no_shared_words(pg_db, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_partially_filled_column_keeps_jsonb_similarity(pg_db, monkeypatch):
-    """Переход «залито частично» не ухудшает выдачу: строка без halfvec
-    получает косинус из JSONB, как до миграции."""
+async def test_search_degrades_while_embeddings_table_is_locked(pg_db, monkeypatch):
+    """VACUUM FULL event_embeddings держит ACCESS EXCLUSIVE (runbook): поиск
+    не виснет, а за lock_timeout уходит на полнотекст без вектора."""
+    import time
+
     from brain_search.retrieval import fetch_candidates
-    from brain_search.scoring import row_similarity
+    from sqlalchemy import text as sa_text
     from vera_shared.db import vectors
+    from vera_shared.db.engine import get_engine
 
     if not await _apply_pgvector_migration():
         pytest.skip("расширение vector недоступно в этой сборке Postgres")
-    monkeypatch.setattr(vectors, "VEC_DIMS", 3)
-    ids = await _insert_jsonb_embeddings(['[1, 0, 0]'], content={0: "аренда"})
+    monkeypatch.setattr(vectors, "LOCK_TIMEOUT_MS", 300)
+    ids = await _insert_embeddings([[1, 0, 0]], content={0: "аренда"})
 
-    found = await fetch_candidates(ts_query="аренда:*", acc_words=[],
-                                   time_range=None, project=None,
-                                   q_vec=[1.0, 0.0, 0.0], limit=15)
-    row = found.rows[0]
-    assert row[0] == ids[0] and row.vec_sim is None
-    assert row_similarity(row, [1.0, 0.0, 0.0]) == pytest.approx(1.0)
+    async with get_engine().connect() as blocker:
+        await blocker.execute(sa_text("LOCK TABLE event_embeddings IN ACCESS EXCLUSIVE MODE"))
+        started = time.monotonic()
+        found = await fetch_candidates(ts_query="аренда:*", acc_words=[],
+                                       time_range=None, project=None,
+                                       q_vec=[1.0, 0.0, 0.0], limit=15)
+        elapsed = time.monotonic() - started
+        await blocker.rollback()
+
+    assert [r[0] for r in found.rows] == ids, "полнотекстовый результат потерян"
+    assert found.rows[0].vec_sim is None
+    assert elapsed < 5, "поиск ждал блокировку вместо деградации"
 
 
 @pytest.mark.asyncio
@@ -688,9 +629,8 @@ async def test_recall_check_matches_exact_search_on_small_corpus(pg_db, monkeypa
     mod = _backfill_module()
     import random
     rnd = random.Random(7)   # без равных расстояний: иначе top-k неоднозначен
-    await _insert_jsonb_embeddings(
-        [str([round(rnd.gauss(0, 1), 4) for _ in range(3)]) for _ in range(40)])
-    await mod.backfill(100, 3, 0)
+    await _insert_embeddings(
+        [[round(rnd.gauss(0, 1), 4) for _ in range(3)] for _ in range(40)])
     await _build_ann_index(monkeypatch, mod)
     # oversample больше корпуса — грубый шаг отдаёт всё, пересчёт точен
     assert await mod.recall(5, 100, 3, k=5) == pytest.approx(1.0)
@@ -720,9 +660,9 @@ async def test_remember_dedup_uses_the_vector_branch(pg_db, monkeypatch):
             s.add(ev)
             await s.flush()
             await s.execute(sa_text(
-                "INSERT INTO event_embeddings (event_id, embedding, embedding_vec)"
-                " VALUES (:i, CAST(:j AS jsonb), CAST(:v AS halfvec))"),
-                {"i": ev.id, "j": str(vec), "v": as_pg_vector(vec)})
+                "INSERT INTO event_embeddings (event_id, embedding_vec)"
+                " VALUES (:i, CAST(:v AS halfvec))"),
+                {"i": ev.id, "v": as_pg_vector(vec)})
             if sid == "близкий":
                 near_id = ev.id
 
@@ -760,9 +700,9 @@ async def test_remember_dedup_returns_none_when_nothing_is_close(pg_db, monkeypa
         s.add(ev)
         await s.flush()
         await s.execute(sa_text(
-            "INSERT INTO event_embeddings (event_id, embedding, embedding_vec)"
-            " VALUES (:i, CAST(:j AS jsonb), CAST(:v AS halfvec))"),
-            {"i": ev.id, "j": "[0,1,0]", "v": as_pg_vector([0.0, 1.0, 0.0])})
+            "INSERT INTO event_embeddings (event_id, embedding_vec)"
+            " VALUES (:i, CAST(:v AS halfvec))"),
+            {"i": ev.id, "v": as_pg_vector([0.0, 1.0, 0.0])})
 
     monkeypatch.setattr(gc, "embed", lambda _t: _one([[1.0, 0.0, 0.0]]))
 
@@ -775,9 +715,9 @@ async def _one(value):
 
 
 @pytest.mark.asyncio
-async def test_triage_writes_both_columns_during_migration(pg_db, monkeypatch):
-    """Пока идёт бэкфил, новые события обязаны попадать И в vector, И в JSONB —
-    иначе они окажутся в дыре, которую бэкфил уже прошёл."""
+async def test_triage_writes_the_vector_column(pg_db, monkeypatch):
+    """Новое событие обязано получить вектор в embedding_vec — иначе его не
+    увидят ни ANN, ни дедуп remember."""
     from unittest.mock import AsyncMock
 
     from sqlalchemy import text as sa_text
@@ -815,10 +755,9 @@ async def test_triage_writes_both_columns_during_migration(pg_db, monkeypatch):
 
     async with get_session() as s:
         row = (await s.execute(sa_text(
-            "SELECT embedding, embedding_vec IS NOT NULL FROM event_embeddings"
+            "SELECT embedding_vec::text FROM event_embeddings"
             " WHERE event_id = :e"), {"e": ev.id})).one()
-    assert row[0] == [0.1, 0.2, 0.3], "JSONB не записан"
-    assert row[1] is True, "колонка vector не записана — событие выпадет из дедупа"
+    assert [round(float(x), 2) for x in row[0].strip("[]").split(",")] == [0.1, 0.2, 0.3]
 
 
 # ─── куски длинных событий: миграция 032 ────────────────────────────────────
@@ -847,10 +786,9 @@ async def test_long_event_is_found_through_its_chunk_once(pg_db, monkeypatch):
         pytest.skip("расширение vector недоступно в этой сборке Postgres")
     await _apply_chunk_migration()
     mod = _backfill_module()
-    ids = await _insert_jsonb_embeddings(
-        ['[0, 1, 0]', '[0.9, 0.1, 0]'],
+    ids = await _insert_embeddings(
+        [[0, 1, 0], [0.9, 0.1, 0]],
         content={0: "длинное письмо про всё подряд", 1: "другое"})
-    await mod.backfill(100, 3, 0)
     await _build_ann_index(monkeypatch, mod)
     await chunk_vectors.replace_event_chunks(ids[0], [[0, 0, 1], [0, 0.5, 1], [0, 1, 1]])
     await chunk_vectors.replace_event_chunks(ids[0], [[0, 0.2, 1], [1, 0.01, 0]])

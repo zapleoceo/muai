@@ -20,7 +20,6 @@ from vera_shared.memory.remember import (  # noqa: E402
     SEMANTIC_DEDUP_THRESHOLD,
     SEMANTIC_LOOKBACK_DAYS,
     _content_hash,
-    _cosine,
     _find_semantic_neighbour,
 )
 
@@ -43,27 +42,6 @@ def test_content_hash_unicode_safe():
     """Cyrillic + emoji must hash without exception."""
     h = _content_hash("Дима живёт в Джакарте 🌴")
     assert len(h) == 16
-
-
-def test_cosine_identical_vectors():
-    v = [0.1, 0.2, 0.3, 0.4]
-    assert _cosine(v, v) == pytest.approx(1.0)
-
-
-def test_cosine_orthogonal_zero():
-    a = [1.0, 0.0]
-    b = [0.0, 1.0]
-    assert _cosine(a, b) == 0.0
-
-
-def test_cosine_handles_empty():
-    assert _cosine([], [1.0, 2.0]) == 0.0
-    assert _cosine([1.0], [1.0, 2.0]) == 0.0   # mismatched dims
-
-
-def test_cosine_handles_zero_vector():
-    """Zero vector has zero norm → can't divide by zero."""
-    assert _cosine([0.0, 0.0], [1.0, 1.0]) == 0.0
 
 
 # ─── Schema validation ─────────────────────────────────────────────────────
@@ -164,38 +142,54 @@ class _FakeSessionCtx:
         return False
 
 
-def _rows_session(rows):
+def _db_session(best):
+    """Единственный execute — ближайший по halfvec (.first())."""
+    result = MagicMock()
+    result.first.return_value = best
     session = MagicMock()
-    execute_result = MagicMock()
-    execute_result.all.return_value = rows
-    session.execute = AsyncMock(return_value=execute_result)
+    session.execute = AsyncMock(return_value=result)
     return session
 
 
-@pytest.mark.asyncio
-async def test_find_semantic_neighbour_picks_best_match_above_threshold():
-    """Candidate rows scanned in the loop; the closest one above threshold
-    wins, even when it isn't the first row."""
-    rows = [(1, [0.0, 1.0]), (2, [1.0, 0.0])]   # row 2 is identical to q_vec
-    session = _rows_session(rows)
-    with patch("vera_shared.memory.remember.embed", AsyncMock(return_value=[[1.0, 0.0]])), \
-         patch("vera_shared.memory.remember.get_session",
+async def _neighbour(session, vector=None):
+    with patch("vera_shared.memory.remember.embed",
+               AsyncMock(return_value=[vector or [1.0, 0.0]])),          patch("vera_shared.memory.remember.get_session",
                MagicMock(return_value=_FakeSessionCtx(session))):
-        q_vec, match = await _find_semantic_neighbour("hello")
+        return await _find_semantic_neighbour("hello")
+
+
+@pytest.mark.asyncio
+async def test_find_semantic_neighbour_takes_the_database_cosine():
+    q_vec, match = await _neighbour(_db_session((2, 0.97)))
     assert q_vec == [1.0, 0.0]                     # вектор отдаётся для записи
-    assert match == (2, pytest.approx(1.0))
+    assert match == (2, pytest.approx(0.97))
 
 
 @pytest.mark.asyncio
-async def test_find_semantic_neighbour_none_when_all_below_threshold():
-    rows = [(1, [0.0, 1.0])]   # orthogonal to q_vec → sim = 0.0
-    session = _rows_session(rows)
-    with patch("vera_shared.memory.remember.embed", AsyncMock(return_value=[[1.0, 0.0]])), \
-         patch("vera_shared.memory.remember.get_session",
-               MagicMock(return_value=_FakeSessionCtx(session))):
-        q_vec, match = await _find_semantic_neighbour("hello")
+async def test_find_semantic_neighbour_none_when_below_threshold():
+    q_vec, match = await _neighbour(_db_session((1, 0.10)))
     assert q_vec == [1.0, 0.0]   # даже без матча вектор идёт в event_embeddings
     assert match is None
+
+
+@pytest.mark.asyncio
+async def test_find_semantic_neighbour_none_when_no_candidates():
+    _q, match = await _neighbour(_db_session(None))
+    assert match is None
+
+
+@pytest.mark.asyncio
+async def test_semantic_dedup_queries_only_the_vector_column():
+    """Без JSONB-перебора: один запрос по halfvec. Каст запроса — без
+    размерности: pgvector сверяет её с колонкой при сравнении. 13.09.2026
+    зашитая `halfvec(1024)` уронила CI — интеграционный тест держит колонку
+    `halfvec(3)`, и сравнение отказалось работать."""
+    session = _db_session((1, 0.97))
+    await _neighbour(session)
+    assert session.execute.await_count == 1
+    sql = str(session.execute.await_args_list[0].args[0])
+    assert "CAST(:q AS halfvec)" in sql and "halfvec(" not in sql
+    assert "ee.embedding," not in sql and "jsonb" not in sql.lower()
 
 
 # ─── Constants ─────────────────────────────────────────────────────────────
@@ -209,55 +203,3 @@ def test_dedup_threshold_is_strict():
 
 def test_lookback_window_one_week():
     assert SEMANTIC_LOOKBACK_DAYS == 7
-
-
-# ─── halfvec-колонка во время бэкфила ──────────────────────────────────────
-
-
-def _vec_session(db_best, unfilled_rows):
-    """Первый execute — ближайший по halfvec (.first()), второй — строки,
-    до которых бэкфил ещё не дошёл (.all())."""
-    first, second = MagicMock(), MagicMock()
-    first.first.return_value = db_best
-    second.all.return_value = unfilled_rows
-    session = MagicMock()
-    session.execute = AsyncMock(side_effect=[first, second])
-    return session
-
-
-async def _neighbour_with_column(session):
-    with patch("vera_shared.memory.remember.embed", AsyncMock(return_value=[[1.0, 0.0]])), \
-         patch("vera_shared.memory.remember.vector_column_available", AsyncMock(return_value=True)), \
-         patch("vera_shared.memory.remember.get_session",
-               MagicMock(return_value=_FakeSessionCtx(session))):
-        return await _find_semantic_neighbour("hello")
-
-
-@pytest.mark.asyncio
-async def test_semantic_dedup_sees_rows_the_backfill_has_not_reached():
-    """Колонка есть, но залита частично: почти-дубль лежит ещё только в JSONB.
-    Раньше ветка с колонкой смотрела лишь на `embedding_vec IS NOT NULL` и
-    такой дубль молча пропускала."""
-    session = _vec_session(db_best=(1, 0.10), unfilled_rows=[(2, [1.0, 0.0])])
-    _q, match = await _neighbour_with_column(session)
-    assert match == (2, pytest.approx(1.0))
-    assert "embedding_vec IS NULL" in str(session.execute.await_args_list[1].args[0])
-
-
-@pytest.mark.asyncio
-async def test_semantic_dedup_takes_the_database_cosine_when_it_is_best():
-    session = _vec_session(db_best=(1, 0.97), unfilled_rows=[(2, [0.0, 1.0])])
-    _q, match = await _neighbour_with_column(session)
-    assert match == (1, pytest.approx(0.97))
-    assert "halfvec" in str(session.execute.await_args_list[0].args[0])
-
-
-@pytest.mark.asyncio
-async def test_semantic_dedup_casts_without_a_fixed_dimension():
-    """Каст запроса без размерности: pgvector сверяет её с колонкой при
-    сравнении. 13.09.2026 зашитая `halfvec(1024)` уронила CI — интеграционный
-    тест держит колонку `halfvec(3)`, и сравнение отказалось работать."""
-    session = _vec_session(db_best=(1, 0.97), unfilled_rows=[])
-    await _neighbour_with_column(session)
-    sql = str(session.execute.await_args_list[0].args[0])
-    assert "CAST(:q AS halfvec)" in sql and "halfvec(" not in sql

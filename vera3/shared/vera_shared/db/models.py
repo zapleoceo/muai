@@ -144,16 +144,17 @@ class JobRow(Base):
 class EventEmbeddingRow(Base):
     """Voyage-эмбеддинг события — вынесен из events (миграция 011).
 
-    Отдельная узкая таблица: событий ~396k × ~6.5КБ вектор = ~2.5ГБ. Держать
-    их inline в events заставляло каждый COUNT/GROUP BY читать 3.9ГБ. Здесь
-    поиск джойнит по event_id только когда реально нужен вектор.
+    Отдельная узкая таблица: держать вектор inline в events заставляло каждый
+    COUNT/GROUP BY читать гигабайты. Сам вектор — колонка
+    `embedding_vec halfvec(1024) NOT NULL` (миграции 030/039) — в ORM не
+    объявлена: у SQLite нет такого типа, а читает и пишет её только сырой SQL
+    из vera_shared.db.vectors. Интеграционный reset_schema добавляет её руками.
     """
     __tablename__ = "event_embeddings"
 
     event_id: Mapped[int] = mapped_column(
         BigInteger, ForeignKey("events.id", ondelete="CASCADE"), primary_key=True,
     )
-    embedding: Mapped[list[float]] = mapped_column(JsonType, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(),
     )

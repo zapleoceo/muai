@@ -286,7 +286,7 @@ brain-search отбирал ≤200 кандидатов полнотекстом
 - **Индекс** `ix_event_embeddings_vec_bq` — HNSW по бинарному квантованию
   `(binary_quantize(embedding_vec)::bit(1024)) bit_hamming_ops`
   (`vectors.ann_index_sql`), строится `backfill_pgvector.py --index`
-  `CONCURRENTLY` после бэкфила.
+  `CONCURRENTLY`.
 - **Отбор** (`vectors.ann_candidates_sql`): индекс по Хэммингу отдаёт
   `ANN_OVERSAMPLE` = 1000 грубых кандидатов, они пересчитываются точным
   косинусом по halfvec, наверх уходят 200 (`ANN_POOL`). `hnsw.ef_search`
@@ -300,25 +300,34 @@ brain-search отбирал ≤200 кандидатов полнотекстом
   смысловые кандидаты с тем же фильтром (`semantic_filter` — проект, окно,
   «не разговор с Верой», но без текстового условия) добавляются сверху
   (`fetch_ann_rows`, `merge_candidates` — только новые id). Форму строк
-  задают `ann_rows_sql`/`vec_columns`, параметры — `ann_params`, `q_cast`.
+  задают `ann_rows_sql`/`vec_sim_column`, параметры — `ann_params`, `q_cast`.
 - **Скоринг** (`scoring.row_similarity`) берёт косинус из колонки `vec_sim`,
-  посчитанной Postgres; JSONB разбирается только у строк, до которых бэкфил
-  ещё не дошёл. `vec_sim` стоит ПОСЛЕДНЕЙ колонкой: rank и account scoring
-  читает по позициям 7 и 8.
-- **Выключатель** — сам индекс (`vectors.ann_index_available`, валидный в
-  `pg_index`, кэш на процесс). Нет колонки, нет индекса или брокер не дал
-  вектор — поведение прежнее, без ANN-запроса. Включение после постройки —
-  рестарт brain-search; откат — `DROP INDEX` + рестарт.
-- **Дедуп `/v1/claude/remember`**: косинус по halfvec в SQL для перелитых
-  строк И питоновский перебор JSONB для ещё не перелитых — раньше ветка с
-  колонкой смотрела только на `embedding_vec IS NOT NULL` и при частичном
-  бэкфиле пропускала дубли. Индекс здесь не нужен: claude-событий за 7 дней
-  десятки. Вектор запроса кастуется в `halfvec` без размерности — pgvector
-  сверяет её с колонкой при сравнении. Зашитая `halfvec(1024)` 13.09.2026
-  уронила CI: интеграционный тест держит колонку `halfvec(3)` («expected 1024
-  dimensions, not 3»), а в проде такая привязка ничего не проверяла бы
-  сверх того, что уже проверяет колонка. Запись эмбеддинга — одна функция `vectors.embedding_upsert` для
-  триажа и remember (remember раньше писал только JSONB).
+  посчитанной Postgres; у строки без него 0. Седьмая колонка кандидата
+  (`embedding`) зарезервирована и всегда NULL: вектор не покидает БД. `vec_sim`
+  стоит ПОСЛЕДНЕЙ колонкой: rank и account scoring читает по позициям 7 и 8.
+- **Без проверок «колонка/индекс есть»** (пробы наличия колонки и ANN-индекса
+  сняты вместе с JSONB): ANN идёт всегда, когда есть
+  вектор запроса. Снесённый индекс без рестарта по-прежнему не роняет поиск:
+  смысловой шаг в точке сохранения с `statement_timeout` 5 с.
+- **Таблица заблокирована** (`VACUUM FULL event_embeddings`): основной запрос
+  с JOIN по ней идёт под `lock_timeout` 3 с (`vectors.LOCK_TIMEOUT_MS`, параметры — `lock_timeout_params`,
+  `retrieval._primary_with_degrade`); по таймауту поиск повторяется без вектора
+  и без ANN, то есть на полнотексте. Без вектора запроса `event_embeddings`
+  в запросе не участвует вовсе.
+- **Дедуп `/v1/claude/remember`**: один запрос, косинус по halfvec в SQL
+  (`ORDER BY <=> LIMIT 1`), питоновского перебора нет. Индекс не нужен:
+  claude-событий за 7 дней десятки. Вектор запроса кастуется в `halfvec` без
+  размерности — pgvector сверяет её с колонкой при сравнении (зашитая
+  `halfvec(1024)` 13.09.2026 уронила CI, где колонка `halfvec(3)`). Запись —
+  одна функция `vectors.embedding_upsert(event_id, vec)` для триажа, reembed и
+  remember: пишет только `embedding_vec`.
+- **Снятие JSONB** (миграции 038/039, runbook — deploy-ops.md «Снятие
+  JSONB-эмбеддингов»): `embedding` JSONB (~6.3 КБ на строку, ~3.5 ГБ TOAST)
+  больше не читается и не пишется. Строки без вектора (2484, все JSON `null`)
+  удаляются 039, события остаются, цикл reembed в brain-triage эмбеддит их
+  заново. Юнит-тесты на SQLite колонку `embedding_vec` не видят (ORM её не
+  объявляет): SQL с векторами проверяется в `tests/integration` на Postgres
+  с pgvector, где `reset_schema` добавляет `halfvec(3)`.
 
 #### Почему halfvec + HNSW по битам, а не HNSW по вектору или IVFFlat
 
@@ -348,30 +357,14 @@ deploy-ops.md). Ошибка косинуса float16 на той же выбо�
 тогда пересчёт 1000 кандидатов стоил бы ещё ~2000 чтений toast-индекса и
 чанков.
 
-#### Бэкфил
+#### Обслуживание индекса
 
-`scripts/backfill_pgvector.py`: идёт по первичному ключу порциями по 1000
-(`fill_batch`), JSON разбирается в Postgres (`embedding::text` → halfvec),
-каждая порция — своя короткая транзакция. Прежняя версия выбирала `WHERE
-embedding_vec IS NULL LIMIT n` — без индекса по NULL это заново просматривает
-уже перелитое начало на каждой порции — и УДАЛЯЛА нечитаемые строки; теперь
-2496 строк с JSON `null` просто пропускаются (`status` показывает их как
-unfillable). Режимы: `--status`, `--index` (`build_index`: сносит
+`scripts/backfill_pgvector.py` (имя от переливки JSONB → halfvec, которой
+больше нет): `--status` (строки, индекс), `--index` (`build_index`: сносит
 невалидный остаток прерванной постройки, `index_build_statements` —
 `maintenance_work_mem` 192 МБ, без параллельных воркеров, т.к. их граф живёт
-в `/dev/shm` 256 МБ), `--recall N` (`recall`, `recall_at_k`). Разбор+каст
-на проде — ~1800 строк/с на чтении; порядок наката и отката —
-`deploy-ops.md`, «pgvector: накат и откат».
-
-Две вещи, которые стоит знать:
-
-- **Знак оператора.** `<=>` — косинусное РАССТОЯНИЕ, сходство это
-  `1 - (a <=> b)`. Перепутать легко, и тогда дедуп начнёт считать похожими
-  самые ДАЛЁКИЕ факты. Тест сверяет величину с питоновским `_cosine`.
-- **Планировщик берёт индекс не всегда.** На маленьких таблицах он
-  предпочитает seq scan, и это правильно; на проде после постройки проверить
-  `EXPLAIN` поискового запроса — должен быть `Index Scan using
-  ix_event_embeddings_vec_bq`.
+в `/dev/shm` 256 МБ), `--recall N` (`recall`, `recall_at_k`). Порядок наката и
+отката — `deploy-ops.md`, «pgvector: накат и откат».
 
 ### Длинные тексты: потолок входа, отрывок для LLM, куски (миграция 032)
 
@@ -508,7 +501,7 @@ processing is paused/paced.
 `services/brain-search/src/brain_search/app.py`
 
 - `POST /search` — entry point for the Telegram bot and dashboard.
-- Hybrid retrieval: FTS (`russian` OR `indonesian`, ts_rank — see below) AND cosine similarity over Voyage embeddings.
+- Hybrid retrieval: FTS (`russian` OR `indonesian`, ts_rank — see below) AND vector similarity (косинус) over Voyage embeddings.
 
 ### Полнотекст на нескольких языках (`fts.py`, миграция 031)
 

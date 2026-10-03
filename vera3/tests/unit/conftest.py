@@ -34,20 +34,16 @@ import pytest_asyncio  # noqa: E402
 
 @pytest.fixture(autouse=True)
 def _fresh_vector_capability():
-    """Кэш «есть ли halfvec-колонка / ANN-индекс» живёт на процесс. В CI
+    """Кэш «есть ли таблица кусков / её индекс» живёт на процесс. В CI
     интеграционные тесты идут раньше юнит-тестов в том же процессе и оставляют
-    в нём «колонка есть» — юнит-тест дедупа без собственной базы молча уходил
-    в ветку с колонкой и падал (13.09.2026). Сбрасываем до и после каждого
+    в нём «таблица есть» (13.09.2026). Сбрасываем до и после каждого
     теста, а не только в фикстуре sqlite_db: многие тесты базу не берут."""
     from vera_shared.db.chunk_vectors import forget_chunk_capability
-    from vera_shared.db.vectors import forget_capability
     from vera_shared.media_backlog import forget as forget_media_backlog
-    forget_capability()
     forget_chunk_capability()
     forget_media_backlog()
     yield
     forget_media_backlog()
-    forget_capability()
     forget_chunk_capability()
 
 
@@ -69,7 +65,6 @@ async def sqlite_db(tmp_path):
     )
     from vera_shared.db.chunk_vectors import forget_chunk_capability
     from vera_shared.db.engine import Base, get_session, init_engine
-    from vera_shared.db.vectors import forget_capability
     from vera_shared.llm.circuit import forget_cooldowns
 
     # Кэши, которые живут в процессе и переживают базу теста. Оба уже
@@ -77,7 +72,6 @@ async def sqlite_db(tmp_path):
     # тест не ждал, а «колонка vector есть» из pg-теста уводила SQLite-тест в
     # ветку, которой на SQLite нет вовсе. Новая база — новое состояние.
     forget_cooldowns()
-    forget_capability()
     forget_chunk_capability()
 
     if engine_mod._engine is not None:

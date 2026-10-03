@@ -35,7 +35,7 @@ def forget_chunk_capability() -> None:
 
 
 async def chunk_table_available() -> bool:
-    """Накачена ли 032. Кэшируется на процесс, как vectors.vector_column_available."""
+    """Накачена ли 032. Кэшируется на процесс."""
     global _has_table
     if _has_table is not None:
         return _has_table

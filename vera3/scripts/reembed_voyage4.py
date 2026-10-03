@@ -18,11 +18,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import json
 import logging
 
 from sqlalchemy import text
 from vera_shared.db.engine import get_session, init_engine
+from vera_shared.db.vectors import embedding_upsert
 from vera_shared.llm.client import embed
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -46,12 +46,9 @@ async def _fetch_batch(after_id: int) -> list[tuple[int, str]]:
 
 
 async def _upsert(event_id: int, vector: list[float]) -> None:
+    stmt, params = embedding_upsert(event_id, vector)
     async with get_session() as s:
-        await s.execute(text("""
-            INSERT INTO event_embeddings (event_id, embedding)
-            VALUES (:eid, CAST(:emb AS jsonb))
-            ON CONFLICT (event_id) DO UPDATE SET embedding = EXCLUDED.embedding
-        """), {"eid": event_id, "emb": json.dumps(vector)})
+        await s.execute(stmt, params)
 
 
 async def main(start_id: int) -> None:

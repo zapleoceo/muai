@@ -42,7 +42,7 @@
 
 | Container | Purpose |
 |---|---|
-| `vera3-postgres` | All state. pgvector 0.8.2: embeddings as `halfvec(1024)` (migration 030) next to the legacy JSONB column; ANN via HNSW over binary quantization, rerank by halfvec (see `brain.md`). Long events (>4000 chars) also get chunk vectors in `event_chunk_embeddings` (migration 032, same index shape); search takes the best of event and chunk cosine per event. |
+| `vera3-postgres` | All state. pgvector 0.8.2: embeddings as `halfvec(1024)` (migration 030) as the only vector column (the legacy JSONB column was dropped by migrations 038/039); ANN via HNSW over binary quantization, rerank by halfvec (see `brain.md`). Long events (>4000 chars) also get chunk vectors in `event_chunk_embeddings` (migration 032, same index shape); search takes the best of event and chunk similarity per event. |
 | `vera3-gateway` | `POST /event/<source>` — single ingest endpoint with X-Internal-Secret |
 | `vera3-brain-triage-N` | Scalable workers (`docker compose up -d --scale brain-triage=3`). SELECT FOR UPDATE SKIP LOCKED → atomic claim. |
 | `vera3-brain-search` | FastAPI `/search` — ReAct agent loop, calls AIbroker. |
@@ -155,7 +155,7 @@ no per-viewer zone available) and the fixed-UTC+7 month labels in
 5. Embedding worker (same loop): one Voyage call per batch → row in the
    separate `event_embeddings` table (migration 011 — `events` itself has
    no embedding column anymore).
-6. `brain-search` queries events via FTS + cosine on demand.
+6. `brain-search` queries events via FTS + vector similarity on demand.
 
 ## Triage queue scaling
 
@@ -199,7 +199,7 @@ events LEFT JOIN event_embeddings`, скоринг, кэш самоописан�
 | `models.py` | `SearchQuery` / `AnswerResponse` / `SearchResult` |
 | `retrieval.py` | `fetch_candidates()` — ОДНА форма запроса и явные режимы (`project`/`fts`/`time`/`vector`/`recent`) вместо шести копий |
 | `ann.py` | смысловые кандидаты из всего корпуса: HNSW по битам → точный пересчёт по halfvec, объединение с основным режимом (`fetch_ann_rows`, `merge_candidates`); включается только при валидном индексе — см. `brain.md`, «pgvector и смысловой поиск» |
-| `scoring.py` | `cosine()`, `row_similarity()` (косинус из БД `vec_sim`, JSONB — только у неперелитых строк), `score_rows()` |
+| `scoring.py` | `row_similarity()` (косинус из БД `vec_sim`; без него 0), `score_rows()` |
 | `self_context.py` | «кто я и что подключено» + кэш (иначе `COUNT(*)` на каждый /search) |
 | `synthesis.py` | промпт и ответ — агентом или прямым синтезом |
 | `reports.py` | точная SQL-агрегация вместо пересказа top-N |
