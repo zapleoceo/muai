@@ -246,7 +246,7 @@ else
 fi
 
 # ─── 2. Health endpoints ─────────────────────────────────────────────────────
-for svc in gateway brain-search dashboard; do
+for svc in gateway brain-search dashboard mcp; do
     if ! docker exec "vera3-$svc" python -c "import urllib.request,sys;sys.exit(0 if urllib.request.urlopen('http://localhost:8000/healthz',timeout=5).status==200 else 1)" 2>/dev/null; then
         alert "healthz_$svc" "/healthz failed for vera3-$svc"
     else

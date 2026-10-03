@@ -113,6 +113,7 @@ jobs:
           pip install -e ./services/ingestor-slack
           pip install -e ./services/brain-search
           pip install -e ./services/bot-telegram
+          pip install -e ./services/mcp
       - name: Pytest
         # Coverage gate stair-step. 2026-06-24: 40 → 60 → 70 (246 passed, 74.17%)
         env:
@@ -139,7 +140,7 @@ jobs:
           # измеряемого пакета среднее прятало нули — vera_shared/tools
           # стоял на 0% и ехал на хорошо покрытых соседях.
           pytest tests/ \
-            --cov=vera_shared --cov=gateway --cov=media_worker \
+            --cov=vera_shared --cov=gateway --cov=media_worker --cov=vera_mcp \
             --cov=brain_search --cov=brain_triage --cov=dashboard \
             --cov=ingestor_gmail --cov=ingestor_slack --cov=ingestor_trello \
             --cov=ingestor_telegram --cov=bot_telegram \
@@ -198,6 +199,7 @@ jobs:
           pip install -e ./vera3/services/ingestor-slack
           pip install -e ./vera3/services/brain-search
           pip install -e ./vera3/services/bot-telegram
+          pip install -e ./vera3/services/mcp
           pip install vulture==2.13 diff-cover==9.2.0 ruff==0.7.4
 
       - name: Compute diff base
@@ -326,7 +328,7 @@ jobs:
           # копиях в двух воркфлоу и разъехался — у шага diff-cover не было
           # brain-triage, сборка тестов падала, а деплой стоял молча.
             pytest tests/ -q --no-header \
-              --cov=vera_shared --cov=gateway --cov=media_worker --cov=brain_search \
+              --cov=vera_shared --cov=gateway --cov=media_worker --cov=vera_mcp --cov=brain_search \
               --cov-report=xml:coverage.xml -p no:cacheprovider \
               || { echo "pytest exit $?"; exit 1; }
           # Compare against the parent commit on the same branch.
@@ -419,6 +421,7 @@ jobs:
           - ingestor-slack
           - ingestor-telegram
           - ingestor-trello
+          - mcp
           - media-worker
     steps:
       - uses: actions/checkout@v4
