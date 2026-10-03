@@ -101,7 +101,10 @@ def test_search_secret_fail_closed(monkeypatch):
 
 def test_graph_page_escapes_untrusted_html():
     from dashboard.graph_script import GRAPH_SCRIPT
-    assert "function esc(" in GRAPH_SCRIPT
-    assert "esc(labels[c])" in GRAPH_SCRIPT
-    for field in ("p.name", "r.other_name", "e.snippet", "p.username", "p.email"):
-        assert f"esc({field})" in GRAPH_SCRIPT
+    from dashboard.graph_script_connections import CONNECTIONS_SCRIPT
+    # Связи в карточке рисует отдельный модуль, склеенный с GRAPH_SCRIPT в один <script>.
+    script = GRAPH_SCRIPT + CONNECTIONS_SCRIPT
+    assert "function esc(" in script
+    assert "esc(labels[c])" in script
+    for field in ("p.name", "c.other_name", "h.name", "e.snippet", "p.username", "p.email"):
+        assert f"esc({field})" in script
