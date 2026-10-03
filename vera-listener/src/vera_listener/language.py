@@ -72,7 +72,8 @@ from __future__ import annotations
 
 import re
 import unicodedata
-from typing import Callable, NamedTuple
+from collections.abc import Callable
+from typing import NamedTuple
 
 #: Языки наших созвонов. Всё прочее — сбой определителя, а не язык.
 EXPECTED = ("ru", "uk", "en", "id")
