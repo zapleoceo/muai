@@ -24,6 +24,7 @@ from vera_shared.db.vectors import (
     as_pg_vector,
     vector_column_available,
 )
+from vera_shared.events.visibility import NOT_HIDDEN_SQL
 
 from brain_search.ann import fetch_ann_rows, merge_candidates, vec_columns
 from brain_search.fts import fts_match_sql, fts_rank_sql
@@ -39,7 +40,8 @@ RECENT_FALLBACK = 30
 #: Разговоры с Верой — не «события мира». Системно по nature (её проставляет
 #: триаж), source-фильтр остаётся для ещё не классифицированных.
 _NOT_A_WORLD_EVENT = (" AND (nature IS NULL OR nature <> 'conversation_with_me')"
-                      " AND source <> 'vera_chat'")
+                      " AND source <> 'vera_chat'"
+                      f" AND {NOT_HIDDEN_SQL}")
 
 _BASE_COLUMNS = "id, source, source_event_id, occurred_at, content_text, importance"
 
@@ -70,7 +72,7 @@ def project_clause(project, time_range) -> tuple[str, dict[str, Any]]:
     """WHERE для проектной выборки: колонка `project` (её проставляет триаж по
     содержимому) ИЛИ реестр ящиков/чатов — fallback для неклассифицированных."""
     conds = ["(nature IS NULL OR nature NOT IN ('conversation_with_me', 'my_intent'))",
-             "source <> 'vera_chat'"]
+             "source <> 'vera_chat'", NOT_HIDDEN_SQL]
     params: dict[str, Any] = {"pname": project.name}
     ors = ["project = :pname"]
     for i, pat in enumerate(project.account_like):

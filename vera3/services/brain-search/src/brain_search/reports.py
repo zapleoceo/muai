@@ -27,6 +27,7 @@ from typing import Any
 
 from sqlalchemy import text
 from vera_shared.db.engine import get_session
+from vera_shared.events.visibility import NOT_HIDDEN_SQL
 
 log = logging.getLogger(__name__)
 
@@ -114,7 +115,7 @@ async def build_monthly_report(chat_id: str, chat_title: str,
 
     Без LIMIT — отчёт обязан покрыть ВСЕ сообщения периода, иначе суммы врут.
     """
-    where = ["metadata->>'chat_id' = :cid"]
+    where = ["metadata->>'chat_id' = :cid", NOT_HIDDEN_SQL]
     params: dict[str, Any] = {"cid": chat_id}
     if year is not None:
         where.append("occurred_at >= :y_start AND occurred_at < :y_end")

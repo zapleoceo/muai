@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import httpx
+from vera_shared.events.visibility import NOT_HIDDEN_SQL
 from vera_shared.llm.client import LLMCallFailed, chat_async
 from vera_shared.timeutil import utc_naive_now
 
@@ -201,7 +202,7 @@ async def _exec_search_events(q: str, source: str = "any",
                        metadata->>'author_label' AS author_label,
                        metadata->>'chat_title'   AS chat_title
                 FROM events
-                WHERE {fts_match_sql()} {where_extra}
+                WHERE {fts_match_sql()} AND {NOT_HIDDEN_SQL} {where_extra}
                 ORDER BY {fts_rank_sql()} DESC,
                          occurred_at DESC
                 LIMIT :lim
@@ -213,7 +214,7 @@ async def _exec_search_events(q: str, source: str = "any",
                        metadata->>'author_label' AS author_label,
                        metadata->>'chat_title'   AS chat_title
                 FROM events
-                WHERE 1=1 {where_extra}
+                WHERE {NOT_HIDDEN_SQL} {where_extra}
                 ORDER BY occurred_at DESC LIMIT :lim
             """)
         rs = (await s.execute(stmt, params)).all()
