@@ -14,6 +14,10 @@ WORKER_ID = os.environ.get("HOSTNAME", "worker") + ":" + str(os.getpid())
 # Должно быть БОЛЬШЕ чем самый медленный LLM-вызов × CONCURRENCY.
 STUCK_AFTER_S = int(os.environ.get("TRIAGE_STUCK_AFTER_S", "600"))
 
+# Доэмбеддинг событий, оставшихся без вектора (reembed.py).
+REEMBED_INTERVAL_S = float(os.environ.get("TRIAGE_REEMBED_INTERVAL_S", "600"))
+REEMBED_BATCH = int(os.environ.get("TRIAGE_REEMBED_BATCH", "50"))
+
 # ─── Групповой батчинг ───────────────────────────────────────────────────────
 # Rate limiter (backfill_max_per_hour) считает LLM-ВЫЗОВЫ, не события. Группы
 # (супергруппы + легаси Chat) — короткие сообщения (медиана ~260 симв.),
