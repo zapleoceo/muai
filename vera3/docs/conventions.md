@@ -135,6 +135,12 @@ merge-conflict markers, `detect-private-key` (blocks accidental .pem /
 id_rsa commits), `ruff --fix` on `vera3/`, `ruff format` on `vera3/`,
 `pytest -x` on push.
 
+Строгий ruff в CI закреплён на версии из `vera3/scripts/ci_install.sh`
+(`RUFF`, сейчас 0.7.4). Локально проверяй той же версией: свежий ruff и
+0.7.4 расходятся в правилах (03.10.2026 локально было чисто, а CI упал на
+C416). Коммит без изменений файлов (`--allow-empty`) конвейер не запускает —
+перезапуск деплоя делается коммитом с реальной правкой.
+
 ## Process
 
 - One logical change per commit.
