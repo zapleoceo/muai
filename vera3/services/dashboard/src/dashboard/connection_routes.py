@@ -14,11 +14,11 @@ from pydantic import BaseModel, Field
 from vera_shared.db.engine import get_session
 from vera_shared.graph.connection_actions import break_role, reject_inferred
 from vera_shared.graph.edit import GraphEditError
+from vera_shared.graph.manual_roles import set_manual_role
 from vera_shared.journal.audit import AuditNotFound
 from vera_shared.journal.undo import UndoRefused, undo_entry
 
-from dashboard.csrf import same_origin_or_403
-from dashboard.render import owner_or_blank_401
+from dashboard.csrf import owner_post_gate as _gate
 
 router = APIRouter()
 CLIENT = "dashboard"
@@ -37,14 +37,14 @@ class Pair(BaseModel):
     entity_b: EntityId
 
 
+class SetRole(BaseModel):
+    entity_a: EntityId   # карточка, которую смотрят
+    entity_b: EntityId   # с кем связываем: владелец или выбранная связь
+    role: Annotated[str, Field(min_length=1, max_length=40)]
+
+
 class UndoRequest(BaseModel):
     audit_ids: Annotated[list[EntityId], Field(min_length=1, max_length=20)]
-
-
-def _gate(request: Request) -> JSONResponse | None:
-    if owner_or_blank_401(request) is not None:
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
-    return same_origin_or_403(request)
 
 
 @router.post("/api/graph/connection/break", response_class=JSONResponse)
@@ -67,6 +67,17 @@ async def reject_connection(request: Request, body: Pair):
     except GraphEditError as e:
         return JSONResponse({"error": str(e)}, status_code=409)
     return JSONResponse({"ok": True, "audit_ids": [audit_id] if audit_id else []})
+
+
+@router.post("/api/graph/connection/set", response_class=JSONResponse)
+async def set_connection(request: Request, body: SetRole):
+    if (denied := _gate(request)) is not None:
+        return denied
+    try:
+        audit_id = await set_manual_role(body.entity_a, body.entity_b, body.role, CLIENT)
+    except GraphEditError as e:
+        return JSONResponse({"error": str(e)}, status_code=409)
+    return JSONResponse({"ok": True, "audit_ids": [audit_id]})
 
 
 @router.post("/api/journal/undo", response_class=JSONResponse)

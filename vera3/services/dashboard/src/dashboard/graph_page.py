@@ -11,6 +11,7 @@ from __future__ import annotations
 from dashboard.graph_css import GRAPH_CSS
 from dashboard.graph_labels import predicate_labels_json, predicate_options_html
 from dashboard.graph_script import GRAPH_SCRIPT
+from dashboard.manual_roles_ui import manual_roles_json
 from dashboard.ui.theme import CYTOSCAPE_SRI, CYTOSCAPE_URL
 
 _BODY = """
@@ -26,7 +27,7 @@ _BODY = """
   <div id="cy" class="g-canvas" aria-label="Граф людей и связей"></div>
   <div class="g-toolbar">
     <form id="g-searchform" class="g-search" role="search">
-      <input id="g-search" type="search" placeholder="Найти человека…  ( / )"
+      <input id="g-search" type="search" placeholder="Найти человека…"
              autocomplete="off" data-hotkey-search aria-controls="g-suggest">
       <ul id="g-suggest" role="listbox" hidden></ul>
     </form>
@@ -50,7 +51,10 @@ _BODY = """
       </div>
     </details>
   </div>
-  <div id="g-legend" class="g-legend"></div>
+  <div class="g-legend-wrap">
+    <button type="button" id="g-legend-toggle" class="secondary sm" aria-expanded="false">Легенда</button>
+    <div id="g-legend" class="g-legend" hidden></div>
+  </div>
   <span id="g-count" class="g-count"></span>
   <div class="g-zoom">
     <button type="button" id="g-zoom-in" class="secondary" aria-label="Приблизить">+</button>
@@ -59,6 +63,7 @@ _BODY = """
   </div>
   <aside id="g-panel" class="g-panel" hidden aria-live="polite"></aside>
 </div>
+<dialog id="merge-dlg" class="dlg dlg-wide" aria-label="Объединение людей"><div id="merge-body"></div></dialog>
 <script src="__CY_URL__" integrity="__CY_SRI__" crossorigin="anonymous"></script>
 <script>__SCRIPT__</script>
 """
@@ -74,4 +79,5 @@ def graph_body(predicates: list[str], pending: int | None) -> str:
             .replace("__PRED_OPTS__", predicate_options_html(predicates))
             .replace("__CY_URL__", CYTOSCAPE_URL).replace("__CY_SRI__", CYTOSCAPE_SRI)
             .replace("__SCRIPT__", GRAPH_SCRIPT)
+            .replace("__MANUAL_ROLES__", manual_roles_json())
             .replace("__PRED_LABELS__", predicate_labels_json([*predicates, "contact"])))

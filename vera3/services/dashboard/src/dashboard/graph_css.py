@@ -27,8 +27,11 @@ backdrop-filter:blur(20px) saturate(1.5);border:1px solid var(--line-strong);bor
 backdrop-filter:blur(22px) saturate(1.5);border:1px solid var(--line-strong);border-radius:var(--r-md);box-shadow:var(--shadow-2)}
 .g-menu-body label,.g-menu-body select,.g-menu-body form{margin:0}
 .g-menu-body select{margin-top:.3rem}
-.g-legend{position:absolute;left:.8rem;bottom:.8rem;right:5rem;z-index:4;display:flex;gap:.4rem;flex-wrap:wrap;pointer-events:none}
-.g-legend>*{pointer-events:auto;background:var(--glass);backdrop-filter:blur(12px)}
+.g-legend-wrap{position:absolute;left:.8rem;bottom:.8rem;z-index:4;display:flex;flex-direction:column-reverse;gap:.4rem;align-items:flex-start;max-width:calc(100% - 5rem)}
+.g-legend-wrap>button{background:var(--glass);backdrop-filter:blur(14px)}
+.g-legend{display:flex;gap:.4rem;flex-wrap:wrap;padding:.6rem;background:var(--glass);backdrop-filter:blur(20px) saturate(1.5);
+border:1px solid var(--line-strong);border-radius:var(--r-md);box-shadow:var(--shadow-2)}
+.g-legend[hidden]{display:none}
 .g-legend .chip{font-size:.74rem;padding:.05rem .55rem}
 .swatch{width:.6rem;height:.6rem;border-radius:50%;display:inline-block}
 .ln{display:inline-block;width:1rem;height:0;border-top:2px solid var(--muted)}.ln.dashed{border-top-style:dashed}
@@ -55,13 +58,26 @@ transition:transform var(--mid) var(--ease),opacity var(--mid)}
 @keyframes flash{0%,40%{border-color:var(--accent);background:var(--accent-soft)}}
 .g-conn-head{display:flex;align-items:center;gap:.55rem;margin-bottom:.4rem}.g-conn-head img{width:1.6rem;height:1.6rem;border-radius:50%}
 .g-conn-head a{font-weight:600;flex:1;color:var(--text-strong)}
+.g-roles{display:flex;gap:.3rem;flex-wrap:wrap;margin:.2rem 0 .3rem}
 .g-weight{width:3.2rem;height:.3rem;border-radius:var(--r-pill);background:var(--surface-3);overflow:hidden}
 .g-weight i{display:block;height:100%;background:linear-gradient(90deg,var(--accent),var(--ok))}
 .g-role{display:flex;align-items:center;justify-content:space-between;gap:.5rem;margin:.2rem 0}
 .g-acts{display:flex;gap:.2rem;opacity:.55;transition:opacity var(--fast)}.g-conn:hover .g-acts,.g-acts:focus-within{opacity:1}
 .g-act{padding:.15rem .5rem;font-size:.74rem;color:var(--muted)}.g-act[data-act=break]:hover{color:var(--err);background:var(--err-bg)}
+.g-tools{display:flex;gap:.4rem;flex-wrap:wrap;margin:.6rem 0 0}
+dialog.dlg-wide{width:min(42rem,calc(100vw - 1.5rem));max-height:calc(100dvh - 2rem);overflow:auto}
+.dlg-wide h4{margin:1rem 0 .4rem}.dlg-wide label{margin-top:.8rem}.dlg-wide input[type=search]{margin-bottom:.4rem}
+.note-line{font-size:.85rem;color:var(--text);background:var(--accent-soft);border:1px solid var(--accent-line);border-radius:var(--r-md);padding:.5rem .7rem}
+.pick{list-style:none;margin:0 0 .6rem;padding:.3rem;border:1px solid var(--line-strong);border-radius:var(--r-md);max-height:14rem;overflow:auto}
+.pick li{padding:.4rem .5rem;border-radius:var(--r-sm);cursor:pointer}.pick li:hover{background:var(--accent-soft)}
+.pcard{display:flex;gap:.6rem;align-items:center;min-width:0}.pcard img{width:2.2rem;height:2.2rem;border-radius:50%;flex:none}
+.pcard>div{min-width:0;overflow-wrap:anywhere}
+.mcols{display:grid;grid-template-columns:1fr 1fr;gap:.8rem}.mcols>div{padding:.6rem;border:1px solid var(--line);border-radius:var(--r-md)}
+.chk{display:flex;gap:.4rem;align-items:center;margin:0;color:var(--text)}
+@media (max-width:640px){.mcols{grid-template-columns:1fr}}
 .g-foot{display:flex;gap:.5rem;margin-top:1.2rem;flex-wrap:wrap}.g-foot>*{flex:1}
-@media (max-width:760px){.g-stage{height:calc(100vh - 8rem)}.g-search{flex:1}
+@media (max-width:760px){.g-head p{display:none}.g-head{margin-bottom:.6rem}.g-stage{height:calc(100dvh - 11rem);min-height:24rem}.g-search{flex:1}
+.g-zoom{bottom:auto;top:3.9rem}
 .g-panel{top:auto;left:.6rem;right:.6rem;bottom:.6rem;width:auto;max-height:64%}
-.g-panel[hidden]{transform:translateY(110%)}.g-legend{display:none}.g-count{display:none}}
+.g-panel[hidden]{transform:translateY(110%)}.g-count{display:none}.g-legend-wrap{bottom:auto;top:3.9rem;flex-direction:column}}
 """

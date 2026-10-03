@@ -37,7 +37,7 @@ def source_options(present: Iterable[tuple[str, int]], selected: str | None) -> 
     for key, total in rows:
         src = resolve_source(key)
         count = f"{total:,}".replace(",", " ")      # тысячи пробелом — только в числе
-        label = f"{src.icon} {src.title} ({key}) · {count}"
+        label = f"{src.title} ({key}) · {count}"
         options.append(_option(key, label, key == selected))
     return "".join(options)
 

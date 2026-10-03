@@ -2,10 +2,11 @@
 стенограмма в сворачиваемом блоке."""
 from __future__ import annotations
 
+import re
 from collections.abc import Mapping
 from typing import Any
 
-from dashboard.event_text import ParsedText, describe, parse_content
+from dashboard.event_text import ParsedText, clean_name, describe, parse_content
 from dashboard.render import esc, local_dt
 from dashboard.source_registry import resolve_source
 from dashboard.ui.components import collapsible, kv_block
@@ -72,17 +73,41 @@ def transcript_html(extra: dict[str, Any] | None) -> str:
     return collapsible(title, body)
 
 
-def header_pairs(parsed: ParsedText, who: str) -> list[tuple[str, str]]:
-    """Поля заголовка в порядке чтения; пустые и дублирующие автора пропущены."""
+_ADDRESS = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+_PEOPLE_KEYS = ("From", "Author", "To", "Cc")
+
+
+def mail_addresses(parsed: ParsedText) -> list[str]:
+    """Адреса из From/To/Cc: по ним маршрут ищет людей в графе."""
+    found = {m.lower() for k in _PEOPLE_KEYS for m in _ADDRESS.findall(parsed.headers.get(k, ""))}
+    return sorted(found)
+
+
+def _people_html(value: str, links: Mapping[str, int]) -> str:
+    """Список «Имя <адрес>, …»: известные графу люди — ссылкой на карточку в «Людях»."""
+    parts = []
+    for chunk in value.split(","):
+        found = _ADDRESS.search(chunk)
+        entity = links.get(found.group(0).lower()) if found else None
+        entity = entity or links.get(clean_name(chunk).lower())
+        text = esc(chunk.strip())
+        parts.append(f'<a href="/graph#person={entity}">{text}</a>' if entity else text)
+    return ", ".join(p for p in parts if p)
+
+
+def header_pairs(parsed: ParsedText, who: str, links: Mapping[str, int] | None = None) -> list[tuple[str, str]]:
+    """Поля заголовка в порядке чтения; пустые и дублирующие автора пропущены.
+    «Кто» остаётся только там, где нет ни «От», ни «Автор» — иначе это тот же человек дважды."""
     pairs: list[tuple[str, str]] = []
-    if who:
-        pairs.append(("Кто", esc(who)))
+    authored = any(clean_name(parsed.headers.get(k, "")) == who for k in ("From", "Author"))
+    if who and not authored:
+        pairs.append(("Кто", _people_html(who, links or {})))
     for key, label in _HEADER_LABELS:
         value = parsed.headers.get(key)
         if not value or (key == "Author" and "From" in parsed.headers):
             continue
         shown = _DIRECTION.get(value, value) if key == "Direction" else value
-        pairs.append((label, esc(shown)))
+        pairs.append((label, _people_html(shown, links or {}) if key in _PEOPLE_KEYS else esc(shown)))
     return pairs
 
 
@@ -90,7 +115,7 @@ def service_pairs(row: Mapping[str, Any], meta: Mapping[str, Any]) -> list[tuple
     src = resolve_source(row["source"] or "")
     where = " / ".join(str(meta[k]) for k in ("app", "window_title") if meta.get(k))
     return [
-        ("источник", esc(f"{src.icon} {src.title}")),
+        ("источник", esc(src.title)),
         ("аккаунт", esc(row["account"] or "—")),
         ("вид", esc(row["category"] or "—")),
         ("важность", str(row["importance"]) if row["importance"] is not None else "—"),
@@ -101,11 +126,11 @@ def service_pairs(row: Mapping[str, Any], meta: Mapping[str, Any]) -> list[tuple
     ]
 
 
-def event_card(row: Mapping[str, Any]) -> str:
+def event_card(row: Mapping[str, Any], links: Mapping[str, int] | None = None) -> str:
     meta = row["metadata"] or {}
     parsed = parse_content(row["content_text"])
     who = describe(parsed, meta).who
-    pairs = [*header_pairs(parsed, who), ("когда", local_dt(row["occurred_at"], "datetime"))]
+    pairs = [*header_pairs(parsed, who, links), ("когда", local_dt(row["occurred_at"], "datetime"))]
     error = (f'<p class="err">Ошибка разбора: {esc(row["triage_error"])}</p>'
              if row["triage_error"] else "")
     body = esc(parsed.body) if parsed.body else '<span class="muted">текста нет</span>'

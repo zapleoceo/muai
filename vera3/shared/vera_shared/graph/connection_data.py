@@ -74,6 +74,18 @@ async def claims_within(ids: list[int], predicate: str | None = None) -> list[Cl
     return [_claim(r) for r in rows]
 
 
+async def relationship_triples(ids: list[int]) -> dict[int, tuple[int, str, int]]:
+    """id записи → (субъект, предикат, объект); для журнала правок, чьи строки не хранят концов."""
+    if not ids:
+        return {}
+    async with get_session() as s:
+        rows = (await s.execute(
+            text("SELECT id, subject_entity_id, predicate, object_entity_id FROM relationships "
+                 "WHERE id IN :ids").bindparams(bindparam("ids", expanding=True)),
+            {"ids": sorted(set(ids))})).all()
+    return {r[0]: (r[1], r[2], r[3]) for r in rows}
+
+
 async def entity_cards(ids: list[int]) -> dict[int, Card]:
     if not ids:
         return {}

@@ -8,17 +8,20 @@ TZ_FOOTER = '<footer id="tz-note" class="tz-note"></footer>'
 # подменяется каждые 30с). window.__localizeTimes открыт для ручного вызова.
 TZ_SCRIPT = """<script>
 (function(){
-  var M=['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  var M=['января','февраля','марта','апреля','мая','июня','июля','августа','сентября','октября','ноября','декабря'];
   function p(n){return String(n).padStart(2,'0');}
+  function sameDay(a,b){return a.getFullYear()===b.getFullYear()&&a.getMonth()===b.getMonth()&&a.getDate()===b.getDate();}
+  // Одна форма даты на весь дашборд: «25 мая 2026, 14:03»; недавнее — «сегодня, 14:03», «вчера, 14:03».
   function fmt(d,k){
-    var Y=d.getFullYear(),Mo=p(d.getMonth()+1),D=p(d.getDate());
     var h=p(d.getHours()),m=p(d.getMinutes()),s=p(d.getSeconds());
     if(k==='time')return h+':'+m;
-    if(k==='date')return Y+'-'+Mo+'-'+D;
-    if(k==='date_human')return d.getDate()+' '+M[d.getMonth()]+' '+Y;
-    if(k==='datetime_sec')return Y+'-'+Mo+'-'+D+' '+h+':'+m+':'+s;
-    return Y+'-'+Mo+'-'+D+' '+h+':'+m;
+    var day=d.getDate()+' '+M[d.getMonth()]+' '+d.getFullYear();
+    if(k==='date'||k==='date_human')return day;
+    var now=new Date(),yest=new Date(now.getFullYear(),now.getMonth(),now.getDate()-1);
+    var label=sameDay(d,now)?'сегодня':sameDay(d,yest)?'вчера':day;
+    return label+', '+h+':'+m+(k==='datetime_sec'?':'+s:'');
   }
+  window.__fmtDate=fmt;
   function localize(root){
     (root||document).querySelectorAll('time[data-utc]').forEach(function(el){
       var iso=el.getAttribute('data-utc'),d=new Date(iso);

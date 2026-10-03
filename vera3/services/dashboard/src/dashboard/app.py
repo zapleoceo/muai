@@ -22,6 +22,7 @@ from dashboard.graph_routes import router as graph_router
 from dashboard.home_routes import router as home_router
 from dashboard.instagram_login import router as instagram_login_router
 from dashboard.journal_routes import router as journal_router
+from dashboard.merge_routes import router as merge_router
 from dashboard.progress_routes import router as progress_router
 from dashboard.render import FAVICON_SVG
 from dashboard.search_routes import router as search_router
@@ -46,7 +47,7 @@ for router in (
     sources_router, search_router, settings_router, entities_router,
     graph_router, gmail_oauth_router, instagram_login_router,
     telegram_login_router, slack_connect_router, source_actions_router,
-    assets_router, connection_router, journal_router,
+    assets_router, connection_router, journal_router, merge_router,
 ):
     app.include_router(router)
 

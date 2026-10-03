@@ -38,19 +38,31 @@ const PRED_LABELS = __PRED_LABELS__;
 const predLabel = p => PRED_LABELS[p] || String(p||'').replace(/_/g,' ');
 const $ = id => document.getElementById(id);
 const info = $('g-info'), count = $('g-count'), legend = $('g-legend'), panel = $('g-panel');
+// Узел без фото: цветной диск с инициалами. Лежит вторым слоем под настоящим аватаром:
+// если картинка не загрузилась (404, группа без фото), остаётся он, а не чёрный кружок.
+const INI_TINTS = ['#6d6fe8','#2fa37a','#c75a8a','#c9803a','#7d62d6','#2c9bb0','#b39a2a','#c76060'];
+function initialsUri(name, id){
+  const ini = String(name).trim().split(/\s+/).slice(0, 2).map(w => w[0]).join('').toUpperCase() || '?';
+  const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64"><rect width="64" height="64" fill="' +
+    INI_TINTS[id % INI_TINTS.length] + '"/><text x="32" y="41" font-size="26" font-family="sans-serif" ' +
+    'font-weight="600" fill="#fff" text-anchor="middle">' + esc(ini) + '</text></svg>';
+  return 'data:image/svg+xml;utf8,' + encodeURIComponent(svg);
+}
 const nodeSize = e => 16 + Math.min(40, Math.sqrt(e.data('degree')||1) * 4.5);
 
 const cy = cytoscape({
   container: $('cy'), wheelSensitivity: 0.25, minZoom: 0.12, maxZoom: 3.5,
   style: [
     {selector:'node', style:{
-      'background-color': C.bg, 'background-image': e => '/entities/' + e.data('raw') + '/avatar',
+      'background-color': e => INI_TINTS[e.data('raw') % INI_TINTS.length],
+      'background-image': e => ['/entities/' + e.data('raw') + '/avatar', e.data('ini')],
       'background-fit':'cover', 'background-clip':'node', 'width': nodeSize, 'height': nodeSize,
       'border-width': 2, 'border-color': ringColor, 'border-opacity': 0.9,
       'label':'data(name)', 'color':C.text, 'font-size':11, 'font-family':'ui-sans-serif, system-ui, sans-serif',
       'text-valign':'bottom', 'text-margin-y':5, 'text-wrap':'ellipsis', 'text-max-width':'110px',
       'text-background-color':C.bg, 'text-background-opacity':0.78, 'text-background-padding':2,
       'text-background-shape':'roundrectangle', 'min-zoomed-font-size':14,
+      'z-index-compare':'manual', 'z-index':10,
       'transition-property':'opacity, border-width', 'transition-duration':'0.18s'}},
     // У крупных узлов подпись видна и на дальнем плане, у мелких — только при приближении.
     {selector:'node.hub', style:{'min-zoomed-font-size':6, 'font-weight':600}},
@@ -58,17 +70,19 @@ const cy = cytoscape({
       'border-opacity':1}},
     {selector:'node:selected', style:{'border-width':4, 'border-color':'#fff', 'min-zoomed-font-size':0,
       'z-index':1000, 'overlay-color':C.accent, 'overlay-opacity':0.18, 'overlay-padding':6}},
-    {selector:'node.dim', style:{'opacity':0.12}},
+    {selector:'node.dim', style:{'opacity':0.12, 'text-opacity':0, 'text-background-opacity':0}},
     // Ребро — пара людей целиком: толщина = вес связи.
     {selector:'edge', style:{'width': e => 0.7 + (e.data('weight')||e.data('confidence')||0.3) * 3.6,
       'line-color':C.line, 'curve-style':'haystack', 'haystack-radius':0, 'opacity':0.55,
+      'z-index-compare':'manual', 'z-index':1,
       'transition-property':'opacity', 'transition-duration':'0.18s'}},
     // Членство — структурная связь: тоньше и пунктиром, чтобы факты выделялись.
     {selector:'edge[predicate = "member_of"]', style:{'line-style':'dashed', 'width':0.6,
       'opacity':0.3, 'curve-style':'straight'}},
     // Выведенная из общения связь — пунктиром: за ней нет ни одной фразы.
-    {selector:'edge[?inferred]', style:{'line-style':'dashed'}},
-    {selector:'edge.hl', style:{'line-color':C.accent, 'opacity':1, 'z-index':900}},
+    {selector:'edge[?inferred]', style:{'line-style':'dashed', 'width':0.7, 'opacity':0.28}},
+    // Рёбра всегда ниже узлов: подсвеченное ребро поверх узла перехватывало бы наведение.
+    {selector:'edge.hl', style:{'line-color':C.accent, 'opacity':1, 'z-index':5}},
     {selector:'edge.dim', style:{'opacity':0.04}},
   ],
 });
@@ -95,21 +109,40 @@ const selectedNode = () => cy.nodes(':selected');
 cy.on('mouseover', 'node', ev => { $('cy').style.cursor = 'pointer'; highlight(ev.target); });
 cy.on('mouseout', 'node', () => { $('cy').style.cursor = ''; highlight(selectedNode()); });
 
+const isMobile = () => window.matchMedia('(max-width:760px)').matches;
+// Карточка закрывает справа 24 rem (на телефоне — нижние две трети): узел ставим в середину СВОБОДНОЙ части.
+function freeCenter(){
+  const w = $('cy').clientWidth, h = $('cy').clientHeight;
+  if (isMobile()) return {x: w / 2, y: Math.max(70, h * 0.2)};
+  return {x: Math.max(120, (w - 410) / 2), y: h / 2};
+}
+function panToFree(node, zoom){
+  const c = freeCenter(), p = node.position();
+  cy.animate({zoom: zoom, pan: {x: c.x - zoom * p.x, y: c.y - zoom * p.y}},
+             {duration: 420, easing: 'ease-out-cubic'});
+}
+
 function selectNode(id){
   const n = cy.getElementById('n' + id);
   if (n.empty()) return false;
   cy.nodes(':selected').unselect();
   n.select();
   highlight(n);
-  cy.animate({center:{eles:n}, zoom:Math.max(cy.zoom(), 1.3)}, {duration:420, easing:'ease-out-cubic'});
+  panToFree(n, Math.max(cy.zoom(), isMobile() ? 1.0 : 1.15));
   return true;
 }
 
 function fmtStamp(iso){
   const d = new Date(String(iso).replace(/Z?$/, 'Z'));
-  if (isNaN(d)) return String(iso);
-  const p = n => String(n).padStart(2, '0');
-  return p(d.getDate()) + '.' + p(d.getMonth()+1) + ' в ' + p(d.getHours()) + ':' + p(d.getMinutes());
+  return isNaN(d) ? String(iso) : window.__fmtDate(d, 'datetime');
+}
+
+// cose даёт круглое облако; холст широкий — растягиваем по ширине, чтобы использовать его целиком.
+function stretchToCanvas(){
+  const bb = cy.elements().boundingBox();
+  if (bb.w < 1 || bb.h < 1) return;
+  const k = Math.min(1.9, ($('cy').clientWidth / $('cy').clientHeight) / (bb.w / bb.h));
+  if (k > 1.05) cy.nodes().positions(n => ({x: bb.x1 + (n.position('x') - bb.x1) * k, y: n.position('y')}));
 }
 
 let lastParams = null;
@@ -119,7 +152,7 @@ function render(data){
   const hubFrom = Math.max(3, degrees[Math.floor(degrees.length * 0.12)] || 0);
   for (const n of data.nodes)
     els.push({classes: (n.degree >= hubFrom ? 'hub' : ''),
-              data:{id:'n'+n.id, name:n.name, type:n.type, degree:n.degree, raw:n.id,
+              data:{id:'n'+n.id, name:n.name, ini:initialsUri(n.name, n.id), type:n.type, degree:n.degree, raw:n.id,
                     username:n.username, tg_id:n.tg_id,
                     cluster:(n.cluster===undefined?null:n.cluster)}});
   const seen = new Set(data.nodes.map(n=>'n'+n.id));
@@ -132,9 +165,12 @@ function render(data){
   }
   cy.elements().remove();
   cy.add(els);
-  cy.layout({name:'cose', animate:false, nodeRepulsion:9000, idealEdgeLength:70,
-             nodeOverlap:10, gravity:60, padding:40}).run();
+  cy.layout({name:'cose', animate:false, randomize:true, nodeRepulsion:26000, idealEdgeLength:120,
+             edgeElasticity:90, nodeOverlap:30, gravity:14, numIter:1800, componentSpacing:110,
+             padding:40}).run();
+  stretchToCanvas();
   cy.fit(undefined, 40);
+  if (isMobile() && cy.zoom() < 0.6){ cy.zoom({level: 0.6, renderedPosition: {x: $('cy').clientWidth / 2, y: $('cy').clientHeight / 2}}); }
   renderLegend(data);
   count.textContent = data.nodes.length + ' сущностей · ' + data.edges.length + ' связей';
   if (data.focus_id){

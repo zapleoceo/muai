@@ -20,7 +20,7 @@ TOKENS_CSS = """
 --r-sm:8px;--r-md:12px;--r-lg:18px;--r-pill:999px;
 --shadow-1:0 1px 0 rgba(255,255,255,.04) inset,0 1px 2px rgba(0,0,0,.4);
 --shadow-2:0 1px 0 rgba(255,255,255,.05) inset,0 12px 40px rgba(0,0,0,.45);
---glass:rgba(14,16,22,.72);--ease:cubic-bezier(.22,.8,.24,1);--fast:.14s;--mid:.22s;
+--glass:rgba(13,15,21,.9);--ease:cubic-bezier(.22,.8,.24,1);--fast:.14s;--mid:.22s;
 --font:ui-sans-serif,"Inter","SF Pro Text","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
 --mono:ui-monospace,"JetBrains Mono","SF Mono",Consolas,monospace;
 --vera-ok:var(--ok);--vera-warn:var(--warn);--vera-err:var(--err);--vera-muted:var(--muted);
@@ -68,7 +68,7 @@ dl{margin:0}
 NAV_CSS = """
 nav.top{position:sticky;top:.7rem;z-index:30;display:flex;align-items:center;justify-content:space-between;
 gap:.6rem;margin:.7rem 0 1.8rem;padding:.4rem .5rem .4rem .9rem;background:var(--glass);
-backdrop-filter:blur(16px) saturate(1.5);-webkit-backdrop-filter:blur(16px) saturate(1.5);
+backdrop-filter:blur(26px) saturate(1.6);-webkit-backdrop-filter:blur(26px) saturate(1.6);
 border:1px solid var(--line);border-radius:var(--r-lg);box-shadow:var(--shadow-2)}
 nav.top ul{display:flex;align-items:center;gap:.15rem;list-style:none;margin:0;padding:0;flex-wrap:wrap}
 nav.top li{margin:0;padding:0}
@@ -81,8 +81,22 @@ nav.top a:hover{color:var(--text-strong);background:rgba(255,255,255,.05)}
 nav.top a[aria-current=page]{color:var(--text-strong);background:var(--accent-soft);box-shadow:0 0 0 1px var(--accent-line) inset}
 nav.top .out{font-size:.82rem}
 nav.top svg{width:1rem;height:1rem;vertical-align:-.15em}
-@media (max-width:640px){nav.top{top:.3rem;border-radius:var(--r-md);padding:.35rem}
-nav.top .brand span.word{display:none}nav.top a{padding:.4rem .6rem;font-size:.85rem}}
+nav.top .menu{position:relative;margin:0;padding:0;border:0;background:transparent}
+nav.top .menu>summary{display:flex;align-items:center;justify-content:center;width:2.2rem;height:2.2rem;padding:0;border-radius:var(--r-pill);
+color:var(--muted);cursor:pointer;list-style:none;transition:background var(--fast),color var(--fast)}
+nav.top .menu>summary::before{display:none}
+nav.top .menu>summary:hover,nav.top .menu[open]>summary,nav.top .menu>summary.on{color:var(--text-strong);background:var(--accent-soft)}
+nav.top .menu-pop{position:absolute;right:0;top:calc(100% + .5rem);min-width:11rem;padding:.35rem;display:grid;background:var(--glass);
+backdrop-filter:blur(26px);border:1px solid var(--line-strong);border-radius:var(--r-md);box-shadow:var(--shadow-2);animation:pop .18s var(--ease)}
+nav.top .menu-pop a{border-radius:var(--r-sm);padding:.6rem .8rem}
+nav.top .menu-pop .only-mobile{display:none}
+.ico-svg{width:1.15em;height:1.15em;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;vertical-align:-.2em}
+@media (pointer:coarse),(max-width:640px){button,a[role=button],.btn,select,input:not([type=checkbox]):not([type=radio]),
+nav.top a,nav.top .menu>summary,a.chip,.chip{min-height:44px}
+nav.top .menu>summary{width:44px}.chip,a.chip{align-items:center}}
+@media (max-width:640px){nav.top{top:.3rem;border-radius:var(--r-md);padding:.35rem;flex-wrap:nowrap}nav.top ul{flex-wrap:nowrap}
+nav.top .nav-journal{display:none}nav.top .menu-pop .only-mobile{display:block}
+nav.top .brand span.word{display:none}nav.top a{padding:.4rem .42rem;font-size:.82rem}nav.top .brand{margin-right:.2rem}nav.top .menu>summary{width:40px}}
 .page-head{display:flex;align-items:flex-end;justify-content:space-between;gap:1rem;flex-wrap:wrap;margin:0 0 1.2rem}
 .page-head h1,.page-head h2{margin:0}.page-head p{margin:.2rem 0 0;color:var(--muted)}
 .crumb{font-size:.85rem;margin:0 0 .6rem;color:var(--muted)}

@@ -121,6 +121,12 @@ async def test_pending_suggestions_are_counted(db):
 
 
 class TestEntityEndpoint:
+    @pytest.fixture(autouse=True)
+    def _no_owner_lookup(self):
+        with patch("dashboard.graph_routes._owner_fields",
+                   AsyncMock(return_value={"owner_id": 7, "owner_name": "Владелец"})):
+            yield
+
     def test_requires_auth(self):
         assert client.get("/api/graph/entity/1").status_code == 401
 
