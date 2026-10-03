@@ -12,8 +12,12 @@
   независимых подтверждений роли (модель связи показывает иерархию от двух событий).
   Такие строки остаются (`skip`, `duplicate_kept_evidence`) — модель сворачивает формы
   сама;
-- иерархия в обе стороны: погашаются строки стороны с СТРОГО меньшим числом разных
-  событий (ручная правка перевешивает); при равенстве остаются обе, модель покажет одну.
+- побеждает строка канонической формы (равные по форме — более весомая): уцелевшая
+  обратная при конвертации упёрлась бы в погашенную каноническую, а
+  `uq_relationships_spo` не смотрит на `is_current`;
+- иерархия в обе стороны (противоречие) здесь НЕ гасится: одна сторона бывает верной
+  правдой («штраф сотруднику» против разового обратного упоминания), угадать по числу
+  строк нельзя. Её показывает модель связи — сторону с большей поддержкой.
 
 Применение, отчёт и откат — прежние (`rel_cleanup_apply`).
 """
@@ -22,10 +26,9 @@ from __future__ import annotations
 from collections import defaultdict
 from typing import Any
 
-from vera_shared.graph.rel_canon import ANTISYMMETRIC, SYMMETRIC, Triple, canonical_edge
+from vera_shared.graph.rel_canon import SYMMETRIC, Triple, canonical_edge
 from vera_shared.graph.rel_cleanup import (
     RULE_BLOCKED,
-    RULE_CONTRADICTION,
     RULE_INVERSE,
     RULE_SYMMETRIC,
     Action,
@@ -38,12 +41,6 @@ from vera_shared.graph.rel_cleanup import (
 )
 
 RULE_KEPT_EVIDENCE = "duplicate_kept_evidence"
-
-
-def _side_weight(rows: list[Row]) -> tuple[bool, int]:
-    manual = any(r.get("derived_from_event_id") is None for r in rows)
-    return manual, len({r["derived_from_event_id"] for r in rows
-                        if r.get("derived_from_event_id") is not None})
 
 
 def _skip(row: Row, rule: str) -> Action:
@@ -62,22 +59,13 @@ def canonical_plan(snapshot: dict[str, Any]) -> list[Action]:
     for row in current:
         groups[canonical_edge(*_triple(row))].append(row)
 
-    for (s, p, o), members in groups.items():
-        rival = groups.get((o, p, s))
-        if p not in ANTISYMMETRIC or s > o or not rival:
-            continue
-        mine, theirs = _side_weight(members), _side_weight(rival)
-        if mine == theirs:
-            continue
-        loser_rows, winner_rows = (rival, members) if mine > theirs else (members, rival)
-        keep = max(winner_rows, key=_rank)
-        for row in loser_rows:
-            dead.add(row["id"])
-            actions.append(retire_action(row, RULE_CONTRADICTION, keep))
-
     taken = {_triple(r) for r in rows}
     for canon, members in groups.items():
-        alive = sorted((r for r in members if r["id"] not in dead), key=_rank, reverse=True)
+        # Побеждает строка КАНОНИЧЕСКОЙ формы (иначе уцелевшая обратная при конвертации
+        # упёрлась бы в погашенную каноническую: uq_relationships_spo не смотрит is_current),
+        # среди равных по форме — более весомая.
+        alive = sorted((r for r in members if r["id"] not in dead),
+                       key=lambda r: (_triple(r) == canon, _rank(r)), reverse=True)
         kept_events: set[Any] = set()
         for number, row in enumerate(alive):
             event = row.get("derived_from_event_id")
