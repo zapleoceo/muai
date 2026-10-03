@@ -62,6 +62,11 @@ async def build_pair_evidence(a: int, b: int, stats: PairStats) -> Evidence:
     return build_evidence(side_a, side_b, signals, messages)
 
 
+def owner_label(evidence: Evidence) -> str | None:
+    """Метка владельца в пакете (A / B) или None, если пара без владельца."""
+    return "A" if evidence.a.is_owner else "B" if evidence.b.is_owner else None
+
+
 def estimate_tokens(prompt: str) -> int:
     return int(len(prompt) / CHARS_PER_TOKEN)
 
@@ -89,7 +94,7 @@ async def infer_pair(a: int, b: int, *, force: bool = False, dry_run: bool = Fal
             messages=[{"role": "user", "content": prompt}], capability="structured",
             response_format=PAIR_ROLES_JSON_SCHEMA, max_tokens=MAX_OUTPUT_TOKENS, temperature=0.0,
             workflow="pair_roles", poll_deadline_s=poll_deadline_s)
-        roles, summary, trace = parse_traced(raw, evidence.corpus, evidence.messages)
+        roles, summary, trace = parse_traced(raw, evidence.corpus, evidence.messages, owner_label(evidence))
     except LLMCallFailed as e:
         log.warning("pair_roles %s-%s: LLM не ответила: %s", low, high, e)
         return PairInference(low, high, digest=evidence.digest, failed=True, skipped=str(e)[:200])

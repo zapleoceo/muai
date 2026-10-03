@@ -246,3 +246,13 @@ async def test_infer_pair_returns_the_trace_and_a_self_asserted_role_is_explaine
     (t,) = result.trace
     assert t.self_assertion == "самоутверждение" and t.quotes[0].authors == ("B",)
     assert await stored_rows(world["gs"]) == ([], [])
+
+
+async def test_the_owner_as_superior_is_trusted_but_a_stranger_pair_is_not(world):
+    # владелец — метка A (меньший id) и сторона «над»; единственная цитата — его собственная реплика
+    own = {**boss_role(subject="A"), "quotes": ["Виктор Павлович, отчёт готов"]}
+    with fake_llm(reply(own)):
+        result = await infer_pair(world["owner"], world["boss"], dry_run=True)
+    (t,) = result.trace
+    assert [r.predicate for r in result.roles] == ["boss_of"]
+    assert "цитаты владельца — доверенный источник" in t.self_assertion

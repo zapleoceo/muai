@@ -11,7 +11,9 @@
 («я твой директор», его поручения без единого ответа второй стороны или третьих лиц), без
 подтверждения не принимается: так модель превращала бы одну сторону переписки в доказательство.
 Подтверждение — цитата, написанная второй стороной или третьим лицом, либо структурная
-(адрес, должность из сигналов), которой нет ни в одном сообщении.
+(адрес, должность из сигналов), которой нет ни в одном сообщении. Исключение — владелец: правило
+защищает от чужих заявлений о власти, а его собственные сообщения в его мозге — доверенные данные, поэтому
+поручения, которые дал сам владелец-«начальник», подтверждают роль. Для пар без владельца правило строгое.
 
 Каждая проверка оставляет след (`pair_roles_trace`): `parse_traced` возвращает его рядом с
 ролями, `parse_answer` — прежний результат без следа.
@@ -47,6 +49,7 @@ _DIRECTION = {"A": A_TO_B, "B": B_TO_A, "both": BOTH}
 CONFIRMED = "подтверждена"
 SELF_ASSERTED = "самоутверждение"
 NOT_APPLICABLE = "не применяется"
+OWNER_TRUSTED = "цитаты владельца — доверенный источник"
 
 
 class PairRolesFormatError(ValueError):
@@ -87,10 +90,13 @@ def valid_quotes(quotes: list[Any], corpus: str) -> tuple[str, ...]:
     return tuple(out[:MAX_QUOTES])
 
 
-def _self_verdict(finding: RoleFinding, quotes: list[QuoteTrace], have_messages: bool) -> str:
+def _self_verdict(finding: RoleFinding, quotes: list[QuoteTrace], have_messages: bool,
+                  owner: str | None = None) -> str:
     if finding.predicate not in SELF_ASSERTING or finding.direction == BOTH or not have_messages:
         return NOT_APPLICABLE
     superior = "A" if finding.direction == A_TO_B else "B"
+    if owner == superior and any(owner in q.authors for q in quotes):
+        return f"{CONFIRMED} ({OWNER_TRUSTED})"
     authors: set[str] = set()
     for quote in quotes:
         if quote.structural:
@@ -108,7 +114,7 @@ def _direction(predicate: str, subject: str) -> str | None:
 
 
 def _judge(item: Any, haystack: str, authored: list[tuple[str, str]],
-           have_messages: bool) -> tuple[RoleFinding | None, RoleTrace]:
+           have_messages: bool, owner: str | None) -> tuple[RoleFinding | None, RoleTrace]:
     trace = RoleTrace(raw=item)
     if not isinstance(item, dict):
         trace.reason = "элемент ответа не объект"
@@ -139,7 +145,7 @@ def _judge(item: Any, haystack: str, authored: list[tuple[str, str]],
     finding = RoleFinding(trace.predicate, direction, round(trace.confidence, 2),
                           str(item.get("rationale", "")).strip()[:600],
                           tuple(dict.fromkeys(q.raw for q in good))[:MAX_QUOTES])
-    trace.self_assertion = _self_verdict(finding, good, have_messages)
+    trace.self_assertion = _self_verdict(finding, good, have_messages, owner)
     if trace.self_assertion == SELF_ASSERTED:
         trace.reason = ("все цитаты написал сам «старший» — нужна цитата второй стороны, "
                         "третьего лица или адрес/должность")
@@ -157,10 +163,10 @@ def _drop_rival_hierarchy(findings: list[RoleFinding]) -> tuple[list[RoleFinding
     return kept, {id(f) for f in findings} - {id(f) for f in kept}
 
 
-def parse_traced(raw: str, corpus: str, messages: Iterable[PackMessage] = ()
-                 ) -> tuple[list[RoleFinding], str, list[RoleTrace]]:
+def parse_traced(raw: str, corpus: str, messages: Iterable[PackMessage] = (),
+                 owner: str | None = None) -> tuple[list[RoleFinding], str, list[RoleTrace]]:
     """(роли, резюме, след по каждой роли модели). Бросает `PairRolesFormatError`, если это не
-    JSON по схеме. `messages` — сообщения пакета: по ним находится автор цитат."""
+    JSON по схеме. `messages` — сообщения пакета: по ним находится автор цитат; `owner` — метка владельца (A / B), если он в паре: его слова — доверенный источник."""
     messages = list(messages)
     try:
         data = json.loads(raw)
@@ -174,7 +180,7 @@ def parse_traced(raw: str, corpus: str, messages: Iterable[PackMessage] = ()
     traces: list[RoleTrace] = []
     candidates: dict[tuple[str, str], tuple[RoleFinding, RoleTrace]] = {}
     for item in roles[:MAX_ROLES * 2]:
-        finding, trace = _judge(item, haystack, authored, bool(messages))
+        finding, trace = _judge(item, haystack, authored, bool(messages), owner)
         traces.append(trace)
         if finding is None:
             continue
@@ -202,8 +208,8 @@ def parse_traced(raw: str, corpus: str, messages: Iterable[PackMessage] = ()
     return final, summary[:300], traces
 
 
-def parse_answer(raw: str, corpus: str,
-                 messages: Iterable[PackMessage] = ()) -> tuple[list[RoleFinding], str]:
+def parse_answer(raw: str, corpus: str, messages: Iterable[PackMessage] = (),
+                 owner: str | None = None) -> tuple[list[RoleFinding], str]:
     """(роли, резюме) — то же без следа."""
-    roles, summary, _ = parse_traced(raw, corpus, messages)
+    roles, summary, _ = parse_traced(raw, corpus, messages, owner)
     return roles, summary
