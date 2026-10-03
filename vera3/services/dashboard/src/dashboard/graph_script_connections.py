@@ -14,13 +14,14 @@ function connMeta(c){
   if (m.inferred && m.support) meta.push('подтверждено ' + m.support + ' + общение');
   else if (m.support) meta.push(m.support + ' подтв.');
   if (m.manual) meta.push('задано вручную');
+  else if (m.source === 'history') meta.push('выведено из переписки');
   else if (m.inferred && !m.support) meta.push('выведено из общения');
   if (c.interaction.active_days) meta.push(c.interaction.active_days + ' дн. общения');
   return meta.join(' · ');
 }
 
 const roleName = r => esc(r.label || predLabel(r.predicate)) +
-  (r.inferred ? (r.support ? ' (+ общение)' : ' (выведено)') : '');
+  (r.source === 'history' ? ' (из переписки)' : r.inferred ? (r.support ? ' (+ общение)' : ' (выведено)') : '');
 
 function actBtn(act, ci, ri, label, hint){
   return '<button type="button" class="ghost sm g-act" data-act="' + act + '" data-conn="' + ci +
@@ -32,8 +33,8 @@ function roleLine(c, ci, ri){
   const acts = [];
   if (r.rel_ids && r.rel_ids.length)
     acts.push(actBtn('break', ci, ri, '✕ Разорвать', 'Погасить связь: она пропадёт из карточки и графа'));
-  if (r.inferred)
-    acts.push(actBtn('reject', ci, ri, 'Это неверно', 'Не считать общение уликой этой связи'));
+  if (r.inferred || r.source === 'history')
+    acts.push(actBtn('reject', ci, ri, 'Это неверно', r.rationale || 'Не считать общение уликой этой связи'));
   return '<div class="g-role"><span class="chip' + (ri === 0 ? ' on' : '') + '">' + roleName(r) +
     '</span><span class="g-acts">' + acts.join('') + '</span></div>';
 }

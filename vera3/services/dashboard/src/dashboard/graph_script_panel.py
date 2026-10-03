@@ -114,7 +114,7 @@ function editConnection(btn){
     if (!ok) return;
     const pair = {entity_a: current.id, entity_b: c.other_id};
     const req = act === 'break' ? VeraUI.post('/api/graph/connection/break', {...pair, predicate: r.predicate, rel_ids: r.rel_ids})
-                                : VeraUI.post('/api/graph/connection/reject', pair);
+                                : VeraUI.post('/api/graph/connection/reject', r.source === 'history' ? {...pair, predicate: r.predicate} : pair);
     req.then(res => afterEdit(act === 'break' ? 'Связь разорвана' : 'Связь отмечена неверной', res.audit_ids))
        .catch(err => VeraUI.toast('Не получилось: ' + err.message, {kind: 'err'}));
   });
