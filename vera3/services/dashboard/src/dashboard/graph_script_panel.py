@@ -52,7 +52,11 @@ function renderPanel(p){
       (link.indexOf('http') === 0 ? ' target="_blank" rel="noopener"' : '') + '>Открыть в Telegram</a>' : '') + '</div>';
 }
 
+// Токен запроса: медленный ответ про прежнего человека не должен затереть новую карточку.
+let panelSeq = 0;
+
 function openPanel(id, highlightOther){
+  const seq = ++panelSeq;
   panel.hidden = false;
   panel.classList.add('open');
   panel.innerHTML = '<div class="skel-stack"><div class="skeleton"></div><div class="skeleton"></div>' +
@@ -60,14 +64,16 @@ function openPanel(id, highlightOther){
   return fetch('/api/graph/entity/' + id, {credentials:'same-origin'})
     .then(r => r.ok ? r.json() : Promise.reject(r.status))
     .then(p => {
+      if (seq !== panelSeq) return;
       renderPanel(p);
       const row = highlightOther && panel.querySelector('[data-other="' + highlightOther + '"]');
       if (row){ row.classList.add('flash'); row.scrollIntoView({block:'center', behavior:'smooth'}); }
     })
-    .catch(err => { panel.innerHTML = '<p class="err">Карточка не загрузилась: ' + esc(err) + '</p>'; });
+    .catch(err => { if (seq === panelSeq) panel.innerHTML = '<p class="err">Карточка не загрузилась: ' + esc(err) + '</p>'; });
 }
 
 function closePanel(){
+  panelSeq++;
   panel.classList.remove('open');
   panel.hidden = true;
   current = null;
@@ -107,7 +113,7 @@ function editConnection(btn){
   confirmEdit(act, c, r).then(ok => {
     if (!ok) return;
     const pair = {entity_a: current.id, entity_b: c.other_id};
-    const req = act === 'break' ? VeraUI.post('/api/graph/connection/break', {...pair, rel_ids: r.rel_ids})
+    const req = act === 'break' ? VeraUI.post('/api/graph/connection/break', {...pair, predicate: r.predicate, rel_ids: r.rel_ids})
                                 : VeraUI.post('/api/graph/connection/reject', pair);
     req.then(res => afterEdit(act === 'break' ? 'Связь разорвана' : 'Связь отмечена неверной', res.audit_ids))
        .catch(err => VeraUI.toast('Не получилось: ' + err.message, {kind: 'err'}));

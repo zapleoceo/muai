@@ -8,8 +8,8 @@ from __future__ import annotations
 
 import logging
 
-from sqlalchemy import bindparam, delete, select, text
-from sqlalchemy.exc import DBAPIError
+from sqlalchemy import bindparam, delete, text
+from sqlalchemy.exc import DBAPIError, IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.engine import get_session
@@ -55,13 +55,13 @@ async def suppressed_within(ids: list[int]) -> set[tuple[int, int]]:
 async def suppress_pair(s: AsyncSession, a: int, b: int) -> bool:
     """True — запись создана, False — пара уже была отвергнута."""
     low, high = ordered(a, b)
-    exists = (await s.execute(select(ConnectionSuppressionRow).where(
-        ConnectionSuppressionRow.entity_a == low, ConnectionSuppressionRow.entity_b == high,
-        ConnectionSuppressionRow.predicate == INFERRED_PREDICATE))).first()
-    if exists is not None:
+    try:
+        async with s.begin_nested():
+            s.add(ConnectionSuppressionRow(entity_a=low, entity_b=high,
+                                           predicate=INFERRED_PREDICATE))
+            await s.flush()
+    except IntegrityError:
         return False
-    s.add(ConnectionSuppressionRow(entity_a=low, entity_b=high, predicate=INFERRED_PREDICATE))
-    await s.flush()
     return True
 
 

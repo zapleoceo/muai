@@ -17,8 +17,7 @@ def _origin_matches_host(request: Request) -> bool:
     origin = request.headers.get("origin")
     if not origin:
         return False
-    hosts = {request.headers.get("host"), request.headers.get("x-forwarded-host")}
-    return urlsplit(origin).netloc in hosts - {None}
+    return urlsplit(origin).netloc == request.headers.get("host")
 
 
 def same_origin_or_403(request: Request) -> JSONResponse | None:

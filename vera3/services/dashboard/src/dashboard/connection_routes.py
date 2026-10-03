@@ -28,6 +28,7 @@ EntityId = Annotated[int, Field(ge=1)]
 class BreakRole(BaseModel):
     entity_a: EntityId
     entity_b: EntityId
+    predicate: Annotated[str, Field(min_length=1, max_length=80)]
     rel_ids: Annotated[list[EntityId], Field(min_length=1, max_length=20)]
 
 
@@ -51,7 +52,7 @@ async def break_connection(request: Request, body: BreakRole):
     if (denied := _gate(request)) is not None:
         return denied
     try:
-        audit_ids = await break_role(body.entity_a, body.entity_b, body.rel_ids, CLIENT)
+        audit_ids = await break_role(body.entity_a, body.entity_b, body.predicate, body.rel_ids, CLIENT)
     except GraphEditError as e:
         return JSONResponse({"error": str(e)}, status_code=409)
     return JSONResponse({"ok": True, "audit_ids": audit_ids})

@@ -12,31 +12,44 @@ from vera_shared.db.engine import get_session
 from vera_shared.graph import edit as graph_edit
 from vera_shared.graph.edit import GraphEditError
 from vera_shared.graph.pair_stats import ordered
+from vera_shared.graph.rel_canon import SYMMETRIC, canonical_edge
 from vera_shared.graph.suppressions import suppress_pair
 from vera_shared.journal import audit
 
 MAX_RELS_PER_BREAK = 20
 
 
-async def _check_belongs(s: AsyncSession, rel_id: int, pair: tuple[int, int]) -> None:
+async def _check_belongs(s: AsyncSession, rel_id: int, pair: tuple[int, int],
+                         predicate: str) -> tuple[str, int | None]:
+    """Роль записи (канонический предикат, кто «над»); отказ, если запись чужая,
+    погашена или это другая роль, чем просил вызывающий."""
     snap = await graph_edit.current_relationship(s, rel_id)
     ends = ordered(snap["subject_entity_id"], snap["object_entity_id"])
     if ends != pair:
         raise GraphEditError(f"relationship {rel_id} does not connect entities {pair[0]} and {pair[1]}")
     if not snap["is_current"]:
         raise GraphEditError(f"relationship {rel_id} is already retired")
+    subject, canon, _ = canonical_edge(snap["subject_entity_id"], snap["predicate"],
+                                       snap["object_entity_id"])
+    if canon != predicate:
+        raise GraphEditError(f"relationship {rel_id} is '{canon}', not '{predicate}'")
+    return canon, None if canon in SYMMETRIC else subject
 
 
-async def break_role(a: int, b: int, rel_ids: list[int], client: str) -> list[int]:
-    """Гасит записи одной роли пары; возвращает id строк журнала (по одной на запись)."""
+async def break_role(a: int, b: int, predicate: str, rel_ids: list[int],
+                     client: str) -> list[int]:
+    """Гасит записи ОДНОЙ роли пары (предикат + сторона иерархии); возвращает id строк
+    журнала (по одной на запись)."""
     ids = sorted(set(rel_ids))
     if not ids or len(ids) > MAX_RELS_PER_BREAK:
         raise GraphEditError(f"rel_ids must hold 1..{MAX_RELS_PER_BREAK} relationship ids")
     pair = ordered(a, b)
     audit_ids: list[int] = []
     async with get_session() as s:
+        roles = {await _check_belongs(s, rel_id, pair, predicate) for rel_id in ids}
+        if len(roles) != 1:
+            raise GraphEditError("rel_ids belong to different roles of the pair")
         for rel_id in ids:
-            await _check_belongs(s, rel_id, pair)
             before, after = await graph_edit.retire_relationship(s, rel_id)
             audit_ids.append(await audit.record(
                 s, client=client, tool="relationship_retire",

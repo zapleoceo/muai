@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_graph import (
+    ConnectionSuppressionRow,
     EntityAliasRow,
     EntityAvatarRow,
     EntityRow,
@@ -32,6 +33,7 @@ _TABLES: dict[str, type] = {
     "entity_avatars": EntityAvatarRow,
     "identity_nodes": IdentityNodeRow,
     "merge_suggestions": MergeSuggestionRow,
+    "connection_suppressions": ConnectionSuppressionRow,
 }
 
 

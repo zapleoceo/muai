@@ -25,7 +25,7 @@ from vera_shared.journal.undo import UndoRefused  # noqa: E402
 client = TestClient(app)
 SAME_ORIGIN = {"Sec-Fetch-Site": "same-origin"}
 BREAK = "/api/graph/connection/break"
-BODY = {"entity_a": 1, "entity_b": 2, "rel_ids": [7]}
+BODY = {"entity_a": 1, "entity_b": 2, "predicate": "spouse_of", "rel_ids": [7]}
 
 
 def _cookie() -> dict[str, str]:
@@ -55,6 +55,14 @@ class TestAccess:
             assert client.post(BREAK, json=BODY, cookies=_cookie()).status_code == 403
         run.assert_not_awaited()
 
+    def test_forwarded_host_is_not_trusted(self):
+        with patch("dashboard.connection_routes.break_role", AsyncMock()) as run:
+            r = client.post(BREAK, json=BODY, cookies=_cookie(),
+                            headers={"Origin": "https://evil.example",
+                                     "X-Forwarded-Host": "evil.example"})
+        assert r.status_code == 403
+        run.assert_not_awaited()
+
     def test_origin_matching_the_host_is_accepted(self):
         with patch("dashboard.connection_routes.break_role", AsyncMock(return_value=[5])):
             r = client.post(BREAK, json=BODY, cookies=_cookie(),
@@ -72,7 +80,7 @@ class TestEdits:
             r = client.post(BREAK, json={**BODY, "rel_ids": [7, 8]}, cookies=_cookie(),
                             headers=SAME_ORIGIN)
         assert r.json() == {"ok": True, "audit_ids": [11, 12]}
-        run.assert_awaited_once_with(1, 2, [7, 8], "dashboard")
+        run.assert_awaited_once_with(1, 2, "spouse_of", [7, 8], "dashboard")
 
     def test_domain_errors_become_409(self):
         with patch("dashboard.connection_routes.break_role",
@@ -81,7 +89,7 @@ class TestEdits:
         assert r.status_code == 409 and "already retired" in r.json()["error"]
 
     def test_bad_ids_are_rejected_before_any_work(self):
-        r = client.post(BREAK, json={"entity_a": 0, "entity_b": 2, "rel_ids": []},
+        r = client.post(BREAK, json={"entity_a": 0, "entity_b": 2, "predicate": "x", "rel_ids": []},
                         cookies=_cookie(), headers=SAME_ORIGIN)
         assert r.status_code == 422
 
@@ -171,7 +179,7 @@ class TestDesignSystemStructure:
         from dashboard.graph_script import GRAPH_SCRIPT
         for needle in ("/api/graph/connection/break", "/api/graph/connection/reject",
                        "/api/journal/undo", "VeraUI.confirm", "вернуть можно в журнале",
-                       "label: 'Вернуть'"):
+                       "label: 'Вернуть'", "seq !== panelSeq"):
             assert needle in GRAPH_SCRIPT
 
     def test_new_modules_stay_small(self):

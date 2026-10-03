@@ -7,9 +7,13 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import select
 from vera_shared.db.engine import get_session
-from vera_shared.db.models_graph import PairStatsRow, RelationshipRow
+from vera_shared.db.models_graph import (
+    ConnectionSuppressionRow,
+    PairStatsRow,
+    RelationshipRow,
+)
 from vera_shared.db.models_mcp import McpAuditRow
-from vera_shared.graph import connections, pair_stats, repo
+from vera_shared.graph import connections, merge, pair_stats, repo, unmerge
 from vera_shared.graph.connection_actions import break_role, reject_inferred
 from vera_shared.graph.edit import GraphEditError
 from vera_shared.journal.undo import UndoRefused, undo_entry
@@ -46,7 +50,7 @@ async def audit_entries() -> list[McpAuditRow]:
 async def test_break_role_retires_rows_and_journals_as_dashboard(sqlite_db):
     a, b = await person("Игорь Тестов", "1"), await person("Лиза Ветрова", "2")
     rel_ids = await spouse_rel(a, b)
-    ids = await break_role(b, a, rel_ids, "dashboard")
+    ids = await break_role(b, a, "spouse_of", rel_ids, "dashboard")
     assert len(ids) == 1
     out = await connections.entity_connections(a)
     assert all(c["main"]["predicate"] != "spouse_of" for c in out)
@@ -61,18 +65,18 @@ async def test_break_role_refuses_foreign_or_retired_rows(sqlite_db):
                await person("В Тестов", "3"))
     rel_ids = await spouse_rel(a, b)
     with pytest.raises(GraphEditError, match="does not connect"):
-        await break_role(a, c, rel_ids, "dashboard")
-    await break_role(a, b, rel_ids, "dashboard")
+        await break_role(a, c, "spouse_of", rel_ids, "dashboard")
+    await break_role(a, b, "spouse_of", rel_ids, "dashboard")
     with pytest.raises(GraphEditError, match="already retired"):
-        await break_role(a, b, rel_ids, "dashboard")
+        await break_role(a, b, "spouse_of", rel_ids, "dashboard")
     with pytest.raises(GraphEditError):
-        await break_role(a, b, [], "dashboard")
+        await break_role(a, b, "spouse_of", [], "dashboard")
 
 
 async def test_undo_of_break_restores_the_connection(sqlite_db):
     a, b = await person("Игорь Тестов", "1"), await person("Лиза Ветрова", "2")
     rel_ids = await spouse_rel(a, b)
-    (audit_id,) = await break_role(a, b, rel_ids, "dashboard")
+    (audit_id,) = await break_role(a, b, "spouse_of", rel_ids, "dashboard")
     async with get_session() as s:
         res = await undo_entry(s, audit_id, "dashboard", force=False)
     assert res["undone"] == audit_id
@@ -118,3 +122,43 @@ async def test_undo_of_rejection_brings_the_inferred_role_back(sqlite_db):
     async with get_session() as s:
         with pytest.raises(UndoRefused, match="already undone"):
             await undo_entry(s, audit_id, "dashboard", force=False)
+
+
+async def test_break_refuses_rel_ids_of_another_role(sqlite_db):
+    a, b = await person("А Тестов", "1"), await person("Б Тестова", "2")
+    rel_ids = await spouse_rel(a, b)
+    with pytest.raises(GraphEditError, match="not 'friend_of'"):
+        await break_role(a, b, "friend_of", rel_ids, "dashboard")
+    await repo.upsert_relationship(subject_entity_id=a, object_entity_id=b, predicate="friend_of",
+                                   confidence=0.9, derived_from_event_id=None)
+    async with get_session() as s:
+        both = list((await s.execute(select(RelationshipRow.id))).scalars())
+    with pytest.raises(GraphEditError, match="different roles|not 'spouse_of'"):
+        await break_role(a, b, "spouse_of", both, "dashboard")
+
+
+async def test_merge_moves_suppressions_to_the_keeper_and_unmerge_restores(sqlite_db):
+    keep, dup, other, third = (await person("К Тестов", "1"), await person("К Тестов Копия", "2"),
+                               await person("О Тестова", "3"), await person("Т Тестов", "4"))
+    await reject_inferred(dup, other, "dashboard")
+    await reject_inferred(keep, other, "dashboard")
+    await reject_inferred(dup, keep, "dashboard")
+    await reject_inferred(dup, third, "dashboard")
+    report = await merge.merge_entities(keep, [dup], reason="test")
+    async with get_session() as s:
+        pairs = {(r.entity_a, r.entity_b) for r in (await s.execute(
+            select(ConnectionSuppressionRow))).scalars()}
+    assert pairs == {tuple(sorted((keep, other))), tuple(sorted((keep, third)))}
+    await unmerge.unmerge(report)
+    async with get_session() as s:
+        pairs = {(r.entity_a, r.entity_b) for r in (await s.execute(
+            select(ConnectionSuppressionRow))).scalars()}
+    assert pairs == {tuple(sorted(p)) for p in
+                     [(dup, other), (keep, other), (dup, keep), (dup, third)]}
+
+
+async def test_repeated_rejection_is_reported_as_already_done(sqlite_db):
+    a, b = await person("А Тестов", "1"), await person("Б Тестова", "2")
+    assert await reject_inferred(a, b, "dashboard") is not None
+    assert await reject_inferred(b, a, "dashboard") is None
+    assert len([e for e in await audit_entries() if e.tool == "connection_suppress"]) == 1

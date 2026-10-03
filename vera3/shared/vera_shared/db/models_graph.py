@@ -239,14 +239,19 @@ class ConnectionSuppressionRow(Base):
     говорит модели связи: общение этой пары не считать уликой роли. Пара упорядочена:
     entity_a < entity_b."""
     __tablename__ = "connection_suppressions"
+    __table_args__ = (
+        UniqueConstraint("entity_a", "entity_b", "predicate", name="uq_connection_suppression"),
+    )
 
+    # Суррогатный id нужен слиянию сущностей: отчёт `MergeReport` ищет строку по одному ключу.
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     entity_a: Mapped[int] = mapped_column(
-        ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True,
+        ForeignKey("entities.id", ondelete="CASCADE"), nullable=False,
     )
     entity_b: Mapped[int] = mapped_column(
-        ForeignKey("entities.id", ondelete="CASCADE"), primary_key=True,
+        ForeignKey("entities.id", ondelete="CASCADE"), nullable=False,
     )
-    predicate: Mapped[str] = mapped_column(String(80), primary_key=True)
+    predicate: Mapped[str] = mapped_column(String(80), nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(),
     )
