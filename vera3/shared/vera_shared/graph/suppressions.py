@@ -49,7 +49,7 @@ async def suppressed_within(ids: list[int]) -> set[tuple[int, int]]:
         except DBAPIError as e:
             log.warning("connection_suppressions не прочитана: %s", e)
             return set()
-    return {(a, b) for a, b in rows}
+    return set(map(tuple, rows))
 
 
 async def suppress_pair(s: AsyncSession, a: int, b: int) -> bool:
