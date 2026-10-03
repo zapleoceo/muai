@@ -76,6 +76,33 @@ def test_rival_hierarchy_duplicates_and_the_cap_are_explained():
     assert "повтор" in dup1.reason and dup2.verdict == KEPT
 
 
+def test_the_owners_own_instructions_confirm_a_role_when_he_is_the_superior():
+    own = role(["Прошу подготовить отчёт до пятницы"])                 # цитата автора B, B — «над»
+    roles, _, (t,) = parse_traced(answer(own), CORPUS, MESSAGES, owner="B")
+    assert [r.predicate for r in roles] == ["boss_of"] and t.verdict == KEPT
+    assert "цитаты владельца — доверенный источник" in t.self_assertion
+
+
+def test_the_rule_stays_strict_for_a_non_owner_superior_and_for_the_wrong_owner_side():
+    own = role(["Прошу подготовить отчёт до пятницы"])
+    assert parse_traced(answer(own), CORPUS, MESSAGES)[0] == []                    # пара без владельца
+    assert parse_traced(answer(own), CORPUS, MESSAGES, owner="A")[0] == []         # владелец — подчинённый, сказал не он
+
+
+def test_the_owners_word_alone_does_not_make_him_a_parent():
+    """Доверие к словам владельца — только для рабочей иерархии: одно его «сынок»
+    не делает его родителем (ревью 04.10.2026)."""
+    own = role(["Прошу подготовить отчёт до пятницы"], predicate="parent_of")
+    assert parse_traced(answer(own), CORPUS, MESSAGES, owner="B")[0] == []
+
+
+def test_the_owner_as_subordinate_is_the_other_party():
+    reports = role(["Отправил, готово, Вы просили"], subject="B")                  # владелец A отчитывается
+    roles, _, (t,) = parse_traced(answer(reports), CORPUS, MESSAGES, owner="A")
+    assert [r.predicate for r in roles] == ["boss_of"]
+    assert t.self_assertion.startswith("подтверждена") and "владельца" not in t.self_assertion
+
+
 def test_the_traced_and_the_plain_parser_agree():
     raw = answer(role(["Прошу подготовить отчёт до пятницы", "Отправил, готово, Вы просили"]))
     assert parse_answer(raw, CORPUS, MESSAGES) == parse_traced(raw, CORPUS, MESSAGES)[:2]
