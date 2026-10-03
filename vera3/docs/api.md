@@ -134,7 +134,8 @@ Returns `AnswerResponse` with `answer`, `results`, `provider`, `cost_usd`,
 | `/api/slack/start` | POST | owner cookie | Проверка токена через `auth.test` и сохранение в `slack_auth` под шифрованием (`slack_start`). Токен не логируется и в ответ не возвращается |
 | `/api/sources/{key}/disconnect` | GET | owner cookie | Подтверждение отключения (`disconnect_confirm`): что именно погаснет и что события останутся |
 | `/api/sources/{key}/disconnect` | POST | owner cookie | Погасить строки доступа источника (`disconnect_apply`). Секрет НЕ удаляется — шаг обратим |
-| `/graph` | GET | owner cookie | Knowledge-graph visualizer page (`graph_page`) — Cytoscape.js force layout of entities+relationships. See "Graph visualizer" below. |
+| `/graph` | GET | owner cookie | «Люди» (`graph_page`, разметка — `graph_body`) — Cytoscape.js force layout. Поле поиска с кнопкой «Найти»; фильтры (связей ≥, тип связи, «Раскрасить по темам», «весь граф») свёрнуты под «Фильтры»; клик по узлу открывает правую панель вместо строки-подсказки; в шапке ссылка «Дубли (N)» (`dupes_label`) на `/entities/duplicates` с числом ожидающих `merge_suggestions` (`count_pending_suggestions`). See "Graph visualizer" below. |
+| `/api/graph/entity/{id}` | GET | owner cookie | Карточка сущности для боковой панели (`graph_entity` → `vera_shared.graph.panel.entity_panel`): имя, тип, @username / email / алиасы по источникам, счётчики (связей, групп, участников), восемь главных связей с русскими подписями из `graph_labels.py` и последние пять событий человека ссылками на `/events/{id}`. 404 — нет сущности. События ищутся по алиасу источника (`recent_events`): telegram по индексу `ix_events_tg_sender`, остальные под таймаутом 2 с — при таймауте панель показывается без событий |
 | `/api/graph` | GET | owner cookie | Node/edge JSON for the visualizer (`graph_data`). Params: `min_degree`, `limit` (≤800), `predicate`, `focus` (entity id), `q` (name→focus). |
 | `/api/instagram/start` | GET | owner cookie | Instagram login form (`instagram_start_form`) |
 | `/api/instagram/start` | POST | owner cookie | Submit username/password (`instagram_start`) — may return a 2FA/challenge code form |
@@ -160,7 +161,7 @@ Returns `AnswerResponse` with `answer`, `results`, `provider`, `cost_usd`,
 `render_markdown` — единственное место, где текст модели превращается в HTML:
 экранирует всё, затем включает только свои теги.
 
-### Graph visualizer (`dashboard/graph_routes.py`)
+### Graph visualizer (`dashboard/graph_routes.py`, `graph_page.py`, `graph_script.py`)
 
 `/graph` renders Vera's L1 substrate (entities + relationships) as an
 interactive force-directed graph via Cytoscape.js (CDN, same pattern as

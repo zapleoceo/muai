@@ -477,6 +477,7 @@ async def list_relationships(entity_id: int, limit: int = 40) -> list[dict[str, 
         rows = (await s.execute(text("""
             SELECT r.predicate, r.fact, r.confidence,
                    CASE WHEN r.subject_entity_id = :eid THEN 'out' ELSE 'in' END AS direction,
+                   CASE WHEN r.subject_entity_id = :eid THEN eo.id ELSE es.id END AS other_id,
                    CASE WHEN r.subject_entity_id = :eid THEN eo.name ELSE es.name END AS other_name,
                    CASE WHEN r.subject_entity_id = :eid THEN eo.type ELSE es.type END AS other_type
             FROM relationships r

@@ -78,6 +78,7 @@ this project's own "~200 lines, one responsibility per file" convention):
 | `source_freshness.py` | `Freshness` / `freshness_of` / `silence_limit_min` — один расчёт «живой / тихо / молчит» для точки, плашки и статусной строки. Между `live_min` и `warn_min` из каталога — нейтральное «тихо» (ночь, суббота), тревога только после `warn_min`: telegram 6 ч, gmail/slack/trello/claude_chat 48 ч |
 | `event_text.py` | `parse_content` / `describe` / `clean_name` / `normalize_subject` / `one_line` — `content_text` → заголовок + тело → «кто, где, что» для «Входящего», карточки события и источников под ответом |
 | `event_view.py` | Карточка `/events/{id}`: `event_card`, `header_pairs`, `service_pairs`, `transcript_html` (стенограмма в сворачиваемом блоке) |
+| `graph_page.py` / `graph_script.py` | Разметка и скрипт «Людей» (`/graph`): `graph_body`, `dupes_label`; цвета холста берутся из CSS-переменных темы, боковая панель рисуется из `/api/graph/entity/{id}` |
 | `search_view.py` | `sources_html` — «На чём основан ответ»: человеческая строка, дедуп по событию и цепочке писем; `headline`, `dedupe_key` |
 | `source_detail.py` | Провайдеры разбивок по источнику — отдают блоки `rows`/`table`, не разметку. `Html` помечает готовую разметку, всё прочее страница экранирует |
 | `slack_connect.py` | `/api/slack/start` — ввод user-токена Slack, проверка через `auth.test` ДО сохранения, шифрование в `slack_auth` |
