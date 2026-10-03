@@ -78,3 +78,11 @@ def token_pattern(rule: NicknameRule) -> re.Pattern[str]:
         return re.compile(r"(?<!\w)" + r"\s+".join(stems) + r"(?!\w)", re.IGNORECASE)
     flags = 0 if rule.case_sensitive else re.IGNORECASE
     return re.compile(rf"(?<!\w){re.escape(rule.token)}(?!\w)", flags)
+
+
+def scope_ids_for(chats: list[str] | None, project: str | None) -> list[str]:
+    """Идентификаторы области: перечисленные чаты и, если задан, проект (`project:<slug>`)."""
+    ids = list(chats or [])
+    if project:
+        ids.append(PROJECT_PREFIX + project)
+    return ids
