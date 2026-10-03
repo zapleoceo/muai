@@ -16,7 +16,8 @@
 Проход soft не зовёт модель; проход verify (нужны БД и брокер, запускается на
 сервере) проверяет каждую связь с одним словом вместо имени через
 `vera_shared/graph/rel_verify.py` и гасит те, где модель не нашла прямого
-утверждения с цитатой. Правила — `vera_shared/graph/rel_cleanup.py`, регламент — `docs/deploy-ops.md`.
+утверждения с цитатой; связи пар с устоявшимся общением (`pair_stats`) пропускает
+(`pair_established`) — их роль судит модель связи, а не одна фраза. Правила — `vera_shared/graph/rel_cleanup.py`, регламент — `docs/deploy-ops.md`.
 Связи не удаляются: `is_current=false` либо приведение к канонической форме.
 """
 from __future__ import annotations
@@ -29,6 +30,8 @@ import sys
 from pathlib import Path
 
 from vera_shared.db.engine import close_engine, init_engine
+from vera_shared.graph.connections import established_pairs
+from vera_shared.graph.pair_stats import refresh_pair_stats
 from vera_shared.graph.rel_cleanup import (
     build_plan,
     plan_document,
@@ -54,6 +57,8 @@ def _parser() -> argparse.ArgumentParser:
     p.add_argument("--limit", type=int, metavar="N",
                    help="verify: пробная партия из первых N связей")
     p.add_argument("--concurrency", type=int, default=4, help="verify: параллельных вызовов")
+    p.add_argument("--refresh-pair-stats", action="store_true",
+                   help="verify: перед проходом пересобрать pair_stats (обычно её держит задача brain-triage)")
     p.add_argument("--snapshot", metavar="EXPORT.json",
                    help="планировать по SELECT-выгрузке, без подключения к БД")
     return p
@@ -79,8 +84,13 @@ async def _plan(out: Path, args: argparse.Namespace) -> None:
         doc = plan_document(build_plan(data), source)
     else:
         cache = out.with_suffix(".verdicts.jsonl")
-        actions, stats = await verify_plan(weak_name_candidates(data), cache,
-                                           limit=args.limit, concurrency=args.concurrency)
+        if args.refresh_pair_stats:
+            print(f"pair_stats пересобрана: {await refresh_pair_stats()} пар")
+        candidates = weak_name_candidates(data)
+        established = await established_pairs(
+            [(r["subject_entity_id"], r["object_entity_id"]) for r in candidates])
+        actions, stats = await verify_plan(candidates, cache, limit=args.limit,
+                                           concurrency=args.concurrency, established=established)
         doc = {**plan_document(actions, source, "verify"), "stats": stats}
         print("вердикты:", json.dumps(stats))
     out.write_text(json.dumps(doc, ensure_ascii=False, indent=1), encoding="utf-8")

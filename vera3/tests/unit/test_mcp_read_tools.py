@@ -149,11 +149,12 @@ async def test_entity_find_treats_percent_literally_and_ranks_exact_first(sqlite
 async def test_entity_context_by_id_and_by_name(sqlite_db):
     alice, _ = await seed_entities()
     await w.relationship_set(alice, alice + 1, "coworker_of", ctx())
-    by_id = await r.entity_context(entity_id=alice)
+    by_id = await r.entity_context(entity_id=alice, raw_relationships=True)
     assert by_id["name"] == "Alice Anderson"
     assert {a["identifier"] for a in by_id["aliases"]} == {"user:42"}
     assert by_id["relationships"][0]["predicate"] == "coworker_of"
     assert by_id["relationships"][0]["id"]                            # нужен для relationship_retire
+    assert by_id["connections"][0]["main"]["predicate"] == "coworker_of"
     assert by_id["members_truncated"] is False
     by_name = await r.entity_context(name="Alice")
     assert by_name["entity_id"] == alice
@@ -163,6 +164,24 @@ async def test_entity_context_by_id_and_by_name(sqlite_db):
         await r.entity_context(name="Nobody At All")
     with pytest.raises(LookupError):
         await r.entity_context(entity_id=999)
+
+
+async def test_entity_context_returns_connections_not_raw_rows_by_default(sqlite_db):
+    alice, bob = await seed_entities()
+    await w.relationship_set(alice, bob, "boss_of", ctx())
+    out = await r.entity_context(entity_id=alice)
+    assert "relationships" not in out
+    (conn,) = out["connections"]
+    assert conn["other_id"] == bob and conn["main"]["predicate"] == "boss_of"
+    assert conn["main"]["rel_ids"]                                  # relationship_retire по-прежнему возможен
+
+
+async def test_graph_neighbours_one_edge_per_pair_and_raw_flag(sqlite_db):
+    alice, bob = await seed_entities()
+    await w.relationship_set(alice, bob, "boss_of", ctx())
+    await w.relationship_set(alice, bob, "client_of", ctx())
+    assert len((await r.graph_neighbours(alice))["edges"]) == 1
+    assert len((await r.graph_neighbours(alice, raw_edges=True))["edges"]) == 2
 
 
 async def test_graph_neighbours(sqlite_db):

@@ -1,5 +1,5 @@
-"""Карточка сущности для боковой панели `/graph`: алиасы, счётчики, главные
-связи и последние события человека.
+"""Карточка сущности для боковой панели `/graph`: алиасы, счётчики, связи-пары
+и последние события человека.
 
 События ищутся по алиасу каждого источника (как в `dossiers`): telegram, slack
 и instagram — по `metadata.sender_id`, gmail — по адресу в `metadata.from`.
@@ -17,12 +17,14 @@ from sqlalchemy import text
 from sqlalchemy.exc import DBAPIError
 
 from vera_shared.db.engine import get_session
+from vera_shared.graph.connections import entity_connections
 from vera_shared.graph.repo import get_entity, list_relationships
 from vera_shared.ingest.envelope import message_body
 
 log = logging.getLogger(__name__)
 
-RELATIONSHIPS_SHOWN = 8
+CONNECTIONS_SHOWN = 12
+RAW_RELATIONSHIPS_SHOWN = 8
 EVENTS_SHOWN = 5
 SNIPPET_CHARS = 160
 EVENTS_TIMEOUT_S = 2
@@ -112,15 +114,16 @@ def _relationship(row: dict[str, Any]) -> dict[str, Any]:
     return {k: row[k] for k in keys}
 
 
-async def entity_panel(entity_id: int) -> dict[str, Any] | None:
-    """Всё для панели одним ответом; None — такой сущности нет."""
+async def entity_panel(entity_id: int, *, raw: bool = False) -> dict[str, Any] | None:
+    """Всё для панели одним ответом; None — такой сущности нет. `connections` — по
+    одной связи на собеседника (`connections.entity_connections`); `raw=True` добавляет
+    ещё и записи `relationships` по одной."""
     entity = await get_entity(entity_id)
     if entity is None:
         return None
     attrs = entity.attributes or {}
     aliases = await _aliases(entity_id)
-    rels = await list_relationships(entity_id, limit=RELATIONSHIPS_SHOWN)
-    return {
+    payload: dict[str, Any] = {
         "id": entity.id, "name": entity.name, "type": entity.type,
         "username": attrs.get("username") or None,
         "tg_id": attrs.get("tg_id") or None,
@@ -128,6 +131,10 @@ async def entity_panel(entity_id: int) -> dict[str, Any] | None:
         "profile": [str(attrs[k]) for k in PROFILE_KEYS if attrs.get(k)],
         "aliases": [{"source": s, "identifier": i} for s, i in aliases],
         "counts": await _counts(entity_id),
-        "relationships": [_relationship(r) for r in rels],
+        "connections": await entity_connections(entity_id, limit=CONNECTIONS_SHOWN),
         "events": await recent_events(aliases),
     }
+    if raw:
+        rels = await list_relationships(entity_id, limit=RAW_RELATIONSHIPS_SHOWN)
+        payload["relationships"] = [_relationship(r) for r in rels]
+    return payload

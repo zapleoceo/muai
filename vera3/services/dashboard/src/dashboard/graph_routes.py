@@ -22,7 +22,7 @@ from vera_shared.graph.rel_extract import PREDICATES
 from vera_shared.graph.repo import find_entity_by_name, graph_snapshot
 from vera_shared.graph.suggestions import count_pending_suggestions
 
-from dashboard.graph_labels import predicate_label
+from dashboard.graph_labels import predicate_label, role_label
 from dashboard.graph_page import graph_body
 from dashboard.render import _render, owner_or_auth_error, owner_or_blank_401
 
@@ -95,14 +95,18 @@ async def graph_recluster(request: Request):
 
 
 @router.get("/api/graph/entity/{entity_id}", response_class=JSONResponse)
-async def graph_entity(request: Request, entity_id: int):
-    """Карточка сущности для боковой панели: алиасы, счётчики, связи, события."""
+async def graph_entity(request: Request, entity_id: int, raw: bool = False):
+    """Карточка сущности для боковой панели: алиасы, счётчики, связи-пары, события.
+    `raw=true` добавляет записи relationships по одной."""
     if (resp := owner_or_blank_401(request)) is not None:
         return resp
-    panel = await entity_panel(entity_id)
+    panel = await entity_panel(entity_id, raw=raw)
     if panel is None:
         return JSONResponse({"error": "not found"}, status_code=404)
-    for rel in panel["relationships"]:
+    for conn in panel["connections"]:
+        for role in (conn["main"], *conn["also"]):
+            role["label"] = role_label(role["predicate"], role["direction"])
+    for rel in panel.get("relationships", []):
         rel["label"] = predicate_label(rel["predicate"])
     return JSONResponse(panel)
 

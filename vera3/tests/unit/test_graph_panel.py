@@ -75,9 +75,17 @@ async def test_panel_carries_profile_aliases_counts_and_relationships(db):
     assert p["profile"] == ["Рога и копыта", "аналитик"]
     assert {"source": "telegram", "identifier": "user:42"} in p["aliases"]
     assert p["counts"] == {"relationships": 1, "groups": 0, "members": 0}
-    rel = p["relationships"][0]
-    assert rel["predicate"] == "works_at" and rel["other_id"] == org
-    assert rel["other_name"] == "Рога и копыта" and rel["direction"] == "out"
+    conn = p["connections"][0]
+    assert conn["main"]["predicate"] == "works_at" and conn["other_id"] == org
+    assert conn["other_name"] == "Рога и копыта" and conn["main"]["direction"] == "out"
+    assert "relationships" not in p
+
+
+@pytest.mark.asyncio
+async def test_panel_raw_flag_adds_the_individual_records(db):
+    a, org = await _person()
+    rel = (await panel.entity_panel(a, raw=True))["relationships"][0]
+    assert rel["predicate"] == "works_at" and rel["other_id"] == org and rel["direction"] == "out"
 
 
 @pytest.mark.asyncio
@@ -117,12 +125,20 @@ class TestEntityEndpoint:
         assert client.get("/api/graph/entity/1").status_code == 401
 
     def test_returns_panel_with_russian_labels(self):
-        data = {"id": 1, "name": "A", "type": "person", "relationships": [
-            {"predicate": "works_at", "direction": "out", "other_id": 2,
-             "other_name": "B", "other_type": "org"}], "events": []}
-        with patch("dashboard.graph_routes.entity_panel", AsyncMock(return_value=data)):
-            r = client.get("/api/graph/entity/1", cookies=_cookie())
+        data = {"id": 1, "name": "A", "type": "person", "connections": [
+            {"other_id": 2, "other_name": "B", "other_type": "person", "weight": 0.7,
+             "main": {"predicate": "boss_of", "direction": "in", "weight": 0.7},
+             "also": [{"predicate": "client_of", "direction": "out", "weight": 0.5}]}],
+            "relationships": [{"predicate": "works_at", "direction": "out", "other_id": 2,
+                               "other_name": "B", "other_type": "org"}], "events": []}
+        mock = AsyncMock(return_value=data)
+        with patch("dashboard.graph_routes.entity_panel", mock):
+            r = client.get("/api/graph/entity/1?raw=true", cookies=_cookie())
         assert r.status_code == 200
+        mock.assert_awaited_once_with(1, raw=True)
+        conn = r.json()["connections"][0]
+        assert conn["main"]["label"] == "начальник"            # смотрящий — подчинённый
+        assert conn["also"][0]["label"] == "поставщик"         # он клиент — другой поставщик
         assert r.json()["relationships"][0]["label"] == "работает в"
 
     def test_unknown_entity_is_404(self):

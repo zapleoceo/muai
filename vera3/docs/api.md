@@ -135,8 +135,8 @@ Returns `AnswerResponse` with `answer`, `results`, `provider`, `cost_usd`,
 | `/api/sources/{key}/disconnect` | GET | owner cookie | Подтверждение отключения (`disconnect_confirm`): что именно погаснет и что события останутся |
 | `/api/sources/{key}/disconnect` | POST | owner cookie | Погасить строки доступа источника (`disconnect_apply`). Секрет НЕ удаляется — шаг обратим |
 | `/graph` | GET | owner cookie | «Люди» (`graph_page`, разметка — `graph_body`) — Cytoscape.js force layout. Поле поиска с кнопкой «Найти»; фильтры (связей ≥, тип связи, «Раскрасить по темам», «весь граф») свёрнуты под «Фильтры»; клик по узлу открывает правую панель вместо строки-подсказки; в шапке ссылка «Дубли (N)» (`dupes_label`) на `/entities/duplicates` с числом ожидающих `merge_suggestions` (`count_pending_suggestions`). See "Graph visualizer" below. |
-| `/api/graph/entity/{id}` | GET | owner cookie | Карточка сущности для боковой панели (`graph_entity` → `vera_shared.graph.panel.entity_panel`): имя, тип, @username / email / алиасы по источникам, счётчики (связей, групп, участников), восемь главных связей с русскими подписями из `graph_labels.py` и последние пять событий человека ссылками на `/events/{id}`. 404 — нет сущности. События ищутся по алиасу источника (`recent_events`): telegram по индексу `ix_events_tg_sender`, остальные под таймаутом 2 с — при таймауте панель показывается без событий |
-| `/api/graph` | GET | owner cookie | Node/edge JSON for the visualizer (`graph_data`). Params: `min_degree`, `limit` (≤800), `predicate`, `focus` (entity id), `q` (name→focus). |
+| `/api/graph/entity/{id}` | GET | owner cookie | Карточка сущности для боковой панели (`graph_entity` → `vera_shared.graph.panel.entity_panel`): имя, тип, @username / email / алиасы по источникам, счётчики (связей, групп, участников), `connections` — до двенадцати связей-пар, по одной на собеседника (`vera_shared.graph.connections.entity_connections`: `main` и `also` — роли с `weight`, `support`, `manual`, `inferred`, `direction` и русским `label` из `graph_labels.role_label`; `hidden`, `interaction` — дни и личка, `shared_work`, `possible_same`), и последние пять событий человека ссылками на `/events/{id}`. `?raw=true` добавляет `relationships` — записи по одной (`label` из `predicate_label`). 404 — нет сущности. События ищутся по алиасу источника (`recent_events`): telegram по индексу `ix_events_tg_sender`, остальные под таймаутом 2 с — при таймауте панель показывается без событий |
+| `/api/graph` | GET | owner cookie | Node/edge JSON for the visualizer (`graph_data`). Params: `min_degree`, `limit` (≤800), `predicate`, `focus` (entity id), `q` (name→focus). Рёбра-факты — одно на пару людей (`connections_among`, `edge_payload`): `predicate` — главная роль, `weight` (толщина линии), `also`, `support`, `inferred`; членство, дублирующее пару со связью, не рисуется. Схема связи как пары — `identity.md`, «Связь как пара». |
 | `/api/instagram/start` | GET | owner cookie | Instagram login form (`instagram_start_form`) |
 | `/api/instagram/start` | POST | owner cookie | Submit username/password (`instagram_start`) — may return a 2FA/challenge code form |
 | `/api/instagram/verify` | POST | owner cookie | Submit 2FA/challenge code (`instagram_verify`) → saves encrypted session |
@@ -276,3 +276,15 @@ nginx проксирует наружу не только дашборд: `/` �
 `/v1/` и `/webhook/` → gateway:8001. Именно поэтому ноутбук может слать
 события и голосовые сессии по HTTPS — под `X-Internal-Secret`, без VPN и
 туннелей. Всё остальное (brain-search, postgres) слушает только 127.0.0.1.
+
+### Связь как пара в графе и карточке (2026-10-04)
+
+Ребро `/api/graph` и строка карточки — не отдельный факт, а ПАРА людей целиком: главная
+роль (с наибольшим весом), остальные роли выше порога («также»), скрытые считаются в
+`hidden`. Вес роли складывается из числа подтверждающих записей, плотности общения
+пары (`pair_stats`) и ручных правок; «работает с» может быть выведено из рабочих
+контактов без единой фразы. Подписи — `graph_labels.role_label`: в карточке они
+называют, КЕМ другой приходится смотрящему («начальник» / «подчинённый»), на ребре —
+по направлению от «над» к «под». `graph_snapshot(raw_edges=True)` и `?raw=true` у
+карточки отдают прежние записи. Модель, пороги и замеры — `identity.md`, «Связь как
+пара»; накат таблицы и задача — `deploy-ops.md`.

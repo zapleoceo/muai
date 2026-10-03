@@ -57,6 +57,8 @@ vera3-mcp :8000 (хост 127.0.0.1:8007)          services/mcp, пакет vera
 
 Все выдачи ограничены и несут `truncated`.
 
+> **BREAKING (04.10.2026):** `entity_context` больше не возвращает `relationships` (и `id` записей) по умолчанию. Берите `connections[].main.rel_ids` / `also[].rel_ids` либо передайте `raw_relationships=true`.
+
 Чтение:
 
 | Tool | Что делает |
@@ -66,8 +68,8 @@ vera3-mcp :8000 (хост 127.0.0.1:8007)          services/mcp, пакет vera
 | `get_event(event_id, max_chars)` | Событие целиком: текст, метаданные, триаж, `hidden`, связанные сущности (автор по алиасу и концы связей, выведенных из события) |
 | `list_sources()` | Число событий, последнее событие и последний приём по каждому источнику |
 | `entity_find(query, type, limit)` | Нечёткий поиск сущностей по имени, алиасу, username, email |
-| `entity_context(entity_id или name)` | Алиасы, членства, связи (с id для `relationship_retire`), активность |
-| `graph_neighbours(entity_id, predicate, limit)` | Соседи в графе на один шаг |
+| `entity_context(entity_id или name, raw_relationships)` | Алиасы, членства, активность и `connections` — по одной связи на собеседника: главная роль с весом и числом подтверждений, «также», скрытые, взаимодействия (дни, личка, общие чаты), «возможно тот же человек»; у ролей `rel_ids` для `relationship_retire`. `raw_relationships=true` добавляет записи `relationships` по одной (с id) |
+| `graph_neighbours(entity_id, predicate, limit, raw_edges)` | Соседи в графе на один шаг: одно ребро на пару (главная роль, `weight`, `also`, `inferred`), членства; `raw_edges=true` — по ребру на запись `relationships` |
 | `timeline(entity_id, start, end, limit)` | События сущности за период: её сообщения (по алиасу) и упоминания полного имени; по умолчанию 30 дней |
 | `sql_query(sql, max_rows)` | Escape hatch: один SELECT/WITH, только чтение (ниже) |
 | `audit_log(limit, client)` | Журнал правок агентов с `audit_id` для `undo` |

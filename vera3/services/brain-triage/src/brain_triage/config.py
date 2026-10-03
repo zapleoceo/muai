@@ -18,6 +18,11 @@ STUCK_AFTER_S = int(os.environ.get("TRIAGE_STUCK_AFTER_S", "600"))
 REEMBED_INTERVAL_S = float(os.environ.get("TRIAGE_REEMBED_INTERVAL_S", "600"))
 REEMBED_BATCH = int(os.environ.get("TRIAGE_REEMBED_BATCH", "50"))
 
+# Пересборка pair_stats — взаимодействия пар для «связь как пара» (pair_stats_loop.py).
+# Один проход ~10 с на 470 тыс. событий; контакты меняются медленно, шести часов хватает.
+PAIR_STATS_INTERVAL_S = float(os.environ.get("TRIAGE_PAIR_STATS_INTERVAL_S", "21600"))
+PAIR_STATS_START_DELAY_S = float(os.environ.get("TRIAGE_PAIR_STATS_START_DELAY_S", "300"))
+
 # ─── Групповой батчинг ───────────────────────────────────────────────────────
 # Rate limiter (backfill_max_per_hour) считает LLM-ВЫЗОВЫ, не события. Группы
 # (супергруппы + легаси Chat) — короткие сообщения (медиана ~260 симв.),

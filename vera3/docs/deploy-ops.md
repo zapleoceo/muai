@@ -619,6 +619,12 @@ $RUN --undo /reports/rel_rollback-2026-10-03.json
 - **Verify-план:** `retire` (правило `weak_name`) только для «no»;
   `skip` (`weak_name_verified`) для «yes» (с цитатой) и «unclear». Применять можно
   частями — действие по строке, изменившейся после плана, пропускается.
+- **Пары с устоявшимся общением verify не судит** (с 04.10.2026): связь, чья пара
+  (`established_pairs`) имеет ≈8+ дней контакта по `pair_stats`, попадает в план
+  `skip` с правилом `pair_established` и не стоит вызова брокера; число — в
+  `stats.established`. Нужна заполненная `pair_stats` (накат 040, см. «Связь как
+  пара» ниже); `--refresh-pair-stats` пересоберёт её перед проходом. Без таблицы
+  освобождать нечего, и verify идёт по всем кандидатам как раньше.
 - Правила soft-плана (счётчики в `counts`): `fact_mismatch` и прочие причины
   `relationship_reject_reason` (одиночное имя здесь не гасится); `symmetric_duplicate`,
   `inverse_duplicate`, `contradiction`; `convert_inverse` (одиночная
@@ -1102,3 +1108,32 @@ Short version:
    Откат кода — revert; откат индекса — `DROP INDEX CONCURRENTLY
    ix_events_media_unrecognized` и `DELETE FROM schema_migrations WHERE
    version='034_events_media_unrecognized_index'`, **только после** отката кода.
+
+
+## Связь как пара: накат 040 и задача pair_stats
+
+Что и почему — `identity.md`, «Связь как пара». Кэш взаимодействий пар
+(`pair_stats`) пересчитывается целиком, правды в нём нет: откатить можно в любой
+момент, код без таблицы работает по записанным ролям.
+
+1. **Миграция:** `scripts/apply_migration.sh infra/migrations/040_pair_stats.sql`.
+   Таблица новая и пустая, транзакционный `CREATE TABLE`, блокировок на `events` нет.
+2. **Деплой кода** обычным мерджем. В `docker-compose.yml` у `brain-triage` добавлены
+   `OWNER_TELEGRAM_ID` (личка считается относительно владельца) и необязательный
+   `TRIAGE_PAIR_STATS_INTERVAL_S` (по умолчанию 21600 с = 6 часов); пересоздайте
+   сервис, чтобы переменные подхватились. Первый проход задача сделает через 5 минут
+   после старта (`TRIAGE_PAIR_STATS_START_DELAY_S`).
+3. **Первое заполнение не дожидаясь задачи:**
+   `docker compose run --rm --no-deps -v /var/www/vera3/scripts:/scripts brain-triage python /scripts/refresh_pair_stats.py`
+   — печатает число пар (на проде ≈ 5,5 тыс., ≈ 10 с). Безопасно повторять; если
+   пересборку уже ведёт другая реплика, скрипт скажет это и выйдет с кодом 1
+   (advisory-замок).
+4. **Проверка** (только чтение): `SELECT count(*), max(computed_at) FROM pair_stats` и
+   карточка человека на `/graph` — у владельца и коллег с общим рабочим доменом
+   главная роль «работает с» с пометкой «выведено из общения», если фраз про них нет.
+5. **Мониторинг:** в логе brain-triage строка `pair-stats: пересобрано N пар` раз в шесть
+   часов; сбой пересборки — WARNING `pair-stats: пересборка не удалась`, старый кэш
+   остаётся. Запрос тяжёлый один раз за период (последовательное чтение `events`, ≈ 10 с,
+   на `mem_limit` приложения не влияет — всё считает Postgres).
+6. **Откат:** `DROP TABLE pair_stats` и `DELETE FROM schema_migrations WHERE
+   version='040_pair_stats'`; задача сама логирует WARNING и ждёт следующего периода.
