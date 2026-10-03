@@ -169,3 +169,35 @@ async def test_cursor_runs_resume_on_postgres(pg_db):
     while (result := await index.run_batch(index.BACKFILL, res, builder, 2)).last_id is not None:
         seen += result.events
     assert seen == top == 5
+
+
+@pytest.mark.asyncio
+async def test_merge_moves_link_data_and_unmerge_restores_on_postgres(pg_db):
+    from vera_shared.db.models_links import EntityNicknameRow, EventEntityRow, VoiceSpeakerMapRow
+    from vera_shared.graph import merge, repo, unmerge
+    from vera_shared.links.nicknames import add_nickname
+    from vera_shared.links.speakers import put_speaker
+
+    w = await _world(pg_db)
+    dup = await repo.upsert_entity(type="person", name="Витя Кронов", source="telegram", identifier="user:301")
+    await add_nickname(dup, "ККК", scope_kind="work")
+    async with pg_db() as s:
+        call = (await s.execute(sa_text("SELECT id FROM events WHERE source = 'voice'"))).scalar_one()
+        await put_speaker(s, call, "Собеседник 2", dup)
+    await _index(pg_db)
+    async with pg_db() as s:      # производные связи у дубля
+        await s.execute(sa_text("UPDATE event_entities SET entity_id = :d WHERE entity_id = :l AND role = 'author'"),
+                        {"d": dup, "l": w["lisa"]})
+    report = await merge.merge_entities(w["boss"], [dup], "дубль")
+    async with pg_db() as s:
+        rows = (await s.execute(select(EventEntityRow))).scalars().all()
+        assert not [r for r in rows if r.entity_id == dup]
+        assert [r.entity_id for r in rows if r.source_of_link == "manual"] == [w["boss"]]
+        assert {r.entity_id for r in (await s.execute(select(EntityNicknameRow))).scalars()} == {w["boss"]}
+        assert {r.entity_id for r in (await s.execute(select(VoiceSpeakerMapRow))).scalars()} == {w["boss"]}
+    await unmerge.unmerge(report)
+    async with pg_db() as s:
+        manual = (await s.execute(select(EventEntityRow).where(
+            EventEntityRow.source_of_link == "manual"))).scalars().all()
+        assert [r.entity_id for r in manual] == [dup]
+        assert {r.entity_id for r in (await s.execute(select(VoiceSpeakerMapRow))).scalars()} == {dup}
