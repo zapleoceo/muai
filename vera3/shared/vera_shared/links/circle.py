@@ -29,9 +29,14 @@ class EventCircle:
 
 
 def circle_of(facts: EventFacts, owner: int | None) -> tuple[frozenset[int], frozenset[int]]:
+    """(первый круг, второй круг). Владелец входит в круг только там, где есть разговор (чат,
+    личка, адресаты письма): в записке самому себе или запросе к поисковику «Дима» — не он."""
+    conversation = facts.ctx.chat_key is not None or bool(facts.recipients)
     primary = set(facts.ctx.participants) | set(facts.recipients)
-    primary |= {e for e in (facts.author, owner) if e is not None}
-    return frozenset(primary), facts.ctx.extended
+    primary |= {facts.author} if facts.author is not None else set()
+    if conversation and owner is not None:
+        primary.add(owner)
+    return frozenset(primary), facts.ctx.extended if conversation else frozenset()
 
 
 async def event_circle(event_id: int) -> EventCircle | None:

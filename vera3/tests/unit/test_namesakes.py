@@ -68,6 +68,13 @@ async def world(sqlite_db):
     await rel(w["namesake"], "boss_of", w["lisa"], w["mine"])
     await rel(w["namesake"], "client_of", w["org"], w["theirs"])
     await rel(w["andrey"], "works_at", w["org"], w["mine"])
+    async with gs() as s:        # запрос владельца к поисковику: разговора нет, «Дима» не обязательно он
+        note = EventRow(source="perplexity", source_event_id="q1", content_text="как говорить с Дима о смете",
+                        occurred_at=datetime(2026, 9, 3), triage_status="done", metadata_={})
+        s.add(note)
+        await s.flush()
+        w["note"] = note.id
+    await rel(w["namesake"], "friend_of", w["lisa"], w["note"])
     return w
 
 
@@ -87,6 +94,8 @@ async def test_short_name_resolves_to_the_owner_not_the_namesake(world):
     circle = await event_circle(world["mine"])
     assert await resolve_short_name("Дима", circle) == world["owner"]
     assert await resolve_short_name("Андрей", circle) is None      # в круге нет ни одного Андрея
+    # без разговора (запрос к поисковику) владелец в круг не входит: «Дима» там — не обязательно он
+    assert await resolve_short_name("Дима", await event_circle(world["note"])) is None
     # в его публичном чате в круге двое Дим (он сам и владелец): неоднозначно — связи нет
     assert await resolve_short_name("Дима", await event_circle(world["theirs"])) is None
 
@@ -96,12 +105,13 @@ async def test_plan_repoints_to_the_owner_and_retires_the_orphan(world):
     actions = await build_namesake_plan(rows)
     by = {a["rule"]: a for a in actions}
     assert set(by) == {RULE_REPOINT, RULE_OUT_OF_CIRCLE}
+    assert [a["rule"] for a in actions].count(RULE_OUT_OF_CIRCLE) == 2      # Андрей и запись без разговора
     assert by[RULE_REPOINT]["after"]["subject_entity_id"] == world["owner"]
     assert by[RULE_OUT_OF_CIRCLE]["after"]["is_current"] is False
     # связь «тёзки» из его собственного публичного чата не тронута
     assert all("client_of" not in a["brief"] for a in actions)
     doc = namesake_document(actions, "entities:test")
-    assert doc["to_apply"] == 2 and doc["by_rule"] == {RULE_REPOINT: 1, RULE_OUT_OF_CIRCLE: 1}
+    assert doc["to_apply"] == 3 and doc["by_rule"] == {RULE_REPOINT: 1, RULE_OUT_OF_CIRCLE: 2}
 
 
 async def test_apply_then_undo_restores_every_row(world, tmp_path):
@@ -109,13 +119,13 @@ async def test_apply_then_undo_restores_every_row(world, tmp_path):
     doc = namesake_document(await build_namesake_plan(await load_rows([world["namesake"], world["andrey"]])), "t")
     report = tmp_path / "rollback.json"
     result = await apply_plan(json.loads(json.dumps(doc)), report)
-    assert len(result["entries"]) == 2
+    assert len(result["entries"]) == 3
     after = await current(world["gs"])
     assert (world["owner"], "boss_of", world["lisa"]) in after
     assert (world["namesake"], "boss_of", world["lisa"]) not in after
     assert (world["andrey"], "works_at", world["org"]) not in after
     assert (world["namesake"], "client_of", world["org"]) in after
-    assert await undo_report(report) == 2
+    assert await undo_report(report) == 3
     assert await current(world["gs"]) == before
 
 
