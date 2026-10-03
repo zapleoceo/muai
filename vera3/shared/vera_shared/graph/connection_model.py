@@ -69,6 +69,11 @@ NEUTRAL_MAX_WEIGHT = 0.3
 #: владельца (16) и медиана его коллег (10); ≥10 дней у ~15% личных контактов, то есть
 #: список короткий, но 108 дней и 615 личных сообщений уже не теряются.
 CONTACT_MIN_DAYS = 10
+#: Более конкретная роль, показываемая главной, поглощает менее конкретные: начальник
+#: подразумевает «работает с», родитель и супруг — «дружит с». Поглощённая роль не
+#: идёт в «также», её подтверждения прибавляются к показанным.
+SPECIFIC_OVER = {"boss_of": frozenset({"coworker_of"}), "parent_of": frozenset({"friend_of"}),
+                 "spouse_of": frozenset({"friend_of"})}
 #: Иерархии, где обе стороны одновременно — противоречие.
 HIERARCHY = frozenset({"boss_of", "parent_of"})
 #: При равном весе главной становится роль, стоящая раньше: она точнее.
@@ -204,10 +209,10 @@ def _asserted_role(key: RoleKey, claims: list[Claim], work: float) -> Role:
                 latest.seen_at)
 
 
-def _priority(role: Role) -> tuple[float, int]:
+def _priority(role: Role) -> tuple[bool, float, int]:
     order = (ROLE_PRIORITY.index(role.predicate) if role.predicate in ROLE_PRIORITY
              else len(ROLE_PRIORITY))
-    return -role.weight, order
+    return role.predicate not in SPECIFIC_OVER, -role.weight, order
 
 
 def _survivor_rank(role: Role) -> tuple[object, ...]:
@@ -225,6 +230,20 @@ def _drop_contradictions(roles: dict[RoleKey, Role]) -> dict[RoleKey, Role]:
             if key != best:
                 del roles[key]
     return roles
+
+
+def _absorb(shown: dict[RoleKey, Role]) -> tuple[dict[RoleKey, Role], int]:
+    """Показанная конкретная роль забирает менее конкретные: вес — больший из двух,
+    подтверждения и id записей складываются. Возвращает роли и число поглощённых."""
+    folded = 0
+    for key in [k for k in shown if k[0] in SPECIFIC_OVER]:
+        for other in [k for k in shown if k[0] in SPECIFIC_OVER[key[0]]]:
+            small, big = shown.pop(other), shown[key]
+            shown[key] = replace(big, weight=max(big.weight, small.weight),
+                                 support=big.support + small.support,
+                                 rel_ids=tuple(sorted({*big.rel_ids, *small.rel_ids})))
+            folded += 1
+    return shown, folded
 
 
 def _neutral(stats: PairStats, interaction: float) -> Role | None:
@@ -254,8 +273,9 @@ def build_connection(a: int, b: int, claims: Iterable[Claim], stats: PairStats,
     elif inferred:
         roles[work_key] = Role(INFERRED_PREDICATE, None, inferred, 0, False, True, 0.0, None)
     qualified = {k: r for k, r in roles.items() if _qualifies(r)}
-    shown = list(_drop_contradictions(qualified).values())
-    hidden = len(roles) - len(shown)
+    kept, folded = _absorb(_drop_contradictions(qualified))
+    shown = list(kept.values())
+    hidden = len(roles) - len(shown) - folded
     if not shown:
         neutral = (_neutral(stats, interaction)
                    if roles or stats.active_days >= CONTACT_MIN_DAYS else None)

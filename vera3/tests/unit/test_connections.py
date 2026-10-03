@@ -39,7 +39,7 @@ async def test_one_connection_per_counterpart_not_one_per_phrase(sqlite_db):
     assert [c["other_id"] for c in out] == [andrey]
     only = out[0]
     assert only["main"]["predicate"] == "boss_of" and only["main"]["direction"] == "out"
-    assert only["hidden"] + len(only["also"]) == 3
+    assert only["hidden"] + len(only["also"]) == 2
     assert only["also"] == []
     assert only["interaction"]["established"] is False
 
