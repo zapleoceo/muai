@@ -6,6 +6,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from sqlalchemy.exc import SQLAlchemyError
 from vera_shared.graph.chat_link import resolve_migrated_chat
 from vera_shared.graph.repo import (
     find_entity_by_alias,
@@ -30,16 +31,29 @@ def _person_name(user: Any) -> str:
 PLACEHOLDER_PREFIX = "tg_user_"
 
 
-async def _sender_is_the_chat(sender_id: int, chat_id: int, name: str,
-                              in_group_chat: bool) -> bool:
-    """Анонимный админ и канал пишут от имени самого чата: Telegram отдаёт id
-    чата как отправителя, и без имени из него рождалась заглушка `tg_user_<id>`
-    рядом с настоящей сущностью чата (аудит 2026-09-26: 11 штук)."""
-    if in_group_chat and sender_id == chat_id:  # в личке id чата = id собеседника
-        return True
+async def _sender_is_the_chat(sender_id: int, name: str) -> bool:
+    """Безымянный отправитель, чей id — уже известный чат (анонимный админ или
+    канал пишут от имени самого чата): из него рождалась заглушка `tg_user_<id>`
+    рядом с настоящей сущностью чата (аудит 2026-09-26: 11 штук). Живого юзера с
+    именем это не касается, даже если его id случайно равен id чата."""
     if not name.startswith(PLACEHOLDER_PREFIX):
         return False
-    return await find_entity_by_alias("telegram", f"chat:{sender_id}") is not None
+    try:
+        return await find_entity_by_alias("telegram", f"chat:{sender_id}") is not None
+    except SQLAlchemyError:
+        log.warning("не смог проверить, не чат ли отправитель %s", sender_id, exc_info=True)
+        return False
+
+
+async def _chat_entity_for_migration(chat_id: int, new_id: int, title: str) -> int | None:
+    """Гонка двух воркеров на одном alias → IntegrityError: логируем и идём
+    дальше без сущности чата, а не теряем персону и членство этого сообщения."""
+    try:
+        return await resolve_migrated_chat(chat_id, new_id, title)
+    except SQLAlchemyError:
+        log.warning("миграция чата %s→%s: не удалось связать, пропускаю сообщение "
+                    "в граф чата", chat_id, new_id, exc_info=True)
+        return None
 
 
 async def _suggest_twin(call: Any, entity_id: int, name: str) -> None:
@@ -68,7 +82,7 @@ async def sync_message_entities(chat: Any, sender: Any) -> None:
         title = getattr(chat, "title", None) or f"tg_chat_{chat_id_int}"
         migrated_to = getattr(getattr(chat, "migrated_to", None), "channel_id", None)
         if chat_type_name == "chat" and migrated_to:
-            chat_entity_id = await resolve_migrated_chat(chat_id_int, migrated_to, title)
+            chat_entity_id = await _chat_entity_for_migration(chat_id_int, migrated_to, title)
         else:
             chat_entity_id = await upsert_entity(
                 type=chat_entity_type, name=title,
@@ -93,8 +107,7 @@ async def sync_message_entities(chat: Any, sender: Any) -> None:
         sender_username = getattr(sender, "username", None)
         sender_id = getattr(sender, "id", None)
         person_name = _person_name(sender) if sender_id is not None else ""
-        if sender_id is not None and await _sender_is_the_chat(
-                sender_id, chat_id_int, person_name, chat_entity_id is not None):
+        if sender_id is not None and await _sender_is_the_chat(sender_id, person_name):
             return
         if sender_id is not None:
             person_entity_id = await upsert_entity(

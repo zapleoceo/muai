@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterable
+from typing import Any
 
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -65,80 +66,73 @@ def _remapper(keep_id: int, drops: set[int]) -> Callable[[int], int]:
 _SEEN_FIELDS = ("is_current", "first_seen_at", "last_seen_at")
 _REL_FIELDS = (*_SEEN_FIELDS, "confidence", "fact", "derived_from_event_id")
 
+Edge = MembershipRow | RelationshipRow
 
-def _widen(survivor: MembershipRow | RelationshipRow,
-           other: MembershipRow | RelationshipRow) -> None:
+
+def _widen(survivor: Edge, other: Edge) -> None:
     survivor.is_current = bool(survivor.is_current or other.is_current)
     survivor.first_seen_at = min(survivor.first_seen_at, other.first_seen_at)
     survivor.last_seen_at = max(survivor.last_seen_at, other.last_seen_at)
 
 
-async def merge_memberships(s: AsyncSession, rec: Recorder, keep_id: int,
-                            drop_ids: list[int]) -> None:
-    drops = set(drop_ids)
-    remap = _remapper(keep_id, drops)
-    touching = (MembershipRow.parent_entity_id.in_(drop_ids),
-                MembershipRow.child_entity_id.in_(drop_ids))
-    rows = (await s.execute(select(MembershipRow).where(or_(*touching))
-            .order_by(MembershipRow.id))).scalars().all()
-    existing = {(m.parent_entity_id, m.child_entity_id, m.source): m
-                for m in (await s.execute(select(MembershipRow).where(or_(
-                    MembershipRow.parent_entity_id == keep_id,
-                    MembershipRow.child_entity_id == keep_id)))).scalars()}
+def _absorb_membership(survivor: MembershipRow, other: MembershipRow) -> None:
+    _widen(survivor, other)
+
+
+def _absorb_relationship(survivor: RelationshipRow, other: RelationshipRow) -> None:
+    survivor.confidence = max(survivor.confidence, other.confidence)
+    survivor.fact = survivor.fact or other.fact
+    survivor.derived_from_event_id = (
+        survivor.derived_from_event_id or other.derived_from_event_id)
+    _widen(survivor, other)
+
+
+async def _fold_edges(
+    s: AsyncSession, rec: Recorder, keep_id: int, drop_ids: list[int], *,
+    model: type[Edge], ends: tuple[str, str], tracked: tuple[str, ...],
+    key: Callable[[Edge, int, int], tuple], absorb: Callable[[Any, Any], None],
+) -> None:
+    """Общий обход рёбер (членства, связи): drop → keep, дубль склеивается в
+    победителя, петля удаляется. `ends` — две колонки-конца ребра."""
+    remap = _remapper(keep_id, set(drop_ids))
+    first, second = (getattr(model, c) for c in ends)
+    rows = (await s.execute(select(model).where(or_(
+        first.in_(drop_ids), second.in_(drop_ids))).order_by(model.id))).scalars().all()
+    existing = {key(r, getattr(r, ends[0]), getattr(r, ends[1])): r
+                for r in (await s.execute(select(model).where(or_(
+                    first == keep_id, second == keep_id)))).scalars()}
     for row in rows:
-        parent, child = remap(row.parent_entity_id), remap(row.child_entity_id)
-        survivor = existing.get((parent, child, row.source))
-        if parent == child or survivor is not None:
-            if survivor is not None and survivor is not row:
-                rec.before_update(survivor, _SEEN_FIELDS)
-                _widen(survivor, row)
+        new = [remap(getattr(row, c)) for c in ends]
+        survivor = existing.get(key(row, *new))
+        if new[0] == new[1] or (survivor is not None and survivor is not row):
+            if survivor is not None and new[0] != new[1]:
+                rec.before_update(survivor, tracked)
+                absorb(survivor, row)
             rec.deleted(row)
             await s.delete(row)
             continue
-        if parent != row.parent_entity_id:
-            rec.moved(row, "parent_entity_id", row.parent_entity_id)
-            row.parent_entity_id = parent
-        if child != row.child_entity_id:
-            rec.moved(row, "child_entity_id", row.child_entity_id)
-            row.child_entity_id = child
-        existing[(parent, child, row.source)] = row
+        for column, value in zip(ends, new, strict=True):
+            if value != getattr(row, column):
+                rec.moved(row, column, getattr(row, column))
+                setattr(row, column, value)
+        existing[key(row, *new)] = row
     await s.flush()
+
+
+async def merge_memberships(s: AsyncSession, rec: Recorder, keep_id: int,
+                            drop_ids: list[int]) -> None:
+    await _fold_edges(
+        s, rec, keep_id, drop_ids, model=MembershipRow,
+        ends=("parent_entity_id", "child_entity_id"), tracked=_SEEN_FIELDS,
+        key=lambda r, a, b: (a, b, r.source), absorb=_absorb_membership)
 
 
 async def merge_relationships(s: AsyncSession, rec: Recorder, keep_id: int,
                               drop_ids: list[int]) -> None:
-    drops = set(drop_ids)
-    remap = _remapper(keep_id, drops)
-    rows = (await s.execute(select(RelationshipRow).where(or_(
-        RelationshipRow.subject_entity_id.in_(drop_ids),
-        RelationshipRow.object_entity_id.in_(drop_ids))).order_by(RelationshipRow.id))
-    ).scalars().all()
-    existing = {(r.subject_entity_id, r.predicate, r.object_entity_id): r
-                for r in (await s.execute(select(RelationshipRow).where(or_(
-                    RelationshipRow.subject_entity_id == keep_id,
-                    RelationshipRow.object_entity_id == keep_id)))).scalars()}
-    for row in rows:
-        subj, obj = remap(row.subject_entity_id), remap(row.object_entity_id)
-        survivor = existing.get((subj, row.predicate, obj))
-        if subj == obj or (survivor is not None and survivor is not row):
-            if survivor is not None and subj != obj:
-                rec.before_update(survivor, _REL_FIELDS)
-                survivor.confidence = max(survivor.confidence, row.confidence)
-                survivor.fact = survivor.fact or row.fact
-                survivor.derived_from_event_id = (
-                    survivor.derived_from_event_id or row.derived_from_event_id)
-                _widen(survivor, row)
-            rec.deleted(row)
-            await s.delete(row)
-            continue
-        if subj != row.subject_entity_id:
-            rec.moved(row, "subject_entity_id", row.subject_entity_id)
-            row.subject_entity_id = subj
-        if obj != row.object_entity_id:
-            rec.moved(row, "object_entity_id", row.object_entity_id)
-            row.object_entity_id = obj
-        existing[(subj, row.predicate, obj)] = row
-    await s.flush()
+    await _fold_edges(
+        s, rec, keep_id, drop_ids, model=RelationshipRow,
+        ends=("subject_entity_id", "object_entity_id"), tracked=_REL_FIELDS,
+        key=lambda r, a, b: (a, r.predicate, b), absorb=_absorb_relationship)
 
 
 def _has_photo(av: EntityAvatarRow | None) -> bool:

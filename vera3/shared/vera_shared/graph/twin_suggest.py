@@ -52,7 +52,7 @@ def _side(aliases: list[tuple[str, str]]) -> str | None:
 async def _people_index() -> dict[str, list[tuple[int, str]]]:
     """name_key → [(id, сторона)]: сторона `telegram` или `work`."""
     global _index_at
-    if _index and time.monotonic() - _index_at < _INDEX_TTL_S:
+    if _index_at and time.monotonic() - _index_at < _INDEX_TTL_S:
         return _index
     async with get_session() as s:
         rows = (await s.execute(

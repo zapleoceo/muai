@@ -14,18 +14,16 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_graph import EntityRow
 from vera_shared.graph import merge_children as children
 from vera_shared.graph.merge_codec import row_dict
+from vera_shared.graph.merge_errors import MergeError
 from vera_shared.graph.merge_report import MergeReport, Recorder
 from vera_shared.timeutil import utc_naive_now
-
-
-class MergeError(ValueError):
-    """Слияние невозможно: нет сущности, пустой список или keep среди drop."""
 
 
 def union_attributes(keep: dict[str, Any], drops: list[EntityRow]) -> dict[str, Any]:
@@ -48,16 +46,16 @@ def union_attributes(keep: dict[str, Any], drops: list[EntityRow]) -> dict[str, 
 
 
 async def _load(s: AsyncSession, keep_id: int, drop_ids: list[int]) -> tuple[EntityRow, list[EntityRow]]:
-    keep = await s.get(EntityRow, keep_id)
-    if keep is None:
-        raise MergeError(f"keep {keep_id} не найден")
-    drops = []
-    for drop_id in drop_ids:
-        drop = await s.get(EntityRow, drop_id)
-        if drop is None:
-            raise MergeError(f"drop {drop_id} не найден")
-        drops.append(drop)
-    return keep, drops
+    # Блокировка строк (в порядке id — без взаимных дедлоков): параллельный
+    # upsert ингестора по этим сущностям встанет в очередь до коммита слияния.
+    rows = (await s.execute(select(EntityRow).where(
+        EntityRow.id.in_([keep_id, *drop_ids])).order_by(EntityRow.id)
+        .with_for_update())).scalars().all()
+    by_id = {r.id: r for r in rows}
+    for missing in (keep_id, *drop_ids):
+        if missing not in by_id:
+            raise MergeError(f"сущность {missing} не найдена")
+    return by_id[keep_id], [by_id[i] for i in drop_ids]
 
 
 async def _merge(s: AsyncSession, keep_id: int, drop_ids: list[int],

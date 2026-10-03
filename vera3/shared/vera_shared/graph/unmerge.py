@@ -12,6 +12,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.engine import get_session
+from vera_shared.db.models import EventRow
 from vera_shared.db.models_graph import (
     EntityAliasRow,
     EntityAvatarRow,
@@ -44,6 +45,16 @@ async def _set(s: AsyncSession, table: str, pk: str, pk_value: Any,
     await s.execute(update(cls).where(getattr(cls, pk) == pk_value).values(**values))
 
 
+async def _drop_pruned_event_link(s: AsyncSession, row: dict[str, Any]) -> None:
+    """Событие, на которое ссылалась связь, могли вычистить с тех пор — тогда
+    FK не даст вставить строку; в проде для такого случая стоит SET NULL."""
+    event_id = row.get("derived_from_event_id")
+    if event_id is None:
+        return
+    if (await s.execute(select(EventRow.id).where(EventRow.id == event_id))).first() is None:
+        row["derived_from_event_id"] = None
+
+
 async def _unmerge(s: AsyncSession, report: MergeReport) -> None:
     keep = await s.get(EntityRow, report.keep_id)
     if keep is None:
@@ -57,11 +68,19 @@ async def _unmerge(s: AsyncSession, report: MergeReport) -> None:
         s.add(EntityRow(**decode_values(row)))
     await s.flush()
 
+    # Все колонки одной строки — одним UPDATE: пошагово пара (entity_a, entity_b)
+    # у предложения на миг совпала бы с чужой и нарушила uq_merge_pair.
+    grouped: dict[tuple[str, str, Any], dict[str, Any]] = {}
     for move in reversed(report.moved):
-        await _set(s, move["table"], move["pk"], move["pk_value"],
-                   {move["column"]: move["old"]})
+        grouped.setdefault((move["table"], move["pk"], move["pk_value"]), {})[
+            move["column"]] = move["old"]
+    for (table, pk, pk_value), values in grouped.items():
+        await _set(s, table, pk, pk_value, values)
     for gone in reversed(report.deleted):
-        s.add(_TABLES[gone["table"]](**decode_values(gone["row"])))
+        row = decode_values(gone["row"])
+        if gone["table"] == "relationships":
+            await _drop_pruned_event_link(s, row)
+        s.add(_TABLES[gone["table"]](**row))
         await s.flush()
     for upd in report.updated:
         await _set(s, upd["table"], upd["pk"], upd["pk_value"],

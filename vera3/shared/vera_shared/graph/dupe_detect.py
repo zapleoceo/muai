@@ -75,6 +75,18 @@ def detect_people(snap: Snapshot) -> list[Action]:
 # ─── 3. группа → супергруппа ────────────────────────────────────────────────
 
 
+def _migration_proof(group: Ent, supergroup: Ent) -> bool:
+    """Telegram-доказательство миграции: взаимные ссылки в атрибутах или алиас
+    старого id у супергруппы (его дописывает `resolve_migrated_chat`)."""
+    attrs_old, attrs_new = group.attributes, supergroup.attributes
+    if group.tg_id is None:
+        return False
+    return (str(attrs_new.get("migrated_from")) == group.tg_id
+            or (supergroup.tg_id is not None
+                and str(attrs_old.get("migrated_to")) == supergroup.tg_id)
+            or f"chat:{group.tg_id}" in supergroup.identifiers("telegram"))
+
+
 def detect_migrated_chats(snap: Snapshot) -> list[Action]:
     by_name: dict[str, list[Ent]] = defaultdict(list)
     for e in snap.of_type(*CHAT_TYPES):
@@ -88,10 +100,15 @@ def detect_migrated_chats(snap: Snapshot) -> list[Action]:
             continue
         if len(group) != 2 or any(e.type == "channel" for e in group):
             out.append(skip_action(3, group, "неоднозначно: больше двух чатов с этим именем "
-                                       "или среди них канал"))
-            continue
-        out.append(merge_action(3, supers[0], groups, "группа переехала в супергруппу: "
-                          "то же имя, типы group + supergroup, разные tg id"))
+                                             "или среди них канал"))
+        elif not _migration_proof(groups[0], supers[0]):
+            out.append(skip_action(3, group, "нет доказательства миграции: одно имя "
+                                             "и типы group + supergroup — мало, это могут "
+                                             "быть два разных чата"))
+        else:
+            out.append(merge_action(3, supers[0], groups, "группа переехала в супергруппу: "
+                                    "подтверждено migrated_from/migrated_to или алиасом "
+                                    "старого id"))
     return out
 
 
@@ -110,7 +127,11 @@ def detect_placeholders(snap: Snapshot) -> list[Action]:
         if e.name != f"{PLACEHOLDER}{e.tg_id}" or e.attributes.get("username"):
             continue
         match = chats.get(e.tg_id, [])
-        if len(match) == 1:
+        if match and e.tg_id not in snap.self_posting:
+            out.append(skip_action(4, [e, *match], "нет доказательства: в событиях нет "
+                                                   "сообщения с sender_id == chat_id — "
+                                                   "совпадение id может быть случайным"))
+        elif len(match) == 1:
             out.append(merge_action(4, match[0], [e], "заглушка tg_user_<id> совпала по tg_id "
                               "с чатом — отправитель и есть этот чат"))
         elif len(match) > 1:

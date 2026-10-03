@@ -126,3 +126,95 @@ async def test_unmerge_restores_ids_and_sequence_stays_usable(pg_db):
         s.add(fresh)
         await s.flush()
         assert fresh.id not in ids.values()
+
+
+@pytest.mark.asyncio
+async def test_multiple_drops_with_duplicate_memberships_and_suggestions(pg_db):
+    from vera_shared.db.models_graph import (
+        EntityRow,
+        MembershipRow,
+        MergeSuggestionRow,
+    )
+    from vera_shared.graph.merge import merge_entities
+    from vera_shared.graph.unmerge import unmerge
+
+    ids = await _world(pg_db)
+    async with pg_db() as s:
+        extra = EntityRow(type="person", name="drop2", attributes={})
+        s.add(extra)
+        await s.flush()
+        ids["drop2"] = extra.id
+        s.add_all([
+            MembershipRow(parent_entity_id=ids["chat"], child_entity_id=extra.id,
+                          source="telegram"),
+            MergeSuggestionRow(entity_a=ids["keep"], entity_b=ids["org"], verdict="same"),
+            MergeSuggestionRow(entity_a=ids["drop"], entity_b=ids["org"], verdict="same"),
+            MergeSuggestionRow(entity_a=ids["org"], entity_b=extra.id, verdict="unsure"),
+        ])
+    report = await merge_entities(ids["keep"], [ids["drop"], ids["drop2"]], "integration")
+    async with pg_db() as s:
+        mems = (await s.execute(select(MembershipRow))).scalars().all()
+        sugs = (await s.execute(select(MergeSuggestionRow))).scalars().all()
+    assert len(mems) == 1 and mems[0].child_entity_id == ids["keep"]
+    assert len(sugs) == 1  # uq_merge_pair не нарушен, дубли склеены
+    await unmerge(report)
+    async with pg_db() as s:
+        assert len((await s.execute(select(MembershipRow))).scalars().all()) == 3
+        assert len((await s.execute(select(MergeSuggestionRow))).scalars().all()) == 3
+
+
+@pytest.mark.asyncio
+async def test_avatar_conflict_keeps_real_photo_and_unmerge_restores_both(pg_db):
+    from vera_shared.db.models_graph import EntityAvatarRow
+    from vera_shared.graph.merge import merge_entities
+    from vera_shared.graph.unmerge import unmerge
+
+    ids = await _world(pg_db)
+    async with pg_db() as s:
+        s.add(EntityAvatarRow(entity_id=ids["keep"], image=None, missing=True))
+    report = await merge_entities(ids["keep"], [ids["drop"]], "integration")
+    async with pg_db() as s:
+        av = (await s.execute(select(EntityAvatarRow))).scalar_one()
+        assert av.entity_id == ids["keep"] and av.image == b"\x00\xff\x10"
+    await unmerge(report)
+    async with pg_db() as s:
+        rows = {a.entity_id: a for a in (await s.execute(select(EntityAvatarRow))).scalars()}
+    assert rows[ids["keep"]].missing is True and rows[ids["drop"]].image == b"\x00\xff\x10"
+
+
+@pytest.mark.asyncio
+async def test_undo_after_partial_apply(pg_db, tmp_path, monkeypatch):
+    from vera_shared.graph import dupe_apply
+    from vera_shared.graph.dupe_apply import apply_plan, undo_report
+    from vera_shared.graph.dupe_detect import build_plan
+    from vera_shared.graph.dupe_snapshot import load_snapshot
+
+    await _world(pg_db)
+    async with pg_db() as s:
+        from vera_shared.db.models_graph import EntityAliasRow, EntityRow
+        for n in range(2):
+            a = EntityRow(type="person", name=f"Ivan Petrenko{n}", attributes={})
+            s.add(a)
+        s.add(EntityRow(type="person", name="Slack", attributes={}))
+        await s.flush()
+        ids = [r.id for r in (await s.execute(select(EntityRow).where(
+            EntityRow.name == "Slack"))).scalars()]
+        s.add(EntityAliasRow(entity_id=ids[0], source="gmail", identifier="no-reply@slack.com"))
+    plan = dupe_apply.plan_document(build_plan(await load_snapshot()), "pg")
+    real, calls = dupe_apply._exec, []
+
+    async def flaky(action, s):
+        calls.append(1)
+        if len(calls) == 2:
+            raise RuntimeError("partial")
+        return await real(action, s)
+
+    monkeypatch.setattr(dupe_apply, "_exec", flaky)
+    async with pg_db() as s:
+        before = (await s.execute(sa_text("SELECT id, type, name FROM entities ORDER BY id"))).all()
+    with pytest.raises(RuntimeError):
+        await apply_plan(plan, tmp_path / "r.json")
+    await undo_report(tmp_path / "r.json")
+    async with pg_db() as s:
+        after = (await s.execute(sa_text("SELECT id, type, name FROM entities ORDER BY id"))).all()
+    assert after == before

@@ -12,7 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_graph import EntityRow
-from vera_shared.graph.merge import MergeError
+from vera_shared.graph.merge_errors import MergeError
 
 ENTITY_TYPES = frozenset({
     "person", "organization", "bot", "group", "supergroup", "channel",

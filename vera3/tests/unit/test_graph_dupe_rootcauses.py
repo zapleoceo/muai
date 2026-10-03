@@ -13,6 +13,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models_graph import (
     EntityAliasRow,
     EntityRow,
+    MembershipRow,
     MergeSuggestionRow,
 )
 from vera_shared.graph import twin_suggest
@@ -248,6 +249,32 @@ class TestTelegramEntitySync:
         async with get_session() as s:
             names = {e.name for e in (await s.execute(select(EntityRow))).scalars()}
         assert "tg_user_555" not in names
+
+    @pytest.mark.asyncio
+    async def test_named_user_with_id_equal_to_group_id_keeps_person_and_membership(self):
+        from ingestor_telegram.entity_sync import sync_message_entities
+        chat = _tg_chat("Chat", 4242, "Room", migrated_to=None, megagroup=False)
+        await sync_message_entities(chat, _user(4242, "Real Human"))
+        async with get_session() as s:
+            ents = {(e.type, e.name) for e in (await s.execute(select(EntityRow))).scalars()}
+            mems = (await s.execute(select(MembershipRow))).scalars().all()
+        assert ("person", "Real Human") in ents and len(mems) == 1
+
+    @pytest.mark.asyncio
+    async def test_migration_race_does_not_abort_person_sync(self, monkeypatch):
+        from ingestor_telegram import entity_sync
+        from sqlalchemy.exc import IntegrityError
+
+        async def boom(*a, **k):
+            raise IntegrityError("insert", {}, Exception("uq_alias"))
+
+        monkeypatch.setattr(entity_sync, "resolve_migrated_chat", boom)
+        legacy = _tg_chat("Chat", 100, "Crew", megagroup=False,
+                          migrated_to=SimpleNamespace(channel_id=200))
+        await entity_sync.sync_message_entities(legacy, _user(1, "Ann"))
+        async with get_session() as s:
+            names = {e.name for e in (await s.execute(select(EntityRow))).scalars()}
+        assert names == {"Ann"}
 
     @pytest.mark.asyncio
     async def test_private_chat_partner_still_becomes_a_person(self):

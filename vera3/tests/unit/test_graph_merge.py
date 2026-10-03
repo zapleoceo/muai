@@ -205,6 +205,39 @@ class TestUnmerge:
         assert await _dump() == before
 
     @pytest.mark.asyncio
+    async def test_suggestion_pair_that_swaps_order_restores_without_collision(self):
+        ids = await _world()
+        before = await _dump()
+        report = await merge_entities(ids["Y"], [ids["K"]], "test")  # keep с бо́льшим id
+        await unmerge(report)
+        assert await _dump() == before
+
+    @pytest.mark.asyncio
+    async def test_unmerge_nulls_link_to_pruned_event(self):
+        from vera_shared.db.models import EventRow
+        from vera_shared.timeutil import utc_naive_now
+        ids = await _world()
+        now = utc_naive_now()
+        async with get_session() as s:
+            ev = EventRow(source="telegram", source_event_id="e", content_text="x",
+                          occurred_at=now, received_at=now, triage_status="done")
+            s.add(ev)
+            await s.flush()
+            drop_edge = (await s.execute(select(RelationshipRow).where(
+                RelationshipRow.subject_entity_id == ids["D1"],
+                RelationshipRow.predicate == "IN"))).scalar_one()
+            drop_edge.derived_from_event_id = ev.id
+        report = await merge_entities(ids["K"], [ids["D1"], ids["D2"]], "test")
+        async with get_session() as s:
+            await s.delete(await s.get(EventRow, ev.id))
+        await unmerge(report)
+        async with get_session() as s:
+            edge = (await s.execute(select(RelationshipRow).where(
+                RelationshipRow.subject_entity_id == ids["D1"],
+                RelationshipRow.predicate == "IN"))).scalar_one()
+        assert edge.derived_from_event_id is None
+
+    @pytest.mark.asyncio
     async def test_unmerge_refuses_when_id_is_taken(self):
         ids = await _world()
         report = await merge_entities(ids["K"], [ids["D1"]], "test")

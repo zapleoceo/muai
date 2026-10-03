@@ -16,7 +16,7 @@ from vera_shared.graph.dupe_keys import (
 from vera_shared.graph.dupe_snapshot import snapshot_from_dict
 
 
-def _snap(*rows):
+def _snap(*rows, self_posting=()):
     """row = (id, type, name, [aliases 'src:ident'], attrs, degree)"""
     entities, aliases, degree = [], [], {}
     for eid, type_, name, als, attrs, deg in rows:
@@ -24,7 +24,8 @@ def _snap(*rows):
         aliases += [{"entity_id": eid, "source": a.split(":", 1)[0],
                      "identifier": a.split(":", 1)[1]} for a in als]
         degree[str(eid)] = deg
-    return snapshot_from_dict({"entities": entities, "aliases": aliases, "degree": degree})
+    return snapshot_from_dict({"entities": entities, "aliases": aliases, "degree": degree,
+                               "self_posting": list(self_posting)})
 
 
 def _tg(eid, name, tg_id, deg=1):
@@ -181,9 +182,21 @@ def _chat(eid, type_, name, tg_id, deg=1, attrs=None):
 class TestCase3MigratedChats:
 
     def test_group_plus_supergroup_with_same_name_merge_into_supergroup(self):
-        snap = _snap(_chat(1, "group", "Team Chat", 100), _chat(2, "supergroup", "team  chat", 200))
+        snap = _snap(_chat(1, "group", "Team Chat", 100),
+                     _chat(2, "supergroup", "team  chat", 200, attrs={"migrated_from": 100}))
         [action] = dupe_detect.detect_migrated_chats(snap)
         assert action["keep"] == 2 and action["drop"] == [1]
+
+    def test_old_id_alias_on_supergroup_is_proof(self):
+        sup = (2, "supergroup", "Chat", ["telegram:chat:200", "telegram:chat:100"],
+               {"tg_id": 200}, 1)
+        snap = _snap(_chat(1, "group", "Chat", 100), sup)
+        assert dupe_detect.detect_migrated_chats(snap)[0]["action"] == "merge"
+
+    def test_same_name_without_migration_proof_is_skipped_for_review(self):
+        snap = _snap(_chat(1, "group", "Team Chat", 100), _chat(2, "supergroup", "Team Chat", 200))
+        [action] = dupe_detect.detect_migrated_chats(snap)
+        assert action["action"] == "skip" and "нет доказательства миграции" in action["reason"]
 
     def test_two_supergroups_with_same_name_are_not_merged(self):
         snap = _snap(_chat(1, "supergroup", "Chat", 100), _chat(2, "supergroup", "Chat", 200))
@@ -205,9 +218,16 @@ class TestCase4Placeholders:
     def test_placeholder_person_merges_into_chat_with_same_tg_id(self):
         snap = _snap((1, "person", "tg_user_555", ["telegram:user:555"],
                       {"tg_id": 555, "username": None}, 1),
-                     _chat(2, "channel", "Some Channel", 555))
+                     _chat(2, "channel", "Some Channel", 555), self_posting=["555"])
         [action] = dupe_detect.detect_placeholders(snap)
         assert action["keep"] == 2 and action["drop"] == [1]
+
+    def test_matching_id_without_self_posting_event_is_skipped(self):
+        snap = _snap((1, "person", "tg_user_555", ["telegram:user:555"],
+                      {"tg_id": 555, "username": None}, 1),
+                     _chat(2, "channel", "Some Channel", 555))
+        [action] = dupe_detect.detect_placeholders(snap)
+        assert action["action"] == "skip" and "sender_id == chat_id" in action["reason"]
 
     def test_real_person_with_matching_id_is_untouched(self):
         snap = _snap(_tg(1, "Real Person", 555), _chat(2, "channel", "Chan", 555))
@@ -253,7 +273,8 @@ class TestBuildPlan:
                      _org(3, "noreply", "noreply@tuneprotect.com"),
                      (4, "person", "tg_user_9", ["telegram:user:9"], {"tg_id": 9}, 1),
                      _chat(5, "group", "Old", 9),
-                     _chat(6, "supergroup", "Old", 10))
+                     _chat(6, "supergroup", "Old", 10, attrs={"migrated_from": 9}),
+                     self_posting=["9"])
         plan = dupe_detect.build_plan(snap)
         assert [a["id"] for a in plan] == list(range(1, len(plan) + 1))
         kinds = [(a["case"], a["action"]) for a in plan]
