@@ -184,12 +184,11 @@ async def test_avatar_conflict_keeps_real_photo_and_unmerge_restores_both(pg_db)
 
 @pytest.mark.asyncio
 async def test_undo_after_partial_apply(pg_db, tmp_path, monkeypatch):
+    from vera_shared.db.models_graph import EntityAliasRow, EntityRow
     from vera_shared.graph import dupe_apply
     from vera_shared.graph.dupe_apply import apply_plan, undo_report
     from vera_shared.graph.dupe_detect import build_plan
     from vera_shared.graph.dupe_snapshot import load_snapshot
-
-    from vera_shared.db.models_graph import EntityAliasRow, EntityRow
     await _world(pg_db)
     # Три независимых сервисных отправителя → ровно три retype в плане; без
     # этого план из одного действия никогда не доходил до точки отказа.
