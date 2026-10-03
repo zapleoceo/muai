@@ -17,6 +17,7 @@ from typing import Any
 
 HEADER_KEYS = frozenset({"Author", "From", "To", "Cc", "Subject", "Chat", "Where",
                          "Date", "Direction"})
+SNIPPET_CHARS = 160
 _HEADER_LINE = re.compile(r"^([A-Za-z]+):[ \t]*(.*)$")
 _ROLE_TAG = re.compile(r"\s*\[[a-z_]+\]\s*$")
 _ADDRESS = re.compile(r"^\s*\"?([^<\"]*?)\"?\s*<([^>]+)>\s*$")
@@ -96,3 +97,8 @@ def describe(parsed: ParsedText, meta: Mapping[str, Any] | None = None) -> Event
     subject = parsed.headers.get("Subject", "")
     venue = subject or _venue(parsed.headers, data)
     return EventLine(_author(parsed.headers, data), venue, parsed.body, subject)
+
+
+def one_line(text: str, limit: int = SNIPPET_CHARS) -> str:
+    flat = " ".join(text.split())
+    return flat if len(flat) <= limit else flat[:limit].rstrip() + "…"

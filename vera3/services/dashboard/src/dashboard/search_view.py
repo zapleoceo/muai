@@ -5,17 +5,17 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from dashboard.event_text import EventLine, describe, normalize_subject, parse_content
+from dashboard.event_text import (
+    EventLine,
+    describe,
+    normalize_subject,
+    one_line,
+    parse_content,
+)
 from dashboard.render import esc, local_dt
 from dashboard.source_registry import resolve_source
 
 SOURCES_SHOWN = 5
-SNIPPET_CHARS = 160
-
-
-def one_line(text: str, limit: int = SNIPPET_CHARS) -> str:
-    flat = " ".join(text.split())
-    return flat if len(flat) <= limit else flat[:limit].rstrip() + "…"
 
 
 def _when(iso: str) -> str:

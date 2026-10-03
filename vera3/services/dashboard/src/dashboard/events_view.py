@@ -7,12 +7,14 @@ from datetime import date, datetime
 from typing import Any
 from urllib.parse import urlencode
 
+from dashboard.event_text import describe, one_line, parse_content
 from dashboard.events_filters import source_options, status_options
 from dashboard.render import data_table, esc, local_dt
 from dashboard.source_registry import resolve_source
 from dashboard.ui.components import status_dot
 
 PAGE_STEP = 50
+PREVIEW_CHARS = 200
 
 # events.triage_status → (эмодзи, пояснение).
 TRIAGE_STATUS_INFO: dict[str, tuple[str, str]] = {
@@ -77,12 +79,16 @@ def _tech_cells(e: Mapping[str, Any]) -> str:
 
 def event_row(e: Mapping[str, Any], tech: bool) -> str:
     src = resolve_source(e["source"] or "")
-    who = esc(e["account"] or "—")
-    preview = esc((e["content_text"] or "")[:160])
+    line = describe(parse_content(e["content_text"]), e.get("metadata"))
+    who = esc(line.who or src.title)
+    venue = f'<div class="muted small">{esc(line.venue)}</div>' if line.venue else ""
+    preview = esc(one_line(line.body or line.subject, PREVIEW_CHARS))
     return (
-        f'<tr class="ev" data-utc="{esc(e["occurred_at"].isoformat())}Z">'
-        f'<td class="muted">{local_dt(e["occurred_at"], "time")}</td>'
-        f'<td title="{esc(src.title)}">{src.icon}</td><td>{who}</td>'
+        f'<tr class="ev row-link" data-href="/events/{e["id"]}" '
+        f'data-utc="{esc(e["occurred_at"].isoformat())}Z">'
+        f'<td class="muted nowrap">{local_dt(e["occurred_at"], "time")}</td>'
+        f'<td title="{esc(src.title)}">{src.icon}</td>'
+        f'<td class="who-cell"><div>{who}</div>{venue}</td>'
         f'<td class="preview"><a href="/events/{e["id"]}">{preview or "—"}</a></td>'
         f'<td>{status_cell(e["triage_status"])}</td>{_tech_cells(e) if tech else ""}</tr>'
     )

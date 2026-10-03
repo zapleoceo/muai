@@ -13,7 +13,7 @@ HTMX_SRI = "sha384-D1Kt99CQMDuVetoL1lrYwg5t+9QdHe7NLX/SoJYkXDFfX37iInKRy5xLSi8nO
 
 VERA_CSS = """
 :root{--vera-ok:#6dd687;--vera-warn:#ffc864;--vera-err:#ff8a8a;--vera-muted:#8a94a0;
---vera-surface:#1a1d24;--vera-line:#2a2d34}
+--vera-surface:#1a1d24;--vera-line:#2a2d34;--vera-ok-bg:#14422c;--vera-warn-bg:#4a3a14;--vera-err-bg:#4a1a1d}
 [data-theme=dark]{--pico-background-color:#0f1115;--pico-color:#e4e6eb;
 --pico-card-background-color:var(--vera-surface);--pico-card-sectioning-background-color:var(--vera-surface);
 --pico-primary:#4dabf7;--pico-primary-background:#2f7fc1;--pico-primary-hover-background:#3a9ce0;
@@ -21,7 +21,8 @@ VERA_CSS = """
 --pico-form-element-background-color:#0f1115;--pico-form-element-border-color:var(--vera-line);
 --pico-del-color:var(--vera-err);--pico-ins-color:var(--vera-ok)}
 body>main{padding-block:1rem}
-nav.top{margin-bottom:1.2rem;border-bottom:1px solid var(--vera-line)}
+nav.top{margin-bottom:1.2rem;border-bottom:1px solid var(--vera-line);flex-wrap:wrap;column-gap:1rem}
+nav.top ul{flex-wrap:wrap}
 nav.top a[aria-current=page]{font-weight:600;color:var(--pico-contrast)}
 nav.top .out{color:var(--vera-muted)}
 .muted,.mute{color:var(--vera-muted)}
@@ -32,9 +33,9 @@ vertical-align:middle;margin-right:.35rem}
 .chip,.pill{display:inline-block;padding:.1rem .6rem;border:1px solid var(--vera-line);
 border-radius:999px;font-size:.8rem;line-height:1.5;color:var(--pico-color)}
 a.chip{text-decoration:none}a.chip.on{border-color:var(--pico-primary);color:var(--pico-primary)}
-.pill.ok{background:#14422c;color:var(--vera-ok);border:0}
-.pill.warn{background:#4a3a14;color:var(--vera-warn);border:0}
-.pill.err{background:#4a1a1d;color:var(--vera-err);border:0}
+.pill.ok{background:var(--vera-ok-bg);color:var(--vera-ok);border:0}
+.pill.warn{background:var(--vera-warn-bg);color:var(--vera-warn);border:0}
+.pill.err{background:var(--vera-err-bg);color:var(--vera-err);border:0}
 .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(9rem,1fr));gap:1rem;margin:1rem 0}
 .stat,.card{background:var(--vera-surface);border:1px solid var(--vera-line);border-radius:var(--pico-border-radius);padding:1rem}
 .stat .k,.card-label{font-size:.75rem;text-transform:uppercase;letter-spacing:.06em;color:var(--vera-muted)}
@@ -49,14 +50,25 @@ button.danger,a.danger[role=button],.danger{--pico-background-color:#5a2226;--pi
 a.danger:not([role=button]){color:var(--vera-err)}
 table.data{font-size:.85rem}
 table.data th{font-size:.72rem;text-transform:uppercase;color:var(--vera-muted)}
-.preview{color:#ccc;max-width:38rem;overflow:hidden;text-overflow:ellipsis}
+td.preview{max-width:0;width:100%;min-width:12rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+td.preview a{color:inherit;text-decoration:none}
+.who-cell{min-width:9rem;max-width:14rem}
+.who-cell div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.nowrap{white-space:nowrap}
+tr.row-link{cursor:pointer}tr.row-link:hover td{background:var(--vera-surface)}
+.kv{display:grid;grid-template-columns:max-content 1fr;gap:.35rem 1.4rem;margin:1rem 0}
+.kv dt{color:var(--vera-muted)}.kv dd{margin:0;overflow-wrap:anywhere}
+.body-text{white-space:pre-wrap;overflow-wrap:anywhere;line-height:1.55;background:var(--vera-surface);
+border:1px solid var(--vera-line);border-radius:var(--pico-border-radius);padding:1rem 1.2rem}
+.crumb{font-size:.85rem;margin:0 0 .6rem}
+.tz-note{margin-top:2rem;font-size:.7rem;text-align:center;color:var(--vera-muted)}
 .answer{background:var(--pico-form-element-background-color);padding:1rem 1.2rem;border-radius:var(--pico-border-radius);
 border:1px solid var(--vera-line);line-height:1.6;margin:1rem 0}
 .answer ul{margin:.5rem 0}.answer li{margin-bottom:.2rem}.answer code{font-size:.85em}
 ul.sources{padding-left:1.1rem}ul.sources li{margin-bottom:.6rem}
 .meta{color:var(--vera-muted);font-size:.8rem}
 .error,.err{color:var(--vera-err)}
-.error{background:#4a1a1d;padding:.8rem 1rem;border-radius:var(--pico-border-radius)}
+.error{background:var(--vera-err-bg);padding:.8rem 1rem;border-radius:var(--pico-border-radius)}
 .htmx-indicator{display:none}.htmx-request .htmx-indicator,.htmx-request.htmx-indicator{display:inline}
 .status-line{display:block;margin:0 0 1rem;font-size:.9rem;color:var(--vera-muted);text-decoration:none}
 .ask input[type=text]{font-size:1.15rem;padding:1rem}

@@ -21,6 +21,15 @@ NAV_ITEMS: tuple[tuple[str, str, str], ...] = (
 _NAV_ALIASES = {"entities": "graph"}
 
 
+# Строка таблицы с data-href открывается кликом; ссылки и кнопки внутри живут своей жизнью.
+ROW_LINK_SCRIPT = """<script>
+document.addEventListener('click',function(e){
+  var r=e.target.closest('tr.row-link');
+  if(r&&!e.target.closest('a,button,input,select,summary'))location.href=r.dataset.href;
+});
+</script>"""
+
+
 def head(title: str) -> str:
     return (
         f'<!DOCTYPE html><html lang="ru" data-theme="dark"><head><meta charset="utf-8">'
@@ -48,7 +57,7 @@ def nav(active: str) -> str:
 
 def page(active: str, body: str) -> str:
     return (head("Vera 3.0") + '<body><main class="container">' + nav(active)
-            + body + TZ_FOOTER + "</main>" + TZ_SCRIPT + DAYS_SCRIPT + "</body></html>")
+            + body + TZ_FOOTER + "</main>" + TZ_SCRIPT + DAYS_SCRIPT + ROW_LINK_SCRIPT + "</body></html>")
 
 
 def standalone_html(title: str, body: str) -> str:
