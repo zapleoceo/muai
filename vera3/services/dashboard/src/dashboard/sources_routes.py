@@ -22,47 +22,48 @@ from dashboard.source_detail import Block, Html
 from dashboard.source_registry import CATALOG, resolve_source
 from dashboard.source_state import State, can_disconnect, state_of
 from dashboard.stats import get_source_detail, get_sources_overview
+from dashboard.ui.components import collapsible, status_dot
 
 router = APIRouter()
 
 _STYLE = """<style>
 .src-list { width:100%; border-collapse:collapse; font-size:14px; }
-.src-list th { font-size:11px; text-transform:uppercase; color:#888; font-weight:500;
+.src-list th { font-size:11px; text-transform:uppercase; color:var(--vera-muted); font-weight:500;
                text-align:left; padding:0 12px 8px 0; white-space:nowrap; }
-.src-list td { padding:12px 12px 12px 0; border-top:1px solid #2a2d34;
+.src-list td { padding:12px 12px 12px 0; background:none; border-top:1px solid var(--vera-line);
                vertical-align:middle; }
-.src-list tr:hover td { background:#171a20; }
+.src-list tr:hover td { background:var(--pico-card-background-color); }
 .src-name { display:flex; align-items:center; gap:10px; }
 .src-name .ico { font-size:17px; width:22px; text-align:center; }
 .src-name a { font-weight:600; }
-.src-how { color:#6b7280; font-size:12px; margin-top:2px; }
+.src-how { color:var(--vera-muted); font-size:12px; margin-top:2px; }
 .num { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
 .act { text-align:right; white-space:nowrap; }
-.act a { font-size:12px; padding:5px 11px; border:1px solid #2a2d34; border-radius:7px;
-         color:#9aa4b2; }
-.act a:hover { border-color:#4dabf7; color:#4dabf7; }
-.act a.danger:hover, a.btn.danger:hover { border-color:#c94a4a; color:#ff9c9c; }
-a.btn { padding:8px 16px; border:1px solid #2a2d34; border-radius:8px;
-        color:#9aa4b2; font-size:13px; }
-a.btn:hover { border-color:#4dabf7; color:#4dabf7; }
+.act a { font-size:12px; padding:5px 11px; border:1px solid var(--vera-line); border-radius:7px;
+         color:var(--vera-muted); }
+.act a:hover { border-color:var(--pico-primary); color:var(--pico-primary); }
+.act a.danger:hover, a.btn.danger:hover { border-color:var(--vera-err); color:var(--vera-err); }
+a.btn { padding:8px 16px; border:1px solid var(--vera-line); border-radius:8px;
+        color:var(--vera-muted); font-size:13px; }
+a.btn:hover { border-color:var(--pico-primary); color:var(--pico-primary); }
 .idle td { opacity:.55; }
-.crumb { font-size:13px; color:#6b7280; margin:0 0 10px; }
+.crumb { font-size:13px; color:var(--vera-muted); margin:0 0 10px; }
 .head { display:flex; align-items:baseline; gap:12px; flex-wrap:wrap; margin:0 0 4px; }
 .head h1 { margin:0; font-size:24px; }
 .strip { display:flex; gap:28px; flex-wrap:wrap; margin:18px 0 4px;
-         padding:16px 0; border-top:1px solid #2a2d34; border-bottom:1px solid #2a2d34; }
+         padding:16px 0; border-top:1px solid var(--vera-line); border-bottom:1px solid var(--vera-line); }
 .strip div { min-width:110px; }
-.strip .k { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:#888; }
+.strip .k { font-size:11px; text-transform:uppercase; letter-spacing:.06em; color:var(--vera-muted); }
 .strip .v { font-size:22px; font-weight:600; margin-top:3px;
             font-variant-numeric:tabular-nums; }
 .blocks { display:grid; grid-template-columns:repeat(auto-fit,minmax(320px,1fr));
           gap:18px; margin-top:22px; }
-.blk { background:#1a1d24; border:1px solid #2a2d34; border-radius:12px; padding:16px 18px; }
+.blk { background:var(--vera-surface); border:1px solid var(--vera-line); border-radius:12px; padding:16px 18px; }
 .blk.wide { grid-column:1/-1; }
 .blk h2 { font-size:13px; text-transform:uppercase; letter-spacing:.06em;
-          color:#888; margin:0 0 12px; }
-.blk .hint { color:#6b7280; font-size:12px; margin-top:12px; line-height:1.45; }
-.note { color:#9aa4b2; font-size:13px; margin:6px 0 0; }
+          color:var(--vera-muted); margin:0 0 12px; }
+.blk .hint { color:var(--vera-muted); font-size:12px; margin-top:12px; line-height:1.45; }
+.note { color:var(--vera-muted); font-size:13px; margin:6px 0 0; }
 </style>"""
 
 
@@ -88,6 +89,27 @@ def _freshness(last: datetime | None, now: datetime, src) -> str:
     if mins < (src.warn_min or src.live_min * 4):
         return f'<span class="pill warn">тихо · {ago(mins)}</span>'
     return f'<span class="pill err">молчит · {ago(mins)}</span>'
+
+
+def source_level(last: datetime | None, now: datetime, src, state: State) -> str | None:
+    """Одна точка на источник: красная — не подключён или замолчал, жёлтая —
+    тихо, зелёная — живой. Серая — у источника нет понятия «свежесть»."""
+    if state.connected is False:
+        return "err"
+    if src.live_min is None:
+        return None
+    if last is None:
+        return "err"
+    mins = max(0, int((now - last).total_seconds() / 60))
+    if mins < src.live_min:
+        return "ok"
+    return "warn" if mins < (src.warn_min or src.live_min * 4) else "err"
+
+
+PROGRESS_BLOCK = (
+    '<div id="live-progress" hx-get="/_progress" hx-trigger="load, every 30s" '
+    'hx-swap="innerHTML"><div class="muted small">загружается…</div></div>'
+)
 
 
 def _sources_in_order(overview: dict) -> list:
@@ -131,7 +153,8 @@ def _row(src, stat: dict, state: State, now: datetime) -> str:
     action = actions(src, state)
     return (
         f'<tr class="{cls}">'
-        f'<td><div class="src-name"><span class="ico">{src.icon}</span>'
+        f'<td><div class="src-name">{status_dot(source_level(stat.get("last"), now, src, state))}'
+        f'<span class="ico">{src.icon}</span>'
         f'<span>{detail}<div class="src-how">{esc(src.how)}</div></span></div></td>'
         f'<td>{connection_pill(state)}</td>'
         f'<td>{_freshness(stat.get("last"), now, src)}</td>'
@@ -163,7 +186,8 @@ async def sources_page(request: Request):
       {_STYLE}
       <div class="head"><h1>Источники</h1></div>
       <p class="note">Всё, откуда Вера берёт события. Имя источника —
-         ссылка на подробности.</p>
+         ссылка на подробности. Точка: зелёная — работает, жёлтая — тихо,
+         красная — не подключён или молчит.</p>
 
       <div class="strip">
         <div><div class="k">Источников</div><div class="v">{len(sources)}</div></div>
@@ -172,9 +196,11 @@ async def sources_page(request: Request):
         <div><div class="k">За сутки</div><div class="v">+{last_24h:,}</div></div>
       </div>
 
+      {collapsible("Конвейер обработки", PROGRESS_BLOCK)}
+
       <table class="src-list">
         <thead><tr>
-          <th>источник</th><th>подключение</th><th>поток</th><th class="num">событий</th>
+          <th>источник</th><th>подключение</th><th>свежесть</th><th class="num">событий</th>
           <th class="num">за сутки</th><th>последнее</th><th></th>
         </tr></thead>
         <tbody>{rows}</tbody>
