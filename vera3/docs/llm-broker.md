@@ -167,6 +167,33 @@ into guaranteed failure: brain-triage `worker.py` checks
 `llm_cooldown_remaining_s("chat:fast")`, media-worker checks `"vision"`;
 both sleep in ≤60s slices and log «LLM circuit open».
 
+### Broker-outage breaker (`vera_shared/llm/outage.py`)
+
+The classes above are *pool* failures. A 5xx / transport error from the
+broker itself fell into `other` and was recorded nowhere: during the
+2026-10 outage two brain-triage replicas sent ~16 400 requests (HTTP 500 on
+`/v1/jobs` and `/v1/embed`) in 77 minutes, because `LLMCallFailed` returned
+events to `pending` and the claim loop retried every 5s.
+
+`note_llm_failure()` now routes errors matching `is_outage_error()`
+(`broker 5xx`, `broker poll 5xx`, `broker network`) to
+`note_broker_outage()`. State is **in-process and shared by every
+capability** (the broker is down, not one pool). After
+`OUTAGE_THRESHOLD` (3) consecutive failures calls are rejected instantly
+(`LLMCoolingDown`) for `pause_for(level)` = 30s, 60s, 120s, … capped at
+300s. After the window the next call is a probe: failing reopens with the
+next level, any success (`reset_llm_cooldown()` -> `note_broker_ok()`)
+closes it and resets the level. Failures of calls already in flight while
+open do not escalate the pause. One WARNING on open, one INFO on close, no
+per-call logging.
+
+Because `llm_cooldown_remaining_s()` returns `max(per-capability cooldown,
+outage_remaining_s())`, every consumer respects it with no extra code:
+`chat`/`chat_async`/`embed` prechecks, brain-triage claim loop and
+reembed, media-worker, claude_session worker. `reset_outage()` exists for
+tests. Per-replica: each process learns about the outage itself after 3
+failures, so the worst case is 3 requests per replica per window.
+
 ### In-process cooldown cache
 
 The cooldown is read **twice per LLM call** — `_circuit_precheck()` before,

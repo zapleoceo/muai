@@ -40,6 +40,12 @@ from vera_shared.control import (
     get_int_setting,
     set_control,
 )
+from vera_shared.llm.outage import (
+    is_outage_error,
+    note_broker_ok,
+    note_broker_outage,
+    outage_remaining_s,
+)
 
 log = logging.getLogger(__name__)
 
@@ -115,6 +121,9 @@ async def note_llm_failure(capability: str, error_message: str) -> str:
         minutes = await get_int_setting(NO_PROVIDER_COOLDOWN_MIN, 30)
         until = now + timedelta(minutes=minutes)
     else:
+        if is_outage_error(error_message):
+            note_broker_outage(error_message)
+            return "outage"
         return kind
     await set_control(f"{_KEY_PREFIX}{capability}", until.isoformat())
     _remember(capability, until)
@@ -123,18 +132,20 @@ async def note_llm_failure(capability: str, error_message: str) -> str:
 
 
 async def llm_cooldown_remaining_s(capability: str) -> float:
-    """Секунд до конца кулдауна capability; 0 — можно звонить."""
+    """Секунд до конца кулдауна capability (или паузы при сбое брокера); 0 — можно звонить."""
+    outage = outage_remaining_s()
     until, hit = _cached(capability)
     if not hit:
         until = _parse_until(await get_control(f"{_KEY_PREFIX}{capability}", ""))
         _remember(capability, until)
     if until is None:
-        return 0.0
-    return max(0.0, (until - datetime.now(UTC)).total_seconds())
+        return outage
+    return max(outage, (until - datetime.now(UTC)).total_seconds())
 
 
 async def reset_llm_cooldown(capability: str) -> None:
     """Успешный вызов закрывает circuit досрочно (пул ожил раньше срока)."""
+    note_broker_ok()
     until, hit = _cached(capability)
     if hit and until is None:
         return   # только что видели: кулдауна нет — читать нечего и стирать нечего
