@@ -125,9 +125,9 @@ Returns `AnswerResponse` with `answer`, `results`, `provider`, `cost_usd`,
 | `/login` | GET | none | TG Login Widget |
 | `/api/tg_login` | GET | TG widget signature | Callback → session cookie |
 | `/logout` | GET | none | Clear cookie |
-| `/` | GET | owner cookie | Home — cards, live progress |
-| `/events` | GET | owner cookie | Event browser with filters. Nav label is "log" — per-event columns show the broker call that triaged it (`request_id`/model/tokens/cost, via `usage_log`); batch-triaged events show "в пачке ✓" instead of a blank (see `domain-model.md`) |
-| `/sources` | GET | owner cookie | Список источников — состояние потока, объём, действие. Строится из `source_registry`, не из ручной разметки |
+| `/` | GET | owner cookie | «Поиск» — главная, поиск вперёд: статусная строка (точка зелёная/жёлтая/красная из `health.assess`, «N событий · +M за сутки», ссылка на `/sources`) и поле «Спросить Веру» (`POST /search-ui`). Карточек конвейера и живого прогресса здесь больше нет |
+| `/events` | GET | owner cookie | «Входящее» — события по дням (Сегодня/Вчера/дата): время · иконка источника · кто · текст · точка статуса. Параметры: `q` (текст, ILIKE), `source`, `status`, `tech=1` (колонки техданных: id, важность, запрос к брокеру, модель, токены, цена — по умолчанию скрыты), `limit` (размер страницы, 50 по умолчанию), `before` (курсор `occurred_at_id` для «Показать ещё»: keyset-страницы по `(occurred_at, id)`, `cursor_of` / `parse_cursor`, без растущего лимита; битый курсор игнорируется; ссылка «← к новым» показывается, когда курсор задан — `cursor_given`). Текстовый поиск идёт под `SET LOCAL statement_timeout` в `SEARCH_TIMEOUT_S` = 5 с: при таймауте страница показывает «Слишком долгий поиск — уточните запрос». Заголовки дней Сегодня/Вчера/дата строит браузер по местному времени из `data-utc` у строк (`DAYS_SCRIPT`); без JS остаются серверные заголовки в UTC (`tr.day-fb`). Пакетно обработанные события в техданных помечены «в пачке» (см. `domain-model.md`). Маршрут прежний, поменялась подпись в меню |
+| `/sources` | GET | owner cookie | Список источников — статусная точка (`source_level`), состояние потока, объём, действие; сворачиваемый блок «Конвейер обработки» (`PROGRESS_BLOCK`: живой прогресс `/_progress` раз в 30 с, пауза и лимит разбора). Строится из `source_registry`, не из ручной разметки |
 | `/sources/{key}` | GET | owner cookie | Подробности источника: подключение, разбивки от провайдера `source_detail`. Источник без провайдера так и говорит |
 | `/api/slack/start` | GET | owner cookie | Форма ввода user-токена Slack (`slack_start_form`) — со списком нужных прав |
 | `/api/slack/start` | POST | owner cookie | Проверка токена через `auth.test` и сохранение в `slack_auth` под шифрованием (`slack_start`). Токен не логируется и в ответ не возвращается |
@@ -140,7 +140,7 @@ Returns `AnswerResponse` with `answer`, `results`, `provider`, `cost_usd`,
 | `/api/instagram/verify` | POST | owner cookie | Submit 2FA/challenge code (`instagram_verify`) → saves encrypted session |
 | `/tokens` | GET | owner cookie | Now redirects to AIbroker — see `llm-broker.md` |
 | `/entities/merge-email-dupes` | POST | owner cookie | Слить дубли по рабочему email (`entities_merge_email_dupes`) — детерминированные пары, группы 3+ не трогаются |
-| `/search-ui` | POST | owner cookie | "Ask Vera" form handler |
+| `/search-ui` | POST | owner cookie | Обработчик «Спросить Веру»: ответ плюс до пяти источников (`sources_html`: ссылка `/events/{id}`, источник, дата, фрагмент) из поля `results` ответа brain-search |
 
 ### Graph visualizer (`dashboard/graph_routes.py`)
 

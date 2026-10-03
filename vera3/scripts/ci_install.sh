@@ -22,7 +22,7 @@ case "$MODE" in
     pip install -e "$ROOT/shared[dev]" aiosqlite
     pip install -e "$ROOT/services/gateway[dev]"
     for svc in dashboard media-worker ingestor-telegram ingestor-gmail \
-               ingestor-trello ingestor-slack brain-search bot-telegram; do
+               ingestor-trello ingestor-slack brain-search bot-telegram mcp; do
       pip install -e "$ROOT/services/$svc"
     done
     pip install "$RUFF" "$DIFF_COVER" "$MYPY"

@@ -63,6 +63,7 @@ async def sqlite_db(tmp_path):
     from vera_shared.db import (  # noqa: F401
         models,
         models_graph,
+        models_mcp,
         models_sources,
         models_voice,
     )
@@ -103,3 +104,17 @@ def _fresh_broker_outage():
     reset_outage()
     yield
     reset_outage()
+
+
+@pytest_asyncio.fixture
+async def ro_env(sqlite_db, monkeypatch):
+    """`MCP_RO_DATABASE_URL` на той же SQLite, что у теста: sql_query ходит
+    отдельным движком, а проверка роли на SQLite пропускается (роли там нет)."""
+    import vera_shared.db.engine as engine_mod
+    from vera_mcp.ro_engine import forget_ro_engine
+
+    url = engine_mod._engine.url.render_as_string(hide_password=False)
+    monkeypatch.setenv("MCP_RO_DATABASE_URL", url)
+    await forget_ro_engine()
+    yield
+    await forget_ro_engine()

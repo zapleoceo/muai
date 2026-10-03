@@ -26,6 +26,7 @@ FLOORS: dict[str, int] = {
     "vera_shared":       88,   # 92.2 (был 88.5, пока tools стоял на нуле)
     "gateway":           85,   # 89.4
     "media-worker":      85,   # 91.0
+    "mcp":               90,   # 98.0
     "brain-triage":      78,   # 81.8
     "ingestor-slack":    70,   # 75.1
     "brain-search":      65,   # 69.0

@@ -13,15 +13,15 @@ import pydantic  # noqa: E402
 import pytest  # noqa: E402
 from fastapi import HTTPException  # noqa: E402
 
-from gateway.claude import (  # noqa: E402
+from gateway.auth import check_internal_secret  # noqa: E402
+from gateway.claude import RememberRequest  # noqa: E402
+from vera_shared.llm.client import LLMCallFailed  # noqa: E402
+from vera_shared.memory.remember import (  # noqa: E402
     SEMANTIC_DEDUP_THRESHOLD,
     SEMANTIC_LOOKBACK_DAYS,
-    LLMCallFailed,
-    RememberRequest,
     _content_hash,
     _cosine,
     _find_semantic_neighbour,
-    check_internal_secret,
 )
 
 
@@ -140,7 +140,7 @@ def test_check_internal_secret_fails_closed_when_unconfigured(monkeypatch):
 async def test_find_semantic_neighbour_returns_none_on_embed_fail():
     """If broker is down, semantic check must skip gracefully (return None),
     NOT crash the endpoint — exact dedup still works."""
-    with patch("gateway.claude.embed",
+    with patch("vera_shared.memory.remember.embed",
                AsyncMock(side_effect=LLMCallFailed("broker down"))):
         result = await _find_semantic_neighbour("hello")
     assert result == (None, None)
@@ -148,7 +148,7 @@ async def test_find_semantic_neighbour_returns_none_on_embed_fail():
 
 @pytest.mark.asyncio
 async def test_find_semantic_neighbour_returns_none_on_empty_vectors():
-    with patch("gateway.claude.embed", AsyncMock(return_value=[])):
+    with patch("vera_shared.memory.remember.embed", AsyncMock(return_value=[])):
         result = await _find_semantic_neighbour("hello")
     assert result == (None, None)
 
@@ -178,8 +178,8 @@ async def test_find_semantic_neighbour_picks_best_match_above_threshold():
     wins, even when it isn't the first row."""
     rows = [(1, [0.0, 1.0]), (2, [1.0, 0.0])]   # row 2 is identical to q_vec
     session = _rows_session(rows)
-    with patch("gateway.claude.embed", AsyncMock(return_value=[[1.0, 0.0]])), \
-         patch("gateway.claude.get_session",
+    with patch("vera_shared.memory.remember.embed", AsyncMock(return_value=[[1.0, 0.0]])), \
+         patch("vera_shared.memory.remember.get_session",
                MagicMock(return_value=_FakeSessionCtx(session))):
         q_vec, match = await _find_semantic_neighbour("hello")
     assert q_vec == [1.0, 0.0]                     # вектор отдаётся для записи
@@ -190,8 +190,8 @@ async def test_find_semantic_neighbour_picks_best_match_above_threshold():
 async def test_find_semantic_neighbour_none_when_all_below_threshold():
     rows = [(1, [0.0, 1.0])]   # orthogonal to q_vec → sim = 0.0
     session = _rows_session(rows)
-    with patch("gateway.claude.embed", AsyncMock(return_value=[[1.0, 0.0]])), \
-         patch("gateway.claude.get_session",
+    with patch("vera_shared.memory.remember.embed", AsyncMock(return_value=[[1.0, 0.0]])), \
+         patch("vera_shared.memory.remember.get_session",
                MagicMock(return_value=_FakeSessionCtx(session))):
         q_vec, match = await _find_semantic_neighbour("hello")
     assert q_vec == [1.0, 0.0]   # даже без матча вектор идёт в event_embeddings
@@ -226,9 +226,9 @@ def _vec_session(db_best, unfilled_rows):
 
 
 async def _neighbour_with_column(session):
-    with patch("gateway.claude.embed", AsyncMock(return_value=[[1.0, 0.0]])), \
-         patch("gateway.claude.vector_column_available", AsyncMock(return_value=True)), \
-         patch("gateway.claude.get_session",
+    with patch("vera_shared.memory.remember.embed", AsyncMock(return_value=[[1.0, 0.0]])), \
+         patch("vera_shared.memory.remember.vector_column_available", AsyncMock(return_value=True)), \
+         patch("vera_shared.memory.remember.get_session",
                MagicMock(return_value=_FakeSessionCtx(session))):
         return await _find_semantic_neighbour("hello")
 

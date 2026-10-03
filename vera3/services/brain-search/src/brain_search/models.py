@@ -18,16 +18,15 @@ class HistoryItem(BaseModel):
 
 
 class SearchQuery(BaseModel):
-    q: str = Field(min_length=1)
-    limit: int = 15
-    days_back: int | None = None
+    q: str = Field(min_length=1, max_length=4000)
+    limit: int = Field(default=15, ge=1, le=100)
     #: Прямая передача истории (legacy/dashboard)
     history: list[HistoryItem] = Field(default_factory=list)
     #: Правильный путь — бот передаёт chat_id, историю тянет сам поиск
     conversation: ConversationCtx | None = None
     #: ReAct-цикл с вызовом инструментов. По умолчанию включён.
     use_agent: bool = True
-    max_steps: int = 6
+    max_steps: int = Field(default=6, ge=1, le=10)
 
 
 class SearchResult(BaseModel):

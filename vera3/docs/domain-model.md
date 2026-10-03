@@ -88,7 +88,7 @@ keys live in AIbroker; Vera holds none. See `llm-broker.md`.
 chat (`/v1/jobs` submit+poll since the 2026-07 async migration — see
 `llm-broker.md`) and `/v1/embed` responses (`request_id` arrives as an
 int, cast to `str` before insert — the column is `VARCHAR`). Joined into the
-dashboard's `/events` (renamed "log") page via a `LEFT JOIN LATERAL` on
+dashboard's `/events` («Входящее») page via a `LEFT JOIN LATERAL` on
 the latest row per `event_id`, showing which model/tokens/cost produced
 each event's triage. Batch-triaged group messages share ONE `usage_log`
 row (the broker call covers N events) — the log page shows those as

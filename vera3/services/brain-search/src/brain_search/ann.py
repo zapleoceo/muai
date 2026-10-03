@@ -24,6 +24,8 @@ from vera_shared.db import vectors
 from vera_shared.db.chunk_vectors import chunk_ann_available, chunk_candidates_sql
 from vera_shared.db.vectors import VEC_TYPE, as_pg_vector
 
+from brain_search.rows import META_COLUMNS, Candidate
+
 log = logging.getLogger(__name__)
 
 #: Сколько грубых кандидатов берём из индекса по Хэммингу перед точным
@@ -71,7 +73,7 @@ def ann_rows_sql(where: str, with_chunks: bool = False) -> Any:
         SELECT events.id, events.source, events.source_event_id,
                events.occurred_at, events.content_text, events.importance,
                NULL AS embedding, 0.0 AS rank, events.account,
-               FALSE AS acc_match, best.sim AS vec_sim
+               FALSE AS acc_match, best.sim AS vec_sim, {META_COLUMNS}
         FROM best JOIN events ON events.id = best.event_id
         ORDER BY best.sim DESC
         LIMIT :ann_top
@@ -104,19 +106,6 @@ async def fetch_ann_rows(session: AsyncSession, q_vec: list[float],
         return []
 
 
-class _SimRow(tuple):
-    """Строка основной выборки с поднятым vec_sim: scoring читает и позиции,
-    и атрибут `vec_sim`, а sqlalchemy Row неизменяем."""
-
-    vec_sim: float
-
-
-def _with_sim(row: Any, sim: float) -> Any:
-    out = _SimRow(tuple(row))
-    out.vec_sim = sim
-    return out
-
-
 def merge_candidates(primary: list[Any], semantic: list[Any]) -> list[Any]:
     """Основная выборка первой, смысловые — только новые id. Порядок тут
     ничего не решает (переранжирует scoring), важна полнота без дублей.
@@ -124,13 +113,13 @@ def merge_candidates(primary: list[Any], semantic: list[Any]) -> list[Any]:
     Событие, найденное обоими путями, остаётся строкой основной выборки (там
     ts_rank и acc_match), но берёт лучшее сходство: из ANN оно могло прийти
     через кусок, а основная выборка знает только вектор события целиком."""
-    ann_sim = {r[0]: getattr(r, "vec_sim", None) for r in semantic}
+    ann_sim = {r[0]: Candidate.of(r).vec_sim for r in semantic}
     merged: list[Any] = []
     for r in primary:
-        own = getattr(r, "vec_sim", None)
+        own = Candidate.of(r).vec_sim
         best = ann_sim.get(r[0])
         if best is not None and (own is None or best > own):
-            merged.append(_with_sim(r, best))
+            merged.append(Candidate.of(r)._replace(vec_sim=best))
         else:
             merged.append(r)
     seen = {r[0] for r in primary}

@@ -28,6 +28,8 @@
 """
 from __future__ import annotations
 
+from brain_search.lang import is_stopword
+
 #: Порядок значим: первая — основная, её ts_rank сохраняет прежний порядок.
 FTS_CONFIGS: tuple[str, ...] = ("russian", "indonesian")
 
@@ -38,20 +40,10 @@ FTS_CONFIGS: tuple[str, ...] = ("russian", "indonesian")
 #: GIN не попадает.
 FTS_COLUMNS: tuple[str, ...] = ("content_text", "transcript_text")
 
-#: У `indonesian` в Postgres нет стоп-листа, а русский стоп-лист не знает
-#: английских и индонезийских служебных слов — «the:*» во второй
-#: конфигурации матчил бы почти каждое английское письмо.
-_FOREIGN_STOPWORDS = frozenset({
-    "the", "and", "or", "of", "to", "in", "on", "for", "is", "are", "at",
-    "by", "an", "it", "be", "with", "from", "this", "that",
-    "yang", "dan", "di", "ke", "dari", "untuk", "ini", "itu", "dengan",
-    "atau", "pada", "ada", "tidak", "juga",
-})
-
-
 def build_ts_query(words: list[str]) -> str:
-    """Слова пользователя → `w1:* | w2:*`; одна строка для всех конфигураций."""
-    kept = [w for w in words if w.lower() not in _FOREIGN_STOPWORDS]
+    """Слова пользователя → `w1:* | w2:*`; одна строка для всех конфигураций.
+    Служебные слова (lang.py) отбрасываются: «the:*» матчил бы пол-корпуса."""
+    kept = [w for w in words if not is_stopword(w)]
     return " | ".join(f"{w}:*" for w in kept)
 
 

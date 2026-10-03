@@ -21,6 +21,7 @@ from sqlalchemy import text
 
 from vera_shared.control import MEDIA_MIN_OWN_MESSAGES, get_int_setting
 from vera_shared.db.engine import get_session
+from vera_shared.events.visibility import NOT_HIDDEN_SQL
 
 log = logging.getLogger(__name__)
 
@@ -67,9 +68,9 @@ async def own_message_count(chat_id: str | int | None) -> int:
             # CAST обязателен: в Postgres `->>` всегда отдаёт текст, а в
             # SQLite (на нём гоняются тесты) сохраняет тип JSON-значения, и
             # число 111 никогда не сравнится со строкой '111'.
-            count = (await s.execute(text("""
+            count = (await s.execute(text(f"""
                 SELECT COUNT(*) FROM events
-                WHERE source = 'telegram'
+                WHERE source = 'telegram' AND {NOT_HIDDEN_SQL}
                   AND CAST(metadata->>'chat_id' AS TEXT) = :cid
                   AND CAST(metadata->>'direction' AS TEXT) = 'sent'
             """), {"cid": key})).scalar_one_or_none() or 0

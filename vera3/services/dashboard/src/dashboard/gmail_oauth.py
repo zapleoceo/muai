@@ -28,6 +28,7 @@ from dashboard.auth import (
     require_owner,
     verify_oauth_state,
 )
+from dashboard.ui.shell import standalone_html
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -46,14 +47,7 @@ SCOPES = " ".join([
 
 
 def _page(title: str, body_html: str, *, code: int = 200) -> HTMLResponse:
-    return HTMLResponse(f"""<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8">
-<title>{title}</title><style>
-body{{font-family:-apple-system,sans-serif;background:#0f1115;color:#e4e6eb;
-display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0}}
-.box{{background:#1a1d24;padding:40px;border-radius:16px;max-width:520px;text-align:center}}
-.email{{font-family:monospace;color:#4dabf7}} a{{color:#4dabf7}}
-.err{{color:#ffaaaa}}</style></head><body><div class="box">{body_html}</div></body></html>""",
-        status_code=code)
+    return HTMLResponse(standalone_html(title, body_html), status_code=code)
 
 
 @router.get("/api/gmail/start")

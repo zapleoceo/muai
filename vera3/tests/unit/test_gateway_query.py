@@ -113,7 +113,7 @@ class _FakeAsyncClient:
 @pytest.mark.asyncio
 async def test_search_proxy_forwards_and_returns_json():
     fake_resp = _FakeResponse(200, json_data={"answer": "", "results": []})
-    with patch("gateway.query.httpx.AsyncClient",
+    with patch("vera_shared.search_client.httpx.AsyncClient",
                MagicMock(return_value=_FakeAsyncClient(response=fake_resp))):
         result = await search_proxy(
             SearchProxyRequest(q="Stepan", use_agent=False),
@@ -124,7 +124,7 @@ async def test_search_proxy_forwards_and_returns_json():
 
 @pytest.mark.asyncio
 async def test_search_proxy_raises_502_on_connection_error():
-    with patch("gateway.query.httpx.AsyncClient",
+    with patch("vera_shared.search_client.httpx.AsyncClient",
                MagicMock(return_value=_FakeAsyncClient(
                    raise_error=httpx.ConnectError("down")))), \
          pytest.raises(HTTPException) as exc:
@@ -136,7 +136,7 @@ async def test_search_proxy_raises_502_on_connection_error():
 @pytest.mark.asyncio
 async def test_search_proxy_forwards_upstream_error_status():
     fake_resp = _FakeResponse(404, text="not found")
-    with patch("gateway.query.httpx.AsyncClient",
+    with patch("vera_shared.search_client.httpx.AsyncClient",
                MagicMock(return_value=_FakeAsyncClient(response=fake_resp))), \
          pytest.raises(HTTPException) as exc:
         await search_proxy(SearchProxyRequest(q="x"),
@@ -171,7 +171,7 @@ async def test_recent_events_shapes_response():
         importance=80, project="itstep",
     )
     session = _events_session([row])
-    with patch("gateway.query.get_session",
+    with patch("vera_shared.events.queries.get_session",
                MagicMock(return_value=_FakeSessionCtx(session))):
         result = await recent_events(hours=24, source=None,
                                       x_internal_secret="test-internal-secret")
@@ -193,7 +193,7 @@ async def test_recent_events_truncated_flag_when_at_cap():
     )
     rows = [row] * RECENT_EVENTS_LIMIT
     session = _events_session(rows)
-    with patch("gateway.query.get_session",
+    with patch("vera_shared.events.queries.get_session",
                MagicMock(return_value=_FakeSessionCtx(session))):
         result = await recent_events(hours=1, source=None,
                                       x_internal_secret="test-internal-secret")
@@ -203,7 +203,7 @@ async def test_recent_events_truncated_flag_when_at_cap():
 @pytest.mark.asyncio
 async def test_recent_events_empty_result():
     session = _events_session([])
-    with patch("gateway.query.get_session",
+    with patch("vera_shared.events.queries.get_session",
                MagicMock(return_value=_FakeSessionCtx(session))):
         result = await recent_events(hours=24, source="gmail",
                                       x_internal_secret="test-internal-secret")
@@ -237,10 +237,10 @@ async def test_entity_context_composes_full_response():
     ctx = {"aliases": [{"source": "telegram", "identifier": "1"}],
            "memberships": [], "recent_30d_messages": 3}
     with patch("gateway.query.find_entity_by_name", AsyncMock(return_value=42)), \
-         patch("gateway.query.get_entity", AsyncMock(return_value=entity)), \
-         patch("gateway.query.list_relationships", AsyncMock(return_value=rel_rows)), \
-         patch("gateway.query.get_entity_context", AsyncMock(return_value=ctx)), \
-         patch("gateway.query.list_members", AsyncMock(return_value=[])):
+         patch("vera_shared.graph.context.get_entity", AsyncMock(return_value=entity)), \
+         patch("vera_shared.graph.context.list_relationships", AsyncMock(return_value=rel_rows)), \
+         patch("vera_shared.graph.context.get_entity_context", AsyncMock(return_value=ctx)), \
+         patch("vera_shared.graph.context.list_members", AsyncMock(return_value=[])):
         result = await entity_context(name="Дмитрий",
                                        x_internal_secret="test-internal-secret")
     assert result["entity_id"] == 42
@@ -264,7 +264,7 @@ async def test_entity_context_404_when_entity_vanishes_after_id_lookup():
     """find_entity_by_name нашла id, а get_entity вернула None (строку
     удалили между двумя вызовами) — надо 404, а не падение на entity.name."""
     with patch("gateway.query.find_entity_by_name", AsyncMock(return_value=42)), \
-         patch("gateway.query.get_entity", AsyncMock(return_value=None)), \
+         patch("vera_shared.graph.context.get_entity", AsyncMock(return_value=None)), \
          pytest.raises(HTTPException) as exc:
         await entity_context(name="X", x_internal_secret="test-internal-secret")
     assert exc.value.status_code == 404

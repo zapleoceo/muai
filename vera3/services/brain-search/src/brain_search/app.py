@@ -8,6 +8,8 @@ SELECT'ов, алгоритм скоринга, кэш самоописания 
 ответственность, потолок ~200 строк».
 
     models.py        формы запроса/ответа
+    lang.py          служебные слова ru/uk/en/id для tsquery
+    pipeline.py      вопрос → кандидаты → скоринг (общий с агентом)
     retrieval.py     выборка кандидатов (один запрос вместо шести копий)
     scoring.py       ранжирование
     self_context.py  «кто я и что подключено» + кэш
@@ -16,22 +18,18 @@ SELECT'ов, алгоритм скоринга, кэш самоописания 
 """
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
-import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Header, HTTPException
 from vera_shared.auth import internal_secret_ok
 from vera_shared.db.engine import close_engine, init_engine
-from vera_shared.llm.client import LLMCallFailed, embed
 
-from brain_search.fts import build_ts_query
 from brain_search.models import AnswerResponse, SearchQuery
+from brain_search.pipeline import embed_query, query_terms
 from brain_search.query_parse import (
-    extract_account_terms,
     is_summary_query,
     parse_time_range,
     resolve_project,
@@ -49,19 +47,9 @@ from brain_search.synthesis import answer as synthesize
 
 log = logging.getLogger(__name__)
 
-# Стопслова и regex — module-level, не пересоздавать на каждый запрос
-STOPWORDS = {
-    "что", "как", "и", "в", "на", "о", "по", "у", "для", "это", "что-то",
-    "ли", "ну", "же", "то", "был", "была", "были", "быть", "есть",
-    "не", "ни", "при", "из", "за", "ты", "я", "мне", "мы", "вы",
-    "он", "она", "они",
-}
-_WORD_RE = re.compile(r"[\wа-яА-ЯёЁ]+")
-
 #: «саммари/что сделано/вытяни всё» → нужна ШИРОКАЯ выборка, иначе полсотни
 #: рабочих сообщений не влезают в top-15.
 SUMMARY_MIN_LIMIT = 60
-EMBED_TIMEOUT_S = 15
 
 
 @asynccontextmanager
@@ -90,24 +78,6 @@ def check_internal_secret(provided: str | None) -> None:
 @app.get("/healthz")
 async def healthz():
     return {"ok": True, "service": "brain-search"}
-
-
-def _ts_query(question: str) -> tuple[str, list[str]]:
-    """Postgres FTS (конфигурации — fts.py) + имена собственные для матча по
-    account. Возвращает (tsquery, слова-кандидаты в account)."""
-    raw = _WORD_RE.findall(question)
-    words = [w for w in raw if len(w) >= 2 and w.lower() not in STOPWORDS]
-    return build_ts_query(words), extract_account_terms(words)
-
-
-async def _embed_query(question: str) -> list[float] | None:
-    """Вектор запроса. Отказ брокера не фатален — остаётся FTS."""
-    try:
-        vecs = await asyncio.wait_for(embed([question]), timeout=EMBED_TIMEOUT_S)
-    except (LLMCallFailed, asyncio.TimeoutError) as e:
-        log.warning("Embed failed: %s — fallback only FTS", e)
-        return None
-    return vecs[0] if vecs else None
 
 
 async def _try_report(question: str) -> AnswerResponse | None:
@@ -145,8 +115,7 @@ async def search(
     if report is not None:
         return report
 
-    q_vec = await _embed_query(query.q)
-    ts, acc_words = _ts_query(query.q)
+    q_vec = await embed_query(query.q)
     time_range = parse_time_range(query.q)
     if time_range:
         # DEBUG, не INFO — query.q содержит текст вопроса Димы (может нести
@@ -155,6 +124,7 @@ async def search(
 
     # «по проекту Itstep» → реальные ящики + рабочие чаты, не текст «itstep»
     project = resolve_project(query.q)
+    ts, acc_words = query_terms(query.q, project)
     summary = is_summary_query(query.q)
     eff_limit = max(query.limit, SUMMARY_MIN_LIMIT) if summary else query.limit
 

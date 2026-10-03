@@ -14,6 +14,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models_sources import GmailAccountRow
 from vera_shared.timeutil import utc_naive_now
 
+from dashboard.progress_view import PROGRESS_STYLE, pause_controls, rate_controls
 from dashboard.render import esc, local_dt, owner_or_blank_401
 from dashboard.stats import get_stats
 
@@ -109,7 +110,7 @@ async def _build_progress_fragment() -> str:
             ago = f" ({mins}м назад)"
         gmail_rows.append(
             f'<div class="row"><span>📧 {esc(g.email)}</span>'
-            f'<span class="mute">last poll: {last}{ago}</span></div>'
+            f'<span class="mute">последний опрос: {last}{ago}</span></div>'
         )
 
     # Полоса меряет долю СДЕЛАННОГО от всего объёма. Раньше знаменателем была
@@ -119,36 +120,11 @@ async def _build_progress_fragment() -> str:
     pct_triage = _pct(st["done"], st["done"] + triage_queue)
     pct_media = _pct(media_total - media_left, media_total)
 
-    if paused:
-        pause_ui = (
-            '<span class="bf-badge bf-paused">⏸ Бэкфилл на паузе</span>'
-            '<button class="bf-btn bf-resume" hx-post="/control/backfill" '
-            'hx-vals=\'{"action":"resume"}\' hx-target="#live-progress" '
-            'hx-swap="innerHTML">▶ Продолжить</button>'
-        )
-    else:
-        pause_ui = (
-            '<span class="bf-badge bf-run">▶ Бэкфилл идёт</span>'
-            '<button class="bf-btn bf-pause" hx-post="/control/backfill" '
-            'hx-vals=\'{"action":"pause"}\' hx-target="#live-progress" '
-            'hx-swap="innerHTML">⏸ Пауза</button>'
-        )
-
-    rate_val = "" if max_per_hour <= 0 else str(max_per_hour)
-    rate_hint = ("без лимита" if max_per_hour <= 0
-                 else f"≈ {max(1, round(max_per_hour / 60))}/мин равномерно")
-    rate_ui = (
-        '<form class="bf-rate" hx-post="/control/backfill-rate" '
-        'hx-target="#live-progress" hx-swap="innerHTML">'
-        '<label>Лимит запросов/час:</label>'
-        f'<input type="number" name="max_per_hour" min="0" step="50" '
-        f'value="{rate_val}" placeholder="0 = без лимита">'
-        '<button class="bf-btn bf-save" type="submit">Сохранить</button>'
-        f'<span class="bf-hint">{rate_hint}</span></form>'
-    )
+    pause_ui = pause_controls(paused)
+    rate_ui = rate_controls(max_per_hour)
 
     return f"""
-      <h2>📥 Live прогресс <span style="font-size:12px;color:#888">(обновляется каждые 10с)</span></h2>
+      <p class="muted small">Обновляется каждые 30 секунд.</p>
 
       <div class="bf-control">{pause_ui}</div>
       <div class="bf-control">{rate_ui}</div>
@@ -157,42 +133,42 @@ async def _build_progress_fragment() -> str:
         <div class="prog-cell">
           <div class="prog-label">Приходят события</div>
           <div class="prog-big">+{ingest_1h:,}<span class="prog-unit"> за час</span></div>
-          <div class="mute" style="font-size:12px">{ingest_24h:,} за последние 24ч</div>
+          <div class="mute small">{ingest_24h:,} за последние 24ч</div>
         </div>
         <div class="prog-cell">
           <div class="prog-label">Триажируется AI</div>
           <div class="prog-big">{triage_1h:,}<span class="prog-unit">/час</span></div>
-          <div class="mute" style="font-size:12px">{triage_24h:,} за последние 24ч</div>
+          <div class="mute small">{triage_24h:,} за последние 24ч</div>
         </div>
         <div class="prog-cell">
           <div class="prog-label">В очереди на триаж</div>
           <div class="prog-big">{triage_queue:,}</div>
-          <div class="mute" style="font-size:12px">ETA: {eta_triage}</div>
-          <div class="mute" style="font-size:11px;margin-top:4px">
-            ⏳ {pending:,} pending
-            {' · ❗ ' + f'{errored:,} retry-pending' if errored else ''}
-            {' · 💀 ' + f'{dead:,} dead' if dead else ''}
+          <div class="mute small">ETA: {eta_triage}</div>
+          <div class="mute small">
+            ⏳ {pending:,} ждут
+            {' · ❗ ' + f'{errored:,} на повторе' if errored else ''}
+            {' · 💀 ' + f'{dead:,} отказ' if dead else ''}
           </div>
         </div>
         <div class="prog-cell">
           <div class="prog-label">Распознавание медиа</div>
           <div class="prog-big">{media_left:,}<span class="prog-unit"> осталось</span></div>
-          <div class="mute" style="font-size:12px">ETA: {eta_media}</div>
-          <div class="mute" style="font-size:11px;margin-top:4px">
+          <div class="mute small">ETA: {eta_media}</div>
+          <div class="mute small">
             🎬 {media_pending:,} в работе · {vision_per_h:.0f}/час
           </div>
         </div>
       </div>
 
       <div style="margin:14px 0">
-        <div class="mute" style="font-size:12px;margin-bottom:6px">
+        <div class="mute small">
           Триаж: разобрано {st['done']:,} из {st['done'] + triage_queue:,}
         </div>
         <div class="bar"><div class="bar-fill" style="width:{pct_triage}%"></div></div>
       </div>
 
       <div style="margin:14px 0">
-        <div class="mute" style="font-size:12px;margin-bottom:6px">
+        <div class="mute small">
           Распознавание: {media_total - media_left:,} из {media_total:,}
           (в очереди держится рабочее окно, а не весь остаток)
         </div>
@@ -205,36 +181,9 @@ async def _build_progress_fragment() -> str:
       </div>
 
       <div style="margin-top:18px">
-        <b style="font-size:13px">Gmail ingestor:</b>
+        <b style="font-size:13px">Почтовые ящики Gmail:</b>
         {''.join(gmail_rows) if gmail_rows else '<div class="mute">нет аккаунтов</div>'}
       </div>
 
-      <style>
-        .prog-grid {{ display:grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-                      gap:14px; margin:14px 0; }}
-        .prog-cell {{ background:#0f1115; border:1px solid #2a2d34; border-radius:10px; padding:14px; }}
-        .prog-label {{ font-size:11px; color:#888; text-transform:uppercase; letter-spacing:0.05em; }}
-        .prog-big {{ font-size:26px; font-weight:600; margin:6px 0 3px; }}
-        .prog-unit {{ font-size:13px; color:#888; font-weight:400; margin-left:4px; }}
-        .bar {{ background:#0f1115; height:8px; border-radius:4px; overflow:hidden;
-                border:1px solid #2a2d34; }}
-        .bar-fill {{ background:linear-gradient(90deg,#4dabf7,#6dd687); height:100%;
-                     transition:width 1s ease; }}
-        .chip {{ display:inline-block; padding:4px 10px; background:#0f1115;
-                 border:1px solid #2a2d34; border-radius:999px; font-size:12px; }}
-        .bf-control {{ display:flex; align-items:center; gap:12px; margin:6px 0 14px; }}
-        .bf-badge {{ font-size:12px; font-weight:600; padding:4px 12px; border-radius:999px; }}
-        .bf-run {{ background:#14422c; color:#6dd687; }}
-        .bf-paused {{ background:#4a3a14; color:#ffc864; }}
-        .bf-btn {{ padding:7px 16px; border:none; border-radius:8px; font-weight:600;
-                   cursor:pointer; font-size:13px; color:#fff; }}
-        .bf-pause {{ background:#b8860b; }}
-        .bf-resume {{ background:#2f9e44; }}
-        .bf-save {{ background:#4dabf7; }}
-        .bf-btn:hover {{ filter:brightness(1.12); }}
-        .bf-rate {{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }}
-        .bf-rate label {{ font-size:12px; color:#aab; }}
-        .bf-rate input {{ width:120px; padding:6px 10px; }}
-        .bf-hint {{ font-size:12px; color:#888; }}
-      </style>
+      {PROGRESS_STYLE}
     """

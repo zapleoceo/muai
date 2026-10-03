@@ -25,6 +25,7 @@ IMPORT_FLOOR_MB = {
     "ingestor-instagram": 82,
     "dashboard": 75,
     "gateway": 68,
+    "mcp": 82,
     "brain-search": 66,
     "ingestor-slack": 59,
     "ingestor-gmail": 59,

@@ -1,40 +1,28 @@
 """Read endpoints for the vera-mcp bridge — vera_recall / vera_recent / vera_context.
 
-These back the read-side tools in ~/.claude/mcp-servers/vera-mcp/server.py
-(docs/mcp-claude.md). Write-side (vera_remember) lives in gateway/claude.py.
+Тонкий HTTP-слой: логика живёт в vera_shared (search_client, events.queries,
+graph.context) и общая с удалённым MCP-сервером (`services/mcp`).
+Write-side (vera_remember) — gateway/claude.py.
 """
 from __future__ import annotations
 
-import logging
-from datetime import timedelta
 from typing import Any
 
-import httpx
 from fastapi import APIRouter, Header, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select
-from vera_shared.db.engine import get_session
-from vera_shared.db.models import EventRow
-from vera_shared.graph.dedup import get_entity_context
-from vera_shared.graph.repo import (
-    find_entity_by_name,
-    get_entity,
-    list_members,
-    list_relationships,
-)
-from vera_shared.timeutil import utc_naive_now
+from vera_shared.events.queries import recent_events as query_recent_events
+from vera_shared.graph.context import RELATIONSHIPS_LIMIT, entity_context_payload
+from vera_shared.graph.repo import find_entity_by_name
+from vera_shared.search_client import SearchUnavailable, search_brain
 
 from gateway.auth import check_internal_secret
 from gateway.config import get_settings
 
-log = logging.getLogger(__name__)
 router = APIRouter()
 
 RECENT_EVENTS_LIMIT = 200
-RELATIONSHIPS_LIMIT = 50
 
-
-# ─── vera_recall → POST /v1/search (proxy to brain-search) ──────────────────
+__all__ = ["RECENT_EVENTS_LIMIT", "RELATIONSHIPS_LIMIT", "router"]
 
 
 class SearchProxyRequest(BaseModel):
@@ -48,32 +36,13 @@ async def search_proxy(
     body: SearchProxyRequest,
     x_internal_secret: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    """Thin proxy to brain-search's /search — no logic here, just auth + forward.
-
-    brain-search's _finish_search() ALWAYS runs a broker LLM call to
-    synthesize `answer`, even with use_agent=false (only the ReAct
-    tool-calling loop is skipped) — and that call carries its own 90s
-    internal timeout with a graceful text fallback. This proxy's timeout
-    must clear brain-search's own ceiling, or we cut it off before its
-    fallback ever gets a chance to fire. Measured in production: a real
-    call took 101s end-to-end under broker load.
-    """
     check_internal_secret(x_internal_secret)
-
-    url = f"{get_settings().search_url}/search"
+    settings = get_settings()
     try:
-        async with httpx.AsyncClient(timeout=100.0) as c:
-            r = await c.post(url, json=body.model_dump(),
-                             headers={"X-Internal-Secret": get_settings().internal_secret})
-    except httpx.HTTPError as e:
-        raise HTTPException(502, f"brain-search unreachable: {e}") from e
-
-    if r.status_code >= 400:
-        raise HTTPException(r.status_code, f"brain-search error: {r.text[:300]}")
-    return r.json()
-
-
-# ─── vera_recent → GET /v1/events/recent ─────────────────────────────────────
+        return await search_brain(settings.search_url, settings.internal_secret,
+                                  body.q, body.limit, body.use_agent)
+    except SearchUnavailable as e:
+        raise HTTPException(e.status, e.detail) from e
 
 
 @router.get("/v1/events/recent")
@@ -83,36 +52,9 @@ async def recent_events(
     x_internal_secret: str | None = Header(default=None),
 ) -> dict[str, Any]:
     check_internal_secret(x_internal_secret)
-
-    since = utc_naive_now() - timedelta(hours=hours)
-    async with get_session() as s:
-        q = select(EventRow).where(EventRow.occurred_at >= since)
-        if source:
-            q = q.where(EventRow.source == source)
-        q = q.order_by(EventRow.occurred_at.desc()).limit(RECENT_EVENTS_LIMIT)
-        rows = (await s.execute(q)).scalars().all()
-
-    return {
-        "count": len(rows),
-        "truncated": len(rows) == RECENT_EVENTS_LIMIT,
-        "events": [
-            {
-                "id": r.id,
-                "source": r.source,
-                "account": r.account,
-                "occurred_at": r.occurred_at.isoformat(),
-                "content_preview": (r.content_text or "")[:300],
-                "importance": r.importance,
-                "project": r.project,
-            }
-            for r in rows
-        ],
-    }
-
-
-# ─── vera_context → GET /v1/entity/context ───────────────────────────────────
-
-
+    events, truncated = await query_recent_events(
+        hours=hours, limit=RECENT_EVENTS_LIMIT, source=source)
+    return {"count": len(events), "truncated": truncated, "events": events}
 
 
 @router.get("/v1/entity/context")
@@ -121,29 +63,10 @@ async def entity_context(
     x_internal_secret: str | None = Header(default=None),
 ) -> dict[str, Any]:
     check_internal_secret(x_internal_secret)
-
     entity_id = await find_entity_by_name(name)
     if entity_id is None:
         raise HTTPException(404, f"no entity matching '{name}'")
-
-    entity = await get_entity(entity_id)
-    if entity is None:
+    payload = await entity_context_payload(entity_id)
+    if payload is None:
         raise HTTPException(404, f"entity {entity_id} vanished")
-    rel_rows = await list_relationships(entity_id, limit=RELATIONSHIPS_LIMIT)
-
-    ctx = await get_entity_context(entity_id)
-    members = await list_members(entity_id)
-
-    return {
-        "entity_id": entity_id,
-        "name": entity.name,
-        "type": entity.type,
-        "canonical_id": entity.canonical_id,
-        "attributes": entity.attributes,
-        "last_seen_at": entity.last_seen_at.isoformat() if entity.last_seen_at else None,
-        "aliases": ctx["aliases"],
-        "memberships": ctx["memberships"],
-        "members": members,
-        "recent_30d_messages": ctx["recent_30d_messages"],
-        "relationships": rel_rows,
-    }
+    return payload
