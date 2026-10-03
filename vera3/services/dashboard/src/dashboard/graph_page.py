@@ -92,4 +92,4 @@ def graph_body(predicates: list[str], pending: int | None) -> str:
             .replace("__DUP_LABEL__", dupes_label(pending))
             .replace("__PRED_OPTS__", predicate_options_html(predicates))
             .replace("__SCRIPT__", CONNECTIONS_SCRIPT + GRAPH_SCRIPT)
-            .replace("__PRED_LABELS__", predicate_labels_json(predicates)))
+            .replace("__PRED_LABELS__", predicate_labels_json([*predicates, "contact"])))

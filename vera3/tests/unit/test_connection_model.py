@@ -1,6 +1,7 @@
 """Связь как пара: вес роли по записям и общению, вывод «работает с», пороги. Без базы."""
 from __future__ import annotations
 
+import itertools
 from datetime import datetime
 
 import pytest
@@ -10,9 +11,14 @@ from vera_shared.graph.pair_stats import PairStats
 A, B = 1, 2
 
 
+_events = itertools.count(1000)
+
+
 def claim(predicate: str, *, s: int = A, o: int = B, conf: float = 0.8, manual: bool = False,
-          fact: str | None = None, day: int = 1, rel_id: int | None = None) -> m.Claim:
-    return m.Claim(s, predicate, o, conf, manual, fact, datetime(2026, 9, day), rel_id)
+          fact: str | None = None, day: int = 1, rel_id: int | None = None,
+          event: int | None = None) -> m.Claim:
+    ev = None if manual else (event if event is not None else next(_events))
+    return m.Claim(s, predicate, o, conf, manual, fact, datetime(2026, 9, day), rel_id, ev)
 
 
 def stats(**kw: int) -> PairStats:
@@ -156,7 +162,7 @@ def test_role_payload_direction_is_relative_to_the_viewer():
 
 @pytest.mark.parametrize("predicate", ["spouse_of", "parent_of", "client_of", "vendor_of"])
 def test_personal_and_commercial_roles_need_two_events_or_a_manual_edit(predicate):
-    assert m.build_connection(A, B, [claim(predicate)], stats(active_days=300)) is None
+    assert m.build_connection(A, B, [claim(predicate)], stats()) is None
     two = m.build_connection(A, B, [claim(predicate), claim(predicate)], stats())
     assert two is not None and two.main.predicate == predicate
     manual = m.build_connection(A, B, [claim(predicate, manual=True)], stats())
@@ -188,3 +194,46 @@ def test_private_dms_alone_infer_and_boost_nothing():
     conn = m.build_connection(A, B, [claim("coworker_of")], stats(dm_days=60, active_days=60))
     assert conn.weight == m.build_connection(A, B, [claim("coworker_of")], stats()).weight
     assert conn.main.inferred is False
+
+
+def test_pair_with_only_hidden_roles_and_contact_keeps_a_neutral_main():
+    conn = m.build_connection(A, B, [claim("spouse_of")], stats(dm_days=300, active_days=300))
+    assert conn.main.predicate == m.NEUTRAL_PREDICATE and conn.hidden == 1
+    assert 0 < conn.weight <= m.NEUTRAL_MAX_WEIGHT and conn.also == ()
+
+
+def test_pair_with_hidden_roles_and_no_contact_is_dropped():
+    assert m.build_connection(A, B, [claim("spouse_of")], stats()) is None
+
+
+def test_support_counts_distinct_events_not_rows():
+    twice = [claim("spouse_of", event=7), claim("spouse_of", event=7, fact="again")]
+    assert m.build_connection(A, B, twice, stats()) is None
+    two = m.build_connection(A, B, [claim("spouse_of", event=7), claim("spouse_of", event=8)],
+                             stats())
+    assert two.main.support == 2
+    same = m.build_connection(A, B, [claim("coworker_of", event=3, conf=0.8)] * 2, stats())
+    assert same.main.support == 1 and same.weight == pytest.approx(0.4)
+
+
+def test_manual_rows_do_not_add_event_support():
+    conn = m.build_connection(A, B, [claim("coworker_of", manual=True), claim("coworker_of")],
+                              stats())
+    assert conn.main.manual and conn.main.support == 1
+
+
+def test_unqualified_hierarchy_side_does_not_block_the_other():
+    claims = [claim("parent_of", s=B, o=A), claim("parent_of", s=B, o=A, event=5),
+              claim("parent_of", s=A, o=B, conf=0.9)]
+    conn = m.build_connection(A, B, claims, stats())
+    assert [(r.predicate, r.subject_id) for r in conn.roles] == [("parent_of", B)]
+    single_only = [claim("parent_of", s=B, o=A), claim("boss_of", s=A, o=B, manual=True)]
+    assert m.build_connection(A, B, single_only, stats()).main.predicate == "boss_of"
+
+
+def test_hierarchy_tie_is_deterministic_by_recency_then_lower_rel_id():
+    newer = claim("boss_of", s=A, o=B, day=9, rel_id=5)
+    older = claim("boss_of", s=B, o=A, day=1, rel_id=2)
+    first = m.build_connection(A, B, [newer, older], stats())
+    again = m.build_connection(A, B, [older, newer], stats())
+    assert first.main.subject_id == again.main.subject_id == A

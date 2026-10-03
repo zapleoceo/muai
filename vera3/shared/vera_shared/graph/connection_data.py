@@ -46,7 +46,8 @@ def _claim(row: Any) -> Claim:
         subject_id=row["s"], predicate=row["predicate"], object_id=row["o"],
         confidence=float(row["confidence"] or 0.0),
         manual=row["derived_from_event_id"] is None, fact=row["fact"],
-        seen_at=_when(row["last_seen_at"]), rel_id=row["id"])
+        seen_at=_when(row["last_seen_at"]), rel_id=row["id"],
+        event_id=row["derived_from_event_id"])
 
 
 async def claims_of(entity_id: int) -> list[Claim]:

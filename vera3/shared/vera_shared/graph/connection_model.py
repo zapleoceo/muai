@@ -59,6 +59,9 @@ WORK_ROLES = frozenset({"coworker_of", "boss_of", "works_at"})
 #: 04.10: «супруга» и «поставщики» из одного упоминания перебивали 400 дней общих чатов).
 NEEDS_REPEAT = frozenset({"spouse_of", "parent_of", "client_of", "vendor_of"})
 MIN_REPEAT_SUPPORT = 2
+#: Пара с общением, но без показываемой роли, не пропадает: «общение без ясной роли».
+NEUTRAL_PREDICATE = "contact"
+NEUTRAL_MAX_WEIGHT = 0.3
 #: Иерархии, где обе стороны одновременно — противоречие.
 HIERARCHY = frozenset({"boss_of", "parent_of"})
 #: При равном весе главной становится роль, стоящая раньше: она точнее.
@@ -79,6 +82,7 @@ class Claim:
     fact: str | None = None
     seen_at: datetime | None = None
     rel_id: int | None = None
+    event_id: int | None = None   # событие-источник: независимость улик считается по нему
 
 
 @dataclass(frozen=True)
@@ -92,6 +96,7 @@ class Role:
     confidence: float
     fact: str | None
     rel_ids: tuple[int, ...] = ()
+    seen_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -170,12 +175,20 @@ def _role_key(claim: Claim) -> RoleKey:
 def _asserted_role(key: RoleKey, claims: list[Claim], work: float) -> Role:
     latest = max(claims, key=lambda c: (c.seen_at or datetime.min, len(c.fact or "")))
     manual = any(c.manual for c in claims)
-    base = 1.0 - math.prod(1.0 - CLAIM_SUPPORT * c.confidence for c in claims)
+    # Независимые улики — разные события-источники: одно сообщение, извлечённое
+    # дважды, считается один раз (лучшая уверенность); ручные строки не в счёте.
+    per_event: dict[object, float] = {}
+    for c in claims:
+        if not c.manual:
+            source = c.event_id if c.event_id is not None else id(c)
+            per_event[source] = max(per_event.get(source, 0.0), c.confidence)
+    base = 1.0 - math.prod(1.0 - CLAIM_SUPPORT * conf for conf in per_event.values())
     boost = work if key[0] in WORK_ROLES else 0.0
     weight = MANUAL_WEIGHT if manual else min(1.0, base * (1.0 + boost))
-    return Role(key[0], key[1], weight, len(claims), manual, False,
+    return Role(key[0], key[1], weight, len(per_event), manual, False,
                 max(c.confidence for c in claims), latest.fact,
-                tuple(sorted(c.rel_id for c in claims if c.rel_id is not None)))
+                tuple(sorted(c.rel_id for c in claims if c.rel_id is not None)),
+                latest.seen_at)
 
 
 def _priority(role: Role) -> tuple[float, int]:
@@ -184,31 +197,40 @@ def _priority(role: Role) -> tuple[float, int]:
     return -role.weight, order
 
 
-def _drop_contradictions(roles: dict[RoleKey, Role]) -> tuple[dict[RoleKey, Role], int]:
-    """Обе стороны иерархии сразу — оставляем ту, где больше поддержки (ручная — выше всего)."""
-    dropped = 0
+def _survivor_rank(role: Role) -> tuple[object, ...]:
+    """Какая сторона иерархии остаётся: ручная, поддержка, вес, свежесть, меньший id записи."""
+    return (role.manual, role.support, role.weight, role.seen_at or datetime.min,
+            -(min(role.rel_ids) if role.rel_ids else 0))
+
+
+def _drop_contradictions(roles: dict[RoleKey, Role]) -> dict[RoleKey, Role]:
+    """Обе стороны иерархии сразу — оставляем лучшую по `_survivor_rank`."""
     for predicate in HIERARCHY:
         sides = [k for k in roles if k[0] == predicate]
-        if len(sides) < 2:
-            continue
-        best = max(sides, key=lambda k: (roles[k].manual, roles[k].support, roles[k].weight))
+        best = max(sides, key=lambda k: _survivor_rank(roles[k]), default=None)
         for key in sides:
             if key != best:
                 del roles[key]
-                dropped += 1
-    return roles, dropped
+    return roles
+
+
+def _neutral(stats: PairStats, interaction: float) -> Role | None:
+    if stats.active_days <= 0:
+        return None
+    return Role(NEUTRAL_PREDICATE, None, NEUTRAL_MAX_WEIGHT * interaction, 0, False, False,
+                0.0, None)
 
 
 def build_connection(a: int, b: int, claims: Iterable[Claim], stats: PairStats,
                      shared_work: bool = False) -> Connection | None:
-    """Связь пары из записей и статистики; None — показывать нечего."""
+    """Связь пары из записей и статистики; None — нет показываемой роли и не на что опереться
+    (записей нет вовсе либо нет общения)."""
     interaction = interaction_strength(stats)
     work = work_strength(stats, shared_work)
     grouped: dict[RoleKey, list[Claim]] = {}
     for claim in claims:
         grouped.setdefault(_role_key(claim), []).append(claim)
     roles = {key: _asserted_role(key, group, work) for key, group in grouped.items()}
-    roles, hidden = _drop_contradictions(roles)
     inferred = inferred_work_weight(stats, shared_work)
     work_key: RoleKey = (INFERRED_PREDICATE, None)
     if inferred and work_key in roles:
@@ -217,10 +239,14 @@ def build_connection(a: int, b: int, claims: Iterable[Claim], stats: PairStats,
                                   inferred=True)
     elif inferred:
         roles[work_key] = Role(INFERRED_PREDICATE, None, inferred, 0, False, True, 0.0, None)
-    shown = [r for r in roles.values() if _qualifies(r)]
+    qualified = {k: r for k, r in roles.items() if _qualifies(r)}
+    shown = list(_drop_contradictions(qualified).values())
+    hidden = len(roles) - len(shown)
     if not shown:
-        return None
-    hidden += len(roles) - len(shown)
+        neutral = _neutral(stats, interaction) if roles else None
+        if neutral is None:
+            return None
+        shown = [neutral]
     low, high = ordered(a, b)
     return Connection(low, high, tuple(sorted(shown, key=_priority)), hidden, interaction,
                       stats, shared_work)
