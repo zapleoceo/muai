@@ -173,7 +173,11 @@ async def test_cursor_runs_resume_on_postgres(pg_db):
 
 @pytest.mark.asyncio
 async def test_merge_moves_link_data_and_unmerge_restores_on_postgres(pg_db):
-    from vera_shared.db.models_links import EntityNicknameRow, EventEntityRow, VoiceSpeakerMapRow
+    from vera_shared.db.models_links import (
+        EntityNicknameRow,
+        EventEntityRow,
+        VoiceSpeakerMapRow,
+    )
     from vera_shared.graph import merge, repo, unmerge
     from vera_shared.links.nicknames import add_nickname
     from vera_shared.links.speakers import put_speaker
