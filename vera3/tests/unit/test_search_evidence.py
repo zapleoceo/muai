@@ -1,17 +1,19 @@
 """Answer context must preserve the evidence needed for causal claims."""
 from __future__ import annotations
 
+import json
 import os
 import sys
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
 sys.path.insert(0, os.path.join(
     os.path.dirname(__file__), "..", "..", "services", "brain-search", "src"))
 
-from brain_search import agent_tools, synthesis
+from brain_search import agent, agent_tools, synthesis
 from brain_search.agent import SYSTEM_PROMPT
 from brain_search.evidence import EVIDENCE_RULES, evidence_excerpt
 from brain_search.models import SearchQuery
@@ -81,3 +83,29 @@ async def test_agent_search_tool_keeps_reason_at_end(monkeypatch):
         agent_tools.SearchEventsArgs(q="Why were ads paused?"))
     assert cause in found["events"][0]["preview"]
     assert "middle of stored event omitted" in found["events"][0]["preview"]
+
+
+@pytest.mark.asyncio
+async def test_agent_next_step_receives_tail_of_search_observation(monkeypatch):
+    cause = "Payment declined, so ads were paused."
+    long_preview = evidence_excerpt("header " + "x" * 5000 + cause, 4000)
+    observation = {"found": 1, "events": [{
+        "event_id": 1, "source": "gmail", "preview": long_preview,
+    }]}
+    replies = [
+        (json.dumps({"action": "tool", "name": "search_events", "params": {"q": "ads"}}), {}),
+        (json.dumps({"action": "answer", "text": "ok"}), {}),
+    ]
+    chat = AsyncMock(side_effect=replies)
+    monkeypatch.setattr(agent, "collect_tools", AsyncMock(return_value=[
+        agent.ToolDescriptor("search_events", "Search", {}, "builtin:search_events")
+    ]))
+    monkeypatch.setattr(agent, "execute_tool", AsyncMock(return_value=observation))
+    monkeypatch.setattr(agent, "chat_async", chat)
+
+    result = await agent.run_agent(user_query="Why?", initial_context="",
+                                   self_context="", history_block="")
+    next_prompt = chat.call_args_list[1].kwargs["messages"][0]["content"]
+    assert result.answer == "ok"
+    assert cause in next_prompt
+    assert "middle of stored event omitted" in next_prompt

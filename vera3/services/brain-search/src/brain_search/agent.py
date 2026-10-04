@@ -29,7 +29,7 @@ from brain_search.agent_tools import (
     execute_tool,
     load_remote_tool_specs,
 )
-from brain_search.evidence import EVIDENCE_RULES
+from brain_search.evidence import EVIDENCE_RULES, evidence_excerpt
 
 log = logging.getLogger(__name__)
 
@@ -99,6 +99,19 @@ SYSTEM_PROMPT = """Ты — Вера, цифровая память Димы. Т
     Не придумывай адрес оригинала, если source_url отсутствует.
 """
 SYSTEM_PROMPT += EVIDENCE_RULES
+
+
+def _observation_text(name: str, obs: Any) -> str:
+    """Keep evidence tails in search observations sent to the next LLM step."""
+    if name == "search_events" and isinstance(obs, dict) and isinstance(obs.get("events"), list):
+        events = obs["events"]
+        selected = [
+            {**event, "preview": evidence_excerpt(event.get("preview"), 650)}
+            for event in events[:3] if isinstance(event, dict)
+        ]
+        obs = {**obs, "events": selected, "omitted_events": max(0, len(events) - 3)}
+    rendered = json.dumps(obs, ensure_ascii=False)
+    return evidence_excerpt(rendered, 3000)
 
 
 async def run_agent(
@@ -198,7 +211,7 @@ async def run_agent(
             transcript.append({"role": "assistant",
                                 "content": json.dumps(parsed, ensure_ascii=False)[:2000]})
             transcript.append({"role": "tool",
-                                "content": f"{name} → {json.dumps(obs, ensure_ascii=False)[:3000]}"})
+                                "content": f"{name} → {_observation_text(name, obs)}"})
             continue
 
         # Unknown action — record and continue
