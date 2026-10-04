@@ -6,7 +6,7 @@
 
 Идёт от больших id к меньшим (свежее важнее), курсор `backfill` в `link_cursor` —
 остановка и повтор безопасны. Новые события не трогает: их ведёт цикл `links_loop` (под замком). `--reset` начинает заново (после смены прозвищ, карты
-голосов или правил); `--status` печатает курсоры и ничего не меняет. Пачка пишется
+голосов или правил); `--reindex-source voice` пересчитывает только созвоны (после правила участников); `--status` печатает курсоры и ничего не меняет. Пачка пишется
 одной транзакцией; между пачками пауза `--pause`, чтобы не мешать триажу. Нужны
 DATABASE_URL и OWNER_TELEGRAM_ID.
 """
@@ -24,6 +24,7 @@ from vera_shared.links.index import (
     DEFAULT_BATCH,
     load_resources,
     max_event_id,
+    reindex_source,
     reset_cursors,
     run_batch,
 )
@@ -35,6 +36,10 @@ async def main(args: argparse.Namespace) -> int:
     try:
         if args.status:
             print({"max_event_id": await max_event_id(), **await read_cursors()})
+            return 0
+        if args.reindex_source:
+            print(f"пересчитано событий источника {args.reindex_source}: "
+                  f"{await reindex_source(args.reindex_source)}")
             return 0
         if args.reset:
             print(f"курсоры сброшены, max(id)={await reset_cursors()}")
@@ -63,4 +68,6 @@ if __name__ == "__main__":
     p.add_argument("--pause", type=float, default=0.5)
     p.add_argument("--reset", action="store_true")
     p.add_argument("--status", action="store_true")
+    p.add_argument("--reindex-source", metavar="SOURCE",
+                   help="пересчитать связи всех событий источника (например voice) и выйти")
     sys.exit(asyncio.run(main(p.parse_args())))

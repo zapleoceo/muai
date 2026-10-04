@@ -10,7 +10,10 @@ from collections.abc import Iterable
 
 from vera_shared.graph.dupe_keys import name_key, name_words
 from vera_shared.links.matcher import PersonNames
+from vera_shared.links.matcher_text import same_word
 from vera_shared.links.name_forms import name_group
+
+MIN_SURNAME_CHARS = 5
 
 
 def _first_keys(name: str) -> set[object]:
@@ -47,10 +50,22 @@ class NameResolver:
         found = self._matching(label, circle)
         return next(iter(found)) if len(found) == 1 else None
 
+    def surname(self, label: str, circle: Iterable[int]) -> int | None:
+        """Одно слово — фамилия (≥5 букв) единственного человека КРУГА («Корчевский» в списке
+        участников созвона); падежи не мешают. Иначе None."""
+        words = name_words(label)
+        if len(words) != 1 or len(words[0]) < MIN_SURNAME_CHARS:
+            return None
+        found = {eid for eid in circle if eid in self._names and (parts := name_words(self._names[eid]))
+                 and len(parts) >= 2 and same_word(parts[-1], words[0])}
+        return next(iter(found)) if len(found) == 1 else None
+
     def resolve(self, label: str, circle: Iterable[int]) -> tuple[int, str] | None:
-        """(сущность, 'full'|'short'); одиночное имя — только внутри круга."""
+        """(сущность, 'full'|'short'|'surname'); одиночное имя и фамилия — только внутри круга."""
         if (eid := self.full(label)) is not None:
             return eid, "full"
         if (eid := self.short(label, circle)) is not None:
             return eid, "short"
+        if (eid := self.surname(label, circle)) is not None:
+            return eid, "surname"
         return None

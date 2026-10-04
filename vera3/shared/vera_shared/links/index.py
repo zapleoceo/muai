@@ -13,8 +13,10 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
+from sqlalchemy import select
 from sqlalchemy.exc import DBAPIError, InterfaceError, OperationalError
 
+from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
 from vera_shared.links.builders import base_links, mention_links
 from vera_shared.links.context import ContextBuilder, EventFacts, EventView
@@ -31,15 +33,19 @@ from vera_shared.links.index_store import (
     write_links,
 )
 from vera_shared.links.index_voice import voice_guesses, voice_links_for
+from vera_shared.links.lock import require_links_lock
 from vera_shared.links.model import Link
 
 __all__ = ["BACKFILL", "DEFAULT_BATCH", "FORWARD", "BatchResult", "Resources", "index_events",
-           "index_views", "links_for", "load_resources", "max_event_id", "reset_cursors",
-           "run_batch"]
+           "index_views", "links_for", "load_resources", "max_event_id", "reindex_source",
+           "reindex_token", "reindex_token_report", "Reindexed",
+           "reset_cursors", "run_batch"]
 
 log = logging.getLogger(__name__)
 
 DEFAULT_BATCH = 500
+#: Потолок пересчёта по токену прозвища; больше — полный `--reset`.
+MAX_TOKEN_REINDEX = 5000
 #: Эти сбои — база или сеть, а не плохое событие: пробрасываем, пачка повторится.
 _INFRASTRUCTURE = (OperationalError, InterfaceError, OSError, TimeoutError)
 
@@ -103,6 +109,58 @@ async def _index_tolerant(views: list[EventView], res: Resources,
                         exc_info=True)
             skipped.append(view.id)
     return total, skipped
+
+
+async def _reindex_ids(ids: list[int], builder: ContextBuilder | None) -> int:
+    if not ids:
+        return 0
+    builder = builder or ContextBuilder()
+    await builder.preload()
+    res = await load_resources(builder.owner)
+    for start in range(0, len(ids), DEFAULT_BATCH):
+        await _index_tolerant(await load_views(ids[start:start + DEFAULT_BATCH]), res, builder)
+    return len(ids)
+
+
+@dataclass(frozen=True)
+class Reindexed:
+    count: int
+    #: Совпавших событий больше `limit`: старые остались без пересчёта (нужен `--reset`).
+    truncated: bool
+
+
+async def reindex_token_report(token: str, case_sensitive: bool = True,
+                               limit: int = MAX_TOKEN_REINDEX,
+                               builder: ContextBuilder | None = None) -> Reindexed:
+    """Пересобрать связи событий, в тексте которых встречается `token` (после добавления
+    прозвища): дёшево по сравнению с полным `--reset`. Берутся `limit` самых новых; `truncated` —
+    были и старее. Идёт под замком цикла связей: занят — `LinksBusyError`."""
+    column = EventRow.content_text
+    match = column.contains(token, autoescape=True) if case_sensitive else column.icontains(
+        token, autoescape=True)
+    async with require_links_lock():
+        async with get_session() as s:
+            found = sorted((await s.execute(select(EventRow.id).where(match)
+                                            .order_by(EventRow.id.desc()).limit(limit + 1))).scalars())
+        ids = found[-limit:] if len(found) > limit else found
+        return Reindexed(await _reindex_ids(ids, builder), len(found) > limit)
+
+
+async def reindex_token(token: str, case_sensitive: bool = True, limit: int = MAX_TOKEN_REINDEX,
+                        builder: ContextBuilder | None = None) -> int:
+    """`reindex_token_report` без признака обрезки: → сколько событий пересчитано."""
+    return (await reindex_token_report(token, case_sensitive, limit, builder)).count
+
+
+async def reindex_source(source: str, limit: int = MAX_TOKEN_REINDEX) -> int:
+    """Пересобрать связи всех событий источника (например `voice` — после правила разбора участников
+    созвона или карты голосов): сотни событий, а не весь мозг. → число событий. Под замком цикла
+    связей: занят — `LinksBusyError`."""
+    async with require_links_lock():
+        async with get_session() as s:
+            ids = sorted((await s.execute(select(EventRow.id).where(EventRow.source == source)
+                                          .order_by(EventRow.id.desc()).limit(limit))).scalars())
+        return await _reindex_ids(ids, None)
 
 
 async def run_batch(name: str, res: Resources, builder: ContextBuilder,

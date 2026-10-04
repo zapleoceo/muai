@@ -4,7 +4,8 @@
     python manage_nicknames.py list
     python manage_nicknames.py add --entity 123 --token XY --scope work
     python manage_nicknames.py suggest --entity 123          # инициалы «Имя Отчество» из переписки
-    python manage_nicknames.py decide --id 5 --approve       # или --reject
+    python manage_nicknames.py decide --id 5 --approve       # одобрение и add сразу пересчитывают связи с токеном
+    python manage_nicknames.py reindex --token XY            # пересчитать связи событий с токеном вручную
     python manage_nicknames.py report --entity 123 --token XY --scope work   # сколько в области / вне (ничего не пишет)
 
 Области: work (рабочие чаты + личка с сильными контактами), contacts (+ группы с двумя его
@@ -20,6 +21,7 @@ import sys
 
 from vera_shared.db.engine import close_engine, init_engine
 from vera_shared.graph.repo import get_entity
+from vera_shared.links.index import reindex_token
 from vera_shared.links.nickname_suggest import scope_report, suggest_initials
 from vera_shared.links.nicknames import (
     NicknameError,
@@ -45,6 +47,7 @@ async def _run(args: argparse.Namespace) -> int:
         print("id:", await add_nickname(args.entity, args.token, scope_kind=args.scope,
                                         scope_ids=scope_ids_for(args.scope, args.chat, args.project),
                                         case_sensitive=not args.ignore_case))
+        print("пересчитано событий:", await reindex_token(args.token, not args.ignore_case))
     elif args.cmd == "suggest":
         entity = await get_entity(args.entity)
         if entity is None:
@@ -52,7 +55,12 @@ async def _run(args: argparse.Namespace) -> int:
             return 2
         print("предложено:", await suggest_initials(entity.id, entity.name))
     elif args.cmd == "decide":
+        pending = {row["id"]: row["token"] for row in await pending_suggestions()}
         print("решено:", await decide_suggestion(args.id, args.approve))
+        if args.approve and args.id in pending:
+            print("пересчитано событий:", await reindex_token(pending[args.id]))
+    elif args.cmd == "reindex":
+        print("пересчитано событий:", await reindex_token(args.token, not args.ignore_case))
     else:
         rule = NicknameRule(args.entity, args.token, not args.ignore_case, args.scope,
                             tuple(scope_ids_for(args.scope, args.chat, args.project)))
@@ -73,6 +81,9 @@ def main() -> int:
         c.add_argument("--project", help="сузить рабочую область проектом, например itstep")
         c.add_argument("--ignore-case", action="store_true")
     sub.add_parser("suggest").add_argument("--entity", type=int, required=True)
+    r = sub.add_parser("reindex")
+    r.add_argument("--token", required=True)
+    r.add_argument("--ignore-case", action="store_true")
     d = sub.add_parser("decide")
     d.add_argument("--id", type=int, required=True)
     d.add_argument("--approve", action=argparse.BooleanOptionalAction, default=True)

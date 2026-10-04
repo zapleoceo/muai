@@ -51,7 +51,7 @@ CASES = (
          (Step("filtered", {"kind": "call", "with_owner": True}, "{topic}"), Step("participants", {"event": "$prev"})),
          PARTIAL, "search находит созвон, но имена участников — только строки metadata.voices, без сущностей"),
     Case("asked_the_team", "Что {lisa} спрашивала у команды в сентябре?", "что говорил человек / период",
-         (Step("timeline", {"entity": "$lisa", "roles": ("author",), **PERIOD}),),
+         (Step("timeline", {"entity": "$lisa", "roles": ("author",), "start": "$start", "end": "$end"}),),
          YES, "timeline по алиасу автора отдавал её сообщения"),
     Case("last_talk_about", "Когда я последний раз говорил с {director} про {topic}?", "когда / пара / тема",
          (Step("filtered", {"participant_ids": ("$owner", "$director")}, "{topic}"),),
@@ -67,14 +67,14 @@ CASES = (
          (Step("filtered", {"participant_ids": ("$director",), "kind": "email"}),),
          PARTIAL, "SQL по заголовку to строкой, без разбора адресов и алиасов"),
     Case("said_about_me", "Что обо мне говорили в рабочих чатах в сентябре?", "упоминания обо мне",
-         (Step("timeline", {"entity": "$owner", "roles": ("mentioned",), **PERIOD}),),
+         (Step("timeline", {"entity": "$owner", "roles": ("mentioned",), "start": "$start", "end": "$end"}),),
          NO, "по полному имени владельца почти ничего: в чатах пишут «Дима», «Дим»"),
     Case("unnamed_speaker", "Кто такой «Собеседник 2» на созвоне про {topic}?", "кто / неопознанный голос",
          (Step("filtered", {"kind": "call"}, "{topic}"), Step("participants", {"event": "$prev"})),
          NO, "ярлык виден, назвать его нечем; теперь он перечислен отдельно и называется voice_speaker_set",
          needs_owner=True),
     Case("assigned_in_september", "Что {director} поручал в сентябре?", "что говорил человек / период",
-         (Step("timeline", {"entity": "$director", "roles": ("author",), **PERIOD}),),
+         (Step("timeline", {"entity": "$director", "roles": ("author",), "start": "$start", "end": "$end"}),),
          YES, "timeline по алиасу автора"),
     Case("together_with", "О чём мы говорили с {lisa} и {oleg} вместе?", "совместное участие",
          (Step("filtered", {"participant_ids": ("$lisa", "$oleg")}),),
@@ -103,19 +103,16 @@ def _resolve(args: dict[str, Any], binds: dict[str, Any], prev: int | None) -> d
     return {k: (tuple(one(v) for v in val) if isinstance(val, tuple) else one(val)) for k, val in args.items()}
 
 
-def _hits(events: list[dict[str, Any]], contains: str | None, binds: dict[str, Any]) -> list[dict[str, Any]]:
-    if not contains:
-        return events
-    words = contains.format(**binds).casefold().split()
-    return [e for e in events if all(w in (e.get("content_preview") or "").casefold() for w in words)]
+def _words(contains: str | None, binds: dict[str, Any]) -> tuple[str, ...]:
+    return tuple(contains.format(**binds).split()) if contains else ()
 
 
 async def _step(step: Step, binds: dict[str, Any], prev: int | None) -> tuple[Any, int | None]:
     a = _resolve(step.args, binds, prev)
     if step.tool == "filtered":
         keys = ("participant_ids", "mentioned_ids", "author_ids", "with_owner", "kind", "start", "end")
-        events, _ = await filtered_events(EventFilter(**{k: a[k] for k in keys if k in a}), 200)
-        events = _hits(events, step.contains, binds)
+        events, _ = await filtered_events(EventFilter(**{k: a[k] for k in keys if k in a}), 200,
+                                          _words(step.contains, binds))
         return events, events[0]["id"] if events else None
     if step.tool == "timeline":
         events = await entity_events(a["entity"], a["start"], a["end"], 50, a["roles"]) or []
@@ -137,6 +134,7 @@ def _non_empty(result: Any) -> bool:
 
 async def run_case(case: Case, binds: dict[str, Any]) -> CaseResult:
     """Исполняет цепочку; ответ возможен, если последний шаг дал непустой результат."""
+    binds = {**PERIOD, **binds}                 # период по умолчанию; `--start/--end` его заменяют
     out = CaseResult(case, False)
     prev: int | None = None
     result: Any = None

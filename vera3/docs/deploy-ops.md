@@ -1232,3 +1232,13 @@ Short version:
    печатает `--dry-run` (`cost_usd` из ответа брокера; free-пул — 0). Очередь = число устоявшихся пар
    (`is_established`): `SELECT count(*) FROM pair_stats WHERE active_days + 0.5*least(shared_groups,4) >= 7.33;`.
    После первого прохода модель зовётся только при изменении пакета (не чаще раза в 3 дня на пару) и раз в 30 дней.
+
+### Связи событий: после добавления прозвища и правил участников созвона
+
+- Прозвище добавляется через MCP `entity_add_nickname` или `manage_nicknames.py add` / `decide --approve`: связи событий с токеном
+  пересчитываются сразу (`reindexed_events`); вручную — `manage_nicknames.py reindex --token ДА`.
+- Правило разбора участников созвона (`NameResolver.surname`, прозвище `global` в списке участников) к уже построенным созвонам
+  применяется `backfill_event_links.py --reindex-source voice` (сотни событий, минуты — основное время уходит на поиск
+  искажённых имён).
+- Вопросы владельца на своих данных: `eval_owner_questions.py --lisa <id> --director <id> --oleg <id> --topic <тема>
+  [--start ISO --end ISO]`; период по умолчанию — сентябрь 2026.
