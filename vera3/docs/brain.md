@@ -640,8 +640,9 @@ remain supported: label possibilities unverified, separate them from the stated
 reason, and say what evidence is missing. If an email's local Date header and
 the event UTC timestamp fall on different calendar days, name the time zone.
 
-An explicit `event:ID` or `событие ID` query reads up to five named IDs directly
-from visible legacy `events`, applying source and people filters but bypassing
+`explicit_event_ids()` recognizes an explicit `event:ID` or `событие ID` query;
+the direct ID path reads up to five named IDs from visible legacy `events`,
+applying source and people filters but bypassing
 FTS, embeddings, and inferred date/project scope. This lets an explicitly named
 stored event be read regardless of its ranked-search position. The request limit still caps
 returned IDs. A missing result means only that the event was not found among
