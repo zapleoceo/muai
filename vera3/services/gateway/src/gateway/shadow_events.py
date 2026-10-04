@@ -84,7 +84,6 @@ async def ingest_shadow_event(
                     thread_id=(event.metadata or {}).get("thread_id"),
                     message_id=(event.metadata or {}).get("message_id"),
                     source_revision=1,
-                    shadow_bootstrap_legacy=True,
                 )
                 original = event.model_copy(
                     update={
@@ -94,7 +93,8 @@ async def ingest_shadow_event(
                     }
                 )
                 await ingest_instagram_shadow(
-                    conn, original, legacy_event_id=event_id, in_transaction=True
+                    conn, original, legacy_event_id=event_id, in_transaction=True,
+                    receipt_origin="legacy_snapshot",
                 )
 
         await ingest_instagram_shadow(

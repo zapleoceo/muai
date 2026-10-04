@@ -61,16 +61,19 @@ async def _active_session(conn: AsyncConnection, account: str) -> bool:
 async def ingest_instagram_shadow(
     conn: AsyncConnection, event: RawEvent, *, legacy_event_id: int,
     in_transaction: bool = False,
+    receipt_origin: str = "source",
 ) -> bool:
     """Require the active connector account; preserve the original legacy event ID."""
     if conn.in_transaction() != in_transaction:
         raise Quarantine("shadow adapter transaction state mismatch")
+    if receipt_origin not in {"source", "legacy_snapshot"}:
+        raise Quarantine("invalid Instagram receipt origin")
     async with (nullcontext() if in_transaction else conn.begin()):
-        return await _ingest_in_transaction(conn, event, legacy_event_id)
+        return await _ingest_in_transaction(conn, event, legacy_event_id, receipt_origin)
 
 
 async def _ingest_in_transaction(
-    conn: AsyncConnection, event: RawEvent, legacy_event_id: int
+    conn: AsyncConnection, event: RawEvent, legacy_event_id: int, receipt_origin: str
 ) -> bool:
     account, external_id = _identity(event)
     await _lock_checkpoint(conn, {"provider": "instagram", "account_id": account})
@@ -165,7 +168,7 @@ async def _ingest_in_transaction(
         active_instagram_account=account,
         in_transaction=True,
     )
-    origin = "legacy_snapshot" if (event.metadata or {}).get("shadow_bootstrap_legacy") else "source"
+    origin = receipt_origin
     receipt = {
         "account": account,
         "external_id": external_id,

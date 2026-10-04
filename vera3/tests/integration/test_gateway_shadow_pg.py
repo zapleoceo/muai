@@ -128,11 +128,32 @@ async def test_gateway_bootstraps_existing_original_and_rejects_other_account(mo
                 ))).all()
                 assert [r.content_text for r in receipts] == ["original", "edited"]
                 assert receipts[0].origin == "legacy_snapshot"
-                assert receipts[0].metadata["shadow_bootstrap_legacy"] is True
+                assert receipts[0].metadata["source_revision"] == 1
                 assert all(
                     r.payload_hash == receipt_hash(r.content_text, r.metadata, r.occurred_at)
                     for r in receipts
                 )
+        finally:
+            await route_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_gateway_ignores_untrusted_receipt_origin_marker(monkeypatch):
+    async with isolated_migrated_shadow_schema() as (engine, schema):
+        async with engine.connect() as conn:
+            await use_schema(conn, schema)
+            await conn.execute(text("INSERT INTO instagram_sessions VALUES ('owner-a',true)"))
+            await conn.commit()
+        route_engine = await gateway_engine(monkeypatch, schema)
+        try:
+            event = message("A", 1)
+            event.metadata["shadow_bootstrap_legacy"] = True
+            await send(event)
+            async with engine.connect() as conn:
+                await use_schema(conn, schema)
+                assert (await conn.execute(text(
+                    "SELECT origin FROM brain_revision_receipts"
+                ))).scalar_one() == "source"
         finally:
             await route_engine.dispose()
 
