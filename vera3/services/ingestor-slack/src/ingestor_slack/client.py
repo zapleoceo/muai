@@ -122,3 +122,9 @@ class SlackClient:
 
     async def user_info(self, user_id: str) -> dict[str, Any]:
         return (await self._call("users.info", user=user_id)).get("user") or {}
+
+    async def get_permalink(self, channel: str, message_ts: str) -> str | None:
+        """Return Slack's canonical message URL when available."""
+        data = await self._call("chat.getPermalink", channel=channel,
+                                message_ts=message_ts)
+        return str(data.get("permalink") or "") or None

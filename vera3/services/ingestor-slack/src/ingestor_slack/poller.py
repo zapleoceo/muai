@@ -40,6 +40,8 @@ MAX_PAGES = int(os.environ.get("SLACK_MAX_PAGES", "20"))
 # проверяется реже, а не выпадает.
 THREADS_PER_RUN = int(os.environ.get("SLACK_THREADS_PER_RUN", "20"))
 THREAD_WATCH_DAYS = int(os.environ.get("SLACK_THREAD_WATCH_DAYS", "21"))
+PERMALINK_TIMEOUT_S = 5
+PERMALINK_CONCURRENCY = 8
 DENY_CHANNELS = frozenset(
     x.strip().lstrip("#").lower()
     for x in os.environ.get("SLACK_DENY_CHANNELS", "").split(",") if x.strip()
@@ -122,9 +124,26 @@ class Profiles:
 
 
 async def _events_from(messages: list[dict], row: SlackConversationRow,
-                       me_id: str, account: str, names: Profiles) -> list[dict]:
+                       me_id: str, account: str, names: Profiles,
+                       client: SlackClient) -> list[dict]:
     await names.resolve({str(m.get("user") or "") for m in messages})
     specs = []
+    semaphore = asyncio.Semaphore(PERMALINK_CONCURRENCY)
+
+    async def add_permalink(spec: dict, ts: str) -> None:
+        async with semaphore:
+            try:
+                permalink = await asyncio.wait_for(
+                    client.get_permalink(row.conversation_id, ts),
+                    timeout=PERMALINK_TIMEOUT_S)
+            except Exception as e:  # noqa: BLE001 - a link must not block ingestion
+                log.warning("slack/%s: permalink unavailable for %s: %s",
+                            row.name, ts, e)
+            else:
+                if permalink:
+                    spec["metadata_"]["permalink"] = permalink
+
+    links = []
     for message in messages:
         spec = message_to_event(
             message, channel_id=row.conversation_id, channel_name=row.name,
@@ -133,6 +152,9 @@ async def _events_from(messages: list[dict], row: SlackConversationRow,
         )
         if spec:
             specs.append(spec)
+            links.append(add_permalink(spec, str(message["ts"])))
+    if links:
+        await asyncio.gather(*links)
     return specs
 
 
@@ -156,7 +178,7 @@ async def poll_threads(client: SlackClient, row: SlackConversationRow,
         # Первый элемент ответа — корневое сообщение; оно уже пришло историей.
         replies = [m for m in messages if str(m.get("ts")) != thread.thread_ts]
         fresh = await store.save_events(
-            await _events_from(replies, row, me_id, account, names),
+            await _events_from(replies, row, me_id, account, names, client),
             profiles=names)
         saved += len(fresh)
         cursor = newest_ts(replies) if complete else None
@@ -184,7 +206,7 @@ async def poll_conversation(client: SlackClient, row: SlackConversationRow,
         return 0
 
     saved = len(await store.save_events(
-        await _events_from(messages, row, me_id, account, names),
+        await _events_from(messages, row, me_id, account, names, client),
         profiles=names))
 
     # Корневые сообщения тредов — под наблюдение, ответы придут отдельно.
