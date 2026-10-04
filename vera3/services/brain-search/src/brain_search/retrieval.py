@@ -97,9 +97,14 @@ async def fetch_candidates(
     *, ts_query: str, acc_words: list[str], time_range, project,
     q_vec: list[float] | None, limit: int, source: str | None = None,
     links: LinkScope | None = None,
+    exact_event_ids: list[int] | None = None,
 ) -> Candidates:
     """Кандидаты для скоринга: основной режим + смысловые из ANN."""
     async with get_session() as s:
+        if exact_event_ids:
+            rows = await _exact_rows(s, exact_event_ids[:limit], source, links,
+                                     time_range=time_range, project=project)
+            return Candidates([Candidate.of(row) for row in rows], "exact_id")
         found, with_vec = await _primary_with_degrade(
             s, ts_query=ts_query, acc_words=acc_words, time_range=time_range,
             project=project, q_vec=q_vec, limit=limit, source=source, links=links)
@@ -111,6 +116,22 @@ async def fetch_candidates(
             log.info("retrieval=%s+ann: %d → %d", found.mode, before, len(found.rows))
     found.rows = [Candidate.of(r) for r in found.rows]
     return found
+
+
+async def _exact_rows(s, event_ids: list[int], source: str | None,
+                      links: LinkScope | None, *, time_range=None, project=None) -> list[Any]:
+    """Read named legacy events independently of FTS and embedding freshness."""
+    scope_sql, scope_params = semantic_filter(project, time_range, source, links)
+    binds = {f"event_id_{i}": event_id for i, event_id in enumerate(event_ids)}
+    placeholders = ",".join(f":event_id_{i}" for i in range(len(event_ids)))
+    stmt = _select(
+        extra_cols="1000.0 AS rank, account", join="LEFT JOIN",
+        where=f"events.id IN ({placeholders}) AND ({scope_sql})",
+        order="events.id", limit_sql=str(len(event_ids)),
+    )
+    rows = list((await s.execute(stmt, binds | scope_params)).all())
+    by_id = {Candidate.of(row).id: row for row in rows}
+    return [by_id[event_id] for event_id in event_ids if event_id in by_id]
 
 
 async def _run(s, stmt, params: dict[str, Any], mode: str,

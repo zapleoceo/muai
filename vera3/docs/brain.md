@@ -640,6 +640,18 @@ remain supported: label possibilities unverified, separate them from the stated
 reason, and say what evidence is missing. If an email's local Date header and
 the event UTC timestamp fall on different calendar days, name the time zone.
 
+`explicit_event_ids()` recognizes an explicit `event:ID` or `событие ID` query;
+the direct ID path reads up to five named IDs from visible legacy `events`,
+applying the same visibility, source, people, date, and project filters as ordinary
+retrieval, including structured account restrictions, but bypassing FTS and embeddings.
+Unmarked numbers require at least five digits so a year cannot become an ID;
+four-digit IDs need their own `event:` or `событие ID` marker. This lets an explicitly named
+stored event be read regardless of its ranked-search position. The request limit still caps
+returned IDs. A missing result means only that the event was not found among
+accessible records for this request; it does not prove nonexistence upstream.
+Ordinary ranked search remains a bounded sample and cannot establish that an
+unreturned event does not exist.
+
 ### Monthly reports (`reports.py`) — exact aggregation, no LLM
 
 For requests like "отчёт заказов помесячно за 2026 год": summing numbers

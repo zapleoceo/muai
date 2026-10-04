@@ -30,7 +30,7 @@ from vera_shared.links.context import owner_entity_id
 from vera_shared.links.filters import FilterError, build_where, from_dict
 
 from brain_search.models import AnswerResponse, SearchQuery
-from brain_search.pipeline import embed_query, query_terms
+from brain_search.pipeline import embed_query, explicit_event_ids, query_terms
 from brain_search.query_parse import (
     is_summary_query,
     parse_time_range,
@@ -126,11 +126,12 @@ async def search(
     """Гибридный поиск + LLM-синтез ответа."""
     check_internal_secret(x_internal_secret)
 
-    report = await _try_report(query.q)
+    exact_ids = explicit_event_ids(query.q)
+    report = None if exact_ids else await _try_report(query.q)
     if report is not None:
         return report
 
-    q_vec = await embed_query(query.q)
+    q_vec = await embed_query(query.q) if not exact_ids else None
     time_range = parse_time_range(query.q)
     if time_range:
         # DEBUG, не INFO — query.q содержит текст вопроса Димы (может нести
@@ -140,13 +141,20 @@ async def search(
     # «по проекту Itstep» → реальные ящики + рабочие чаты, не текст «itstep»
     project = resolve_project(query.q)
     ts, acc_words = query_terms(query.q, project)
-    summary = is_summary_query(query.q)
+    summary = False if exact_ids else is_summary_query(query.q)
     eff_limit = max(query.limit, SUMMARY_MIN_LIMIT) if summary else query.limit
 
     found = await fetch_candidates(
         ts_query=ts, acc_words=acc_words, time_range=time_range,
         project=project, q_vec=q_vec, limit=eff_limit, links=await _link_scope(query),
+        exact_event_ids=exact_ids,
     )
+
+    if exact_ids and not found.rows:
+        return AnswerResponse(
+            answer="Указанное событие не найдено среди доступных записей. Это не доказывает, что события не существует в источнике или что поиск охватывает все данные.",
+            results=[], provider=None, cost_usd=0,
+        )
 
     return await synthesize(
         query, found.rows, q_vec,
