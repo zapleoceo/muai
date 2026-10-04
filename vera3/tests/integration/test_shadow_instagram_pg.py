@@ -221,7 +221,7 @@ async def test_gateway_and_standalone_adapter_use_same_event_then_checkpoint_loc
             ingest_instagram_shadow(standalone, source_event("first"), legacy_event_id=8123)
         )
         try:
-            for _ in range(100):
+            for _ in range(500):
                 waiting = (await gateway.execute(text(
                     "SELECT wait_event_type FROM pg_stat_activity WHERE pid=:pid"
                 ), {"pid": backend_pid})).scalar_one()

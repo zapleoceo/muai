@@ -239,6 +239,13 @@ async def read_instagram_shadow(
             receipts[key] = await resolve_instagram_receipt(
                 conn, account, key[0], key[1], authorized_scopes={scope}
             )
+        expected_anchor = (
+            f"receipt:instagram:{account}:{key[0]}:{key[1]}:"
+            f"event:{receipts[key]['legacy_event_id']}:"
+            f"sha256:{receipts[key]['payload_hash']}"
+        )
+        if claim["evidence_anchor"] != expected_anchor:
+            raise Quarantine("Instagram claim evidence anchor mismatch")
         claim["receipt_origin"] = receipts[key]["origin"]
         claim["receipt_payload_hash"] = receipts[key]["payload_hash"]
     return claims
@@ -260,9 +267,11 @@ async def resolve_instagram_receipt(
         await conn.execute(
             text(
                 "SELECT q.content_text,q.metadata,q.occurred_at,q.payload_hash,q.origin,"
-                "r.content_hash FROM brain_revision_receipts q JOIN brain_revisions r "
+                "r.content_hash,l.event_id FROM brain_revision_receipts q JOIN brain_revisions r "
                 "ON (r.provider,r.account_id,r.object_type,r.external_id,r.revision)="
                 "(q.provider,q.account_id,q.object_type,q.external_id,q.revision) "
+                "JOIN brain_event_links l ON (l.provider,l.account_id,l.object_type,l.external_id)="
+                "(q.provider,q.account_id,q.object_type,q.external_id) "
                 "WHERE q.provider='instagram' AND q.account_id=:account "
                 "AND q.object_type='message' AND q.external_id=:external_id "
                 "AND q.revision=:revision"
@@ -289,6 +298,7 @@ async def resolve_instagram_receipt(
         "occurred_at": receipt.occurred_at,
         "payload_hash": digest,
         "origin": receipt.origin,
+        "legacy_event_id": receipt.event_id,
     }
 
 

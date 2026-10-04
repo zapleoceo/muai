@@ -220,6 +220,19 @@ async def test_receipt_resolver_checks_scope_revocation_and_hash(monkeypatch):
                     await resolve_instagram_receipt(
                         conn, "owner-a", sid, "1", authorized_scopes={"instagram:owner-a"}
                     )
+                await conn.commit()
+                await conn.execute(text(
+                    "UPDATE brain_revision_receipts SET payload_hash=:digest "
+                    "WHERE provider='instagram' AND account_id='owner-a'"
+                ), {"digest": receipt["payload_hash"]})
+                await conn.execute(text(
+                    "UPDATE brain_claims SET evidence_anchor='tampered-anchor'"
+                ))
+                await conn.commit()
+                with pytest.raises(Quarantine, match="anchor mismatch"):
+                    await read_instagram_shadow(
+                        conn, "owner-a", known_at="2099-01-01T00:00:00Z"
+                    )
         finally:
             await route_engine.dispose()
 
