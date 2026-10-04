@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import base64
 import os
+from datetime import UTC, datetime
 
 import pytest
 from shadow_pg_support import isolated_migrated_shadow_schema, use_schema
 from sqlalchemy import text
 from vera_shared.ingest import gmail_protocol as protocol
-from vera_shared.ingest.gmail_pilot import pilot_status, register_synthetic_mailbox
+from vera_shared.ingest.gmail_pilot import (
+    apply_next,
+    pilot_status,
+    read_pilot,
+    register_synthetic_mailbox,
+)
 from vera_shared.ingest.shadow_types import Quarantine
 
 pytestmark = pytest.mark.skipif(
@@ -294,9 +300,21 @@ async def test_history_404_full_sync_pages_and_bridge(monkeypatch):
             anchor = await protocol.finish_full_sync(conn, SUB, AT)
             assert anchor == str(BIG + 500)
             assert await protocol.full_sync_state(conn, SUB) == "bridging"
+            assert await apply_next(conn, SUB)
+            assert await apply_next(conn, SUB)
+            assert (
+                await read_pilot(
+                    conn, SUB, verified_sub=SUB, known_at=datetime.now(UTC).isoformat()
+                )
+                == []
+            )
+            await conn.rollback()
             assert (await pilot_status(conn, SUB))["coverage_break"] is True
             await conn.rollback()
-            bridge = {"historyId": str(BIG + 550), "history": []}
+            bridge = {
+                "historyId": str(BIG + 550),
+                "history": [history(str(BIG + 530), "a", "messagesDeleted")],
+            }
             await protocol.capture_history_response(
                 conn,
                 SUB,
@@ -306,8 +324,28 @@ async def test_history_404_full_sync_pages_and_bridge(monkeypatch):
             )
             assert await protocol.finish_history_chain(conn, SUB)
             assert await protocol.full_sync_state(conn, SUB) == "complete"
+            assert (
+                await read_pilot(
+                    conn, SUB, verified_sub=SUB, known_at=datetime.now(UTC).isoformat()
+                )
+                == []
+            )
+            await conn.rollback()
+            assert await apply_next(conn, SUB)
             assert (await pilot_status(conn, SUB))["captured_cursor"] == str(BIG + 550)
             assert (await pilot_status(conn, SUB))["coverage_break"] is True
+            await conn.rollback()
+            assert (
+                len(
+                    await read_pilot(
+                        conn,
+                        SUB,
+                        verified_sub=SUB,
+                        known_at=datetime.now(UTC).isoformat(),
+                    )
+                )
+                == 1
+            )
 
 
 @pytest.mark.asyncio

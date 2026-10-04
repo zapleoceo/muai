@@ -410,6 +410,13 @@ async def test_empty_present_resync_keeps_coverage_break_and_advances_cursors(
             ).scalar_one()
             await conn.rollback()
             await record_history_404(conn, SUB)
+            assert (
+                await read_pilot(
+                    conn, SUB, verified_sub=SUB, known_at=datetime.now(UTC).isoformat()
+                )
+                == []
+            )
+            await conn.rollback()
             await capture_present_resync(conn, SUB, "500", [], "2026-10-04T01:00:00Z")
             status = await pilot_status(conn, SUB)
             assert status["coverage_break"] is True

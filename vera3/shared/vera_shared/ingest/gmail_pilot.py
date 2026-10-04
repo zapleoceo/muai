@@ -59,7 +59,8 @@ async def _account(conn: AsyncConnection, sub: str) -> Row[tuple[Any, ...]]:
     row = (
         await conn.execute(
             text(
-                "SELECT captured_cursor,applied_cursor,coverage_break,resync_required "
+                "SELECT captured_cursor,applied_cursor,coverage_break,"
+                "coverage_break_at,resync_required "
                 "FROM brain_gmail_pilot_accounts "
                 "WHERE google_sub=:sub AND is_active FOR UPDATE"
             ),
@@ -329,7 +330,7 @@ async def record_history_404(conn: AsyncConnection, sub: str) -> None:
         await conn.execute(
             text(
                 "UPDATE brain_gmail_pilot_accounts SET coverage_break=true,"
-                "resync_required=true "
+                "coverage_break_at=clock_timestamp(),resync_required=true "
                 "WHERE google_sub=:sub"
             ),
             {"sub": sub},
@@ -699,7 +700,30 @@ async def read_pilot(
     _enabled()
     if verified_sub != _sub(sub):
         raise Quarantine("verified Google subject mismatch")
-    await _account(conn, sub)
+    account = await _account(conn, sub)
+    as_of = datetime.fromisoformat(utc_timestamp(known_at))
+    if account.resync_required and account.coverage_break_at is not None:
+        boundary = account.coverage_break_at
+        boundary = boundary.replace(tzinfo=UTC) if boundary.tzinfo is None else boundary
+        if as_of >= boundary:
+            return []
+    full_sync = (
+        await conn.execute(
+            text(
+                "SELECT state,started_at FROM brain_gmail_protocol_full_sync WHERE google_sub=:sub"
+            ),
+            {"sub": sub},
+        )
+    ).one_or_none()
+    if full_sync is not None and (
+        full_sync.state != "complete"
+        or account.applied_cursor is None
+        or _number(account.applied_cursor) < _number(account.captured_cursor)
+    ):
+        boundary = full_sync.started_at
+        boundary = boundary.replace(tzinfo=UTC) if boundary.tzinfo is None else boundary
+        if as_of >= boundary:
+            return []
     scope = f"gmail-pilot:{sub}"
     claims = await fetch_claims_as_of_pg(conn, {("gmail-pilot", sub): scope}, {scope}, known_at)
     resync = (
@@ -709,7 +733,7 @@ async def read_pilot(
                 "WHERE google_sub=:sub AND available_at<=:as_of "
                 "ORDER BY available_at DESC LIMIT 1"
             ),
-            {"sub": sub, "as_of": datetime.fromisoformat(utc_timestamp(known_at))},
+            {"sub": sub, "as_of": as_of},
         )
     ).one_or_none()
     if resync is None:
@@ -726,7 +750,7 @@ async def read_pilot(
                 {
                     "sub": sub,
                     "history": resync.history_id,
-                    "as_of": datetime.fromisoformat(utc_timestamp(known_at)),
+                    "as_of": as_of,
                 },
             )
         )
@@ -745,7 +769,7 @@ async def read_pilot(
                 {
                     "sub": sub,
                     "available": resync.available_at,
-                    "as_of": datetime.fromisoformat(utc_timestamp(known_at)),
+                    "as_of": as_of,
                 },
             )
         ).all()

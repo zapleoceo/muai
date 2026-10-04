@@ -7,6 +7,7 @@ CREATE TABLE IF NOT EXISTS brain_gmail_pilot_accounts (
     captured_cursor text,
     applied_cursor text,
     coverage_break boolean NOT NULL DEFAULT false,
+    coverage_break_at timestamptz,
     resync_required boolean NOT NULL DEFAULT false,
     CHECK (google_sub LIKE 'synthetic-%')
 );

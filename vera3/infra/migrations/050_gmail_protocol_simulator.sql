@@ -37,6 +37,7 @@ CREATE TABLE IF NOT EXISTS brain_gmail_protocol_full_sync (
     scope jsonb NOT NULL,
     window_start timestamptz NOT NULL,
     window_end timestamptz NOT NULL,
+    started_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     anchor_history_id text,
     expected_token text NOT NULL DEFAULT '',
     state text NOT NULL DEFAULT 'paging',
