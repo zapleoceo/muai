@@ -471,9 +471,9 @@ async def _advance_applied(conn: AsyncConnection, sub: str) -> None:
         await conn.execute(
             text(
                 "UPDATE brain_gmail_pilot_accounts SET applied_cursor=:cursor "
-                "WHERE google_sub=:sub AND applied_cursor::numeric <= :cursor_num"
+                "WHERE google_sub=:sub AND applied_cursor::numeric <= CAST(:cursor_num AS numeric)"
             ),
-            {"sub": sub, "cursor": candidate, "cursor_num": _number(candidate)},
+            {"sub": sub, "cursor": candidate, "cursor_num": candidate},
         )
 
 
