@@ -683,6 +683,12 @@ while excluding another source/account, hidden rows and out-of-window rows. It p
 no schema reset or permanent-table writes. Local absence of PostgreSQL is a skipped test,
 not a successful SQL verification.
 
+For a recognized quotation with no selected candidates and `use_agent=false`, the
+response is deterministic: search returned no accessible records, and this bounded
+selection does not prove that the quotation is absent from original messages.
+No LLM call is made for that empty result. Agent mode retains further tool search;
+its answer remains governed by the limited-selection evidence rules.
+
 ### Monthly reports (`reports.py`) — exact aggregation, no LLM
 
 For requests like "отчёт заказов помесячно за 2026 год": summing numbers

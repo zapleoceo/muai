@@ -158,6 +158,13 @@ async def search(
             results=[], provider=None, cost_usd=0,
         )
 
+    focus, _scope = split_quoted_query(query.q)
+    if focus != query.q and not found.rows and not query.use_agent:
+        return AnswerResponse(
+            answer="Поиск по указанной цитате не вернул доступных записей. Это ограниченная поисковая выборка; она не доказывает отсутствие цитаты в исходных сообщениях.",
+            results=[], provider=None, cost_usd=0,
+        )
+
     return await synthesize(
         query, found.rows, q_vec,
         acc_words=found.acc_words, summary=summary, eff_limit=eff_limit,

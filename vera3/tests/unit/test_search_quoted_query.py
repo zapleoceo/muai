@@ -158,3 +158,27 @@ async def test_agent_search_preserves_explicit_source_and_day_window(monkeypatch
     assert args["time_range"] == (datetime(2026, 10, 3, 17), datetime(2026, 10, 4, 17))
     assert args["ts_query"] == "amber:* | otter:* | lantern:*"
     embed.assert_awaited_once_with(["amber otter lantern"])
+
+
+@pytest.mark.parametrize("use_agent", [False, True])
+@pytest.mark.asyncio
+async def test_empty_quote_selection_does_not_claim_source_absence(monkeypatch, use_agent):
+    from brain_search import app as search_app
+    from brain_search.models import AnswerResponse, SearchQuery
+    from brain_search.retrieval import Candidates
+
+    monkeypatch.setenv("INTERNAL_SECRET", "synthetic-test-secret")
+    monkeypatch.setattr(search_app, "fetch_candidates", AsyncMock(return_value=Candidates([], "fts")))
+    monkeypatch.setattr(search_app, "embed_query", AsyncMock(return_value=None))
+    synthesis = AsyncMock(return_value=AnswerResponse(answer="Agent may search further",
+                                                     results=[], provider=None, cost_usd=0))
+    monkeypatch.setattr(search_app, "synthesize", synthesis)
+    result = await search_app.search(SearchQuery(q=SHORT, use_agent=use_agent),
+                                     "synthetic-test-secret")
+    if use_agent:
+        synthesis.assert_awaited_once()
+    else:
+        synthesis.assert_not_awaited()
+        assert result.results == [] and result.provider is None and result.cost_usd == 0
+        assert "ограниченная поисковая выборка" in result.answer
+        assert "не доказывает отсутствие" in result.answer
