@@ -642,8 +642,8 @@ the event UTC timestamp fall on different calendar days, name the time zone.
 
 An explicit `event:ID` or `событие ID` query reads up to five named IDs directly
 from visible legacy `events`, applying source and people filters but bypassing
-FTS, embeddings, and inferred date/project scope. This makes a freshly stored
-event reachable before its search index is ready. The request limit still caps
+FTS, embeddings, and inferred date/project scope. This lets an explicitly named
+stored event be read regardless of its ranked-search position. The request limit still caps
 returned IDs. A missing result means only that the event was not found among
 accessible records for this request; it does not prove nonexistence upstream.
 Ordinary ranked search remains a bounded sample and cannot establish that an

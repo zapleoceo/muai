@@ -18,7 +18,7 @@ EVIDENCE_RULES = (
     "from the stated reason, label them unverified, and name the missing "
     "evidence. Keep an email's stated local date and an "
     "event's UTC timestamp distinct; label the time zone when dates differ. "
-    "Search returns a limited, possibly stale sample. A missing result means "
+    "Search returns a limited selection, not a complete inventory. A missing result means "
     "only that it was not returned by this search, never that the event does "
     "not exist in the source. Check an explicitly named event ID directly.\n"
 )

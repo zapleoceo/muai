@@ -1,4 +1,4 @@
-"""Explicit event IDs must reach fresh legacy rows without FTS or vector lag."""
+"""Explicit event IDs reach legacy rows without relying on ranked search."""
 from __future__ import annotations
 
 from datetime import datetime, timezone
@@ -57,7 +57,7 @@ async def test_exact_id_reads_base_events_without_search_index():
 
 
 @pytest.mark.asyncio
-async def test_explicit_id_bypasses_stale_fts_and_embedding(monkeypatch):
+async def test_explicit_id_bypasses_fts_and_embedding(monkeypatch):
     class Context:
         async def __aenter__(self):
             return object()
@@ -71,7 +71,10 @@ async def test_explicit_id_bypasses_stale_fts_and_embedding(monkeypatch):
     monkeypatch.setattr(retrieval, "_primary_with_degrade", primary)
     monkeypatch.setattr(retrieval, "_exact_rows", exact)
     found = await retrieval.fetch_candidates(
-        ts_query="unrelated:*", acc_words=[], time_range=None, project=None,
+        ts_query="unrelated:*", acc_words=[],
+        time_range=(datetime(2026, 10, 5, tzinfo=timezone.utc),
+                    datetime(2026, 10, 6, tzinfo=timezone.utc)),
+        project=SimpleNamespace(name="unrelated"),
         q_vec=None, limit=1, exact_event_ids=[900101, 900102],
     )
     assert found.mode == "exact_id"
@@ -109,6 +112,6 @@ def test_sampled_search_does_not_license_absence_claim():
 
     prompt = build_prompt(question="Did a new notice arrive?", self_ctx="",
                           context="(no selected candidates)", history_block="", notes="")
-    assert "limited, possibly stale sample" in prompt
+    assert "limited selection, not a complete inventory" in prompt
     assert "not returned by this search" in prompt
     assert EVIDENCE_RULES in SYSTEM_PROMPT
