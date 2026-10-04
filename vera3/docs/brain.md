@@ -633,6 +633,10 @@ no excerpt is sent without its event ID. Prompts require the model to preserve s
 causality and identifier types and to avoid claiming that a detail is absent
 when only an excerpt was read. The underlying source can still be incomplete;
 absence claims require checking the full event or original.
+An adjacent login alert is not evidence for the cause of a payment restriction;
+answers to a stated-reason question omit unrequested causal hypotheses unless
+the source explicitly connects the events. If an email's local Date header and
+the event UTC timestamp fall on different calendar days, name the time zone.
 
 ### Monthly reports (`reports.py`) — exact aggregation, no LLM
 

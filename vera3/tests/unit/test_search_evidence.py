@@ -70,6 +70,25 @@ def test_truncated_excerpts_do_not_license_absence_or_reversed_causality():
     assert "account identifiers from payment" in EVIDENCE_RULES
 
 
+def test_adjacent_login_alert_is_not_a_payment_cause_in_answer_prompts():
+    context = (
+        "[event:101 | 2026-10-04 02:00 | gmail] "
+        "Date: October 3, 2026, 19:00 PDT. New login alert.\n\n"
+        "[event:102 | 2026-10-04 16:00 | gmail] "
+        "Advertising paused because the payment was declined. "
+        "Account 12345678901234 is an advertising account identifier."
+    )
+    prompt = synthesis.build_prompt(
+        question="Why were ads paused, and what is the number?",
+        self_ctx="", context=context, history_block="", notes="",
+    )
+    assert context in prompt
+    assert "login or security alert does not explain a payment" in prompt
+    assert "without unsolicited speculative causes" in prompt
+    assert "label the time zone when dates differ" in prompt
+    assert EVIDENCE_RULES in SYSTEM_PROMPT
+
+
 @pytest.mark.asyncio
 async def test_agent_search_tool_keeps_reason_at_end(monkeypatch):
     cause = "Payment declined, therefore ads paused."
