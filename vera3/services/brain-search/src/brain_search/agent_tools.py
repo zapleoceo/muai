@@ -20,6 +20,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
 from vera_shared.timeutil import utc_naive_now
 
+from brain_search.evidence import PRIMARY_CHARS, SECONDARY_CHARS, evidence_excerpt
 from brain_search.pipeline import search_ranked
 from brain_search.query_parse import TZ_OFFSET_H
 from brain_search.source_links import source_url
@@ -36,7 +37,6 @@ INTERNAL_SECRET = os.environ.get("INTERNAL_SECRET", "")
 #: записи можно найти и вычистить, если в них попал текст из инъекции.
 AGENT_WRITER = "search_agent"
 MAX_SEARCH_LIMIT = 50
-PREVIEW_CHARS = 400
 
 
 @dataclass
@@ -188,8 +188,9 @@ async def _exec_search_events(args: SearchEventsArgs) -> dict[str, Any]:
              "author_role": c.author_role,
              "author_label": c.author_label,
              "chat_title": c.chat_title,
-             "preview": (c.content_text or "")[:PREVIEW_CHARS]}
-            for _score, c in ranked
+             "preview": evidence_excerpt(
+                 c.content_text, PRIMARY_CHARS if i < 3 else SECONDARY_CHARS)}
+            for i, (_score, c) in enumerate(ranked)
         ],
     }
 
