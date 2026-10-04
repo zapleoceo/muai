@@ -626,8 +626,10 @@ events (706 МБ, 445 тыс. строк) не переписывается.
 preview, but synthesis uses a bounded excerpt of the stored event text: up to
 4,000 characters for the first three hits and 900 for later hits. Long excerpts
 keep their beginning and end and mark the omitted middle. The agent search tool
-uses the same excerpt rule. The next agent step compacts tool observations
-per event while retaining each selected excerpt tail. Prompts require the model to preserve source
+uses the same excerpt rule. The next agent step serializes complete compact
+event cards with ID, source, excerpt, and available link inside a 3,000-character
+observation budget. If a whole card does not fit, `omitted_events` counts it;
+no excerpt is sent without its event ID. Prompts require the model to preserve source
 causality and identifier types and to avoid claiming that a detail is absent
 when only an excerpt was read. The underlying source can still be incomplete;
 absence claims require checking the full event or original.

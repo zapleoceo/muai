@@ -109,3 +109,35 @@ async def test_agent_next_step_receives_tail_of_search_observation(monkeypatch):
     assert result.answer == "ok"
     assert cause in next_prompt
     assert "middle of stored event omitted" in next_prompt
+
+
+def test_search_observation_never_orphans_a_preview():
+    events = [{
+        "event_id": i, "source": "telegram", "preview": f"EVENT_{i} " + "x" * 640,
+        "source_url": "https://example.invalid/" + "u" * 180,
+        "author_label": "A" * 40, "chat_title": "C" * 100,
+        "unneeded_metadata": "secret" * 1000,
+    } for i in (101, 102, 103)]
+    rendered = agent._observation_text("search_events", {"found": 3, "events": events})
+    parsed = json.loads(rendered)
+    assert len(rendered) <= 3000
+    assert parsed["omitted_events"] == 3 - len(parsed["events"])
+    assert "unneeded_metadata" not in rendered
+    assert parsed["events"]
+    for card in parsed["events"]:
+        assert f"EVENT_{card['event_id']}" in card["preview"]
+        assert card["source"] == "telegram"
+    for omitted in events[len(parsed["events"]):]:
+        assert f"EVENT_{omitted['event_id']}" not in rendered
+
+
+def test_search_observation_keeps_three_compact_cards():
+    events = [{"event_id": i, "source": "gmail", "preview": f"reason {i}",
+               "chat_title": "T" * 10000, "source_url": "u" * 10000}
+              for i in (201, 202, 203)]
+    parsed = json.loads(agent._observation_text(
+        "search_events", {"found": 3, "events": events}))
+    assert [card["event_id"] for card in parsed["events"]] == [201, 202, 203]
+    assert parsed["omitted_events"] == 0
+    assert all(card["source_url"] is None for card in parsed["events"])
+    assert all(len(card["chat_title"]) == 120 for card in parsed["events"])

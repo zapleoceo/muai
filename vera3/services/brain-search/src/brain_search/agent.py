@@ -102,14 +102,34 @@ SYSTEM_PROMPT += EVIDENCE_RULES
 
 
 def _observation_text(name: str, obs: Any) -> str:
-    """Keep evidence tails in search observations sent to the next LLM step."""
+    """Send complete, attributable search cards within the observation budget."""
     if name == "search_events" and isinstance(obs, dict) and isinstance(obs.get("events"), list):
         events = obs["events"]
-        selected = [
-            {**event, "preview": evidence_excerpt(event.get("preview"), 650)}
-            for event in events[:3] if isinstance(event, dict)
-        ]
-        obs = {**obs, "events": selected, "omitted_events": max(0, len(events) - 3)}
+        selected: list[dict[str, Any]] = []
+        for event in events[:3]:
+            if not isinstance(event, dict):
+                continue
+            # Only these fields are needed to attribute the quoted excerpt.
+            # Bound each field before serializing; never cut serialized JSON.
+            card = {
+                "event_id": event.get("event_id"),
+                "source": str(event.get("source") or "")[:40],
+                "preview": evidence_excerpt(event.get("preview"), 650),
+                "occurred_at": str(event.get("occurred_at") or "")[:32],
+                "author_role": str(event.get("author_role") or "")[:30],
+                "author_label": str(event.get("author_label") or "")[:120],
+                "chat_title": str(event.get("chat_title") or "")[:120],
+            }
+            url = event.get("source_url")
+            card["source_url"] = url if isinstance(url, str) and len(url) <= 300 else None
+            candidate = {"found": obs.get("found"), "events": selected + [card],
+                         "omitted_events": len(events) - len(selected) - 1}
+            if len(json.dumps(candidate, ensure_ascii=False)) > 3000:
+                break
+            selected.append(card)
+        obs = {"found": obs.get("found"), "events": selected,
+               "omitted_events": len(events) - len(selected)}
+        return json.dumps(obs, ensure_ascii=False)
     rendered = json.dumps(obs, ensure_ascii=False)
     return evidence_excerpt(rendered, 3000)
 
