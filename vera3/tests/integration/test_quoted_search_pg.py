@@ -51,9 +51,9 @@ async def quote_pg_events(monkeypatch):
                 INSERT INTO events
                     (id, source, source_event_id, occurred_at, content_text,
                      importance, account, triage_status, metadata)
-                VALUES (:id, :source, CAST(:id AS text), :at, :body,
+                VALUES (:id, :source, :external_id, :at, :body,
                         50, :account, :status, '{}')
-            """), [base | row for row in rows])
+            """), [base | row | {"external_id": str(row["id"])} for row in rows])
 
             @asynccontextmanager
             async def session():
