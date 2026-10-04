@@ -67,6 +67,9 @@ async def test_shadow_migration_up_repeat_down_preserves_legacy_event():
             ).scalar_one()
             assert link == 8123
             assert (
+                await conn.execute(text("SELECT to_regclass('brain_revision_receipts')"))
+            ).scalar_one() is not None
+            assert (
                 await conn.execute(
                     text(
                         "SELECT count(*) FROM schema_migrations WHERE version='047_shadow_brain'"
@@ -76,6 +79,9 @@ async def test_shadow_migration_up_repeat_down_preserves_legacy_event():
             await run_migration_sql(conn, DOWN)
             assert (
                 await conn.execute(text("SELECT to_regclass('brain_source_objects')"))
+            ).scalar_one() is None
+            assert (
+                await conn.execute(text("SELECT to_regclass('brain_revision_receipts')"))
             ).scalar_one() is None
             assert (
                 await conn.execute(text("SELECT id FROM events"))

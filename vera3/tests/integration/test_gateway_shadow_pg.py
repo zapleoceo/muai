@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from datetime import UTC, datetime
 
@@ -51,6 +53,11 @@ async def send(event: RawEvent):
     return await gateway_events.ingest_event("instagram", event, x_internal_secret="test")
 
 
+def receipt_hash(content: str, metadata: dict, occurred_at: str) -> str:
+    payload = {"text": content, "metadata": metadata, "occurred_at": occurred_at}
+    return hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+
+
 @pytest.mark.asyncio
 async def test_gateway_ordered_edit_stale_retry_and_tombstone(monkeypatch):
     async with isolated_migrated_shadow_schema() as (engine, schema):
@@ -76,6 +83,20 @@ async def test_gateway_ordered_edit_stale_retry_and_tombstone(monkeypatch):
                 assert [r.value for r in evidence] == ["A", "B"]
                 assert evidence[0].evidence_anchor != evidence[1].evidence_anchor
                 assert all(":sha256:" in r.evidence_anchor for r in evidence)
+                receipts = (await conn.execute(text(
+                    "SELECT revision,content_text,metadata,occurred_at,payload_hash,origin "
+                    "FROM brain_revision_receipts ORDER BY revision"
+                ))).all()
+                assert [r.content_text for r in receipts] == ["A", "B", ""]
+                assert all(r.origin == "source" for r in receipts)
+                assert all(
+                    r.payload_hash == receipt_hash(r.content_text, r.metadata, r.occurred_at)
+                    for r in receipts
+                )
+                assert all(
+                    any(r.payload_hash in claim.evidence_anchor for claim in evidence)
+                    for r in receipts[:2]
+                )
         finally:
             await route_engine.dispose()
 
@@ -101,6 +122,17 @@ async def test_gateway_bootstraps_existing_original_and_rejects_other_account(mo
                 assert (await conn.execute(text("SELECT account,content_text FROM events"))).one() == ("owner-a", "edited")
                 assert (await conn.execute(text("SELECT value FROM brain_claims ORDER BY generation_id"))).scalars().all() == ["original", "edited"]
                 assert (await conn.execute(text("SELECT revision FROM brain_revisions ORDER BY revision"))).scalars().all() == ["1", "2"]
+                receipts = (await conn.execute(text(
+                    "SELECT content_text,metadata,occurred_at,payload_hash,origin "
+                    "FROM brain_revision_receipts ORDER BY revision"
+                ))).all()
+                assert [r.content_text for r in receipts] == ["original", "edited"]
+                assert receipts[0].origin == "legacy_snapshot"
+                assert receipts[0].metadata["shadow_bootstrap_legacy"] is True
+                assert all(
+                    r.payload_hash == receipt_hash(r.content_text, r.metadata, r.occurred_at)
+                    for r in receipts
+                )
         finally:
             await route_engine.dispose()
 
@@ -153,7 +185,7 @@ async def test_gateway_crash_at_each_former_commit_boundary_retries(monkeypatch,
                     assert (await conn.execute(text("SELECT content_text FROM events"))).scalar_one() == "A"
                     assert (await conn.execute(text("SELECT revision FROM brain_revisions"))).scalars().all() == ["1"]
                 else:
-                    for table in ("events", "brain_revisions", "brain_event_links", "brain_claims"):
+                    for table in ("events", "brain_revisions", "brain_revision_receipts", "brain_event_links", "brain_claims"):
                         assert (await conn.execute(text(f"SELECT count(*) FROM {table}"))).scalar_one() == 0
             monkeypatch.setattr(gateway_events, "ingest_shadow_event", original)
             await send(message("B", 2) if phase == "projection" else message("A", 1))

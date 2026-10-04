@@ -32,17 +32,18 @@ async def _link_legacy_event(
 ) -> None:
     if event_id is None:
         return
-    if key["provider"] == "instagram":
-        identity = (
-            await conn.execute(
-                text("SELECT source,source_event_id,account FROM events WHERE id=:id FOR SHARE"),
-                {"id": event_id},
-            )
-        ).one_or_none()
-        if identity is None or tuple(identity) != (
-            "instagram", key["external_id"], key["account_id"]
-        ):
-            raise Quarantine("legacy event source identity changed")
+    if key["provider"] != "instagram":
+        raise Quarantine("legacy links require a verified provider adapter")
+    identity = (
+        await conn.execute(
+            text("SELECT source,source_event_id,account FROM events WHERE id=:id FOR SHARE"),
+            {"id": event_id},
+        )
+    ).one_or_none()
+    if identity is None or tuple(identity) != (
+        "instagram", key["external_id"], key["account_id"]
+    ):
+        raise Quarantine("legacy event source identity changed")
     await conn.execute(
         text(
             "INSERT INTO brain_event_links(event_id,provider,account_id,object_type,external_id) "

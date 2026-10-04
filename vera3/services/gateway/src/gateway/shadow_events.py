@@ -43,7 +43,7 @@ async def ingest_shadow_event(
                         EventRow.id,
                         EventRow.account,
                         EventRow.content_text,
-                        EventRow.metadata_,
+                        EventRow.metadata_.label("legacy_metadata"),
                         EventRow.occurred_at,
                     )
                     .where(
@@ -64,7 +64,7 @@ async def ingest_shadow_event(
 
         if previous is not None and (
             previous.content_text != event.content_text
-            or previous.metadata_ != event.metadata
+            or previous.legacy_metadata != event.metadata
         ):
             head = (
                 await conn.execute(
@@ -79,11 +79,12 @@ async def ingest_shadow_event(
             if head is None:
                 if (event.metadata or {}).get("source_revision") != 2:
                     raise Quarantine("legacy edit needs authoritative source revision 2")
-                original_meta = dict(previous.metadata_ or {})
+                original_meta = dict(previous.legacy_metadata or {})
                 original_meta.update(
                     thread_id=(event.metadata or {}).get("thread_id"),
                     message_id=(event.metadata or {}).get("message_id"),
                     source_revision=1,
+                    shadow_bootstrap_legacy=True,
                 )
                 original = event.model_copy(
                     update={
@@ -104,7 +105,7 @@ async def ingest_shadow_event(
         if previous is not None:
             deleted = (event.metadata or {}).get("deleted") is True
             target = "" if deleted else event.content_text
-            if previous.content_text != target or previous.metadata_ != event.metadata:
+            if previous.content_text != target or previous.legacy_metadata != event.metadata:
                 await conn.execute(
                     update(EventRow)
                     .where(EventRow.id == event_id, EventRow.account == event.account)

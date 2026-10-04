@@ -133,7 +133,11 @@ async def _ingest_in_transaction(
         deleted=deleted,
         previous_revision=previous,
     )
-    occurred = event.occurred_at.replace(tzinfo=UTC).isoformat()
+    occurred_at = event.occurred_at
+    occurred = (
+        occurred_at.replace(tzinfo=UTC) if occurred_at.tzinfo is None
+        else occurred_at.astimezone(UTC)
+    ).isoformat()
     claims = (
         []
         if deleted
@@ -143,13 +147,16 @@ async def _ingest_in_transaction(
                 predicate="source_text",
                 value=event.content_text,
                 valid_from=occurred,
-                evidence_anchor=f"event:{legacy_event_id}:revision:{revision}:sha256:{digest}",
+                evidence_anchor=(
+                    f"receipt:instagram:{account}:{external_id}:{revision}:"
+                    f"event:{legacy_event_id}:sha256:{digest}"
+                ),
                 evidence_kind="document",
                 extraction_version="raw-v1",
             )
         ]
     )
-    return await PgShadowIngest({("instagram", account): scope}).apply(
+    changed = await PgShadowIngest({("instagram", account): scope}).apply(
         conn,
         source,
         claims,
@@ -158,6 +165,46 @@ async def _ingest_in_transaction(
         active_instagram_account=account,
         in_transaction=True,
     )
+    origin = "legacy_snapshot" if (event.metadata or {}).get("shadow_bootstrap_legacy") else "source"
+    receipt = {
+        "account": account,
+        "external_id": external_id,
+        "revision": revision,
+        "content_text": event.content_text,
+        "metadata": json.dumps(event.metadata, sort_keys=True, default=str),
+        "occurred_at": event.occurred_at.isoformat(),
+        "payload_hash": digest,
+        "origin": origin,
+    }
+    await conn.execute(
+        text(
+            "INSERT INTO brain_revision_receipts(provider,account_id,object_type,external_id,"
+            "revision,content_text,metadata,occurred_at,payload_hash,origin) "
+            "VALUES ('instagram',:account,'message',:external_id,:revision,:content_text,"
+            "CAST(:metadata AS jsonb),:occurred_at,:payload_hash,:origin) "
+            "ON CONFLICT DO NOTHING"
+        ),
+        receipt,
+    )
+    stored = (
+        await conn.execute(
+            text(
+                "SELECT content_text,metadata,occurred_at,payload_hash,origin "
+                "FROM brain_revision_receipts WHERE provider='instagram' AND account_id=:account "
+                "AND object_type='message' AND external_id=:external_id AND revision=:revision"
+            ),
+            receipt,
+        )
+    ).one()
+    if tuple(stored) != (
+        event.content_text,
+        event.metadata,
+        event.occurred_at.isoformat(),
+        digest,
+        origin,
+    ):
+        raise Quarantine("Instagram revision receipt changed")
+    return changed
 
 
 async def read_instagram_shadow(

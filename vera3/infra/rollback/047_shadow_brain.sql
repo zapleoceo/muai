@@ -5,6 +5,7 @@ DROP TABLE IF EXISTS brain_event_links;
 DROP TABLE IF EXISTS brain_rollback_audit;
 DROP TABLE IF EXISTS brain_claims;
 DROP TABLE IF EXISTS brain_generations;
+DROP TABLE IF EXISTS brain_revision_receipts;
 DROP TABLE IF EXISTS brain_revisions;
 DROP TABLE IF EXISTS brain_checkpoints;
 DROP TABLE IF EXISTS brain_source_objects;
