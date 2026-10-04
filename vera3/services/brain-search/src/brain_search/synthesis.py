@@ -106,7 +106,7 @@ async def answer(
     self_ctx = await self_context()
     ctx_n = CONTEXT_EVENTS_SUMMARY if summary else CONTEXT_EVENTS
     blocks = [
-        f"[event:{r.event_id} | {r.occurred_at[:16]} | {r.source} | "
+        f"[event:{r.event_id} | {r.occurred_at[:16]} UTC | {r.source} | "
         f"{r.source_url or 'original link unavailable'}] "
         f"{evidence_excerpt(full_text_by_id[r.event_id], PRIMARY_CHARS if i < 3 else SECONDARY_CHARS)}"
         for i, r in enumerate(results[:ctx_n])

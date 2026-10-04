@@ -55,6 +55,7 @@ async def test_answer_context_keeps_payment_cause_at_end(monkeypatch):
 
     assert result.answer == "ok"
     assert cause in seen["initial_context"]
+    assert "2026-10-04 16:00 UTC" in seen["initial_context"]
     assert "middle of stored event omitted" in seen["initial_context"]
     assert cause not in result.results[0].content_preview
 
@@ -76,17 +77,24 @@ def test_adjacent_login_alert_is_not_a_payment_cause_in_answer_prompts():
         "Date: October 3, 2026, 19:00 PDT. New login alert.\n\n"
         "[event:102 | 2026-10-04 16:00 | gmail] "
         "Advertising paused because the payment was declined. "
-        "Account 12345678901234 is an advertising account identifier."
+        "Account 00000000000000 is an advertising account identifier."
     )
     prompt = synthesis.build_prompt(
         question="Why were ads paused, and what is the number?",
         self_ctx="", context=context, history_block="", notes="",
     )
     assert context in prompt
-    assert "login or security alert does not explain a payment" in prompt
+    assert "Do not present a login or security alert as the cause" in prompt
     assert "without unsolicited speculative causes" in prompt
+    assert "If asked for hypotheses, separate them" in prompt
     assert "label the time zone when dates differ" in prompt
     assert EVIDENCE_RULES in SYSTEM_PROMPT
+
+    hypothesis_prompt = synthesis.build_prompt(
+        question="What hypotheses could explain these two alerts?",
+        self_ctx="", context=context, history_block="", notes="",
+    )
+    assert "label them unverified, and name the missing evidence" in hypothesis_prompt
 
 
 @pytest.mark.asyncio
@@ -101,6 +109,7 @@ async def test_agent_search_tool_keeps_reason_at_end(monkeypatch):
     found = await agent_tools._exec_search_events(
         agent_tools.SearchEventsArgs(q="Why were ads paused?"))
     assert cause in found["events"][0]["preview"]
+    assert found["events"][0]["occurred_at"].endswith(" UTC")
     assert "middle of stored event omitted" in found["events"][0]["preview"]
 
 

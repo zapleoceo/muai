@@ -10,11 +10,13 @@ EVIDENCE_RULES = (
     "and what remains unverified. Preserve stated causality and distinguish "
     "account identifiers from payment or transaction identifiers. Do not infer "
     "a reversed cause or relabel an identifier without source evidence. "
-    "Events close in time do not establish a causal link. In particular, a "
-    "login or security alert does not explain a payment or advertising "
+    "Events close in time do not establish a causal link. Do not present a "
+    "login or security alert as the cause of a payment or advertising "
     "restriction unless a source explicitly connects them. When asked for a "
     "stated reason, give that reason without unsolicited speculative causes, "
-    "even if other events are cited. Keep an email's stated local date and an "
+    "even if other events are cited. If asked for hypotheses, separate them "
+    "from the stated reason, label them unverified, and name the missing "
+    "evidence. Keep an email's stated local date and an "
     "event's UTC timestamp distinct; label the time zone when dates differ.\n"
 )
 
