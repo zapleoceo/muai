@@ -1,8 +1,8 @@
 # Vera 3.0 — documentation index
 
-CI blocks pushes that change `vera3/services/**` or `vera3/shared/**`
-without updating a file under `vera3/docs/`. Opt-out: put `docs-not-needed`
-in the commit message (for cosmetic refactors only).
+CI blocks changes to `vera3/services/**` or `vera3/shared/**` without
+updating `vera3/docs/`. Public symbol changes must also match the docs.
+Commit messages cannot bypass these gates.
 
 ## Files
 
@@ -16,6 +16,7 @@ in the commit message (for cosmetic refactors only).
 | [voice-commands.md](./voice-commands.md) | Голосовые поручения по кодовой фразе «Вера, мне нужна помощь»: очередь, воркер бота, гарантии |
 | [model-pilots.md](./model-pilots.md) | Замер 09.2026: PaddleOCR-VL против vision-моделей, parakeet против whisper — цифры, выводы, скрипты пилота |
 | [brain.md](./brain.md) | Triage worker, agent loop, search synthesis, memory |
+| [new-brain-plan.md](./new-brain-plan.md) | Source-linked claims, acceptance scenarios, shadow migration plan |
 | [api.md](./api.md) | Gateway endpoints, dashboard routes |
 | [deploy-ops.md](./deploy-ops.md) | rsync deploy, secrets, monitor, runbook |
 | [domain-model.md](./domain-model.md) | Postgres schema (events, usage_log, gmail_accounts, …) |

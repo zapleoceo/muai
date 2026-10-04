@@ -39,7 +39,7 @@ env:
 jobs:
   # ─── 1. Docs gate ────────────────────────────────────────────────────────
   # Blocks the run if vera3/services or vera3/shared changed without
-  # vera3/docs being updated. Opt-out per commit: `docs-not-needed`.
+  # vera3/docs being updated. Functional changes cannot skip this gate.
   docs:
     runs-on: ubuntu-latest
     timeout-minutes: 3
@@ -56,16 +56,11 @@ jobs:
           CHANGED="$(git diff --name-only "$BASE" "$HEAD")"
           echo "changed files:"; echo "$CHANGED"
 
-          if git log --format=%B "${BASE}..${HEAD}" 2>/dev/null | grep -qiF "docs-not-needed"; then
-            echo "::notice::'docs-not-needed' marker found, skipping docs gate"
-            exit 0
-          fi
-
           CODE="$(echo "$CHANGED" | grep -E '^vera3/(services|shared)/' || true)"
           DOCS="$(echo "$CHANGED" | grep -E '^vera3/docs/' || true)"
           if [ -n "$CODE" ] && [ -z "$DOCS" ]; then
             echo "::error::Code changed in vera3/services or vera3/shared but vera3/docs was not updated."
-            echo "Update the relevant doc OR add 'docs-not-needed' to a commit message."
+            echo "Update the relevant contract or behavior doc in vera3/docs/."
             exit 1
           fi
           echo "docs gate passed"
@@ -77,7 +72,7 @@ jobs:
   #   (c) Vulture — flags dead/unused code in files touched by this push.
   #   (d) Docs-name sync — every newly-added public symbol (def foo / class Bar)
   #       must appear in vera3/docs/*; every removed symbol must NOT remain there.
-  # Opt-out per commit: `docs-not-needed` (skips d only).
+  # Public API names must stay in sync with vera3/docs/.
   quality:
     needs: docs
     runs-on: ubuntu-latest
@@ -189,10 +184,6 @@ jobs:
           set -euo pipefail
           BASE="${{ steps.base.outputs.base }}"
           HEAD="${{ steps.base.outputs.head }}"
-          if git log --format=%B "${BASE}..${HEAD}" 2>/dev/null | grep -qiF "docs-not-needed"; then
-            echo "::notice::'docs-not-needed' marker — skip docs name-sync"
-            exit 0
-          fi
           # Public names = lowercase def + PascalCase class. Skip _private, test_, dunder.
           # Also skip generic entrypoint/lifecycle names (main/run/... — every
           # service has a `def main()`): they're not documentable API symbols,
@@ -205,7 +196,7 @@ jobs:
           # упоминание срабатывала бы ложно при любом удалении такого класса.
           SKIP='^test_|^_|^(main|run|serve|create_app|lifespan|healthz|startup|shutdown|Source)$'
           NAME_RE='^[+-](async )?def [a-z][a-z0-9_]*\(|^[+-]class [A-Z][A-Za-z0-9_]*[\(:]'
-          DIFF="$(git diff "$BASE" "$HEAD" -- 'vera3/services/**/*.py' 'vera3/shared/**/*.py' || true)"
+          DIFF="$(git diff "$BASE" "$HEAD" -- ':(glob)vera3/services/**/*.py' ':(glob)vera3/shared/**/*.py' || true)"
           ADDED="$(echo "$DIFF" | grep -E "^\+" | grep -E "$NAME_RE" \
                     | sed -E 's/^\+(async )?def ([a-z][a-z0-9_]*)\(.*/\2/;
                               s/^\+class ([A-Z][A-Za-z0-9_]*).*/\1/' \
