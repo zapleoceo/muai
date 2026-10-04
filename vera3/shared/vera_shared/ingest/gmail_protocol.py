@@ -22,6 +22,7 @@ from vera_shared.ingest.gmail_pilot import (
     _account,
     _enabled,
     _idle,
+    _mark_full_sync_completed,
     _number,
     _plain_message,
     _sub,
@@ -357,6 +358,7 @@ async def finish_history_chain(conn: AsyncConnection, sub: str) -> bool:
             ),
             {"sub": sub, "start": run.start_history_id},
         )
+        await _mark_full_sync_completed(conn, sub)
     return True
 
 
@@ -469,19 +471,55 @@ async def start_full_sync(
             raise Quarantine("full sync requires an explicit coverage break")
         existing = (
             await conn.execute(
-                text("SELECT 1 FROM brain_gmail_protocol_full_sync WHERE google_sub=:sub"),
+                text(
+                    "SELECT state FROM brain_gmail_protocol_full_sync "
+                    "WHERE google_sub=:sub FOR UPDATE"
+                ),
                 {"sub": sub},
             )
         ).scalar_one_or_none()
-        if existing:
+        started_at = (await conn.execute(text("SELECT clock_timestamp()"))).scalar_one()
+        params = {
+            "sub": sub,
+            "scope": json.dumps(scope, sort_keys=True),
+            "start": start,
+            "end": end,
+            "started_at": started_at,
+        }
+        if existing is None:
+            await conn.execute(
+                text(
+                    "INSERT INTO brain_gmail_protocol_full_sync "
+                    "(google_sub,scope,window_start,window_end,started_at) "
+                    "VALUES (:sub,CAST(:scope AS jsonb),:start,:end,:started_at)"
+                ),
+                params,
+            )
+        elif existing == "complete":
+            await conn.execute(
+                text(
+                    "UPDATE brain_gmail_protocol_full_sync SET generation=generation+1,"
+                    "scope=CAST(:scope AS jsonb),window_start=:start,window_end=:end,"
+                    "started_at=:started_at,completed_at=NULL,"
+                    "anchor_history_id=NULL,expected_token='',state='paging' "
+                    "WHERE google_sub=:sub"
+                ),
+                params,
+            )
+        else:
             raise Quarantine("full sync already exists; resolve it explicitly")
+        generation = (
+            await conn.execute(
+                text("SELECT generation FROM brain_gmail_protocol_full_sync WHERE google_sub=:sub"),
+                {"sub": sub},
+            )
+        ).scalar_one()
         await conn.execute(
             text(
-                "INSERT INTO brain_gmail_protocol_full_sync "
-                "(google_sub,scope,window_start,window_end) "
-                "VALUES (:sub,CAST(:scope AS jsonb),:start,:end)"
+                "INSERT INTO brain_gmail_protocol_full_cycles "
+                "(google_sub,generation,started_at) VALUES (:sub,:generation,:started_at)"
             ),
-            {"sub": sub, "scope": json.dumps(scope, sort_keys=True), "start": start, "end": end},
+            {"sub": sub, "generation": generation, "started_at": started_at},
         )
 
 
@@ -531,9 +569,10 @@ async def capture_full_sync_response(
             await conn.execute(
                 text(
                     "SELECT response_hash,next_token FROM brain_gmail_protocol_full_pages "
-                    "WHERE google_sub=:sub AND requested_token=:token"
+                    "WHERE google_sub=:sub AND generation=:generation "
+                    "AND requested_token=:token"
                 ),
-                {"sub": sub, "token": request},
+                {"sub": sub, "generation": run.generation, "token": request},
             )
         ).one_or_none()
         if old is not None:
@@ -567,9 +606,10 @@ async def capture_full_sync_response(
                 await conn.execute(
                     text(
                         "SELECT payload FROM brain_gmail_protocol_full_items "
-                        "WHERE google_sub=:sub AND message_id=:mid"
+                        "WHERE google_sub=:sub AND generation=:generation "
+                        "AND message_id=:mid"
                     ),
-                    {"sub": sub, "mid": mid},
+                    {"sub": sub, "generation": run.generation, "mid": mid},
                 )
             ).scalar_one_or_none()
             if prior is not None and prior != payload:
@@ -577,11 +617,12 @@ async def capture_full_sync_response(
         await conn.execute(
             text(
                 "INSERT INTO brain_gmail_protocol_full_pages "
-                "(google_sub,requested_token,next_token,response_hash,manifest) "
-                "VALUES (:sub,:request,:next,:digest,CAST(:manifest AS jsonb))"
+                "(google_sub,generation,requested_token,next_token,response_hash,manifest) "
+                "VALUES (:sub,:generation,:request,:next,:digest,CAST(:manifest AS jsonb))"
             ),
             {
                 "sub": sub,
+                "generation": run.generation,
                 "request": request,
                 "next": next_token,
                 "digest": digest,
@@ -592,10 +633,16 @@ async def capture_full_sync_response(
             await conn.execute(
                 text(
                     "INSERT INTO brain_gmail_protocol_full_items "
-                    "(google_sub,message_id,payload) "
-                    "VALUES (:sub,:mid,CAST(:payload AS jsonb)) ON CONFLICT DO NOTHING"
+                    "(google_sub,generation,message_id,payload) "
+                    "VALUES (:sub,:generation,:mid,CAST(:payload AS jsonb)) "
+                    "ON CONFLICT DO NOTHING"
                 ),
-                {"sub": sub, "mid": mid, "payload": json.dumps(payload, sort_keys=True)},
+                {
+                    "sub": sub,
+                    "generation": run.generation,
+                    "mid": mid,
+                    "payload": json.dumps(payload, sort_keys=True),
+                },
             )
         await conn.execute(
             text(
@@ -640,7 +687,7 @@ async def finish_full_sync(conn: AsyncConnection, sub: str, observed_at: str) ->
     run = (
         await conn.execute(
             text(
-                "SELECT anchor_history_id,state FROM brain_gmail_protocol_full_sync "
+                "SELECT generation,anchor_history_id,state FROM brain_gmail_protocol_full_sync "
                 "WHERE google_sub=:sub"
             ),
             {"sub": _sub(sub)},
@@ -656,9 +703,9 @@ async def finish_full_sync(conn: AsyncConnection, sub: str, observed_at: str) ->
             await conn.execute(
                 text(
                     "SELECT payload FROM brain_gmail_protocol_full_items "
-                    "WHERE google_sub=:sub ORDER BY message_id"
+                    "WHERE google_sub=:sub AND generation=:generation ORDER BY message_id"
                 ),
-                {"sub": sub},
+                {"sub": sub, "generation": run.generation},
             )
         )
         .scalars()
@@ -698,6 +745,7 @@ async def finish_full_sync(conn: AsyncConnection, sub: str, observed_at: str) ->
             ),
             {"sub": sub, "state": "complete" if bridge_complete else "bridging"},
         )
+        await _mark_full_sync_completed(conn, sub)
     return run.anchor_history_id
 
 

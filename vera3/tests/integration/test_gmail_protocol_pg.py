@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import base64
 import os
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from shadow_pg_support import isolated_migrated_shadow_schema, use_schema
@@ -332,6 +332,25 @@ async def test_history_404_full_sync_pages_and_bridge(monkeypatch):
             )
             await conn.rollback()
             assert await apply_next(conn, SUB)
+            completed_at = (
+                await conn.execute(
+                    text("SELECT completed_at FROM brain_gmail_protocol_full_sync")
+                )
+            ).scalar_one()
+            assert completed_at is not None
+            if completed_at.tzinfo is None:
+                completed_at = completed_at.replace(tzinfo=UTC)
+            await conn.rollback()
+            assert (
+                await read_pilot(
+                    conn,
+                    SUB,
+                    verified_sub=SUB,
+                    known_at=(completed_at - timedelta(microseconds=1)).isoformat(),
+                )
+                == []
+            )
+            await conn.rollback()
             assert (await pilot_status(conn, SUB))["captured_cursor"] == str(BIG + 550)
             assert (await pilot_status(conn, SUB))["coverage_break"] is True
             await conn.rollback()
@@ -346,6 +365,39 @@ async def test_history_404_full_sync_pages_and_bridge(monkeypatch):
                 )
                 == 1
             )
+            await conn.rollback()
+            await protocol.expire_history_chain(conn, SUB)
+            await protocol.start_full_sync(
+                conn,
+                SUB,
+                scope=WHOLE_SCOPE,
+                window_start=WINDOW_START,
+                window_end=WINDOW_END,
+            )
+            assert (
+                await conn.execute(
+                    text("SELECT generation FROM brain_gmail_protocol_full_sync")
+                )
+            ).scalar_one() == 2
+            assert (
+                await conn.execute(
+                    text(
+                        "SELECT count(*) FROM brain_gmail_protocol_full_pages "
+                        "WHERE generation=1"
+                    )
+                )
+            ).scalar_one() == 2
+            cycles = (
+                await conn.execute(
+                    text(
+                        "SELECT generation,completed_at FROM "
+                        "brain_gmail_protocol_full_cycles ORDER BY generation"
+                    )
+                )
+            ).all()
+            assert [row.generation for row in cycles] == [1, 2]
+            assert cycles[0].completed_at is not None
+            assert cycles[1].completed_at is None
 
 
 @pytest.mark.asyncio

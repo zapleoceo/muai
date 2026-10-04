@@ -19,6 +19,11 @@ CREATE TABLE IF NOT EXISTS brain_gmail_pilot_pages (
     manifest jsonb NOT NULL,
     PRIMARY KEY (google_sub,page_id)
 );
+CREATE TABLE IF NOT EXISTS brain_gmail_pilot_breaks (
+    google_sub text NOT NULL REFERENCES brain_gmail_pilot_accounts(google_sub),
+    broken_at timestamptz NOT NULL,
+    PRIMARY KEY (google_sub,broken_at)
+);
 CREATE TABLE IF NOT EXISTS brain_gmail_pilot_resyncs (
     google_sub text NOT NULL REFERENCES brain_gmail_pilot_accounts(google_sub),
     history_id text NOT NULL,

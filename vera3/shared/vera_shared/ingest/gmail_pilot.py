@@ -326,11 +326,27 @@ async def record_history_404(conn: AsyncConnection, sub: str) -> None:
     _enabled()
     _idle(conn)
     async with conn.begin():
-        await _account(conn, _sub(sub))
+        account = await _account(conn, _sub(sub))
+        if not account.resync_required:
+            broken_at = (await conn.execute(text("SELECT clock_timestamp()"))).scalar_one()
+            await conn.execute(
+                text(
+                    "INSERT INTO brain_gmail_pilot_breaks(google_sub,broken_at) "
+                    "VALUES (:sub,:broken_at)"
+                ),
+                {"sub": sub, "broken_at": broken_at},
+            )
+            await conn.execute(
+                text(
+                    "UPDATE brain_gmail_pilot_accounts SET coverage_break_at=:broken_at "
+                    "WHERE google_sub=:sub"
+                ),
+                {"sub": sub, "broken_at": broken_at},
+            )
         await conn.execute(
             text(
                 "UPDATE brain_gmail_pilot_accounts SET coverage_break=true,"
-                "coverage_break_at=clock_timestamp(),resync_required=true "
+                "resync_required=true "
                 "WHERE google_sub=:sub"
             ),
             {"sub": sub},
@@ -477,6 +493,31 @@ async def _advance_applied(conn: AsyncConnection, sub: str) -> None:
                 "WHERE google_sub=:sub AND applied_cursor::numeric <= CAST(:cursor_num AS numeric)"
             ),
             {"sub": sub, "cursor": candidate, "cursor_num": candidate},
+        )
+    await _mark_full_sync_completed(conn, sub)
+
+
+async def _mark_full_sync_completed(conn: AsyncConnection, sub: str) -> None:
+    completed_at = (await conn.execute(text("SELECT clock_timestamp()"))).scalar_one()
+    generation = (
+        await conn.execute(
+            text(
+                "UPDATE brain_gmail_protocol_full_sync SET completed_at=:completed_at "
+                "WHERE google_sub=:sub AND state='complete' AND completed_at IS NULL "
+                "AND EXISTS (SELECT 1 FROM brain_gmail_pilot_accounts a "
+                "WHERE a.google_sub=:sub AND a.applied_cursor=a.captured_cursor) "
+                "RETURNING generation"
+            ),
+            {"sub": sub, "completed_at": completed_at},
+        )
+    ).scalar_one_or_none()
+    if generation is not None:
+        await conn.execute(
+            text(
+                "UPDATE brain_gmail_protocol_full_cycles SET completed_at=:completed_at "
+                "WHERE google_sub=:sub AND generation=:generation"
+            ),
+            {"sub": sub, "generation": generation, "completed_at": completed_at},
         )
 
 
@@ -702,27 +743,50 @@ async def read_pilot(
         raise Quarantine("verified Google subject mismatch")
     account = await _account(conn, sub)
     as_of = datetime.fromisoformat(utc_timestamp(known_at))
-    if account.resync_required and account.coverage_break_at is not None:
-        boundary = account.coverage_break_at
-        boundary = boundary.replace(tzinfo=UTC) if boundary.tzinfo is None else boundary
-        if as_of >= boundary:
-            return []
-    full_sync = (
+    in_gap = (
         await conn.execute(
             text(
-                "SELECT state,started_at FROM brain_gmail_protocol_full_sync WHERE google_sub=:sub"
+                "SELECT 1 FROM brain_gmail_pilot_breaks b "
+                "WHERE b.google_sub=:sub AND b.broken_at<=:as_of "
+                "AND NOT EXISTS (SELECT 1 FROM brain_gmail_pilot_resyncs r "
+                "WHERE r.google_sub=b.google_sub AND r.available_at>b.broken_at "
+                "AND r.available_at<=:as_of) LIMIT 1"
+            ),
+            {"sub": sub, "as_of": as_of},
+        )
+    ).scalar_one_or_none()
+    if in_gap:
+        return []
+    in_sync = (
+        await conn.execute(
+            text(
+                "SELECT 1 FROM brain_gmail_protocol_full_cycles "
+                "WHERE google_sub=:sub AND started_at<=:as_of "
+                "AND (completed_at IS NULL OR completed_at>:as_of) LIMIT 1"
+            ),
+            {"sub": sub, "as_of": as_of},
+        )
+    ).scalar_one_or_none()
+    if in_sync:
+        return []
+    latest_cycle_start = (
+        await conn.execute(
+            text(
+                "SELECT max(started_at) FROM brain_gmail_protocol_full_cycles WHERE google_sub=:sub"
             ),
             {"sub": sub},
         )
-    ).one_or_none()
-    if full_sync is not None and (
-        full_sync.state != "complete"
-        or account.applied_cursor is None
+    ).scalar_one()
+    if latest_cycle_start is not None and (
+        account.applied_cursor is None
         or _number(account.applied_cursor) < _number(account.captured_cursor)
     ):
-        boundary = full_sync.started_at
-        boundary = boundary.replace(tzinfo=UTC) if boundary.tzinfo is None else boundary
-        if as_of >= boundary:
+        start = (
+            latest_cycle_start.replace(tzinfo=UTC)
+            if latest_cycle_start.tzinfo is None
+            else latest_cycle_start
+        )
+        if as_of >= start:
             return []
     scope = f"gmail-pilot:{sub}"
     claims = await fetch_claims_as_of_pg(conn, {("gmail-pilot", sub): scope}, {scope}, known_at)

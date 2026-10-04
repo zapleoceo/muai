@@ -410,6 +410,20 @@ async def test_empty_present_resync_keeps_coverage_break_and_advances_cursors(
             ).scalar_one()
             await conn.rollback()
             await record_history_404(conn, SUB)
+            first_break = (
+                await conn.execute(
+                    text("SELECT coverage_break_at FROM brain_gmail_pilot_accounts")
+                )
+            ).scalar_one()
+            await conn.rollback()
+            await record_history_404(conn, SUB)
+            second_break = (
+                await conn.execute(
+                    text("SELECT coverage_break_at FROM brain_gmail_pilot_accounts")
+                )
+            ).scalar_one()
+            assert second_break == first_break
+            await conn.rollback()
             assert (
                 await read_pilot(
                     conn, SUB, verified_sub=SUB, known_at=datetime.now(UTC).isoformat()
@@ -421,6 +435,12 @@ async def test_empty_present_resync_keeps_coverage_break_and_advances_cursors(
             status = await pilot_status(conn, SUB)
             assert status["coverage_break"] is True
             assert status["captured_cursor"] == status["applied_cursor"] == "500"
+            assert (
+                await read_pilot(
+                    conn, SUB, verified_sub=SUB, known_at=first_break.isoformat()
+                )
+                == []
+            )
             assert (
                 len(
                     await read_pilot(
