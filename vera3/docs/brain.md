@@ -502,6 +502,12 @@ processing is paused/paced.
 
 - `POST /search` — entry point for the Telegram bot and dashboard.
 - Hybrid retrieval: FTS (`russian` OR `indonesian`, ts_rank — see below) AND vector similarity (косинус) over Voyage embeddings.
+- `source_url` in search results is derived only for Slack events with a
+  stored `channel_id:timestamp` source ID. The answer context and agent search
+  observations carry the event ID and this link, and the prompts request
+  `[event:ID]` citations. Other sources return no original link until their
+  account-specific link resolution is implemented. This is a link to the
+  source message, not a claim that the answer was independently verified.
 
 ### Полнотекст на нескольких языках (`fts.py`, миграция 031)
 
