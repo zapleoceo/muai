@@ -138,8 +138,26 @@ async def capture_history_response(
                 {"sub": sub, "start": start_history_id},
             )
             expected = ""
+            generation = 1
         else:
-            if run.state in {"complete", "expired"} and run.start_history_id != start_history_id:
+            if run.state == "complete" and run.start_history_id == start_history_id:
+                prior_first = (
+                    await conn.execute(
+                        text(
+                            "SELECT response_hash,next_token "
+                            "FROM brain_gmail_protocol_history_pages "
+                            "WHERE google_sub=:sub AND start_history_id=:start "
+                            "AND generation=:generation AND requested_token=''"
+                        ),
+                        {"sub": sub, "start": start_history_id, "generation": run.generation},
+                    )
+                ).one_or_none()
+                if not request and prior_first and prior_first.response_hash == digest:
+                    return prior_first.next_token
+            restart = run.state in {"complete", "expired"} and (
+                run.start_history_id != start_history_id or run.state == "complete"
+            )
+            if restart:
                 if (
                     request
                     or account.captured_cursor != start_history_id
@@ -149,7 +167,8 @@ async def capture_history_response(
                 await conn.execute(
                     text(
                         "UPDATE brain_gmail_protocol_history SET start_history_id=:start,"
-                        "expected_token='',final_history_id=NULL,state='paging' "
+                        "generation=generation+1,expected_token='',"
+                        "final_history_id=NULL,state='paging' "
                         "WHERE google_sub=:sub"
                     ),
                     {"sub": sub, "start": start_history_id},
@@ -160,6 +179,7 @@ async def capture_history_response(
                         {"sub": sub},
                     )
                 ).one()
+            generation = run.generation
             if run.start_history_id != start_history_id or run.state == "expired":
                 raise Quarantine("Gmail history chain identity changed")
             old = (
@@ -167,9 +187,14 @@ async def capture_history_response(
                     text(
                         "SELECT response_hash,next_token FROM brain_gmail_protocol_history_pages "
                         "WHERE google_sub=:sub AND start_history_id=:start "
-                        "AND requested_token=:request"
+                        "AND generation=:generation AND requested_token=:request"
                     ),
-                    {"sub": sub, "start": start_history_id, "request": request},
+                    {
+                        "sub": sub,
+                        "start": start_history_id,
+                        "generation": generation,
+                        "request": request,
+                    },
                 )
             ).one_or_none()
             if old is not None:
@@ -187,9 +212,14 @@ async def capture_history_response(
                     text(
                         "SELECT 1 FROM brain_gmail_protocol_history_pages "
                         "WHERE google_sub=:sub AND start_history_id=:start "
-                        "AND requested_token=:token"
+                        "AND generation=:generation AND requested_token=:token"
                     ),
-                    {"sub": sub, "start": start_history_id, "token": next_token},
+                    {
+                        "sub": sub,
+                        "start": start_history_id,
+                        "generation": generation,
+                        "token": next_token,
+                    },
                 )
             ).scalar_one_or_none()
             if prior:
@@ -197,13 +227,15 @@ async def capture_history_response(
         await conn.execute(
             text(
                 "INSERT INTO brain_gmail_protocol_history_pages "
-                "(google_sub,start_history_id,requested_token,next_token,response_history_id,"
-                "response_hash,manifest) VALUES (:sub,:start,:request,:next,:head,:digest,"
+                "(google_sub,start_history_id,generation,requested_token,next_token,"
+                "response_history_id,response_hash,manifest) "
+                "VALUES (:sub,:start,:generation,:request,:next,:head,:digest,"
                 "CAST(:manifest AS jsonb))"
             ),
             {
                 "sub": sub,
                 "start": start_history_id,
+                "generation": generation,
                 "request": request,
                 "next": next_token,
                 "head": head,
@@ -217,9 +249,15 @@ async def capture_history_response(
                 await conn.execute(
                     text(
                         "SELECT kind,label_ids FROM brain_gmail_protocol_obligations "
-                        "WHERE google_sub=:sub AND start_history_id=:start AND event_key=:key"
+                        "WHERE google_sub=:sub AND start_history_id=:start "
+                        "AND generation=:generation AND event_key=:key"
                     ),
-                    {"sub": sub, "start": start_history_id, "key": event.key},
+                    {
+                        "sub": sub,
+                        "start": start_history_id,
+                        "generation": generation,
+                        "key": event.key,
+                    },
                 )
             ).one_or_none()
             if old is not None and (old.kind != event.kind or old.label_ids != change["label_ids"]):
@@ -227,13 +265,16 @@ async def capture_history_response(
             await conn.execute(
                 text(
                     "INSERT INTO brain_gmail_protocol_obligations "
-                    "(google_sub,start_history_id,event_key,history_id,message_id,kind,label_ids) "
-                    "VALUES (:sub,:start,:key,:history,:mid,:kind,CAST(:labels AS jsonb)) "
+                    "(google_sub,start_history_id,generation,event_key,history_id,"
+                    "message_id,kind,label_ids) "
+                    "VALUES (:sub,:start,:generation,:key,:history,:mid,:kind,"
+                    "CAST(:labels AS jsonb)) "
                     "ON CONFLICT DO NOTHING"
                 ),
                 {
                     "sub": sub,
                     "start": start_history_id,
+                    "generation": generation,
                     "key": event.key,
                     "history": event.history_id,
                     "mid": event.message_id,
@@ -263,7 +304,7 @@ async def finish_history_chain(conn: AsyncConnection, sub: str) -> bool:
     run = (
         await conn.execute(
             text(
-                "SELECT start_history_id,final_history_id,state FROM "
+                "SELECT start_history_id,generation,final_history_id,state FROM "
                 "brain_gmail_protocol_history WHERE google_sub=:sub"
             ),
             {"sub": _sub(sub)},
@@ -278,9 +319,10 @@ async def finish_history_chain(conn: AsyncConnection, sub: str) -> bool:
         await conn.execute(
             text(
                 "SELECT history_id,message_id,kind FROM brain_gmail_protocol_obligations "
-                "WHERE google_sub=:sub AND start_history_id=:start"
+                "WHERE google_sub=:sub AND start_history_id=:start "
+                "AND generation=:generation"
             ),
-            {"sub": sub, "start": run.start_history_id},
+            {"sub": sub, "start": run.start_history_id, "generation": run.generation},
         )
     ).all()
     await conn.rollback()
@@ -288,7 +330,7 @@ async def finish_history_chain(conn: AsyncConnection, sub: str) -> bool:
         await capture_history_page(
             conn,
             sub,
-            page_id=f"protocol:{run.start_history_id}:{run.final_history_id}",
+            page_id=f"protocol:{run.start_history_id}:{run.generation}:{run.final_history_id}",
             start_history_id=run.start_history_id,
             end_history_id=run.final_history_id,
             changes=[GmailChange(*row) for row in changes],
@@ -302,9 +344,10 @@ async def finish_history_chain(conn: AsyncConnection, sub: str) -> bool:
         await conn.execute(
             text(
                 "UPDATE brain_gmail_protocol_history SET state='complete' "
-                "WHERE google_sub=:sub AND start_history_id=:start AND state='ready'"
+                "WHERE google_sub=:sub AND start_history_id=:start "
+                "AND generation=:generation AND state='ready'"
             ),
-            {"sub": sub, "start": run.start_history_id},
+            {"sub": sub, "start": run.start_history_id, "generation": run.generation},
         )
         await conn.execute(
             text(

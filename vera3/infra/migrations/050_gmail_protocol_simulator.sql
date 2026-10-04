@@ -3,6 +3,7 @@ BEGIN;
 CREATE TABLE IF NOT EXISTS brain_gmail_protocol_history (
     google_sub text PRIMARY KEY REFERENCES brain_gmail_pilot_accounts(google_sub),
     start_history_id text NOT NULL,
+    generation bigint NOT NULL DEFAULT 1,
     expected_token text NOT NULL DEFAULT '',
     final_history_id text,
     state text NOT NULL DEFAULT 'paging',
@@ -11,23 +12,25 @@ CREATE TABLE IF NOT EXISTS brain_gmail_protocol_history (
 CREATE TABLE IF NOT EXISTS brain_gmail_protocol_history_pages (
     google_sub text NOT NULL REFERENCES brain_gmail_pilot_accounts(google_sub),
     start_history_id text NOT NULL,
+    generation bigint NOT NULL,
     requested_token text NOT NULL,
     next_token text,
     response_history_id text NOT NULL,
     response_hash text NOT NULL,
     manifest jsonb NOT NULL,
     captured_at timestamptz NOT NULL DEFAULT clock_timestamp(),
-    PRIMARY KEY (google_sub,start_history_id,requested_token)
+    PRIMARY KEY (google_sub,start_history_id,generation,requested_token)
 );
 CREATE TABLE IF NOT EXISTS brain_gmail_protocol_obligations (
     google_sub text NOT NULL REFERENCES brain_gmail_pilot_accounts(google_sub),
     start_history_id text NOT NULL,
+    generation bigint NOT NULL,
     event_key text NOT NULL,
     history_id text NOT NULL,
     message_id text NOT NULL,
     kind text NOT NULL,
     label_ids jsonb NOT NULL DEFAULT '[]',
-    PRIMARY KEY (google_sub,start_history_id,event_key)
+    PRIMARY KEY (google_sub,start_history_id,generation,event_key)
 );
 CREATE TABLE IF NOT EXISTS brain_gmail_protocol_full_sync (
     google_sub text PRIMARY KEY REFERENCES brain_gmail_pilot_accounts(google_sub),

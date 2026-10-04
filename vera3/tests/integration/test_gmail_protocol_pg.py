@@ -145,6 +145,45 @@ async def test_terminal_capture_failure_retries_without_early_cursor(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_idle_terminal_chain_allows_later_changes_at_same_cursor(monkeypatch):
+    monkeypatch.setenv("VERA_SHADOW_GMAIL_PILOT_ENABLED", "1")
+    async with isolated_migrated_shadow_schema() as (engine, schema):  # noqa: SIM117
+        async with engine.connect() as conn:
+            await setup(conn, schema)
+            idle = {"historyId": str(BIG), "history": []}
+            await protocol.capture_history_response(
+                conn,
+                SUB,
+                start_history_id=str(BIG),
+                requested_token=None,
+                response=idle,
+            )
+            assert await protocol.finish_history_chain(conn, SUB)
+            assert (await pilot_status(conn, SUB))["captured_cursor"] == str(BIG)
+            later = {
+                "historyId": str(BIG + 10),
+                "history": [history(str(BIG + 7), "new")],
+            }
+            await protocol.capture_history_response(
+                conn,
+                SUB,
+                start_history_id=str(BIG),
+                requested_token=None,
+                response=later,
+            )
+            assert await protocol.finish_history_chain(conn, SUB)
+            assert (await pilot_status(conn, SUB))["captured_cursor"] == str(BIG + 10)
+            assert (
+                await conn.execute(
+                    text(
+                        "SELECT count(DISTINCT generation) "
+                        "FROM brain_gmail_protocol_history_pages"
+                    )
+                )
+            ).scalar_one() == 2
+
+
+@pytest.mark.asyncio
 async def test_ambiguous_same_position_and_changed_replay_hold_cursor(monkeypatch):
     monkeypatch.setenv("VERA_SHADOW_GMAIL_PILOT_ENABLED", "1")
     ambiguous = {
