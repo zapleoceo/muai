@@ -73,6 +73,7 @@ class PgShadowIngest:
                     key,
                 )
             ).one()
+            await _link_legacy_event(conn, key, legacy_event_id)
             old = (
                 await conn.execute(
                     text(
@@ -185,7 +186,6 @@ class PgShadowIngest:
             await _advance_checkpoint(
                 conn, key, current=checkpoint, cursor=cursor, expected_cursor=expected_cursor
             )
-            await _link_legacy_event(conn, key, legacy_event_id)
             if source.deleted:
                 await _invalidate_source_cache(conn, key)
             return changed
