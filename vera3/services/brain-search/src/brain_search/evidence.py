@@ -17,7 +17,10 @@ EVIDENCE_RULES = (
     "even if other events are cited. If asked for hypotheses, separate them "
     "from the stated reason, label them unverified, and name the missing "
     "evidence. Keep an email's stated local date and an "
-    "event's UTC timestamp distinct; label the time zone when dates differ.\n"
+    "event's UTC timestamp distinct; label the time zone when dates differ. "
+    "Search returns a limited, possibly stale sample. A missing result means "
+    "only that it was not returned by this search, never that the event does "
+    "not exist in the source. Check an explicitly named event ID directly.\n"
 )
 
 

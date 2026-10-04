@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime
 
 from vera_shared.llm.client import LLMCallFailed, embed
@@ -22,6 +23,18 @@ from brain_search.scoring import score_candidates
 log = logging.getLogger(__name__)
 
 EMBED_TIMEOUT_S = 15
+_EVENT_IDS = re.compile(
+    r"\b(?:event|событи[а-я]*)\s*(?:id\s*)?[:#№]?\s*"
+    r"\d{4,10}(?:\s*(?:,|/|и|and)\s*\d{4,10}){0,4}\b",
+    re.IGNORECASE,
+)
+
+
+def explicit_event_ids(question: str) -> list[int]:
+    """Extract only IDs explicitly introduced as events, never arbitrary numbers."""
+    ids = [int(raw) for match in _EVENT_IDS.finditer(question)
+           for raw in re.findall(r"\d{4,10}", match.group())]
+    return list(dict.fromkeys(ids))[:5]
 
 
 def query_terms(question: str,
@@ -52,9 +65,11 @@ async def search_ranked(
     links: LinkScope | None = None,
 ) -> tuple[Candidates, list[tuple[float, Candidate]]]:
     """Полный проход поиска. Пустой вопрос = только окно времени, без вектора."""
-    q_vec = await embed_query(question) if question.strip() else None
+    exact_ids = explicit_event_ids(question)
+    q_vec = await embed_query(question) if question.strip() and not exact_ids else None
     ts, acc_words = query_terms(question, project)
     found = await fetch_candidates(
         ts_query=ts, acc_words=acc_words, time_range=time_range, project=project,
-        q_vec=q_vec, limit=limit, source=source, links=links)
+        q_vec=q_vec, limit=limit, source=source, links=links,
+        exact_event_ids=exact_ids)
     return found, score_candidates(found.rows, q_vec, found.acc_words)[:limit]
