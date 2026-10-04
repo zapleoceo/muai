@@ -87,6 +87,45 @@ def test_ambiguous_or_unsupported_quotes_keep_existing_query(question):
     assert split_quoted_query(question) == (question, question)
 
 
+@pytest.mark.parametrize("question", [
+    'Compare phrase "amber otter" with "silver fox"',
+    'Find phrase "amber otter" and «today»',
+    'Find phrase “amber otter” and "Veranda"',
+    'Find phrase "amber otter" in chat «Synthetic Cedar»',
+    'Find phrase "amber otter" and "unclosed',
+    'Find phrase "amber «otter»"',
+    'Find phrase "amber otter" and “' + "x" * 501 + '”',
+    'Find phrase "amber otter" and ""',
+])
+def test_any_additional_quotation_keeps_all_query_terms(question):
+    assert split_quoted_query(question) == (question, question)
+    # No term is silently removed from the lexical query on this fallback path.
+    from brain_search.pipeline import build_ts_query, content_words
+
+    assert query_terms(question)[0] == build_ts_query(content_words(question))
+
+
+@pytest.mark.parametrize("question", [
+    'Find messages without phrase "amber otter"',
+    'Find messages that do not contain quote "amber otter"',
+    'Find messages that don\'t contain phrase "amber otter"',
+    'Find messages excluding phrase "amber otter"',
+    'Find messages lacking phrase "amber otter"',
+    'Find phrase "amber otter" nowhere in the message, not even once',
+    'Найди сообщения без фразы «amber otter»',
+    'Найди сообщения, где нет цитаты «amber otter»',
+    'Исключи фразу «amber otter»',
+    'Cari pesan tanpa phrase "amber otter"',
+])
+def test_negative_request_does_not_become_positive_quote_search(question):
+    assert split_quoted_query(question) == (question, question)
+
+
+def test_negative_words_inside_quote_are_search_content():
+    assert split_quoted_query('Find phrase "not without amber"') == (
+        "not without amber", "Find  ")
+
+
 def test_scope_and_summary_intent_remain_outside_requested_quote():
     question = 'Find quote "today summary Veranda" for Itstep on 2026-10-04'
     assert resolve_project(question).name == "itstep"

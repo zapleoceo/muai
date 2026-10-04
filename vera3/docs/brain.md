@@ -669,8 +669,12 @@ The internal `/search` model supports account/project in `filters`; MCP `search`
 supports source/start/end/people/kind, while the gateway `/v1/search` bridge currently
 accepts only q/limit/use_agent. The external ChatGPT wrapper is outside this repo.
 
-Multiple requested quotations, escaped/newline quotations, and quotations longer
-than 500 characters retain the previous search semantics. Ordinary FTS still uses
+Any additional quotation (including a quoted chat name), unmatched/nested quote
+delimiters, escaped/newline quotations, quotations longer than 500 characters, and
+recognized negative wording outside the quotation retain the previous search
+semantics. Exclusion predicates are not implemented; fallback does not guarantee
+an exclusion search. A leading quotation followed by prose without a phrase/quote
+marker also uses the previous path. Ordinary FTS still uses
 OR prefixes, ANN still contributes its bounded pool, and numeric scoring/topK are
 unchanged. This removes demonstrated context pollution; it does not guarantee that
 every exact phrase in the database is retrieved or that quoted words match contiguously.
