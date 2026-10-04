@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime
 
 import pytest
 from shadow_pg_support import isolated_migrated_shadow_schema, use_schema
@@ -399,6 +400,15 @@ async def test_empty_present_resync_keeps_coverage_break_and_advances_cursors(
                 observed_at=AT,
             )
             assert await apply_next(conn, SUB)
+            old_applied = (
+                await conn.execute(
+                    text(
+                        "SELECT applied_at FROM brain_gmail_pilot_events "
+                        "WHERE message_id='previously-live'"
+                    )
+                )
+            ).scalar_one()
+            await conn.rollback()
             await record_history_404(conn, SUB)
             await capture_present_resync(conn, SUB, "500", [], "2026-10-04T01:00:00Z")
             status = await pilot_status(conn, SUB)
@@ -407,14 +417,14 @@ async def test_empty_present_resync_keeps_coverage_break_and_advances_cursors(
             assert (
                 len(
                     await read_pilot(
-                        conn, SUB, verified_sub=SUB, known_at="2026-10-04T00:30:00Z"
+                        conn, SUB, verified_sub=SUB, known_at=old_applied.isoformat()
                     )
                 )
                 == 1
             )
             assert (
                 await read_pilot(
-                    conn, SUB, verified_sub=SUB, known_at="2026-10-04T02:00:00Z"
+                    conn, SUB, verified_sub=SUB, known_at=datetime.now(UTC).isoformat()
                 )
                 == []
             )
@@ -449,22 +459,255 @@ async def test_resync_hides_old_body_until_new_observation_is_applied(monkeypatc
             assert await apply_next(conn, SUB)
             await record_history_404(conn, SUB)
             updated = message("m", "490")
-            updated["text"] = "new body"
+            updated["labels"] = ["STARRED"]
             await capture_present_resync(
                 conn, SUB, "500", [updated], "2026-10-04T01:00:00Z"
             )
             assert (
                 await read_pilot(
-                    conn, SUB, verified_sub=SUB, known_at="2026-10-04T01:30:00Z"
+                    conn, SUB, verified_sub=SUB, known_at=datetime.now(UTC).isoformat()
                 )
                 == []
             )
             await conn.rollback()
             assert await apply_next(conn, SUB)
             claims = await read_pilot(
-                conn, SUB, verified_sub=SUB, known_at="2026-10-04T01:30:00Z"
+                conn, SUB, verified_sub=SUB, known_at=datetime.now(UTC).isoformat()
             )
-            assert [item["value"] for item in claims] == ["new body"]
+            assert [item["value"] for item in claims] == ["body-m"]
+
+
+@pytest.mark.asyncio
+async def test_equal_version_hash_is_idempotent_but_conflict_quarantines(monkeypatch):
+    monkeypatch.setenv("VERA_SHADOW_GMAIL_PILOT_ENABLED", "1")
+    first = GmailChange("110", "m", "added")
+    replay = GmailChange("120", "m", "label_added")
+    conflict = GmailChange("130", "m", "label_removed")
+    async with isolated_migrated_shadow_schema() as (engine, schema):  # noqa: SIM117
+        async with engine.connect() as conn:
+            await setup(conn, schema)
+            await capture_history_page(
+                conn,
+                SUB,
+                page_id="p",
+                start_history_id="100",
+                end_history_id="130",
+                changes=[first, replay, conflict],
+            )
+            original = message("m", "200")
+            for change, payload in (
+                (first, original),
+                (replay, original),
+                (conflict, message("m", "200", labels=["TRASH"])),
+            ):
+                await record_fetch_result(
+                    conn,
+                    SUB,
+                    change,
+                    verified_sub=SUB,
+                    outcome="fetched",
+                    message=payload,
+                    observed_at=AT,
+                )
+            assert await apply_next(conn, SUB)
+            assert await apply_next(conn, SUB)
+            assert await apply_next(conn, SUB)
+            assert not await apply_next(conn, SUB)
+            assert (
+                await conn.execute(text("SELECT count(*) FROM brain_generations"))
+            ).scalar_one() == 1
+            assert (
+                await conn.execute(
+                    text(
+                        "SELECT fetch_state FROM brain_gmail_pilot_events "
+                        "WHERE history_id='130'"
+                    )
+                )
+            ).scalar_one() == "quarantined"
+
+
+@pytest.mark.asyncio
+async def test_immutable_message_body_conflict_quarantines(monkeypatch):
+    monkeypatch.setenv("VERA_SHADOW_GMAIL_PILOT_ENABLED", "1")
+    first, change = (
+        GmailChange("110", "m", "added"),
+        GmailChange("150", "m", "label_added"),
+    )
+    async with isolated_migrated_shadow_schema() as (engine, schema):  # noqa: SIM117
+        async with engine.connect() as conn:
+            await setup(conn, schema)
+            await capture_history_page(
+                conn,
+                SUB,
+                page_id="p",
+                start_history_id="100",
+                end_history_id="150",
+                changes=[first, change],
+            )
+            await record_fetch_result(
+                conn,
+                SUB,
+                first,
+                verified_sub=SUB,
+                outcome="fetched",
+                message=message("m", "200"),
+                observed_at=AT,
+            )
+            changed_body = message("m", "300")
+            changed_body["text"] = "impossible replacement"
+            await record_fetch_result(
+                conn,
+                SUB,
+                change,
+                verified_sub=SUB,
+                outcome="fetched",
+                message=changed_body,
+                observed_at="2026-10-04T00:00:01Z",
+            )
+            assert await apply_next(conn, SUB)
+            assert await apply_next(conn, SUB)
+            assert (
+                await conn.execute(
+                    text(
+                        "SELECT fetch_state FROM brain_gmail_pilot_events "
+                        "WHERE history_id='150'"
+                    )
+                )
+            ).scalar_one() == "quarantined"
+            assert (
+                await conn.execute(
+                    text(
+                        "SELECT source_head_revision FROM brain_source_objects "
+                        "WHERE provider='gmail-pilot'"
+                    )
+                )
+            ).scalar_one() == "200"
+
+
+@pytest.mark.asyncio
+async def test_fetched_receipt_survives_history_expiry_and_resync(monkeypatch):
+    monkeypatch.setenv("VERA_SHADOW_GMAIL_PILOT_ENABLED", "1")
+    fetched = GmailChange("110", "kept", "added")
+    unfetched = GmailChange("120", "lost", "added")
+    async with isolated_migrated_shadow_schema() as (engine, schema):  # noqa: SIM117
+        async with engine.connect() as conn:
+            await setup(conn, schema)
+            await capture_history_page(
+                conn,
+                SUB,
+                page_id="p",
+                start_history_id="100",
+                end_history_id="120",
+                changes=[fetched, unfetched],
+            )
+            await record_fetch_result(
+                conn,
+                SUB,
+                fetched,
+                verified_sub=SUB,
+                outcome="fetched",
+                message=message("kept", "110"),
+                observed_at=AT,
+            )
+            await record_history_404(conn, SUB)
+            await capture_present_resync(conn, SUB, "500", [message("kept", "110")], AT)
+            states = (
+                (
+                    await conn.execute(
+                        text(
+                            "SELECT fetch_state FROM brain_gmail_pilot_events "
+                            "WHERE resync_history_id IS NULL ORDER BY id"
+                        )
+                    )
+                )
+                .scalars()
+                .all()
+            )
+            assert states == ["fetched", "gap"]
+            await conn.rollback()
+            assert await apply_next(conn, SUB)
+            assert await apply_next(conn, SUB)
+            row = (
+                await conn.execute(text("SELECT value,valid_from FROM brain_claims"))
+            ).one()
+            assert row.value == "body-kept"
+            assert row.valid_from.isoformat().startswith("2026-10-04T00:00:00")
+            await conn.rollback()
+            assert (
+                len(
+                    await read_pilot(
+                        conn,
+                        SUB,
+                        verified_sub=SUB,
+                        known_at=datetime.now(UTC).isoformat(),
+                    )
+                )
+                == 1
+            )
+
+
+@pytest.mark.asyncio
+async def test_observation_capture_and_materialization_times_are_distinct(monkeypatch):
+    monkeypatch.setenv("VERA_SHADOW_GMAIL_PILOT_ENABLED", "1")
+    added, deleted = (
+        GmailChange("110", "m", "added"),
+        GmailChange("140", "m", "deleted"),
+    )
+    async with isolated_migrated_shadow_schema() as (engine, schema):  # noqa: SIM117
+        async with engine.connect() as conn:
+            await setup(conn, schema)
+            await capture_history_page(
+                conn,
+                SUB,
+                page_id="p",
+                start_history_id="100",
+                end_history_id="140",
+                changes=[added, deleted],
+            )
+            await record_fetch_result(
+                conn,
+                SUB,
+                added,
+                verified_sub=SUB,
+                outcome="fetched",
+                message=message("m", "110"),
+                observed_at=AT,
+            )
+            assert await apply_next(conn, SUB)
+            assert await apply_next(conn, SUB)
+            first = (
+                await conn.execute(
+                    text(
+                        "SELECT e.observed_at,e.applied_at,r.received_at,g.known_from "
+                        "FROM brain_gmail_pilot_events e JOIN brain_revisions r "
+                        "ON r.provider='gmail-pilot' AND r.account_id=e.google_sub "
+                        "AND r.external_id=e.message_id AND r.revision=e.observed_history_id "
+                        "JOIN brain_generations g ON g.provider=r.provider AND g.account_id=r.account_id "
+                        "AND g.external_id=r.external_id AND g.revision=r.revision "
+                        "WHERE e.history_id='110'"
+                    )
+                )
+            ).one()
+            assert first.received_at == first.observed_at
+            assert (
+                first.known_from == first.applied_at
+                and first.known_from > first.observed_at
+            )
+            tombstone = (
+                await conn.execute(
+                    text(
+                        "SELECT e.captured_at,e.applied_at,r.received_at,g.known_from "
+                        "FROM brain_gmail_pilot_events e JOIN brain_revisions r "
+                        "ON r.provider='gmail-pilot' AND r.account_id=e.google_sub "
+                        "AND r.external_id=e.message_id AND r.revision=e.history_id "
+                        "JOIN brain_generations g ON g.provider=r.provider AND g.account_id=r.account_id "
+                        "AND g.external_id=r.external_id AND g.revision=r.revision "
+                        "WHERE e.history_id='140'"
+                    )
+                )
+            ).one()
+            assert tombstone.received_at == tombstone.captured_at
+            assert tombstone.known_from == tombstone.applied_at
 
 
 @pytest.mark.asyncio

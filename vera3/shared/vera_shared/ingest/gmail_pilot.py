@@ -362,27 +362,27 @@ async def capture_present_resync(
                 {"sub": sub},
             )
         ).scalar_one()
-        latest_generation = (
+        latest_available = (
             await conn.execute(
                 text(
-                    "SELECT max(known_from) FROM brain_generations "
-                    "WHERE provider='gmail-pilot' AND account_id=:sub"
+                    "SELECT max(available_at) FROM brain_gmail_pilot_resyncs WHERE google_sub=:sub"
                 ),
                 {"sub": sub},
             )
         ).scalar_one()
-        if any(
-            boundary is not None and observed <= boundary
-            for boundary in (latest_observation, latest_generation)
+        available = (await conn.execute(text("SELECT clock_timestamp()"))).scalar_one()
+        if (latest_observation is not None and observed <= latest_observation) or (
+            latest_available is not None and available <= latest_available
         ):
             raise Quarantine("present-state observation time must advance")
         await conn.execute(
             text(
                 "UPDATE brain_gmail_pilot_events SET fetch_state='gap',"
-                "error='history expired before resolution',applied_at=now() "
-                "WHERE google_sub=:sub AND fetch_state NOT IN ('done','obsolete','gap')"
+                "error='history expired before fetch',applied_at=:available "
+                "WHERE google_sub=:sub AND kind<>'deleted' AND fetch_state IN "
+                "('pending','failed','missing','forbidden','deleted_before_fetch')"
             ),
-            {"sub": sub},
+            {"sub": sub, "available": available},
         )
         present_ids: set[str] = set()
         for message in messages:
@@ -415,13 +415,15 @@ async def capture_present_resync(
         await conn.execute(
             text(
                 "INSERT INTO brain_gmail_pilot_resyncs(google_sub,history_id,"
-                "observed_at,present_ids) VALUES (:sub,:history,:observed,"
+                "observed_at,available_at,present_ids) "
+                "VALUES (:sub,:history,:observed,:available,"
                 "CAST(:present_ids AS jsonb))"
             ),
             {
                 "sub": sub,
                 "history": present_history_id,
                 "observed": observed,
+                "available": available,
                 "present_ids": json.dumps(sorted(present_ids)),
             },
         )
@@ -522,6 +524,7 @@ async def _apply_next_transaction(conn: AsyncConnection, sub: str, selected: lis
             and row.fetch_state in {"pending", "failed", "missing", "forbidden", "quarantined"}
         ):
             return False
+        materialized_at = (await conn.execute(text("SELECT clock_timestamp()"))).scalar_one()
         if row.fetch_state == "deleted_before_fetch":
             await conn.execute(
                 text(
@@ -531,15 +534,15 @@ async def _apply_next_transaction(conn: AsyncConnection, sub: str, selected: lis
                 {"sub": sub},
             )
         elif row.kind == "deleted":
-            await _apply_delete(conn, sub, row)
+            await _apply_delete(conn, sub, row, materialized_at)
         elif row.fetch_state == "fetched":
-            if not await _apply_fetched(conn, sub, row):
+            if not await _apply_fetched(conn, sub, row, materialized_at):
                 await conn.execute(
                     text(
                         "UPDATE brain_gmail_pilot_events SET "
-                        "fetch_state='obsolete',applied_at=now() WHERE id=:id"
+                        "fetch_state='obsolete',applied_at=:materialized WHERE id=:id"
                     ),
-                    {"id": row.id},
+                    {"id": row.id, "materialized": materialized_at},
                 )
                 await _advance_applied(conn, sub)
                 return True
@@ -548,9 +551,9 @@ async def _apply_next_transaction(conn: AsyncConnection, sub: str, selected: lis
         await conn.execute(
             text(
                 "UPDATE brain_gmail_pilot_events SET fetch_state='done',"
-                "applied_at=now() WHERE id=:id"
+                "applied_at=:materialized WHERE id=:id"
             ),
-            {"id": row.id},
+            {"id": row.id, "materialized": materialized_at},
         )
         await _advance_applied(conn, sub)
     return True
@@ -572,20 +575,49 @@ async def _head(conn: AsyncConnection, sub: str, message_id: str) -> Row[tuple[A
     ).one_or_none()
 
 
-async def _apply_fetched(conn: AsyncConnection, sub: str, row: Row[tuple[Any, ...]]) -> bool:
+async def _apply_fetched(
+    conn: AsyncConnection, sub: str, row: Row[tuple[Any, ...]], materialized_at: datetime
+) -> bool:
     version = str(row.observed_history_id)
     head = await _head(conn, sub, row.message_id)
     payload = row.fetched_payload
     digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
-    if head and _number(version) <= _number(head.source_head_revision):
+    prior_text = (
+        await conn.execute(
+            text(
+                "SELECT fetched_payload->>'text' FROM brain_gmail_pilot_events "
+                "WHERE google_sub=:sub AND message_id=:mid AND fetch_state='done' "
+                "AND fetched_payload IS NOT NULL ORDER BY id DESC LIMIT 1"
+            ),
+            {"sub": sub, "mid": row.message_id},
+        )
+    ).scalar_one_or_none()
+    if prior_text is not None and payload["text"] != prior_text:
+        raise Quarantine("immutable Gmail message body changed")
+    prior_delete = (
+        await conn.execute(
+            text(
+                "SELECT 1 FROM brain_gmail_pilot_events WHERE google_sub=:sub "
+                "AND message_id=:mid AND kind='deleted' AND fetch_state='done' LIMIT 1"
+            ),
+            {"sub": sub, "mid": row.message_id},
+        )
+    ).scalar_one_or_none()
+    if prior_delete:
+        raise Quarantine("permanently deleted Gmail message reappeared")
+    if head and _number(version) == _number(head.source_head_revision):
+        if digest != head.content_hash:
+            raise Quarantine("same Gmail message version has conflicting payload")
+        return True  # Identical source version and payload are idempotent.
+    if head and _number(version) < _number(head.source_head_revision):
         if row.resync_history_id is not None:
-            if version != head.source_head_revision or digest != head.content_hash:
-                raise Quarantine("present-state payload disagrees with source head")
-            return True
+            raise Quarantine("present-state version precedes source head")
         return False  # A later fetch of an older version cannot replace the current body.
     observed = row.observed_at.astimezone(UTC).isoformat()
     if head and row.observed_at <= head.received_at:
         raise Quarantine("Gmail observation time precedes prior observation")
+    if row.observed_at > materialized_at:
+        raise Quarantine("Gmail observation lies in the future")
     source = SourceRevision(
         provider="gmail-pilot",
         account_id=sub,
@@ -607,18 +639,19 @@ async def _apply_fetched(conn: AsyncConnection, sub: str, row: Row[tuple[Any, ..
         extraction_version="plain-v1",
     )
     await PgShadowIngest({("gmail-pilot", sub): source.required_scope}).apply(
-        conn, source, [claim], known_at=observed, in_transaction=True
+        conn, source, [claim], known_at=materialized_at.isoformat(), in_transaction=True
     )
     return True
 
 
-async def _apply_delete(conn: AsyncConnection, sub: str, row: Row[tuple[Any, ...]]) -> None:
+async def _apply_delete(
+    conn: AsyncConnection, sub: str, row: Row[tuple[Any, ...]], materialized_at: datetime
+) -> None:
     head = await _head(conn, sub, row.message_id)
     if head is None or _number(row.history_id) <= _number(head.source_head_revision):
         return
-    observed = datetime.now(UTC).isoformat()
-    if datetime.fromisoformat(observed) <= head.received_at:
-        raise Quarantine("Gmail delete observation precedes prior observation")
+    if row.captured_at <= head.received_at:
+        raise Quarantine("Gmail delete capture precedes prior observation")
     source = SourceRevision(
         provider="gmail-pilot",
         account_id=sub,
@@ -626,13 +659,13 @@ async def _apply_delete(conn: AsyncConnection, sub: str, row: Row[tuple[Any, ...
         external_id=row.message_id,
         revision=row.history_id,
         content_hash=f"delete:{row.history_id}",
-        received_at=observed,
+        received_at=row.captured_at.isoformat(),
         required_scope=f"gmail-pilot:{sub}",
         deleted=True,
         previous_revision=head.source_head_revision,
     )
     await PgShadowIngest({("gmail-pilot", sub): source.required_scope}).apply(
-        conn, source, [], known_at=observed, in_transaction=True
+        conn, source, [], known_at=materialized_at.isoformat(), in_transaction=True
     )
 
 
@@ -672,9 +705,9 @@ async def read_pilot(
     resync = (
         await conn.execute(
             text(
-                "SELECT history_id,observed_at,present_ids FROM brain_gmail_pilot_resyncs "
-                "WHERE google_sub=:sub AND observed_at<=:as_of "
-                "ORDER BY observed_at DESC LIMIT 1"
+                "SELECT history_id,available_at,present_ids FROM brain_gmail_pilot_resyncs "
+                "WHERE google_sub=:sub AND available_at<=:as_of "
+                "ORDER BY available_at DESC LIMIT 1"
             ),
             {"sub": sub, "as_of": datetime.fromisoformat(utc_timestamp(known_at))},
         )
@@ -688,17 +721,38 @@ async def read_pilot(
                 text(
                     "SELECT message_id FROM brain_gmail_pilot_events "
                     "WHERE google_sub=:sub AND resync_history_id=:history "
-                    "AND fetch_state='done'"
+                    "AND fetch_state='done' AND applied_at<=:as_of"
                 ),
-                {"sub": sub, "history": resync.history_id},
+                {
+                    "sub": sub,
+                    "history": resync.history_id,
+                    "as_of": datetime.fromisoformat(utc_timestamp(known_at)),
+                },
             )
         )
         .scalars()
         .all()
     )
+    post_resync = set(
+        (
+            await conn.execute(
+                text(
+                    "SELECT message_id,observed_history_id FROM brain_gmail_pilot_events "
+                    "WHERE google_sub=:sub AND resync_history_id IS NULL "
+                    "AND captured_at>=:available AND fetch_state='done' "
+                    "AND applied_at<=:as_of"
+                ),
+                {
+                    "sub": sub,
+                    "available": resync.available_at,
+                    "as_of": datetime.fromisoformat(utc_timestamp(known_at)),
+                },
+            )
+        ).all()
+    )
     return [
         claim
         for claim in claims
-        if claim["known_from"] >= resync.observed_at
-        or (claim["external_id"] in present and claim["external_id"] in verified)
+        if (claim["external_id"] in present and claim["external_id"] in verified)
+        or (claim["external_id"], claim["revision"]) in post_resync
     ]

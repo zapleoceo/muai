@@ -22,6 +22,7 @@ CREATE TABLE IF NOT EXISTS brain_gmail_pilot_resyncs (
     google_sub text NOT NULL REFERENCES brain_gmail_pilot_accounts(google_sub),
     history_id text NOT NULL,
     observed_at timestamptz NOT NULL,
+    available_at timestamptz NOT NULL,
     present_ids jsonb NOT NULL,
     PRIMARY KEY (google_sub,history_id)
 );
@@ -38,7 +39,7 @@ CREATE TABLE IF NOT EXISTS brain_gmail_pilot_events (
     observed_history_id text,
     observed_at timestamptz,
     error text,
-    captured_at timestamptz NOT NULL DEFAULT now(),
+    captured_at timestamptz NOT NULL DEFAULT clock_timestamp(),
     applied_at timestamptz,
     UNIQUE (google_sub,event_key),
     CHECK (kind IN ('added','deleted','label_added','label_removed')),
@@ -48,7 +49,7 @@ CREATE TABLE IF NOT EXISTS brain_gmail_pilot_events (
 CREATE INDEX IF NOT EXISTS ix_brain_gmail_pilot_pending
     ON brain_gmail_pilot_events(google_sub,id) WHERE fetch_state <> 'done';
 CREATE INDEX IF NOT EXISTS ix_brain_gmail_pilot_resync_asof
-    ON brain_gmail_pilot_resyncs(google_sub,observed_at DESC);
+    ON brain_gmail_pilot_resyncs(google_sub,available_at DESC);
 INSERT INTO schema_migrations(version,note)
 VALUES ('049_gmail_shadow_pilot','offline Gmail history contract pilot')
 ON CONFLICT(version) DO NOTHING;
