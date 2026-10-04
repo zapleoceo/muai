@@ -10,8 +10,15 @@ from vera_shared.events.visibility import NOT_HIDDEN_SQL
 from vera_shared.llm.client import LLMCallFailed, chat_async
 
 from brain_search.agent import run_agent
+from brain_search.evidence import (
+    EVIDENCE_RULES,
+    PRIMARY_CHARS,
+    SECONDARY_CHARS,
+    evidence_excerpt,
+)
 from brain_search.models import AnswerResponse, HistoryItem, SearchQuery, SearchResult
 from brain_search.query_parse import SOURCE_PROMPT_NOTE
+from brain_search.rows import Candidate
 from brain_search.scoring import score_rows
 from brain_search.self_context import self_context
 
@@ -79,7 +86,7 @@ def build_prompt(*, question: str, self_ctx: str, context: str,
         "4) Каждое существенное утверждение о событии сопровождай [event:ID] "
         "из найденных событий. Если у события есть ссылка на оригинал, "
         "приведи её рядом; если ссылки нет, не выдумывай её.\n"
-        f"{SOURCE_PROMPT_NOTE}{notes}"
+        f"{EVIDENCE_RULES}{SOURCE_PROMPT_NOTE}{notes}"
     )
 
 
@@ -94,12 +101,16 @@ async def answer(
     candidates = score_rows(rows, q_vec, acc_words or [])
     top = candidates[:(eff_limit or query.limit)]
     results = [SearchResult(score=score, **info) for score, info in top]
+    full_text_by_id = {c.id: c.content_text for c in (Candidate.of(row) for row in rows)}
 
     self_ctx = await self_context()
     ctx_n = CONTEXT_EVENTS_SUMMARY if summary else CONTEXT_EVENTS
-    blocks = [f"[event:{r.event_id} | {r.occurred_at[:16]} | {r.source} | "
-              f"{r.source_url or 'original link unavailable'}] {r.content_preview[:300]}"
-              for r in results[:ctx_n]]
+    blocks = [
+        f"[event:{r.event_id} | {r.occurred_at[:16]} | {r.source} | "
+        f"{r.source_url or 'original link unavailable'}] "
+        f"{evidence_excerpt(full_text_by_id[r.event_id], PRIMARY_CHARS if i < 3 else SECONDARY_CHARS)}"
+        for i, r in enumerate(results[:ctx_n])
+    ]
     context = "\n\n".join(blocks) if blocks else "(нет данных)"
 
     history: list[HistoryItem] = []

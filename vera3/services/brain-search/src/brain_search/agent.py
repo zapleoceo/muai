@@ -29,6 +29,7 @@ from brain_search.agent_tools import (
     execute_tool,
     load_remote_tool_specs,
 )
+from brain_search.evidence import EVIDENCE_RULES
 
 log = logging.getLogger(__name__)
 
@@ -97,6 +98,7 @@ SYSTEM_PROMPT = """Ты — Вера, цифровая память Димы. Т
     найденных событий. Если у события есть source_url, добавь ссылку.
     Не придумывай адрес оригинала, если source_url отсутствует.
 """
+SYSTEM_PROMPT += EVIDENCE_RULES
 
 
 async def run_agent(
