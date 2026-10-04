@@ -139,6 +139,7 @@ async def test_terminal_capture_failure_retries_without_early_cursor(monkeypatch
             with pytest.raises(RuntimeError, match="before cursor advance"):
                 await protocol.finish_history_chain(conn, SUB)
             assert (await pilot_status(conn, SUB))["captured_cursor"] == str(BIG)
+            await conn.rollback()
             monkeypatch.setattr(protocol, "capture_history_page", original)
             assert await protocol.finish_history_chain(conn, SUB)
             assert (await pilot_status(conn, SUB))["captured_cursor"] == str(BIG + 40)
@@ -160,6 +161,7 @@ async def test_idle_terminal_chain_allows_later_changes_at_same_cursor(monkeypat
             )
             assert await protocol.finish_history_chain(conn, SUB)
             assert (await pilot_status(conn, SUB))["captured_cursor"] == str(BIG)
+            await conn.rollback()
             later = {
                 "historyId": str(BIG + 10),
                 "history": [history(str(BIG + 7), "new")],
@@ -293,6 +295,7 @@ async def test_history_404_full_sync_pages_and_bridge(monkeypatch):
             assert anchor == str(BIG + 500)
             assert await protocol.full_sync_state(conn, SUB) == "bridging"
             assert (await pilot_status(conn, SUB))["coverage_break"] is True
+            await conn.rollback()
             bridge = {"historyId": str(BIG + 550), "history": []}
             await protocol.capture_history_response(
                 conn,
@@ -359,6 +362,50 @@ async def test_full_sync_get_failure_and_enumeration_race_are_unresolved(monkeyp
                 )
             assert await protocol.full_sync_state(conn, SUB) == "paging"
             assert (await pilot_status(conn, SUB))["captured_cursor"] == str(BIG)
+
+
+@pytest.mark.asyncio
+async def test_synthetic_http_get_failure_retries_page_without_partial_commit(
+    monkeypatch,
+):
+    monkeypatch.setenv("VERA_SHADOW_GMAIL_PILOT_ENABLED", "1")
+    async with isolated_migrated_shadow_schema() as (engine, schema):  # noqa: SIM117
+        async with engine.connect() as conn:
+            await setup(conn, schema)
+            await protocol.expire_history_chain(conn, SUB)
+            await protocol.start_full_sync(
+                conn,
+                SUB,
+                scope=WHOLE_SCOPE,
+                window_start=WINDOW_START,
+                window_end=WINDOW_END,
+            )
+            http = protocol.SyntheticGmailHttp(
+                {
+                    ("messages.list", ""): (200, {"messages": [{"id": "a"}]}),
+                    ("messages.get", "a"): (503, {}),
+                }
+            )
+            with pytest.raises(Quarantine, match="messages.get failed"):
+                await protocol.ingest_synthetic_full_page(conn, SUB, None, http)
+            assert (
+                await conn.execute(
+                    text("SELECT count(*) FROM brain_gmail_protocol_full_pages")
+                )
+            ).scalar_one() == 0
+            await conn.rollback()
+            http.replies[("messages.get", "a")] = (
+                200,
+                get_message("a", str(BIG + 500)),
+            )
+            assert (
+                await protocol.ingest_synthetic_full_page(conn, SUB, None, http) is None
+            )
+            assert (
+                await conn.execute(
+                    text("SELECT count(*) FROM brain_gmail_protocol_full_items")
+                )
+            ).scalar_one() == 1
 
 
 @pytest.mark.asyncio

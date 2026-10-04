@@ -549,7 +549,17 @@ async def capture_full_sync_response(
             anchor = str(normalized[ids[0]]["historyId"])
         for mid, payload in normalized.items():
             created = datetime.fromtimestamp(int(str(payload["internalDate"])) / 1000, UTC)
-            if not run.window_start <= created < run.window_end:
+            start = (
+                run.window_start.replace(tzinfo=UTC)
+                if run.window_start.tzinfo is None
+                else run.window_start.astimezone(UTC)
+            )
+            end = (
+                run.window_end.replace(tzinfo=UTC)
+                if run.window_end.tzinfo is None
+                else run.window_end.astimezone(UTC)
+            )
+            if not start <= created < end:
                 raise Quarantine("Gmail item lies outside declared full-sync window")
             if _number(str(payload["historyId"])) > _number(anchor):
                 raise Quarantine("Gmail enumeration raced beyond its history anchor")
@@ -600,6 +610,27 @@ async def capture_full_sync_response(
             },
         )
     return next_token
+
+
+async def ingest_synthetic_full_page(
+    conn: AsyncConnection, sub: str, token: str | None, http: SyntheticGmailHttp
+) -> str | None:
+    """Fetch a scripted list page and all GETs before its durable page commit."""
+    status, response = http.get("messages.list", token)
+    if status != 200 or not isinstance(response.get("messages", []), list):
+        raise Quarantine("synthetic Gmail messages.list failed")
+    fetched: dict[str, dict[str, Any]] = {}
+    for item in response.get("messages", []):
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            raise Quarantine("invalid Gmail listed message")
+        mid = item["id"]
+        get_status, body = http.get("messages.get", mid)
+        if get_status != 200:
+            raise Quarantine("synthetic Gmail messages.get failed")
+        fetched[mid] = body
+    return await capture_full_sync_response(
+        conn, sub, requested_token=token, response=response, fetched=fetched
+    )
 
 
 async def finish_full_sync(conn: AsyncConnection, sub: str, observed_at: str) -> str:
