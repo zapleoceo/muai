@@ -76,6 +76,16 @@ async def _ingest_in_transaction(
     conn: AsyncConnection, event: RawEvent, legacy_event_id: int, receipt_origin: str
 ) -> bool:
     account, external_id = _identity(event)
+    # Gateway already holds this row; standalone intake takes it before the
+    # checkpoint too. Both entrypoints must use events -> checkpoint order.
+    locked_event = (
+        await conn.execute(
+            text("SELECT id FROM events WHERE id=:event_id FOR SHARE"),
+            {"event_id": legacy_event_id},
+        )
+    ).scalar_one_or_none()
+    if locked_event is None:
+        raise Quarantine("legacy event identity unavailable")
     await _lock_checkpoint(conn, {"provider": "instagram", "account_id": account})
     if not await _active_session(conn, account):
         raise Quarantine("Instagram account access revoked")
@@ -154,7 +164,9 @@ async def _ingest_in_transaction(
                     f"receipt:instagram:{account}:{external_id}:{revision}:"
                     f"event:{legacy_event_id}:sha256:{digest}"
                 ),
-                evidence_kind="document",
+                evidence_kind=(
+                    "inference" if receipt_origin == "legacy_snapshot" else "document"
+                ),
                 extraction_version="raw-v1",
             )
         ]
@@ -217,7 +229,67 @@ async def read_instagram_shadow(
     if not await _active_session(conn, account):
         return []
     scope = f"instagram:{account}"
-    return await fetch_claims_as_of_pg(conn, {("instagram", account): scope}, {scope}, known_at)
+    claims = await fetch_claims_as_of_pg(
+        conn, {("instagram", account): scope}, {scope}, known_at
+    )
+    receipts: dict[tuple[str, str], dict[str, object]] = {}
+    for claim in claims:
+        key = (str(claim["external_id"]), str(claim["revision"]))
+        if key not in receipts:
+            receipts[key] = await resolve_instagram_receipt(
+                conn, account, key[0], key[1], authorized_scopes={scope}
+            )
+        claim["receipt_origin"] = receipts[key]["origin"]
+        claim["receipt_payload_hash"] = receipts[key]["payload_hash"]
+    return claims
+
+
+async def resolve_instagram_receipt(
+    conn: AsyncConnection,
+    account: str,
+    external_id: str,
+    revision: str,
+    *,
+    authorized_scopes: set[str],
+) -> dict[str, object]:
+    """Resolve a cited payload only for a currently authorized Instagram account."""
+    scope = f"instagram:{account}"
+    if scope not in authorized_scopes or not await _active_session(conn, account):
+        raise Quarantine("Instagram receipt access denied")
+    receipt = (
+        await conn.execute(
+            text(
+                "SELECT q.content_text,q.metadata,q.occurred_at,q.payload_hash,q.origin,"
+                "r.content_hash FROM brain_revision_receipts q JOIN brain_revisions r "
+                "ON (r.provider,r.account_id,r.object_type,r.external_id,r.revision)="
+                "(q.provider,q.account_id,q.object_type,q.external_id,q.revision) "
+                "WHERE q.provider='instagram' AND q.account_id=:account "
+                "AND q.object_type='message' AND q.external_id=:external_id "
+                "AND q.revision=:revision"
+            ),
+            {"account": account, "external_id": external_id, "revision": revision},
+        )
+    ).one_or_none()
+    if receipt is None:
+        raise Quarantine("Instagram evidence receipt unavailable")
+    payload = {
+        "text": receipt.content_text,
+        "metadata": receipt.metadata,
+        "occurred_at": receipt.occurred_at,
+    }
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True, default=str).encode()).hexdigest()
+    if digest != receipt.payload_hash or digest != receipt.content_hash:
+        raise Quarantine("Instagram evidence receipt hash mismatch")
+    return {
+        "account_id": account,
+        "external_id": external_id,
+        "revision": revision,
+        "content_text": receipt.content_text,
+        "metadata": receipt.metadata,
+        "occurred_at": receipt.occurred_at,
+        "payload_hash": digest,
+        "origin": receipt.origin,
+    }
 
 
 async def invalidate_instagram_cache(

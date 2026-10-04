@@ -15,6 +15,11 @@ from shadow_pg_support import isolated_migrated_shadow_schema, use_schema
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import create_async_engine
 from vera_shared.events.schema import RawEvent
+from vera_shared.ingest.shadow_instagram import (
+    read_instagram_shadow,
+    resolve_instagram_receipt,
+)
+from vera_shared.ingest.shadow_types import Quarantine
 
 pytestmark = pytest.mark.skipif(
     os.environ.get("RUN_INTEGRATION_TESTS") != "1",
@@ -133,6 +138,17 @@ async def test_gateway_bootstraps_existing_original_and_rejects_other_account(mo
                     r.payload_hash == receipt_hash(r.content_text, r.metadata, r.occurred_at)
                     for r in receipts
                 )
+                first_known = (await conn.execute(text(
+                    "SELECT known_from FROM brain_generations WHERE revision='1'"
+                ))).scalar_one()
+                original_read = await read_instagram_shadow(
+                    conn, "owner-a", known_at=first_known.isoformat()
+                )
+                assert original_read[0]["receipt_origin"] == "legacy_snapshot"
+                assert original_read[0]["evidence_kind"] == "inference"
+                assert (await read_instagram_shadow(
+                    conn, "owner-a", known_at="2099-01-01T00:00:00Z"
+                ))[0]["receipt_origin"] == "source"
         finally:
             await route_engine.dispose()
 
@@ -154,6 +170,56 @@ async def test_gateway_ignores_untrusted_receipt_origin_marker(monkeypatch):
                 assert (await conn.execute(text(
                     "SELECT origin FROM brain_revision_receipts"
                 ))).scalar_one() == "source"
+        finally:
+            await route_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_receipt_resolver_checks_scope_revocation_and_hash(monkeypatch):
+    async with isolated_migrated_shadow_schema() as (engine, schema):
+        async with engine.connect() as conn:
+            await use_schema(conn, schema)
+            await conn.execute(text("INSERT INTO instagram_sessions VALUES ('owner-a',true),('owner-b',true)"))
+            await conn.commit()
+        route_engine = await gateway_engine(monkeypatch, schema)
+        try:
+            await send(message("A", 1))
+            async with engine.connect() as conn:
+                await use_schema(conn, schema)
+                sid = "ig:thread-1:message-2"
+                receipt = await resolve_instagram_receipt(
+                    conn, "owner-a", sid, "1", authorized_scopes={"instagram:owner-a"}
+                )
+                assert receipt["content_text"] == "A"
+                assert receipt["payload_hash"] == receipt_hash(
+                    receipt["content_text"], receipt["metadata"], receipt["occurred_at"]
+                )
+                with pytest.raises(Quarantine, match="access denied"):
+                    await resolve_instagram_receipt(
+                        conn, "owner-a", sid, "1", authorized_scopes={"instagram:owner-b"}
+                    )
+                with pytest.raises(Quarantine, match="unavailable"):
+                    await resolve_instagram_receipt(
+                        conn, "owner-b", sid, "1", authorized_scopes={"instagram:owner-b"}
+                    )
+                await conn.commit()
+                await conn.execute(text("UPDATE instagram_sessions SET is_active=false WHERE username='owner-a'"))
+                await conn.commit()
+                with pytest.raises(Quarantine, match="access denied"):
+                    await resolve_instagram_receipt(
+                        conn, "owner-a", sid, "1", authorized_scopes={"instagram:owner-a"}
+                    )
+                await conn.commit()
+                await conn.execute(text("UPDATE instagram_sessions SET is_active=true WHERE username='owner-a'"))
+                await conn.execute(text(
+                    "UPDATE brain_revision_receipts SET payload_hash='corrupt' "
+                    "WHERE provider='instagram' AND account_id='owner-a'"
+                ))
+                await conn.commit()
+                with pytest.raises(Quarantine, match="hash mismatch"):
+                    await resolve_instagram_receipt(
+                        conn, "owner-a", sid, "1", authorized_scopes={"instagram:owner-a"}
+                    )
         finally:
             await route_engine.dispose()
 

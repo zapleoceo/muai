@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 
 import pytest
@@ -103,6 +104,11 @@ async def test_pg_restore_is_audited_preserves_source_head_and_checkpoint():
             == []
         )
         await conn.commit()
+        with pytest.raises(Quarantine, match="stale extraction generation"):
+            await ingest.apply(
+                conn, sample_source("2"), [sample_claim("changed")],
+                known_at="2026-10-03T03:30:00Z",
+            )
         assert await ingest.apply(
             conn,
             sample_source("3"),
@@ -207,3 +213,55 @@ async def test_pg_restore_rolls_back_when_audit_insert_fails():
         assert (
             await conn.execute(text("SELECT count(*) FROM brain_generations"))
         ).scalar_one() == 2
+
+
+@pytest.mark.asyncio
+async def test_concurrent_restore_and_next_revision_ingest_serialize():
+    ingest = PgShadowIngest(REGISTRY)
+    rollback = PgShadowRollback(REGISTRY)
+    async with isolated_shadow_schema() as (engine, schema), engine.connect() as blocker, engine.connect() as restore_conn, engine.connect() as ingest_conn:
+        for conn in (blocker, restore_conn, ingest_conn):
+            await use_schema(conn, schema)
+        await ingest.apply(
+            blocker, sample_source(), [sample_claim()], known_at="2026-10-03T01:00:00Z"
+        )
+        await ingest.apply(
+            blocker, sample_source("2"), [sample_claim("changed")],
+            known_at="2026-10-03T02:00:00Z",
+        )
+        generations = (await blocker.execute(text(
+            "SELECT id FROM brain_generations ORDER BY id"
+        ))).scalars().all()
+        await blocker.commit()
+        await blocker.execute(text(
+            "SELECT active_generation FROM brain_source_objects FOR UPDATE"
+        ))
+        restore_task = asyncio.create_task(rollback.restore(
+            restore_conn, KEY, target_generation=generations[0],
+            expected_active=generations[1], known_at="2026-10-03T03:00:00Z",
+            reason="concurrent review", authorized_write_scopes=WRITE,
+        ))
+        ingest_task = asyncio.create_task(ingest.apply(
+            ingest_conn, sample_source("3"), [sample_claim("next")],
+            known_at="2026-10-03T04:00:00Z",
+        ))
+        try:
+            await asyncio.sleep(0.05)
+            await blocker.commit()
+            restored, ingested = await asyncio.wait_for(
+                asyncio.gather(restore_task, ingest_task, return_exceptions=True), 10
+            )
+            assert ingested is True
+            assert isinstance(restored, int) or (
+                isinstance(restored, Quarantine)
+                and "active generation changed" in str(restored)
+            )
+            state = (await blocker.execute(text(
+                "SELECT o.source_head_revision,g.revision FROM brain_source_objects o "
+                "JOIN brain_generations g ON g.id=o.active_generation"
+            ))).one()
+            assert tuple(state) == ("3", "3")
+            await blocker.commit()
+        finally:
+            if blocker.in_transaction():
+                await blocker.rollback()
