@@ -19,6 +19,9 @@ pytestmark = pytest.mark.skipif(
 SUB = "synthetic-protocol-sub"
 AT = "2026-10-04T01:00:00Z"
 BIG = 18446744073709551620
+WHOLE_SCOPE = {"labelIds": [], "includeSpamTrash": True, "q": ""}
+WINDOW_START = "0001-01-01T00:00:00Z"
+WINDOW_END = "9999-12-31T00:00:00Z"
 
 
 def history(position: str, mid: str, field: str = "messagesAdded") -> dict:
@@ -187,7 +190,6 @@ async def test_ambiguous_same_position_and_changed_replay_hold_cursor(monkeypatc
 @pytest.mark.asyncio
 async def test_history_404_full_sync_pages_and_bridge(monkeypatch):
     monkeypatch.setenv("VERA_SHADOW_GMAIL_PILOT_ENABLED", "1")
-    scope = {"labelIds": ["INBOX"], "includeSpamTrash": False, "q": ""}
     async with isolated_migrated_shadow_schema() as (engine, schema):  # noqa: SIM117
         async with engine.connect() as conn:
             await setup(conn, schema)
@@ -213,9 +215,9 @@ async def test_history_404_full_sync_pages_and_bridge(monkeypatch):
             await protocol.start_full_sync(
                 conn,
                 SUB,
-                scope=scope,
-                window_start="2026-10-03T00:00:00Z",
-                window_end="2026-10-05T00:00:00Z",
+                scope=WHOLE_SCOPE,
+                window_start=WINDOW_START,
+                window_end=WINDOW_END,
             )
             first = {
                 "messages": [{"id": "a", "threadId": "ta"}],
@@ -273,17 +275,33 @@ async def test_full_sync_get_failure_and_enumeration_race_are_unresolved(monkeyp
         async with engine.connect() as conn:
             await setup(conn, schema)
             await protocol.expire_history_chain(conn, SUB)
+            with pytest.raises(Quarantine, match="whole-mailbox"):
+                await protocol.start_full_sync(
+                    conn,
+                    SUB,
+                    scope={"labelIds": ["INBOX"], "includeSpamTrash": False, "q": ""},
+                    window_start="2026-10-03T00:00:00Z",
+                    window_end="2026-10-05T00:00:00Z",
+                )
             await protocol.start_full_sync(
                 conn,
                 SUB,
-                scope={"labelIds": [], "includeSpamTrash": True, "q": ""},
-                window_start="2026-10-03T00:00:00Z",
-                window_end="2026-10-05T00:00:00Z",
+                scope=WHOLE_SCOPE,
+                window_start=WINDOW_START,
+                window_end=WINDOW_END,
             )
             first = {"messages": [{"id": "a"}], "nextPageToken": "p2"}
             with pytest.raises(Quarantine, match="incomplete or duplicated"):
                 await protocol.capture_full_sync_response(
                     conn, SUB, requested_token=None, response=first, fetched={}
+                )
+            with pytest.raises(Quarantine, match="identity differs"):
+                await protocol.capture_full_sync_response(
+                    conn,
+                    SUB,
+                    requested_token=None,
+                    response=first,
+                    fetched={"a": get_message("different", str(BIG + 500))},
                 )
             await protocol.capture_full_sync_response(
                 conn,
@@ -302,3 +320,45 @@ async def test_full_sync_get_failure_and_enumeration_race_are_unresolved(monkeyp
                 )
             assert await protocol.full_sync_state(conn, SUB) == "paging"
             assert (await pilot_status(conn, SUB))["captured_cursor"] == str(BIG)
+
+
+@pytest.mark.asyncio
+async def test_full_sync_bridge_race_and_publish_retry(monkeypatch):
+    monkeypatch.setenv("VERA_SHADOW_GMAIL_PILOT_ENABLED", "1")
+    async with isolated_migrated_shadow_schema() as (engine, schema):  # noqa: SIM117
+        async with engine.connect() as conn:
+            await setup(conn, schema)
+            await protocol.expire_history_chain(conn, SUB)
+            await protocol.start_full_sync(
+                conn,
+                SUB,
+                scope=WHOLE_SCOPE,
+                window_start=WINDOW_START,
+                window_end=WINDOW_END,
+            )
+            await protocol.capture_full_sync_response(
+                conn,
+                SUB,
+                requested_token=None,
+                response={"messages": [{"id": "a"}]},
+                fetched={"a": get_message("a", str(BIG + 500))},
+            )
+            original = protocol.capture_present_resync
+
+            async def bridge_during_publish(*args, **kwargs):
+                await original(*args, **kwargs)
+                await protocol.capture_history_response(
+                    conn,
+                    SUB,
+                    start_history_id=str(BIG + 500),
+                    requested_token=None,
+                    response={"historyId": str(BIG + 510), "history": []},
+                )
+                await protocol.finish_history_chain(conn, SUB)
+
+            monkeypatch.setattr(
+                protocol, "capture_present_resync", bridge_during_publish
+            )
+            await protocol.finish_full_sync(conn, SUB, AT)
+            assert await protocol.full_sync_state(conn, SUB) == "complete"
+            assert await protocol.finish_full_sync(conn, SUB, AT) == str(BIG + 500)

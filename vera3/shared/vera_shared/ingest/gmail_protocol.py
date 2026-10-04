@@ -414,6 +414,12 @@ async def start_full_sync(
         or not isinstance(scope["q"], str)
     ):
         raise Quarantine("invalid Gmail full-sync scope")
+    # A scoped or date-limited list is not a complete present-state snapshot.
+    # It must never be fed to capture_present_resync, which hides absent IDs.
+    if scope != {"labelIds": [], "includeSpamTrash": True, "q": ""} or (
+        start != datetime(1, 1, 1, tzinfo=UTC) or end != datetime(9999, 12, 31, tzinfo=UTC)
+    ):
+        raise Quarantine("present-state full sync requires whole-mailbox scope and window")
     async with conn.begin():
         account = await _account(conn, sub)
         if not account.resync_required:
@@ -459,6 +465,8 @@ async def capture_full_sync_response(
     if len(ids) != len(set(ids)) or set(fetched) != set(ids):
         raise Quarantine("Gmail list/get enumeration is incomplete or duplicated")
     normalized = {mid: _plain_get(fetched[mid]) for mid in ids}
+    if any(normalized[mid]["id"] != mid for mid in ids):
+        raise Quarantine("Gmail messages.get identity differs from list ID")
     request = requested_token or ""
     next_token = _token(response.get("nextPageToken"))
     if next_token == request:
@@ -583,17 +591,38 @@ async def finish_full_sync(conn: AsyncConnection, sub: str, observed_at: str) ->
         .all()
     )
     await conn.rollback()
-    await capture_present_resync(
-        conn, sub, run.anchor_history_id, [dict(row) for row in rows], observed_at
-    )
-    async with conn.begin():
-        await _account(conn, sub)
+    already_published = (
         await conn.execute(
             text(
-                "UPDATE brain_gmail_protocol_full_sync SET state='bridging' "
+                "SELECT 1 FROM brain_gmail_pilot_resyncs "
+                "WHERE google_sub=:sub AND history_id=:anchor"
+            ),
+            {"sub": sub, "anchor": run.anchor_history_id},
+        )
+    ).scalar_one_or_none()
+    await conn.rollback()
+    if not already_published:
+        await capture_present_resync(
+            conn, sub, run.anchor_history_id, [dict(row) for row in rows], observed_at
+        )
+    async with conn.begin():
+        await _account(conn, sub)
+        bridge_complete = (
+            await conn.execute(
+                text(
+                    "SELECT 1 FROM brain_gmail_protocol_history "
+                    "WHERE google_sub=:sub AND start_history_id=:anchor "
+                    "AND state='complete'"
+                ),
+                {"sub": sub, "anchor": run.anchor_history_id},
+            )
+        ).scalar_one_or_none()
+        await conn.execute(
+            text(
+                "UPDATE brain_gmail_protocol_full_sync SET state=:state "
                 "WHERE google_sub=:sub AND state='ready'"
             ),
-            {"sub": sub},
+            {"sub": sub, "state": "complete" if bridge_complete else "bridging"},
         )
     return run.anchor_history_id
 
