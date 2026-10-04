@@ -277,6 +277,7 @@ telegram/slack/trello свои `[:8000]` сохранили: у них до по
 ### Что становится событием
 
 - `source_event_id` = `<channel_id>:<ts>` — глобально уникален, дедуп бесплатный.
+- For newly ingested messages, `metadata.permalink` stores the canonical Slack URL returned by `chat.getPermalink` using the existing user token. A lookup failure leaves the event ingest and cursor intact; existing events are not backfilled. Search exposes a `source_url` only when the stored URL matches the event channel and timestamp. `PermalinkBudget` bounds optional requests to 10 seconds and stops them after two errors per poll cycle, including thread replies. Remaining messages are ingested without links when the budget is exhausted; no permalink retry/backfill is included.
 - Разметка Slack разворачивается в читаемый вид (`mapper.unwrap`): `<@U123>` →
   `@Имя Фамилия`, `<#C1|general>` → `#general`, `<https://…|текст>` →
   `текст (url)`. Без этого и выжимка, и поиск по мозгу работали бы по мусору.

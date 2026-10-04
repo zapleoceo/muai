@@ -7,9 +7,11 @@
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import func, select
@@ -43,6 +45,8 @@ class _FakeClient:
         self._users = users or {}
         self.history_calls: list[dict] = []
         self.reply_calls: list[dict] = []
+        self.permalink_calls: list[tuple[str, str]] = []
+        self.permalink_error: Exception | None = None
 
     async def history(self, channel, *, oldest, max_pages):
         self.history_calls.append({"channel": channel, "oldest": oldest})
@@ -54,6 +58,86 @@ class _FakeClient:
 
     async def user_info(self, user_id):
         return self._users.get(user_id, {"real_name": user_id, "profile": {}})
+
+    async def get_permalink(self, channel, message_ts):
+        self.permalink_calls.append((channel, message_ts))
+        if self.permalink_error:
+            raise self.permalink_error
+        return f"https://acme.slack.com/archives/{channel}/p{message_ts.replace('.', '')}"
+
+
+@pytest.mark.asyncio
+async def test_permalink_client_uses_existing_api_call(monkeypatch):
+    from ingestor_slack.client import SlackClient
+
+    client = SlackClient("xoxp-test")
+    seen = []
+
+    async def fake_call(method, **params):
+        seen.append((method, params))
+        return {"ok": True, "permalink": "https://acme.slack.com/archives/C1/p1756200000000100"}
+
+    monkeypatch.setattr(client, "_call", fake_call)
+    assert await client.get_permalink("C1", "1756200000.000100") == (
+        "https://acme.slack.com/archives/C1/p1756200000000100")
+    assert seen == [("chat.getPermalink", {
+        "channel": "C1", "message_ts": "1756200000.000100"})]
+
+
+@pytest.mark.asyncio
+async def test_slow_permalink_page_keeps_all_messages_and_cancels_lookups(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    class SlowClient(_FakeClient):
+        active = 0
+        cancelled = 0
+
+        async def get_permalink(self, channel, message_ts):
+            self.active += 1
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                self.cancelled += 1
+                raise
+            finally:
+                self.active -= 1
+
+    messages = [_msg(f"1756200000.{i:06d}") for i in range(1000)]
+    client = SlowClient(history={"Cbulk": (messages, True)})
+    row = SimpleNamespace(conversation_id="Cbulk", name="bulk", kind="channel",
+                          is_private=False, last_ts="old")
+    saved_specs = []
+
+    async def save_events(specs, *, profiles):
+        saved_specs.extend(specs)
+        return specs
+
+    cursor = AsyncMock()
+    monkeypatch.setattr(poller, "PERMALINK_POLL_BUDGET_S", 0.02)
+    monkeypatch.setattr(store, "save_events", save_events)
+    monkeypatch.setattr(store, "save_cursor", cursor)
+    monkeypatch.setattr(poller, "poll_threads", AsyncMock(return_value=0))
+    assert await poller.poll_conversation(client, row, ME, "acme/dima",
+                                          poller.Profiles(client)) == 1000
+    assert len(saved_specs) == 1000
+    assert all("permalink" not in spec["metadata_"] for spec in saved_specs)
+    assert cursor.await_args.args[1] == messages[-1]["ts"]
+    assert client.cancelled > 0
+    assert client.active == 0
+
+
+@pytest.mark.asyncio
+async def test_permalink_errors_open_circuit_for_large_page():
+    row = SimpleNamespace(conversation_id="Cbulk", name="bulk", kind="channel",
+                          is_private=False)
+    client = _FakeClient()
+    client.permalink_error = RuntimeError("lookup unavailable")
+    messages = [_msg(f"1756200000.{i:06d}") for i in range(1000)]
+    specs = await poller._events_from(messages, row, ME, "acme/dima",
+                                      poller.Profiles(client), client,
+                                      poller.PermalinkBudget())
+    assert len(specs) == 1000
+    assert len(client.permalink_calls) <= poller.PERMALINK_CONCURRENCY
 
 
 def _msg(ts, text="сообщение", user="UKOL", **over):
@@ -90,6 +174,18 @@ async def _event_count():
         return (await s.execute(
             select(func.count()).select_from(EventRow)
             .where(EventRow.source == "slack")
+        )).scalar_one()
+
+
+async def _event_metadata(source_event_id):
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models import EventRow
+    async with get_session() as s:
+        return (await s.execute(
+            select(EventRow.metadata_).where(
+                EventRow.source == "slack",
+                EventRow.source_event_id == source_event_id,
+            )
         )).scalar_one()
 
 
@@ -133,6 +229,27 @@ class TestHistory:
         first = await _run(_FakeClient(history={"C3": msgs}), row)
         again = await _run(_FakeClient(history={"C3": msgs}), row)
         assert (first, again) == (2, 0)
+
+    @pytest.mark.asyncio
+    async def test_canonical_permalink_is_stored_and_repoll_is_idempotent(self):
+        ts = _ts(-200)
+        row = await _conversation(cid="C6", cursor="old")
+        client = _FakeClient(history={"C6": ([_msg(ts)], True)})
+        assert await _run(client, row) == 1
+        expected = f"https://acme.slack.com/archives/C6/p{ts.replace('.', '')}"
+        assert (await _event_metadata(f"C6:{ts}"))["permalink"] == expected
+        assert await _run(client, row) == 0
+        assert await _event_count() == 1
+
+    @pytest.mark.asyncio
+    async def test_permalink_failure_keeps_event_and_cursor(self):
+        ts = _ts(-200)
+        row = await _conversation(cid="C7", cursor="old")
+        client = _FakeClient(history={"C7": ([_msg(ts)], True)})
+        client.permalink_error = RuntimeError("temporary failure")
+        assert await _run(client, row) == 1
+        assert "permalink" not in await _event_metadata(f"C7:{ts}")
+        assert await _cursor("C7") == ts
 
     @pytest.mark.asyncio
     async def test_first_run_bootstraps_from_a_window_not_from_zero(self):
