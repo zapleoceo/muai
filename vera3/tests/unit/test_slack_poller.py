@@ -7,9 +7,11 @@
 """
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from datetime import datetime, timezone
+from types import SimpleNamespace
 
 import pytest
 from sqlalchemy import func, select
@@ -80,6 +82,62 @@ async def test_permalink_client_uses_existing_api_call(monkeypatch):
         "https://acme.slack.com/archives/C1/p1756200000000100")
     assert seen == [("chat.getPermalink", {
         "channel": "C1", "message_ts": "1756200000.000100"})]
+
+
+@pytest.mark.asyncio
+async def test_slow_permalink_page_keeps_all_messages_and_cancels_lookups(monkeypatch):
+    from unittest.mock import AsyncMock
+
+    class SlowClient(_FakeClient):
+        active = 0
+        cancelled = 0
+
+        async def get_permalink(self, channel, message_ts):
+            self.active += 1
+            try:
+                await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                self.cancelled += 1
+                raise
+            finally:
+                self.active -= 1
+
+    messages = [_msg(f"1756200000.{i:06d}") for i in range(1000)]
+    client = SlowClient(history={"Cbulk": (messages, True)})
+    row = SimpleNamespace(conversation_id="Cbulk", name="bulk", kind="channel",
+                          is_private=False, last_ts="old")
+    saved_specs = []
+
+    async def save_events(specs, *, profiles):
+        saved_specs.extend(specs)
+        return specs
+
+    cursor = AsyncMock()
+    monkeypatch.setattr(poller, "PERMALINK_POLL_BUDGET_S", 0.02)
+    monkeypatch.setattr(store, "save_events", save_events)
+    monkeypatch.setattr(store, "save_cursor", cursor)
+    monkeypatch.setattr(poller, "poll_threads", AsyncMock(return_value=0))
+    assert await poller.poll_conversation(client, row, ME, "acme/dima",
+                                          poller.Profiles(client)) == 1000
+    assert len(saved_specs) == 1000
+    assert all("permalink" not in spec["metadata_"] for spec in saved_specs)
+    assert cursor.await_args.args[1] == messages[-1]["ts"]
+    assert client.cancelled > 0
+    assert client.active == 0
+
+
+@pytest.mark.asyncio
+async def test_permalink_errors_open_circuit_for_large_page():
+    row = SimpleNamespace(conversation_id="Cbulk", name="bulk", kind="channel",
+                          is_private=False)
+    client = _FakeClient()
+    client.permalink_error = RuntimeError("lookup unavailable")
+    messages = [_msg(f"1756200000.{i:06d}") for i in range(1000)]
+    specs = await poller._events_from(messages, row, ME, "acme/dima",
+                                      poller.Profiles(client), client,
+                                      poller.PermalinkBudget())
+    assert len(specs) == 1000
+    assert len(client.permalink_calls) <= poller.PERMALINK_CONCURRENCY
 
 
 def _msg(ts, text="сообщение", user="UKOL", **over):
