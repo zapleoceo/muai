@@ -24,15 +24,15 @@ log = logging.getLogger(__name__)
 
 EMBED_TIMEOUT_S = 15
 _EVENT_IDS = re.compile(
-    r"\b(?:event|событи[а-я]*)\s*(?:id\s*)?[:#№]?\s*"
-    r"[0-9]{4,10}(?![\w-])"
+    r"\b(?:event|событи[а-я]*)\s*"
+    r"(?:(?:id\s*[:#№]?\s*|[:#№]\s*)[0-9]{4,10}|[0-9]{5,10})(?![\w-])"
     r"(?:\s*(?:,|/|и\b|and\b)\s*[0-9]{5,10}(?![\w-])){0,4}",
     re.IGNORECASE,
 )
 
 
 def explicit_event_ids(question: str) -> list[int]:
-    """Extract marked event IDs; four-digit list members need their own marker.
+    """Extract marked event IDs; four-digit IDs need punctuation or an ID marker.
 
     Otherwise a neighbouring year (or the start of an ISO date) becomes an ID.
     """
