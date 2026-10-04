@@ -302,6 +302,10 @@ jobs:
             --cov-report=xml:coverage.xml
           python scripts/check_coverage.py coverage.xml
 
+      - name: Gateway shadow orchestration coverage (90% minimum)
+        working-directory: vera3
+        run: coverage report --include='*/services/gateway/src/gateway/shadow_events.py' --fail-under=90
+
       - name: Diff-cover (≥75% on new lines)
         # Only the lines this change touched need ≥75% coverage. Skips
         # automatically when the diff has no .py files.
