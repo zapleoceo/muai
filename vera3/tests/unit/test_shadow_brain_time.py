@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import replace
 
 import pytest
-
 from shadow_samples import decision, make_brain, source
 from vera_shared.ingest.shadow_types import Quarantine
 

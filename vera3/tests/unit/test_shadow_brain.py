@@ -1,10 +1,9 @@
 """Offline vertical slice; no production connection or imported private data."""
 
-from dataclasses import replace
 import sqlite3
+from dataclasses import replace
 
 import pytest
-
 from shadow_samples import decision, make_brain, source
 from vera_shared.ingest.shadow_types import Quarantine
 

@@ -7,7 +7,6 @@ import sqlite3
 from dataclasses import replace
 
 import pytest
-
 from shadow_samples import decision, make_brain, source
 from vera_shared.ingest.shadow_types import Quarantine
 
@@ -71,12 +70,12 @@ async def test_rollback_rejects_wrong_actor_stale_active_and_blank_reason(tmp_pa
         source(revision="2"), [decision("Changed")], known_at="2026-10-03T02:00:00Z"
     )
     first, second = await brain.generation_ids(KEY, ACCESS)
-    params = dict(
-        target_generation=first,
-        expected_active=second,
-        known_at="2026-10-03T03:00:00Z",
-        reason="correction",
-    )
+    params = {
+        "target_generation": first,
+        "expected_active": second,
+        "known_at": "2026-10-03T03:00:00Z",
+        "reason": "correction",
+    }
     with pytest.raises(Quarantine, match="source write access denied"):
         await brain.rollback(KEY, authorized_write_scopes=ACCESS, **params)
     with pytest.raises(Quarantine, match="reason required"):

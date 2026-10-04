@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from vera_shared.ingest.shadow_types import Claim, SourceRevision
 from vera_shared.db.shadow_repository import ShadowBrain
+from vera_shared.ingest.shadow_types import Claim, SourceRevision
 
 
 async def make_brain(path):
