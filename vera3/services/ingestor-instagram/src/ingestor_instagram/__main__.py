@@ -6,6 +6,7 @@
   3. Дедуп через source_event_id="ig:{thread_id}:{message_id}"
   4. Сохраняет новые как event source='instagram'
 """
+
 from __future__ import annotations
 
 import asyncio
@@ -21,7 +22,13 @@ from vera_shared.crypto import decrypt
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import InstagramSessionRow
+from vera_shared.events.schema import RawEvent
 from vera_shared.graph.repo import upsert_entity
+from vera_shared.ingest.shadow_instagram import (
+    instagram_event_hash,
+    invalidate_instagram_cache,
+    synced_instagram_state,
+)
 from vera_shared.timeutil import utc_naive_now
 
 log = logging.getLogger("ig")
@@ -42,11 +49,13 @@ MSGS_PER_THREAD = int(os.environ.get("IG_MSGS_PER_THREAD", "50"))
 
 async def load_client() -> tuple[Client, str]:
     async with get_session() as s:
-        row = (await s.execute(
-            select(InstagramSessionRow)
-            .where(InstagramSessionRow.is_active.is_(True))
-            .order_by(InstagramSessionRow.id.desc())
-        )).scalar_one_or_none()
+        row = (
+            await s.execute(
+                select(InstagramSessionRow)
+                .where(InstagramSessionRow.is_active.is_(True))
+                .order_by(InstagramSessionRow.id.desc())
+            )
+        ).scalar_one_or_none()
     if row is None:
         raise RuntimeError("No active Instagram session in DB")
     settings = json.loads(decrypt(row.session_json_enc))
@@ -58,8 +67,13 @@ async def load_client() -> tuple[Client, str]:
 
 async def post_event(payload: dict) -> None:
     async with httpx.AsyncClient(timeout=15) as c:
-        await c.post(f"{GATEWAY_URL}/event/instagram", json=payload,
-                     headers={"X-Internal-Secret": INTERNAL_SECRET})
+        response = await c.post(
+            f"{GATEWAY_URL}/event/instagram",
+            json=payload,
+            headers={"X-Internal-Secret": INTERNAL_SECRET},
+        )
+        if os.environ.get("VERA_SHADOW_INSTAGRAM_ENABLED") == "1":
+            response.raise_for_status()
 
 
 async def _existing_sids(sids: list[str]) -> set[str]:
@@ -67,12 +81,18 @@ async def _existing_sids(sids: list[str]) -> set[str]:
     if not sids:
         return set()
     async with get_session() as s:
-        rows = (await s.execute(
-            select(EventRow.source_event_id).where(
-                EventRow.source == "instagram",
-                EventRow.source_event_id.in_(sids),
+        rows = (
+            (
+                await s.execute(
+                    select(EventRow.source_event_id).where(
+                        EventRow.source == "instagram",
+                        EventRow.source_event_id.in_(sids),
+                    )
+                )
             )
-        )).scalars().all()
+            .scalars()
+            .all()
+        )
     return set(rows)
 
 
@@ -85,25 +105,37 @@ async def poll_once(cl: Client, username: str) -> int:
     saved = 0
     for t in threads:
         try:
-            msgs = await asyncio.to_thread(cl.direct_messages, t.id, amount=MSGS_PER_THREAD)
+            msgs = await asyncio.to_thread(
+                cl.direct_messages, t.id, amount=MSGS_PER_THREAD
+            )
         except (LoginRequired, ChallengeRequired) as e:
             raise SessionDead(str(e)) from e
         except Exception as e:
             log.warning("thread %s msgs fetch failed: %s", t.id, e)
             continue
 
-        chat_title = ", ".join(u.username for u in t.users) or t.thread_title or "(no users)"
+        chat_title = (
+            ", ".join(u.username for u in t.users) or t.thread_title or "(no users)"
+        )
         is_group = len(t.users) > 1
 
-        seen = await _existing_sids([f"ig:{t.id}:{m.id}" for m in msgs])
+        sids = [f"ig:{t.id}:{m.id}" for m in msgs]
+        shadow_enabled = os.environ.get("VERA_SHADOW_INSTAGRAM_ENABLED") == "1"
+        seen = set() if shadow_enabled else await _existing_sids(sids)
+        if shadow_enabled:
+            async with get_session() as s:
+                synced = await synced_instagram_state(s, username, sids)
+        else:
+            synced = {}
         for m in msgs:
             sid = f"ig:{t.id}:{m.id}"
-            if sid in seen:
-                continue
 
             sender_id = getattr(m, "user_id", None)
             direction = "sent" if sender_id == cl.user_id else "received"
-            sender_username = next((u.username for u in t.users if u.pk == sender_id), None) or username
+            sender_username = (
+                next((u.username for u in t.users if u.pk == sender_id), None)
+                or username
+            )
 
             text = (m.text or "").strip()
             if not text:
@@ -129,7 +161,6 @@ async def poll_once(cl: Client, username: str) -> int:
                 f"Direction: {direction}\n"
                 f"---\n{text[:6000]}"
             )
-
             payload = {
                 "source": "instagram",
                 "source_event_id": sid,
@@ -150,6 +181,16 @@ async def poll_once(cl: Client, username: str) -> int:
                     "item_type": getattr(m, "item_type", None),
                 },
             }
+            if not shadow_enabled and sid in seen:
+                continue
+            if shadow_enabled and sid in synced:
+                digest, legacy_text, legacy_metadata = synced[sid]
+                if (
+                    digest == instagram_event_hash(RawEvent.model_validate(payload))
+                    and legacy_text == payload["content_text"]
+                    and legacy_metadata == payload["metadata"]
+                ):
+                    continue
             try:
                 await post_event(payload)
                 saved += 1
@@ -162,11 +203,15 @@ async def poll_once(cl: Client, username: str) -> int:
             if direction == "received" and sender_id is not None:
                 try:
                     await upsert_entity(
-                        type="person", name=sender_username,
-                        source="instagram", identifier=f"user:{sender_id}",
+                        type="person",
+                        name=sender_username,
+                        source="instagram",
+                        identifier=f"user:{sender_id}",
                         display_name=sender_username,
-                        attributes={"username": sender_username,
-                                    "ig_user_id": sender_id},
+                        attributes={
+                            "username": sender_username,
+                            "ig_user_id": sender_id,
+                        },
                     )
                 except Exception as e:
                     log.warning("entity sync failed for @%s: %s", sender_username, e)
@@ -174,8 +219,9 @@ async def poll_once(cl: Client, username: str) -> int:
 
 
 async def main():
-    logging.basicConfig(level=logging.INFO,
-                        format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+    logging.basicConfig(
+        level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s"
+    )
     await init_engine()
 
     # Нет активной сессии (не подключено / протухла) — не роняем процесс:
@@ -186,11 +232,16 @@ async def main():
             cl, username = await load_client()
             break
         except RuntimeError as e:
-            log.warning("Нет активной Instagram-сессии (%s) — жду ре-логин, "
-                        "проверка через 10 мин", e)
+            log.warning(
+                "Нет активной Instagram-сессии (%s) — жду ре-логин, "
+                "проверка через 10 мин",
+                e,
+            )
             await asyncio.sleep(600)
 
-    log.info("Loaded Instagram session for @%s, poll every %ss", username, POLL_INTERVAL_S)
+    log.info(
+        "Loaded Instagram session for @%s, poll every %ss", username, POLL_INTERVAL_S
+    )
 
     while True:
         try:
@@ -213,6 +264,7 @@ async def main():
                     .where(InstagramSessionRow.username == username)
                     .values(is_active=False)
                 )
+                await invalidate_instagram_cache(s, username)
             return
         except Exception as e:
             log.exception("poll failed: %s", e)

@@ -13,6 +13,11 @@ from vera_shared.db.shadow_pg_claims import (
     _check_generation_claims,
     _insert_generation_claims,
 )
+from vera_shared.db.shadow_pg_links import (
+    _invalidate_source_cache,
+    _link_legacy_event,
+    _require_active_instagram,
+)
 from vera_shared.ingest.shadow_types import Claim, Quarantine, SourceRevision, validate_generation
 
 
@@ -29,6 +34,8 @@ class PgShadowIngest:
         known_at: str,
         cursor: str | None = None,
         expected_cursor: str | None = None,
+        legacy_event_id: int | None = None,
+        active_instagram_account: str | None = None,
     ) -> bool:
         if conn.in_transaction():
             raise Quarantine("ingest requires idle connection")
@@ -46,6 +53,7 @@ class PgShadowIngest:
             "external_id": source.external_id,
         }
         async with conn.begin():
+            await _require_active_instagram(conn, source, active_instagram_account)
             checkpoint = await _lock_checkpoint(conn, key)
             await conn.execute(
                 text(
@@ -177,4 +185,7 @@ class PgShadowIngest:
             await _advance_checkpoint(
                 conn, key, current=checkpoint, cursor=cursor, expected_cursor=expected_cursor
             )
+            await _link_legacy_event(conn, key, legacy_event_id)
+            if source.deleted:
+                await _invalidate_source_cache(conn, key)
             return changed

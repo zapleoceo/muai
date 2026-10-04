@@ -4,17 +4,20 @@
 `uq_event_source_id` в db/models.py). Это закрывает race condition
 между check-and-insert при concurrent backfill + poller.
 """
+
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from vera_shared.db.engine import get_session
+from vera_shared.db.engine import get_engine, get_session
 from vera_shared.db.models import EventRow
 from vera_shared.events.schema import RawEvent
+from vera_shared.ingest.shadow_instagram import ingest_instagram_shadow
 
 from gateway.auth import check_internal_secret
 
@@ -67,18 +70,53 @@ async def ingest_event(
         if event_id is None:
             # Дедуп hit — событие уже было. Подберём существующий id.
             existing = await s.execute(
-                select(EventRow.id).where(
+                select(EventRow.id, EventRow.content_text, EventRow.metadata_).where(
                     EventRow.source == event.source,
                     EventRow.source_event_id == event.source_event_id,
                 )
             )
-            event_id = existing.scalar_one_or_none()
-            log.info("Dedup hit: %s/%s → event %s",
-                     event.source, event.source_event_id, event_id)
-            return {"ok": True, "event_id": event_id, "deduped": True}
+            old = existing.one_or_none()
+            event_id = old.id if old is not None else None
+            legacy_content = old.content_text if old is not None else None
+            legacy_metadata = old.metadata_ if old is not None else None
+            log.info(
+                "Dedup hit: %s/%s → event %s",
+                event.source,
+                event.source_event_id,
+                event_id,
+            )
+            deduped = True
+        else:
+            deduped = False
+            legacy_content = None
+            legacy_metadata = None
+
+    if (
+        event.source == "instagram"
+        and os.environ.get("VERA_SHADOW_INSTAGRAM_ENABLED") == "1"
+    ):
+        if event_id is None:
+            raise HTTPException(409, "legacy event identity unavailable")
+        async with get_engine().connect() as conn:
+            await ingest_instagram_shadow(conn, event, legacy_event_id=event_id)
+        deleted = (event.metadata or {}).get("deleted") is True
+        target_content = "" if deleted else event.content_text
+        if deduped and (
+            legacy_content != target_content or legacy_metadata != event.metadata
+        ):
+            async with get_session() as s:
+                await s.execute(
+                    update(EventRow)
+                    .where(EventRow.id == event_id)
+                    .values(
+                        content_text=target_content,
+                        metadata_=event.metadata,
+                        triage_status="done" if deleted else "pending",
+                    )
+                )
 
     log.info("Event %s ingested: %s/%s", event_id, event.source, event.source_event_id)
-    return {"ok": True, "event_id": event_id, "deduped": False}
+    return {"ok": True, "event_id": event_id, "deduped": deduped}
 
 
 @router.get("/api/events/{event_id}")

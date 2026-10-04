@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from uuid import uuid4
 
 import pytest
@@ -36,6 +37,11 @@ DDL = (
     "external_id text NOT NULL, from_generation bigint NOT NULL, "
     "target_generation bigint NOT NULL, restored_generation bigint NOT NULL, "
     "known_at timestamptz NOT NULL, reason text NOT NULL)",
+    "CREATE TABLE brain_event_links (event_id bigint PRIMARY KEY, provider text NOT NULL, "
+    "account_id text NOT NULL, object_type text NOT NULL, external_id text NOT NULL, "
+    "UNIQUE(provider,account_id,object_type,external_id))",
+    "CREATE TABLE brain_derived_cache (provider text NOT NULL, account_id text NOT NULL, "
+    "cache_key text NOT NULL, payload jsonb NOT NULL, PRIMARY KEY(provider,account_id,cache_key))",
 )
 
 
@@ -97,6 +103,64 @@ async def isolated_shadow_schema():
             await conn.execute(text(f'SET search_path TO "{schema}"'))
             for statement in DDL:
                 await conn.execute(text(statement))
+        yield engine, schema
+    finally:
+        async with engine.begin() as conn:
+            await conn.execute(text(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE'))
+        await engine.dispose()
+
+
+async def run_migration_sql(conn: AsyncConnection, path: Path) -> None:
+    sql = "\n".join(
+        line
+        for line in path.read_text(encoding="utf-8").splitlines()
+        if not line.lstrip().startswith("--")
+    )
+    for statement in sql.split(";"):
+        statement = statement.strip()
+        if statement and statement not in {"BEGIN", "COMMIT"}:
+            await conn.execute(text(statement))
+
+
+@asynccontextmanager
+async def isolated_migrated_shadow_schema():
+    raw_url = os.environ.get("TEST_DATABASE_URL")
+    if not raw_url:
+        pytest.fail("RUN_INTEGRATION_TESTS=1 requires TEST_DATABASE_URL")
+    url = make_url(raw_url)
+    if url.get_backend_name() != "postgresql" or url.host not in {
+        "localhost",
+        "127.0.0.1",
+    }:
+        pytest.fail("shadow integration requires local isolated PostgreSQL")
+    if not url.database or "test" not in url.database.lower():
+        pytest.fail("shadow integration refuses a non-test database")
+    schema = f"shadowmig_{uuid4().hex}"
+    engine = create_async_engine(raw_url)
+    migration = (
+        Path(__file__).resolve().parents[2] / "infra/migrations/047_shadow_brain.sql"
+    )
+    try:
+        async with engine.begin() as conn:
+            await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
+            await conn.execute(text(f'SET search_path TO "{schema}"'))
+            await conn.execute(
+                text(
+                    "CREATE TABLE events(id bigint PRIMARY KEY,source text,source_event_id text,"
+                    "account text,content_text text,metadata jsonb)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE TABLE schema_migrations(version text PRIMARY KEY,note text)"
+                )
+            )
+            await conn.execute(
+                text(
+                    "CREATE TABLE instagram_sessions(username text PRIMARY KEY,is_active boolean NOT NULL)"
+                )
+            )
+            await run_migration_sql(conn, migration)
         yield engine, schema
     finally:
         async with engine.begin() as conn:

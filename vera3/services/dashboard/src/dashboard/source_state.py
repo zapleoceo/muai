@@ -11,6 +11,7 @@
 `connected=None` — у источника нет понятия подключения (внутренние, разовый
 импорт). Кнопки у него тоже нет.
 """
+
 from __future__ import annotations
 
 import logging
@@ -25,6 +26,7 @@ from vera_shared.db.models_sources import (
     SlackAuthRow,
     TelegramSessionRow,
 )
+from vera_shared.ingest.shadow_instagram import invalidate_instagram_cache
 
 from dashboard.source_registry import CATALOG, Source
 
@@ -49,9 +51,11 @@ UNKNOWN = State(connected=None)
 async def _counts(model, active_col) -> tuple[int, int]:
     async with get_session() as s:
         total = (await s.execute(select(func.count()).select_from(model))).scalar_one()
-        live = (await s.execute(
-            select(func.count()).select_from(model).where(active_col.is_(True))
-        )).scalar_one()
+        live = (
+            await s.execute(
+                select(func.count()).select_from(model).where(active_col.is_(True))
+            )
+        ).scalar_one()
     return total, live
 
 
@@ -100,14 +104,18 @@ async def _slack() -> State:
         reason = (rows[0].last_error or "токен отозван")[:60]
         return State(False, reason)
     row = live[0]
-    return State(True, f"{row.team_name or row.team_id} · {row.username}",
-                 "опрос каналов и тредов остановится")
+    return State(
+        True,
+        f"{row.team_name or row.team_id} · {row.username}",
+        "опрос каналов и тредов остановится",
+    )
 
 
 async def _trello() -> State:
     """У Trello секрета в БД нет — ключ в infra/.env, отключать из UI нечего.
     Судим по тому, добрался ли опрос хоть до одной доски."""
     from vera_shared.db.models_sources import TrelloBoardRow
+
     async with get_session() as s:
         rows = (await s.execute(select(TrelloBoardRow))).scalars().all()
     live = [r for r in rows if r.is_active]
@@ -150,7 +158,9 @@ def is_off(src: Source, state: State) -> bool:
 
 async def disabled_optional() -> frozenset[str]:
     """Ключи необязательных источников, которые сейчас выключены."""
-    return frozenset([s.key for s in CATALOG if s.optional and is_off(s, await state_of(s.key))])
+    return frozenset(
+        [s.key for s in CATALOG if s.optional and is_off(s, await state_of(s.key))]
+    )
 
 
 def _why(error: Exception) -> str:
@@ -187,4 +197,6 @@ async def disconnect(key: str) -> int:
         result = await s.execute(
             update(model).where(active_col.is_(True)).values(is_active=False)
         )
+        if key == "instagram" and result.rowcount:
+            await invalidate_instagram_cache(s)
     return result.rowcount or 0
