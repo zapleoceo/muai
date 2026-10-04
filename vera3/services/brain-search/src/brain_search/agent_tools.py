@@ -158,7 +158,7 @@ def parse_iso_date(raw: str | None) -> datetime | None:
     if not raw:
         return None
     try:
-        return datetime.strptime(raw.strip()[:10], "%Y-%m-%d")
+        return datetime.strptime(raw.strip()[:10], "%Y-%m-%d")  # noqa: DTZ007 - local date before UTC conversion
     except ValueError:
         return None
 
@@ -169,7 +169,7 @@ def date_window(date_from: str | None,
     d_from, d_to = parse_iso_date(date_from), parse_iso_date(date_to)
     if d_from is None and d_to is None:
         return None
-    start = (d_from - timedelta(hours=TZ_OFFSET_H)) if d_from else datetime(2000, 1, 1)
+    start = (d_from - timedelta(hours=TZ_OFFSET_H)) if d_from else datetime(2000, 1, 1)  # noqa: DTZ001 - UTC-naive DB bound
     end = ((d_to + timedelta(days=1) - timedelta(hours=TZ_OFFSET_H)) if d_to
            else utc_naive_now() + timedelta(days=1))
     return start, end
@@ -184,7 +184,7 @@ async def _exec_search_events(args: SearchEventsArgs) -> dict[str, Any]:
         "events": [
             {"event_id": c.id, "source": c.source,
              "source_url": source_url(c.source, c.source_event_id, c.source_permalink),
-             "occurred_at": str(c.occurred_at)[:19],
+             "occurred_at": f"{str(c.occurred_at)[:19]} UTC",
              "author_role": c.author_role,
              "author_label": c.author_label,
              "chat_title": c.chat_title,
