@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from contextlib import nullcontext
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncConnection
@@ -36,9 +37,13 @@ class PgShadowIngest:
         expected_cursor: str | None = None,
         legacy_event_id: int | None = None,
         active_instagram_account: str | None = None,
+        in_transaction: bool = False,
     ) -> bool:
-        if conn.in_transaction():
-            raise Quarantine("ingest requires idle connection")
+        if conn.in_transaction() != in_transaction:
+            raise Quarantine(
+                "ingest requires an active transaction" if in_transaction
+                else "ingest requires idle connection"
+            )
         received, known, valid_from, valid_to, version = validate_generation(
             source, claims, known_at
         )
@@ -52,7 +57,7 @@ class PgShadowIngest:
             "object_type": source.object_type,
             "external_id": source.external_id,
         }
-        async with conn.begin():
+        async with (nullcontext() if in_transaction else conn.begin()):
             await _require_active_instagram(conn, source, active_instagram_account)
             checkpoint = await _lock_checkpoint(conn, key)
             await conn.execute(

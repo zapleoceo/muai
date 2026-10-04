@@ -1,0 +1,161 @@
+"""Exercise the real gateway route against migration 047 on isolated PostgreSQL."""
+
+from __future__ import annotations
+
+import os
+from datetime import UTC, datetime
+
+import pytest
+from fastapi import HTTPException
+from gateway import events as gateway_events
+from gateway.shadow_events import ingest_shadow_event
+from shadow_pg_support import isolated_migrated_shadow_schema, use_schema
+from sqlalchemy import text
+from sqlalchemy.ext.asyncio import create_async_engine
+from vera_shared.events.schema import RawEvent
+
+pytestmark = pytest.mark.skipif(
+    os.environ.get("RUN_INTEGRATION_TESTS") != "1",
+    reason="Set RUN_INTEGRATION_TESTS=1 and TEST_DATABASE_URL for isolated PostgreSQL",
+)
+
+
+def message(value: str, revision: int, *, account: str = "owner-a", deleted: bool = False):
+    return RawEvent(
+        source="instagram",
+        source_event_id="ig:thread-1:message-2",
+        account=account,
+        occurred_at=datetime(2026, 10, 3, tzinfo=UTC),
+        content_text=value,
+        metadata={
+            "thread_id": "thread-1",
+            "message_id": "message-2",
+            "source_revision": revision,
+            "deleted": deleted,
+        },
+    )
+
+
+async def gateway_engine(monkeypatch, schema: str):
+    engine = create_async_engine(
+        os.environ["TEST_DATABASE_URL"],
+        connect_args={"server_settings": {"search_path": schema}},
+    )
+    monkeypatch.setattr(gateway_events, "get_engine", lambda: engine)
+    monkeypatch.setattr(gateway_events, "check_internal_secret", lambda _: None)
+    monkeypatch.setenv("VERA_SHADOW_INSTAGRAM_ENABLED", "1")
+    return engine
+
+
+async def send(event: RawEvent):
+    return await gateway_events.ingest_event("instagram", event, x_internal_secret="test")
+
+
+@pytest.mark.asyncio
+async def test_gateway_ordered_edit_stale_retry_and_tombstone(monkeypatch):
+    async with isolated_migrated_shadow_schema() as (engine, schema):
+        async with engine.connect() as conn:
+            await use_schema(conn, schema)
+            await conn.execute(text("INSERT INTO instagram_sessions VALUES ('owner-a',true)"))
+            await conn.commit()
+        route_engine = await gateway_engine(monkeypatch, schema)
+        try:
+            first = await send(message("A", 1))
+            assert first["deduped"] is False
+            assert (await send(message("B", 2)))["deduped"] is True
+            with pytest.raises(HTTPException, match="out-of-order|stale"):
+                await send(message("A", 1))
+            await send(message("", 3, deleted=True))
+            with pytest.raises(HTTPException, match="out-of-order|stale"):
+                await send(message("B", 2))
+            async with engine.connect() as conn:
+                await use_schema(conn, schema)
+                assert (await conn.execute(text("SELECT content_text FROM events"))).scalar_one() == ""
+                assert (await conn.execute(text("SELECT revision FROM brain_revisions ORDER BY revision"))).scalars().all() == ["1", "2", "3"]
+                evidence = (await conn.execute(text("SELECT value,evidence_anchor FROM brain_claims ORDER BY generation_id"))).all()
+                assert [r.value for r in evidence] == ["A", "B"]
+                assert evidence[0].evidence_anchor != evidence[1].evidence_anchor
+                assert all(":sha256:" in r.evidence_anchor for r in evidence)
+        finally:
+            await route_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_gateway_bootstraps_existing_original_and_rejects_other_account(monkeypatch):
+    async with isolated_migrated_shadow_schema() as (engine, schema):
+        async with engine.connect() as conn:
+            await use_schema(conn, schema)
+            await conn.execute(text("INSERT INTO instagram_sessions VALUES ('owner-a',true),('owner-b',true)"))
+            await conn.execute(text("INSERT INTO events(source,source_event_id,account,content_text,metadata) VALUES "
+                                    "('instagram','ig:thread-1:message-2','owner-a','original','{}'::jsonb)"))
+            await conn.commit()
+        route_engine = await gateway_engine(monkeypatch, schema)
+        try:
+            with pytest.raises(HTTPException, match="another account"):
+                await send(message("intrusion", 1, account="owner-b"))
+            await send(message("edited", 2))
+            with pytest.raises(HTTPException, match="out-of-order|stale"):
+                await send(message("original", 1))
+            async with engine.connect() as conn:
+                await use_schema(conn, schema)
+                assert (await conn.execute(text("SELECT account,content_text FROM events"))).one() == ("owner-a", "edited")
+                assert (await conn.execute(text("SELECT value FROM brain_claims ORDER BY generation_id"))).scalars().all() == ["original", "edited"]
+                assert (await conn.execute(text("SELECT revision FROM brain_revisions ORDER BY revision"))).scalars().all() == ["1", "2"]
+        finally:
+            await route_engine.dispose()
+
+
+@pytest.mark.asyncio
+async def test_gateway_revoked_intake_rolls_back_legacy(monkeypatch):
+    async with isolated_migrated_shadow_schema() as (engine, schema):
+        async with engine.connect() as conn:
+            await use_schema(conn, schema)
+            await conn.execute(text("INSERT INTO instagram_sessions VALUES ('owner-a',false)"))
+            await conn.commit()
+        route_engine = await gateway_engine(monkeypatch, schema)
+        try:
+            with pytest.raises(HTTPException, match="access revoked"):
+                await send(message("A", 1))
+            async with engine.connect() as conn:
+                await use_schema(conn, schema)
+                assert (await conn.execute(text("SELECT count(*) FROM events"))).scalar_one() == 0
+        finally:
+            await route_engine.dispose()
+
+
+@pytest.mark.parametrize("phase", ["legacy", "shadow", "projection"])
+@pytest.mark.asyncio
+async def test_gateway_crash_at_each_former_commit_boundary_retries(monkeypatch, phase):
+    async with isolated_migrated_shadow_schema() as (engine, schema):
+        async with engine.connect() as conn:
+            await use_schema(conn, schema)
+            await conn.execute(text("INSERT INTO instagram_sessions VALUES ('owner-a',true)"))
+            await conn.commit()
+        route_engine = await gateway_engine(monkeypatch, schema)
+        original = ingest_shadow_event
+        if phase == "projection":
+            await send(message("A", 1))
+
+        async def crash(conn, event, values):
+            def hook(current):
+                if current == phase:
+                    raise RuntimeError("injected crash")
+
+            return await original(conn, event, values, phase_hook=hook)
+
+        try:
+            monkeypatch.setattr(gateway_events, "ingest_shadow_event", crash)
+            with pytest.raises(RuntimeError, match="injected crash"):
+                await send(message("B", 2) if phase == "projection" else message("A", 1))
+            async with engine.connect() as conn:
+                await use_schema(conn, schema)
+                if phase == "projection":
+                    assert (await conn.execute(text("SELECT content_text FROM events"))).scalar_one() == "A"
+                    assert (await conn.execute(text("SELECT revision FROM brain_revisions"))).scalars().all() == ["1"]
+                else:
+                    for table in ("events", "brain_revisions", "brain_event_links", "brain_claims"):
+                        assert (await conn.execute(text(f"SELECT count(*) FROM {table}"))).scalar_one() == 0
+            monkeypatch.setattr(gateway_events, "ingest_shadow_event", original)
+            await send(message("B", 2) if phase == "projection" else message("A", 1))
+        finally:
+            await route_engine.dispose()

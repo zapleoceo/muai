@@ -24,7 +24,7 @@ pytestmark = pytest.mark.skipif(
 
 
 def source_event(
-    value: str, *, deleted: bool = False, account: str = "owner-a"
+    value: str, *, deleted: bool = False, account: str = "owner-a", revision: int = 1
 ) -> RawEvent:
     return RawEvent(
         source="instagram",
@@ -36,6 +36,7 @@ def source_event(
             "thread_id": "thread-1",
             "message_id": "message-2",
             "deleted": deleted,
+            "source_revision": revision,
         },
     )
 
@@ -73,7 +74,7 @@ async def test_instagram_source_edit_tombstone_mapping_and_cache():
         await conn.commit()
 
         assert await ingest_instagram_shadow(
-            conn, source_event("edited"), legacy_event_id=8123
+            conn, source_event("edited", revision=2), legacy_event_id=8123
         )
         assert [
             r["value"]
@@ -111,7 +112,7 @@ async def test_instagram_source_edit_tombstone_mapping_and_cache():
         await conn.commit()
 
         assert await ingest_instagram_shadow(
-            conn, source_event("", deleted=True), legacy_event_id=8123
+            conn, source_event("", deleted=True, revision=3), legacy_event_id=8123
         )
         assert (
             await read_instagram_shadow(
@@ -137,7 +138,8 @@ async def test_revoked_session_blocks_read_and_ingest_even_with_stale_cache():
         await conn.execute(
             text("INSERT INTO instagram_sessions VALUES ('owner-a',true)")
         )
-        await conn.execute(text("INSERT INTO events(id) VALUES (8123)"))
+        await conn.execute(text("INSERT INTO events(id,source,source_event_id,account) VALUES "
+                                "(8123,'instagram','ig:thread-1:message-2','owner-a')"))
         await conn.commit()
         await ingest_instagram_shadow(
             conn, source_event("private"), legacy_event_id=8123
@@ -163,7 +165,7 @@ async def test_revoked_session_blocks_read_and_ingest_even_with_stale_cache():
         await conn.commit()
         with pytest.raises(Quarantine, match="access revoked"):
             await ingest_instagram_shadow(
-                conn, source_event("edited"), legacy_event_id=8123
+                conn, source_event("edited", revision=2), legacy_event_id=8123
             )
         assert (
             await conn.execute(text("SELECT count(*) FROM brain_revisions"))
@@ -180,14 +182,16 @@ async def test_instagram_adapter_rejects_spoofed_identity_and_legacy_remap():
         await conn.execute(
             text("INSERT INTO instagram_sessions VALUES ('owner-a',true)")
         )
-        await conn.execute(text("INSERT INTO events(id) VALUES (8123),(8124)"))
+        await conn.execute(text("INSERT INTO events(id,source,source_event_id,account) VALUES "
+                                "(8123,'instagram','ig:thread-1:message-2','owner-a'),"
+                                "(8124,'instagram','ig:other:message-2','owner-a')"))
         await conn.commit()
         with pytest.raises(Quarantine, match="untrusted Instagram source identity"):
             await ingest_instagram_shadow(
                 conn, source_event("other", account=""), legacy_event_id=8123
             )
         await ingest_instagram_shadow(conn, source_event("first"), legacy_event_id=8123)
-        with pytest.raises(Quarantine, match="legacy event identity changed"):
+        with pytest.raises(Quarantine, match="legacy event source identity changed"):
             await ingest_instagram_shadow(
                 conn, source_event("first"), legacy_event_id=8124
             )

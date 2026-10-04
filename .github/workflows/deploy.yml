@@ -154,6 +154,15 @@ jobs:
           echo "$CHANGED" | xargs ruff check \
             --select E,F,W,I,B,UP,SIM,C4,RET,RUF006,DTZ003 --ignore E501,E402,B008
 
+      - name: Type check shadow gateway critical path
+        run: |
+          mypy --follow-imports=silent --ignore-missing-imports \
+            vera3/services/gateway/src/gateway/events.py \
+            vera3/services/gateway/src/gateway/shadow_events.py \
+            vera3/shared/vera_shared/ingest/shadow_instagram.py \
+            vera3/shared/vera_shared/db/shadow_pg_ingest.py \
+            vera3/shared/vera_shared/db/shadow_pg_links.py
+
       - name: Vulture (dead-code on changed files)
         shell: bash
         run: |

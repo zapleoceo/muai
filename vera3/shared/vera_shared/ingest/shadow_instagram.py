@@ -4,11 +4,13 @@ from __future__ import annotations
 
 import hashlib
 import json
+from contextlib import nullcontext
 from datetime import UTC, datetime, timedelta
 
 from sqlalchemy import bindparam, text
 from sqlalchemy.ext.asyncio import AsyncConnection, AsyncSession
 
+from vera_shared.db.shadow_pg_checkpoint import _lock_checkpoint
 from vera_shared.db.shadow_pg_ingest import PgShadowIngest
 from vera_shared.db.shadow_pg_read import fetch_claims_as_of_pg
 from vera_shared.events.schema import RawEvent
@@ -57,12 +59,23 @@ async def _active_session(conn: AsyncConnection, account: str) -> bool:
 
 
 async def ingest_instagram_shadow(
-    conn: AsyncConnection, event: RawEvent, *, legacy_event_id: int
+    conn: AsyncConnection, event: RawEvent, *, legacy_event_id: int,
+    in_transaction: bool = False,
 ) -> bool:
     """Require the active connector account; preserve the original legacy event ID."""
-    if conn.in_transaction():
-        raise Quarantine("shadow adapter requires idle connection")
+    if conn.in_transaction() != in_transaction:
+        raise Quarantine("shadow adapter transaction state mismatch")
+    async with (nullcontext() if in_transaction else conn.begin()):
+        return await _ingest_in_transaction(conn, event, legacy_event_id)
+
+
+async def _ingest_in_transaction(
+    conn: AsyncConnection, event: RawEvent, legacy_event_id: int
+) -> bool:
     account, external_id = _identity(event)
+    await _lock_checkpoint(conn, {"provider": "instagram", "account_id": account})
+    if not await _active_session(conn, account):
+        raise Quarantine("Instagram account access revoked")
     digest = instagram_event_hash(event)
     deleted = (event.metadata or {}).get("deleted") is True
     head = (
@@ -80,11 +93,16 @@ async def ingest_instagram_shadow(
             {"account": account, "external_id": external_id},
         )
     ).first()
-    active = await _active_session(conn, account)
-    await conn.commit()
-    if not active:
-        raise Quarantine("Instagram account access revoked")
+    source_version = (event.metadata or {}).get("source_revision")
+    if source_version is not None and (
+        isinstance(source_version, bool)
+        or not isinstance(source_version, int)
+        or source_version < 1
+    ):
+        raise Quarantine("invalid Instagram source revision")
     if head is not None and head.content_hash == digest:
+        if source_version is not None and str(source_version) != head.source_head_revision:
+            raise Quarantine("stale Instagram source revision")
         revision = head.source_head_revision
         previous = head.previous_revision
         received = head.received_at
@@ -92,7 +110,10 @@ async def ingest_instagram_shadow(
     else:
         if head is not None and not head.source_head_revision.isdigit():
             raise Quarantine("unsupported Instagram revision chain")
-        revision = str(int(head.source_head_revision) + 1) if head else "1"
+        expected = int(head.source_head_revision) + 1 if head else 1
+        if source_version != expected and not (head is None and source_version is None):
+            raise Quarantine("missing or out-of-order Instagram source revision")
+        revision = str(expected)
         previous = head.source_head_revision if head else None
         now = datetime.now(UTC)
         if head is not None:
@@ -122,7 +143,7 @@ async def ingest_instagram_shadow(
                 predicate="source_text",
                 value=event.content_text,
                 valid_from=occurred,
-                evidence_anchor=f"event:{legacy_event_id}",
+                evidence_anchor=f"event:{legacy_event_id}:revision:{revision}:sha256:{digest}",
                 evidence_kind="document",
                 extraction_version="raw-v1",
             )
@@ -135,6 +156,7 @@ async def ingest_instagram_shadow(
         known_at=known.isoformat(),
         legacy_event_id=legacy_event_id,
         active_instagram_account=account,
+        in_transaction=True,
     )
 
 
