@@ -47,8 +47,13 @@ def voice_links_for(view: EventView, owner: int | None, res: Resources,
         return found[0], VOICEPRINT if found[1] == "full" else NAME_MATCH, confidence
 
     def counterpart(name: str) -> int | None:
+        """Участник из выжимки: имя, одиночное имя / фамилия в круге владельца, затем прозвище
+        области global («Дмитрий Александрович» — фраза, которую владелец привязал к человеку)."""
         found = res.names.resolve(name, res.owner_circle)
-        return found[0] if found else None
+        if found:
+            return found[0]
+        nick = res.matcher.find(name, EventFacts().ctx, owner, scopes=frozenset({GLOBAL}))
+        return nick[0].entity_id if len(nick) == 1 else None
 
     exact = res.matcher.find(voice_body(view), EventFacts().ctx, owner, scopes=frozenset({GLOBAL}))
     known = {m.entity_id for m in exact}

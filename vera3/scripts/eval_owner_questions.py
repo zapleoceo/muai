@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import sys
 from collections import Counter
+from datetime import datetime
 
 from sqlalchemy import bindparam, text
 from vera_shared.db.engine import close_engine, get_session, init_engine
@@ -44,7 +45,8 @@ async def main(args: argparse.Namespace) -> int:
         if owner is None:
             print("не найден владелец (OWNER_TELEGRAM_ID)", file=sys.stderr)
             return 2
-        binds = {"owner": owner, "topic": args.topic, **{r: getattr(args, r) for r in ROLES}}
+        period = {k: datetime.fromisoformat(v) for k, v in (("start", args.start), ("end", args.end)) if v}
+        binds = {**period, "owner": owner, "topic": args.topic, **{r: getattr(args, r) for r in ROLES}}
         names = await _names([binds[r] for r in ROLES])
         label = {"topic": args.topic, **{r: names.get(binds[r], str(binds[r])) for r in ROLES}}
         before, after = Counter(), Counter()
@@ -66,5 +68,7 @@ if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     for role in ROLES:
         p.add_argument(f"--{role}", type=int, required=True, help=f"id сущности ({role})")
+    p.add_argument("--start", help="начало периода вопросов «за период» (ISO; по умолчанию 2026-09-01)")
+    p.add_argument("--end", help="конец периода (ISO; по умолчанию 2026-10-01)")
     p.add_argument("--topic", required=True, help="тема для вопросов про созвоны и упоминания")
     sys.exit(asyncio.run(main(p.parse_args())))

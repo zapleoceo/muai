@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import logging
 from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import Context
@@ -11,12 +12,14 @@ from pydantic import Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from vera_shared.db.engine import get_session
 from vera_shared.journal import audit
+from vera_shared.links.index import reindex_token
 from vera_shared.links.nicknames import ACTIVE, NicknameError, put_nickname
 from vera_shared.links.scope import WORK, ScopeError, scope_ids_for
 from vera_shared.links.speakers import SpeakerError, put_speaker
 
 from vera_mcp.auth import client_of
 
+log = logging.getLogger(__name__)
 ScopeKind = Literal["work", "contacts", "chats", "global"]
 
 
@@ -44,7 +47,7 @@ async def entity_add_nickname(
     case_sensitive: bool = True,
     project: Annotated[str | None, Field(max_length=40)] = None,
 ) -> dict[str, Any]:
-    """Добавить человеку прозвище или инициалы (например «ДА» = Дмитрий Александрович) с областью: work — рабочие чаты и личка с его сильными контактами, contacts — плюс группы с двумя его контактами, chats — только перечисленные (chats=['telegram:<chat_id>']), global — везде; project сужает work одним проектом (project='itstep': инициалы директора не ловятся в чатах другого бизнеса). Регистрозависимо по умолчанию: «ДА» не совпадёт со словом «да». Упоминания пересчитываются при следующем backfill. Add a scoped nickname; reversible via undo."""
+    """Добавить человеку прозвище или инициалы (например «ДА» = Дмитрий Александрович) с областью: work — рабочие чаты и личка с его сильными контактами, contacts — плюс группы с двумя его контактами, chats — только перечисленные (chats=['telegram:<chat_id>']), global — везде; project сужает work одним проектом (project='itstep': инициалы директора не ловятся в чатах другого бизнеса). Регистрозависимо по умолчанию: «ДА» не совпадёт со словом «да». Связи событий с этим токеном пересчитываются сразу (`reindexed_events`; null — не удалось, тогда `backfill_event_links.py --reset`). Add a scoped nickname; reversible via undo."""
     try:
         scope_ids = scope_ids_for(scope, chats, project)
     except ScopeError as e:
@@ -64,7 +67,18 @@ async def entity_add_nickname(
             audit_id = await op(s)
     except NicknameError as e:
         raise ValueError(str(e)) from e
-    return {"ok": True, "audit_id": audit_id}
+    return {"ok": True, "audit_id": audit_id,
+            "reindexed_events": await _reindex(token, case_sensitive)}
+
+
+async def _reindex(token: str, case_sensitive: bool) -> int | None:
+    """Связи уже построенных событий с этим токеном — сразу, а не после полного backfill. Сбой
+    не отменяет прозвище: его подхватит `backfill_event_links.py --reset`."""
+    try:
+        return await reindex_token(token, case_sensitive)
+    except Exception:
+        log.warning("entity_add_nickname: пересчёт связей по токену не удался", exc_info=True)
+        return None
 
 
 LINK_WRITE_TOOLS = (voice_speaker_set, entity_add_nickname)

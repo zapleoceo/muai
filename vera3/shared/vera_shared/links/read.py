@@ -54,10 +54,27 @@ def _preview(r: Any, chars: int | None = PREVIEW_CHARS) -> dict[str, Any]:
             "importance": r["importance"], "project": r["project"]}
 
 
-async def filtered_events(f: EventFilter, limit: int = 50) -> tuple[list[dict[str, Any]], bool]:
-    """События по фильтру, новые первыми; → (список, упёрлись ли в лимит)."""
+def _contains_sql(words: tuple[str, ...]) -> tuple[str, dict[str, Any]]:
+    """Каждое слово — в тексте события или его расшифровке (без учёта регистра)."""
+    parts, params = [], {}
+    for i, word in enumerate(words):
+        escaped = word.lower().replace("!", "!!").replace("%", "!%").replace("_", "!_")
+        params[f"w{i}"] = f"%{escaped}%"
+        parts.append(f"(lower(events.content_text) LIKE :w{i} ESCAPE '!' "
+                     f"OR lower(coalesce(events.transcript_text, '')) LIKE :w{i} ESCAPE '!')")
+    return " AND ".join(parts), params
+
+
+async def filtered_events(f: EventFilter, limit: int = 50, contains: tuple[str, ...] = ()
+                          ) -> tuple[list[dict[str, Any]], bool]:
+    """События по фильтру, новые первыми; → (список, упёрлись ли в лимит). `contains` — слова,
+    которые должны быть в тексте (отбор в SQL ДО лимита: слова из «последних 200» теряли бы всё
+    остальное; настоящий поиск — `search` с тем же фильтром)."""
     owner = await owner_entity_id() if f.with_owner else None
     where, params = build_where(f, owner)
+    word_sql, word_params = _contains_sql(contains)
+    where = " AND ".join(x for x in (where, word_sql) if x)
+    params = {**params, **word_params}
     sql = (f"SELECT {_COLUMNS} FROM events WHERE {not_hidden_sql('events')}"
            f"{' AND ' + where if where else ''} ORDER BY events.occurred_at DESC LIMIT :lim")
     async with get_session() as s:
