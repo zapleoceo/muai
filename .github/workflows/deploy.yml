@@ -283,6 +283,7 @@ jobs:
             vera3/services/gateway/src/gateway/shadow_events.py \
             vera3/shared/vera_shared/ingest/shadow_instagram.py \
             vera3/shared/vera_shared/ingest/shadow_delivery.py \
+            vera3/shared/vera_shared/ingest/gmail_pilot.py \
             vera3/shared/vera_shared/db/shadow_pg_ingest.py \
             vera3/shared/vera_shared/db/shadow_pg_links.py
 

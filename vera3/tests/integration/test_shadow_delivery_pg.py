@@ -22,6 +22,7 @@ from vera_shared.ingest.shadow_delivery import (
     SCOPE,
     Delivery,
     _claim,
+    _settle_failure,
     capture,
     deliver_once,
 )
@@ -169,6 +170,36 @@ async def test_restart_expired_lease_and_lost_delivery_response(monkeypatch):
 
 
 @pytest.mark.asyncio
+async def test_old_worker_cannot_settle_replaced_lease(monkeypatch):
+    monkeypatch.setenv("VERA_SHADOW_SYNTHETIC_DELIVERY_ENABLED", "1")
+    async with isolated_migrated_shadow_schema() as (engine, schema):  # noqa: SIM117
+        async with engine.connect() as conn:
+            await use_schema(conn, schema)
+            await capture(
+                conn, expected_cursor=None, next_cursor="p1", deliveries=[envelope(1)]
+            )
+            old = await _claim(conn, 1)
+            assert old is not None
+            async with conn.begin():
+                await conn.execute(
+                    text(
+                        "UPDATE brain_delivery_envelopes SET lease_until=now()-interval '1 second'"
+                    )
+                )
+            replacement = await _claim(conn, 30)
+            assert replacement is not None and replacement[1] != old[1]
+            await _settle_failure(conn, old[0], old[1], RuntimeError("stale worker"))
+            row = (
+                await conn.execute(
+                    text(
+                        "SELECT status,lease_token,attempts FROM brain_delivery_envelopes"
+                    )
+                )
+            ).one()
+            assert row == ("leased", replacement[1], 2)
+
+
+@pytest.mark.asyncio
 async def test_competing_workers_do_not_duplicate_generation(monkeypatch):
     monkeypatch.setenv("VERA_SHADOW_SYNTHETIC_DELIVERY_ENABLED", "1")
     async with isolated_migrated_shadow_schema() as (engine, schema):
@@ -234,6 +265,44 @@ async def test_transient_failure_retries_without_advancing_shadow(monkeypatch):
                     text("SELECT status,attempts FROM brain_delivery_envelopes")
                 )
             ).one() == ("done", 2)
+
+
+@pytest.mark.asyncio
+async def test_failure_after_shadow_apply_before_ack_rolls_back_both(monkeypatch):
+    monkeypatch.setenv("VERA_SHADOW_SYNTHETIC_DELIVERY_ENABLED", "1")
+    async with isolated_migrated_shadow_schema() as (engine, schema):  # noqa: SIM117
+        async with engine.connect() as conn:
+            await use_schema(conn, schema)
+            await capture(
+                conn, expected_cursor=None, next_cursor="p1", deliveries=[envelope(1)]
+            )
+            original = PgShadowIngest.apply
+
+            async def fail_after_apply(self, *args, **kwargs):
+                await original(self, *args, **kwargs)
+                monkeypatch.setattr(PgShadowIngest, "apply", original)
+                raise RuntimeError("ack boundary failed after apply")
+
+            monkeypatch.setattr(PgShadowIngest, "apply", fail_after_apply)
+            assert await deliver_once(conn)
+            assert (
+                await conn.execute(text("SELECT count(*) FROM brain_generations"))
+            ).scalar_one() == 0
+            await conn.rollback()
+            assert (
+                await conn.execute(text("SELECT status FROM brain_delivery_envelopes"))
+            ).scalar_one() == "pending"
+            await conn.rollback()
+            async with conn.begin():
+                await conn.execute(
+                    text(
+                        "UPDATE brain_delivery_envelopes SET next_attempt_at=now()-interval '1 second'"
+                    )
+                )
+            assert await deliver_once(conn)
+            assert (
+                await conn.execute(text("SELECT count(*) FROM brain_generations"))
+            ).scalar_one() == 1
 
 
 @pytest.mark.asyncio

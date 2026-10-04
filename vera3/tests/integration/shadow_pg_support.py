@@ -89,6 +89,9 @@ async def isolated_migrated_shadow_schema():
     delivery_migration = (
         Path(__file__).resolve().parents[2] / "infra/migrations/048_shadow_delivery.sql"
     )
+    gmail_migration = (
+        Path(__file__).resolve().parents[2] / "infra/migrations/049_gmail_shadow_pilot.sql"
+    )
     try:
         async with engine.begin() as conn:
             await conn.execute(text(f'CREATE SCHEMA "{schema}"'))
@@ -117,6 +120,7 @@ async def isolated_migrated_shadow_schema():
             )
             await run_migration_sql(conn, migration)
             await run_migration_sql(conn, delivery_migration)
+            await run_migration_sql(conn, gmail_migration)
         yield engine, schema
     finally:
         async with engine.begin() as conn:
