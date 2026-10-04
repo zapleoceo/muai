@@ -183,7 +183,7 @@ async def _exec_search_events(args: SearchEventsArgs) -> dict[str, Any]:
         "found": len(ranked),
         "events": [
             {"event_id": c.id, "source": c.source,
-             "source_url": source_url(c.source, c.source_event_id),
+             "source_url": source_url(c.source, c.source_event_id, c.source_permalink),
              "occurred_at": str(c.occurred_at)[:19],
              "author_role": c.author_role,
              "author_label": c.author_label,
