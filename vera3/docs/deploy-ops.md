@@ -9,7 +9,8 @@ expensive) ones: `docs` → `quality` → `test` → `build` → `deploy`.
 
 1. **`docs` job** — any file changed under `vera3/services/` or
    `vera3/shared/` must be matched by a change under `vera3/docs/`.
-   Opt-out per commit: literal `docs-not-needed`.
+   Functional changes have no commit-message bypass. The changed documentation
+   must describe the affected behavior or contract.
 2. **`quality` job** — strict static analysis on the diff (no tests):
    - **Secret scan** on added lines (bot tokens, `sk-…`, AWS keys, private
      keys, `ghp_…`).
@@ -23,8 +24,9 @@ expensive) ones: `docs` → `quality` → `test` → `build` → `deploy`.
      the diff (lowercase `def foo`, PascalCase `class Bar`; skip
      `_private`, `test_*`, dunders). Each **added** name must appear
      somewhere in `vera3/docs/`; each **removed** name must NOT remain
-     in `vera3/docs/` (orphaned reference = stale doc). Opt-out:
-     `docs-not-needed`.
+     in `vera3/docs/` (orphaned reference = stale doc). Glob pathspec includes
+     Python files immediately under `shared/` or `services/` and nested files.
+     No commit-message bypass applies to this check.
 3. **`test` job** — ONE pytest run (live `pgvector/pgvector:pg16` service,
    `RUN_INTEGRATION_TESTS=1`) whose `coverage.xml` feeds:
    - **per-package coverage floors** (`scripts/check_coverage.py`);

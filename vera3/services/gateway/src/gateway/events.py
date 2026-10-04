@@ -4,19 +4,23 @@
 `uq_event_source_id` в db/models.py). Это закрывает race condition
 между check-and-insert при concurrent backfill + poller.
 """
+
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException
 from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from vera_shared.db.engine import get_session
+from vera_shared.db.engine import get_engine, get_session
 from vera_shared.db.models import EventRow
 from vera_shared.events.schema import RawEvent
+from vera_shared.ingest.shadow_types import Quarantine
 
 from gateway.auth import check_internal_secret
+from gateway.shadow_events import ingest_shadow_event
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -52,6 +56,14 @@ async def ingest_event(
         "triage_status": "pending",
     }
 
+    if event.source == "instagram" and os.environ.get("VERA_SHADOW_INSTAGRAM_ENABLED") == "1":
+        try:
+            async with get_engine().connect() as conn:
+                shadow_event_id, deduped = await ingest_shadow_event(conn, event, values)
+        except Quarantine as exc:
+            raise HTTPException(409, str(exc)) from exc
+        return {"ok": True, "event_id": shadow_event_id, "deduped": deduped}
+
     # INSERT ... ON CONFLICT (source, source_event_id) DO NOTHING RETURNING id.
     # Если конфликт — RETURNING пуст, делаем SELECT уже существующего ID.
     async with get_session() as s:
@@ -62,7 +74,7 @@ async def ingest_event(
             .returning(EventRow.id)
         )
         result = await s.execute(stmt)
-        event_id = result.scalar_one_or_none()
+        event_id: int | None = result.scalar_one_or_none()
 
         if event_id is None:
             # Дедуп hit — событие уже было. Подберём существующий id.
@@ -72,13 +84,20 @@ async def ingest_event(
                     EventRow.source_event_id == event.source_event_id,
                 )
             )
-            event_id = existing.scalar_one_or_none()
-            log.info("Dedup hit: %s/%s → event %s",
-                     event.source, event.source_event_id, event_id)
-            return {"ok": True, "event_id": event_id, "deduped": True}
+            old = existing.one_or_none()
+            event_id = old.id if old is not None else None
+            log.info(
+                "Dedup hit: %s/%s → event %s",
+                event.source,
+                event.source_event_id,
+                event_id,
+            )
+            deduped = True
+        else:
+            deduped = False
 
     log.info("Event %s ingested: %s/%s", event_id, event.source, event.source_event_id)
-    return {"ok": True, "event_id": event_id, "deduped": False}
+    return {"ok": True, "event_id": event_id, "deduped": deduped}
 
 
 @router.get("/api/events/{event_id}")
