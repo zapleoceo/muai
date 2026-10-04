@@ -17,7 +17,8 @@ META_COLUMNS = (
     "OR metadata->>'is_bot' = 'true') AS is_bot, "
     "metadata->>'author_role' AS author_role, "
     "metadata->>'author_label' AS author_label, "
-    "metadata->>'chat_title' AS chat_title"
+    "metadata->>'chat_title' AS chat_title, "
+    "metadata->>'permalink' AS source_permalink"
 )
 
 
@@ -36,6 +37,7 @@ class Candidate(NamedTuple):
     author_role: str | None = None
     author_label: str | None = None
     chat_title: str | None = None
+    source_permalink: str | None = None
 
     @classmethod
     def of(cls, row: Any) -> Candidate:
@@ -50,4 +52,5 @@ class Candidate(NamedTuple):
             author_role=getattr(row, "author_role", None),
             author_label=getattr(row, "author_label", None),
             chat_title=getattr(row, "chat_title", None),
+            source_permalink=getattr(row, "source_permalink", None),
         )

@@ -118,8 +118,75 @@ def test_bot_authored_event_is_downweighted_not_dropped():
 
 def test_score_rows_preview_shape_unchanged():
     ((_score, info),) = score_rows([_cand(7, content_text="x" * 500)], None, [])
-    assert set(info) == {"event_id", "source", "occurred_at", "content_preview", "importance"}
+    assert set(info) == {"event_id", "source", "source_url", "occurred_at", "content_preview", "importance"}
     assert len(info["content_preview"]) == 400
+
+
+@pytest.mark.parametrize(("event_id", "permalink"), [
+    ("C123ABC456:1234567890.123456",
+     "https://alpha.slack.com/archives/C123ABC456/p1234567890123456"),
+    ("C123ABC456:1234567890.123456",
+     "https://beta.slack.com/archives/C123ABC456/p1234567890123456"),
+    ("D123ABC456:1234567890.123456",
+     "https://alpha.slack.com/archives/D123ABC456/p1234567890123456"),
+    ("C123ABC456:1234567890.123456",
+     ("https://alpha.slack.com/archives/C123ABC456/p1234567890123456"
+      "?thread_ts=1234567800.000001&cid=C123ABC456")),
+])
+def test_source_link_accepts_matching_stored_permalink(event_id, permalink):
+    from brain_search.source_links import source_url
+
+    assert source_url("slack", event_id, permalink) == permalink
+
+
+@pytest.mark.parametrize("permalink", [
+    "https://evil.example/archives/C123ABC456/p1234567890123456",
+    "https://alpha.slack.com.evil.example/archives/C123ABC456/p1234567890123456",
+    "http://alpha.slack.com/archives/C123ABC456/p1234567890123456",
+    "https://user@alpha.slack.com/archives/C123ABC456/p1234567890123456",
+    "https://alpha.slack.com/archives/D123ABC456/p1234567890123456",
+    "https://alpha.slack.com/archives/C123ABC456/p1234567890123457",
+    "https://alpha.slack.com/archives/C123ABC456/p1234567890123456?cid=D123ABC456",
+    ("https://alpha.slack.com/archives/C123ABC456/p1234567890123456"
+     "?thread_ts=bad&cid=C123ABC456"),
+])
+def test_source_link_rejects_malformed_or_mismatched_permalink(permalink):
+    from brain_search.source_links import source_url
+
+    assert source_url("slack", "C123ABC456:1234567890.123456", permalink) is None
+
+
+def test_source_link_absent_or_other_source_has_no_fabricated_fallback():
+    from brain_search.source_links import source_url
+
+    valid = "https://alpha.slack.com/archives/C123ABC456/p1234567890123456"
+    assert source_url("slack", "C123ABC456:1234567890.123456") is None
+    assert source_url("slack", "bad/path:1234567890.123456", valid) is None
+    assert source_url("telegram", "tg:123:456", valid) is None
+
+
+@pytest.mark.asyncio
+async def test_answer_receives_original_link_and_returns_it_with_result():
+    from brain_search import synthesis
+
+    event = _cand(7, source="slack",
+                  source_event_id="C123ABC456:1234567890.123456",
+                  source_permalink="https://alpha.slack.com/archives/"
+                                   "C123ABC456/p1234567890123456",
+                  content_text="Project decision recorded")
+    with (patch.object(synthesis, "self_context", AsyncMock(return_value="")),
+          patch.object(synthesis, "chat_async", AsyncMock(return_value=(
+              "Decision recorded [event:7]", {"provider": "test"})) ) as chat):
+        result = await synthesis.answer(SearchQuery(q="What was decided?", use_agent=False),
+                                        [event], None)
+
+    assert result.results[0].source_url == (
+        "https://alpha.slack.com/archives/C123ABC456/p1234567890123456"
+    )
+    prompt = chat.await_args.kwargs["messages"][0]["content"]
+    assert "[event:7 |" in prompt
+    assert result.results[0].source_url in prompt
+    assert "[event:ID]" in prompt
 
 
 # ─── фильтры и проектная выборка ────────────────────────────────────────────

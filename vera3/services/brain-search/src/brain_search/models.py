@@ -35,6 +35,7 @@ class SearchQuery(BaseModel):
 class SearchResult(BaseModel):
     event_id: int
     source: str
+    source_url: str | None = None
     occurred_at: str
     content_preview: str
     importance: int | None

@@ -9,6 +9,7 @@ from typing import Any
 
 from brain_search.query_parse import BOT_AUTHOR_WEIGHT, source_weight
 from brain_search.rows import Candidate
+from brain_search.source_links import source_url
 
 
 def row_similarity(row: Any, q_vec: list[float] | None) -> float:
@@ -47,6 +48,7 @@ def score_rows(rows, q_vec: list[float] | None,
     return [(score, {
         "event_id": c.id,
         "source": c.source,
+        "source_url": source_url(c.source, c.source_event_id, c.source_permalink),
         "occurred_at": str(c.occurred_at),
         "content_preview": (c.content_text or "")[:400],
         "importance": c.importance,

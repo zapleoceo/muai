@@ -22,6 +22,7 @@ from vera_shared.timeutil import utc_naive_now
 
 from brain_search.pipeline import search_ranked
 from brain_search.query_parse import TZ_OFFSET_H
+from brain_search.source_links import source_url
 
 log = logging.getLogger(__name__)
 
@@ -182,6 +183,7 @@ async def _exec_search_events(args: SearchEventsArgs) -> dict[str, Any]:
         "found": len(ranked),
         "events": [
             {"event_id": c.id, "source": c.source,
+             "source_url": source_url(c.source, c.source_event_id, c.source_permalink),
              "occurred_at": str(c.occurred_at)[:19],
              "author_role": c.author_role,
              "author_label": c.author_label,
