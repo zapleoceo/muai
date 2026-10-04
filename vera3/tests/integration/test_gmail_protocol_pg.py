@@ -98,6 +98,14 @@ async def test_continuation_replay_overlap_and_terminal_highwater(monkeypatch):
                 )
                 == "page-two"
             )
+            with pytest.raises(Quarantine, match="head regressed during continuation"):
+                await protocol.capture_history_response(
+                    conn,
+                    SUB,
+                    start_history_id=str(BIG),
+                    requested_token="page-two",
+                    response={"historyId": str(BIG + 899), "history": []},
+                )
             assert (
                 await protocol.ingest_synthetic_history_page(
                     conn, SUB, str(BIG), "page-two", http
@@ -538,3 +546,60 @@ async def test_full_sync_bridge_race_and_publish_retry(monkeypatch):
             await protocol.finish_full_sync(conn, SUB, AT)
             assert await protocol.full_sync_state(conn, SUB) == "complete"
             assert await protocol.finish_full_sync(conn, SUB, AT) == str(BIG + 500)
+
+
+@pytest.mark.asyncio
+async def test_second_full_sync_waits_for_prior_bridge_apply(monkeypatch):
+    monkeypatch.setenv("VERA_SHADOW_GMAIL_PILOT_ENABLED", "1")
+    async with isolated_migrated_shadow_schema() as (engine, schema):  # noqa: SIM117
+        async with engine.connect() as conn:
+            await setup(conn, schema)
+            await protocol.expire_history_chain(conn, SUB)
+            await protocol.start_full_sync(
+                conn,
+                SUB,
+                scope=WHOLE_SCOPE,
+                window_start=WINDOW_START,
+                window_end=WINDOW_END,
+            )
+            await protocol.capture_full_sync_response(
+                conn,
+                SUB,
+                requested_token=None,
+                response={"messages": [{"id": "a"}]},
+                fetched={"a": get_message("a", str(BIG + 500))},
+            )
+            anchor = await protocol.finish_full_sync(conn, SUB, AT)
+            assert await apply_next(conn, SUB)
+            await protocol.capture_history_response(
+                conn,
+                SUB,
+                start_history_id=anchor,
+                requested_token=None,
+                response={
+                    "historyId": str(BIG + 520),
+                    "history": [history(str(BIG + 510), "b")],
+                },
+            )
+            assert await protocol.finish_history_chain(conn, SUB)
+            assert await protocol.full_sync_state(conn, SUB) == "complete"
+            assert (
+                await conn.execute(
+                    text("SELECT completed_at FROM brain_gmail_protocol_full_sync")
+                )
+            ).scalar_one() is None
+            await conn.rollback()
+            await protocol.expire_history_chain(conn, SUB)
+            with pytest.raises(Quarantine, match="resolve it explicitly"):
+                await protocol.start_full_sync(
+                    conn,
+                    SUB,
+                    scope=WHOLE_SCOPE,
+                    window_start=WINDOW_START,
+                    window_end=WINDOW_END,
+                )
+            assert (
+                await conn.execute(
+                    text("SELECT generation FROM brain_gmail_protocol_full_sync")
+                )
+            ).scalar_one() == 1

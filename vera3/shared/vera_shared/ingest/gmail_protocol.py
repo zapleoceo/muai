@@ -207,6 +207,22 @@ async def capture_history_response(
                 raise Quarantine("Gmail history chain already ended")
         if request != expected or (request and request == next_token):
             raise Quarantine("Gmail continuation token mismatch")
+        prior_heads = (
+            (
+                await conn.execute(
+                    text(
+                        "SELECT response_history_id FROM brain_gmail_protocol_history_pages "
+                        "WHERE google_sub=:sub AND start_history_id=:start "
+                        "AND generation=:generation"
+                    ),
+                    {"sub": sub, "start": start_history_id, "generation": generation},
+                )
+            )
+            .scalars()
+            .all()
+        )
+        if any(_number(previous) > _number(head) for previous in prior_heads):
+            raise Quarantine("Gmail mailbox head regressed during continuation")
         if next_token:
             prior = (
                 await conn.execute(
@@ -472,12 +488,12 @@ async def start_full_sync(
         existing = (
             await conn.execute(
                 text(
-                    "SELECT state FROM brain_gmail_protocol_full_sync "
+                    "SELECT state,completed_at FROM brain_gmail_protocol_full_sync "
                     "WHERE google_sub=:sub FOR UPDATE"
                 ),
                 {"sub": sub},
             )
-        ).scalar_one_or_none()
+        ).one_or_none()
         started_at = (await conn.execute(text("SELECT clock_timestamp()"))).scalar_one()
         params = {
             "sub": sub,
@@ -495,7 +511,7 @@ async def start_full_sync(
                 ),
                 params,
             )
-        elif existing == "complete":
+        elif existing.state == "complete" and existing.completed_at is not None:
             await conn.execute(
                 text(
                     "UPDATE brain_gmail_protocol_full_sync SET generation=generation+1,"

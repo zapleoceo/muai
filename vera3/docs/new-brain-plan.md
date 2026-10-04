@@ -150,3 +150,5 @@ Offline simulator API: `SyntheticGmailHttp` returns scripted status/body pairs t
 Completion of the bridge's page chain is insufficient for current reads: `read_pilot` also waits until the account's applied cursor reaches its captured cursor. This prevents a pending post-anchor delete or fetch from appearing as current state.
 The first 404 timestamp remains stable across retries until resync; as-of reads between that break and the next published resync stay hidden even after recovery. A full-sync bridge receives a separate `completed_at` only after its captured changes are applied, so historical as-of reads during the bridge stay hidden after completion too.
 Each later 404 can open another full-sync generation after the previous one completes; page and GET receipts from earlier generations remain immutable. An incomplete generation cannot be silently replaced.
+The prior generation must also have a non-null applied `completed_at` before restart; a captured but unapplied bridge cannot be abandoned with an open availability interval.
+Continuation responses with a regressing mailbox head are quarantined before any cursor advance.
