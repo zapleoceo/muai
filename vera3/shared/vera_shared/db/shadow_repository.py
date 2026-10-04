@@ -141,6 +141,8 @@ class ShadowBrain(ShadowHistory):
                 raise Quarantine("extraction version changed")
             changed = existing is None
             if changed:
+                if active and known_at <= active[2]:
+                    raise Quarantine("generation knowledge time must advance")
                 if active:
                     db.execute(
                         "UPDATE generations SET known_to=? WHERE id=?",

@@ -113,3 +113,16 @@ async def test_source_receipt_provenance_and_knowledge_order(tmp_path):
         await brain.apply(
             source(revision="2"), [decision()], known_at="2026-10-03T00:00:00Z"
         )
+
+
+@pytest.mark.asyncio
+async def test_new_generation_requires_later_knowledge_time(tmp_path):
+    brain = await make_brain(tmp_path / "shadow.db")
+    await brain.apply(source(), [decision()], known_at="2026-10-03T01:00:00Z")
+    assert not await brain.apply(
+        source(), [decision()], known_at="2026-10-03T01:00:00Z"
+    )
+    with pytest.raises(Quarantine, match="knowledge time must advance"):
+        await brain.apply(
+            source(revision="2"), [decision()], known_at="2026-10-03T01:00:00Z"
+        )
