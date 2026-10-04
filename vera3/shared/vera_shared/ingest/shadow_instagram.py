@@ -251,6 +251,8 @@ async def read_instagram_shadow(
         )
         if claim["evidence_kind"] != expected_kind:
             raise Quarantine("Instagram claim evidence kind mismatch")
+        if claim["predicate"] == "source_text" and claim["value"] != receipts[key]["content_text"]:
+            raise Quarantine("Instagram claim value differs from receipt")
         claim["receipt_origin"] = receipts[key]["origin"]
         claim["receipt_payload_hash"] = receipts[key]["payload_hash"]
     return claims
