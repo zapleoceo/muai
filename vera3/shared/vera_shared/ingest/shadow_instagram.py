@@ -246,6 +246,11 @@ async def read_instagram_shadow(
         )
         if claim["evidence_anchor"] != expected_anchor:
             raise Quarantine("Instagram claim evidence anchor mismatch")
+        expected_kind = (
+            "inference" if receipts[key]["origin"] == "legacy_snapshot" else "document"
+        )
+        if claim["evidence_kind"] != expected_kind:
+            raise Quarantine("Instagram claim evidence kind mismatch")
         claim["receipt_origin"] = receipts[key]["origin"]
         claim["receipt_payload_hash"] = receipts[key]["payload_hash"]
     return claims

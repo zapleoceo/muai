@@ -149,6 +149,16 @@ async def test_gateway_bootstraps_existing_original_and_rejects_other_account(mo
                 assert (await read_instagram_shadow(
                     conn, "owner-a", known_at="2099-01-01T00:00:00Z"
                 ))[0]["receipt_origin"] == "source"
+                await conn.execute(text(
+                    "UPDATE brain_claims SET evidence_kind='document' "
+                    "WHERE generation_id=(SELECT id FROM brain_generations "
+                    "WHERE revision='1' LIMIT 1)"
+                ))
+                await conn.commit()
+                with pytest.raises(Quarantine, match="kind mismatch"):
+                    await read_instagram_shadow(
+                        conn, "owner-a", known_at=first_known.isoformat()
+                    )
         finally:
             await route_engine.dispose()
 
