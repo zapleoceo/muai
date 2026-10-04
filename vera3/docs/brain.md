@@ -622,7 +622,7 @@ events (706 МБ, 445 тыс. строк) не переписывается.
     (default 90s, env-overridable) — a hung broker call used to block
     `/search` indefinitely; now it returns "LLM не ответил вовремя" instead.
 
-**Answer evidence (2026-10):** The API result card still shows a 400-character
+**Answer evidence (2026-10):** `evidence_excerpt()` builds the bounded source text. The API result card still shows a 400-character
 preview, but synthesis uses a bounded excerpt of the stored event text: up to
 4,000 characters for the first three hits and 900 for later hits. Long excerpts
 keep their beginning and end and mark the omitted middle. The agent search tool
