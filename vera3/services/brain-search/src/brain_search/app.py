@@ -126,11 +126,11 @@ async def search(
     """Гибридный поиск + LLM-синтез ответа."""
     check_internal_secret(x_internal_secret)
 
-    report = await _try_report(query.q)
+    exact_ids = explicit_event_ids(query.q)
+    report = None if exact_ids else await _try_report(query.q)
     if report is not None:
         return report
 
-    exact_ids = explicit_event_ids(query.q)
     q_vec = await embed_query(query.q) if not exact_ids else None
     time_range = parse_time_range(query.q)
     if time_range:
@@ -139,7 +139,7 @@ async def search(
         log.debug("Temporal filter: %s → [%s, %s)", query.q[:60], *time_range)
 
     # «по проекту Itstep» → реальные ящики + рабочие чаты, не текст «itstep»
-    project = None if exact_ids else resolve_project(query.q)
+    project = resolve_project(query.q)
     ts, acc_words = query_terms(query.q, project)
     summary = False if exact_ids else is_summary_query(query.q)
     eff_limit = max(query.limit, SUMMARY_MIN_LIMIT) if summary else query.limit

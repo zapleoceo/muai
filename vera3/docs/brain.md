@@ -642,8 +642,10 @@ the event UTC timestamp fall on different calendar days, name the time zone.
 
 `explicit_event_ids()` recognizes an explicit `event:ID` or `событие ID` query;
 the direct ID path reads up to five named IDs from visible legacy `events`,
-applying source and people filters but bypassing
-FTS, embeddings, and inferred date/project scope. This lets an explicitly named
+applying the same visibility, source, people, date, and project filters as ordinary
+retrieval, including structured account restrictions, but bypassing FTS and embeddings.
+Unmarked list members require at least five digits so a neighbouring year cannot
+become another ID; four-digit IDs need their own `event:` marker. This lets an explicitly named
 stored event be read regardless of its ranked-search position. The request limit still caps
 returned IDs. A missing result means only that the event was not found among
 accessible records for this request; it does not prove nonexistence upstream.

@@ -26,6 +26,14 @@ def _event(event_id: int) -> Candidate:
     ("событие 900101", [900101]),
     ("события 900101/900102", [900101, 900102]),
     ("[event:900101]", [900101]),
+    ("событие 900101 и 2026 год", [900101]),
+    ("event:900101 и 2026-10-04", [900101]),
+    ("event:900101, 2026 and event:2026", [900101, 2026]),
+    ("event:12345678901234", []),
+    ("event:900101abc", []),
+    ("event:2026-10-04", []),
+    ("event:900101/900102/900103/900104/900105/900106", list(range(900101, 900106))),
+    ("event:900101 OR 1=1; DROP TABLE events", [900101]),
     ("account 12345678901234 and payment 900101", []),
 ])
 def test_only_explicit_event_references_become_ids(question, expected):
@@ -81,6 +89,8 @@ async def test_explicit_id_bypasses_fts_and_embedding(monkeypatch):
     assert [row.id for row in found.rows] == [900101]
     exact.assert_awaited_once()
     assert exact.await_args.args[1] == [900101]
+    assert exact.await_args.kwargs["time_range"][0].day == 5
+    assert exact.await_args.kwargs["project"].name == "unrelated"
     primary.assert_not_awaited()
 
 
