@@ -181,7 +181,7 @@
   Применить к уже построенным созвонам (`reindex_source`): `backfill_event_links.py --reindex-source voice`.
 - **`chats_by_nickname`** — баг процесса: прозвище добавлено после backfill, а связи пересчитываются только для новых
   событий. Теперь `entity_add_nickname`, `manage_nicknames.py add` / `decide --approve` и `manage_nicknames.py reindex --token X`
-  вызывают `reindex_token` — пересчёт событий, в тексте которых есть токен (регистрозависимо; ≤5000 новейших).
+  вызывают `reindex_token` — пересчёт событий, в тексте которых есть токен (регистрозависимо; ≤5000 новейших). `reindex_token_report` возвращает `Reindexed(count, truncated)`: MCP отдаёт их как `reindexed_events` / `reindex_truncated` (старее лимита — `manage_nicknames.py reindex`). `reindex_token` и `reindex_source` идут под тем же advisory-замком, что цикл (`links/lock.py`: `LINKS_LOCK_KEY`, `links_lock`, `require_links_lock`); занят — `LinksBusyError`, повторить позже.
 - **`together_with`** — не баг: у Лизы и Олега нет ни одного общего события (разные люди, общих чатов нет).
 
 ## Чистка связей, ушедших к тёзке

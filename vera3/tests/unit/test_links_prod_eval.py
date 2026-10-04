@@ -123,7 +123,7 @@ async def test_adding_a_nickname_through_the_tool_links_existing_events_at_once(
             EventEntityRow.entity_id == world["director"], EventEntityRow.role == "mentioned"))).first()
     ctx = SimpleNamespace(request_context=SimpleNamespace(request=SimpleNamespace(scope={"mcp_client": "t"})))
     out = await lw.entity_add_nickname(world["director"], "ДА", ctx, scope="work")
-    assert out["reindexed_events"] == 1                          # только событие с заглавным «ДА»
+    assert out["reindex_truncated"] is False and out["reindexed_events"] == 1                          # только событие с заглавным «ДА»
     async with gs() as s:
         rows = (await s.execute(select(EventEntityRow).where(
             EventEntityRow.entity_id == world["director"], EventEntityRow.role == "mentioned"))).scalars().all()
@@ -149,3 +149,23 @@ async def test_reindex_source_rebuilds_only_that_sources_events(world):
     async with gs() as s:
         ids = {r.event_id for r in (await s.execute(select(EventEntityRow))).scalars()}
     assert call in ids and other not in ids
+
+
+async def test_reindex_reports_truncation_and_refuses_while_the_cycle_lock_is_held(world, monkeypatch):
+    from vera_shared.links import lock
+    gs = world["gs"]
+    meta = {"chat_type": "user", "chat_id": "200", "sender_id": "200"}
+    for i in (1, 2, 3):
+        await event(gs, i, "telegram", "ДА просил", meta=meta)
+    done = await index.reindex_token_report("ДА", limit=2)
+    assert (done.count, done.truncated) == (2, True)
+    assert (await index.reindex_token_report("ДА", limit=3)).truncated is False
+
+    @lock.asynccontextmanager
+    async def busy():
+        yield False
+    monkeypatch.setattr(lock, "links_lock", busy)
+    with pytest.raises(lock.LinksBusyError):
+        await index.reindex_token("ДА")
+    with pytest.raises(lock.LinksBusyError):
+        await index.reindex_source("voice")
