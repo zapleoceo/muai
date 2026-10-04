@@ -16,6 +16,7 @@ from vera_shared.llm.client import LLMCallFailed, embed
 from brain_search.fts import build_ts_query
 from brain_search.lang import content_words
 from brain_search.query_parse import ProjectScope, extract_account_terms
+from brain_search.quoted_query import split_quoted_query
 from brain_search.retrieval import Candidates, LinkScope, fetch_candidates
 from brain_search.rows import Candidate
 from brain_search.scoring import score_candidates
@@ -36,7 +37,8 @@ def explicit_event_ids(question: str) -> list[int]:
 
     Otherwise a neighbouring year (or the start of an ISO date) becomes an ID.
     """
-    ids = [int(raw) for match in _EVENT_IDS.finditer(question)
+    _focus, scope = split_quoted_query(question)
+    ids = [int(raw) for match in _EVENT_IDS.finditer(scope)
            for raw in re.findall(r"\d{4,10}", match.group())]
     return list(dict.fromkeys(ids))[:5]
 
@@ -46,7 +48,10 @@ def query_terms(question: str,
     """(tsquery, имена собственные для матча по account). Слова самого
     проекта («Веранда») в запрос не идут: внутри проекта они есть в каждой
     строке и только размывают ранг."""
-    words = content_words(question)
+    focus, _scope = split_quoted_query(question)
+    words = content_words(focus)
+    if focus != question:
+        return build_ts_query(words), []
     if project is not None:
         words = [w for w in words
                  if not any(t in w.lower() for t in project.triggers)]
@@ -56,7 +61,8 @@ def query_terms(question: str,
 async def embed_query(question: str) -> list[float] | None:
     """Вектор запроса. Отказ брокера не фатален — остаётся FTS."""
     try:
-        vecs = await asyncio.wait_for(embed([question]), timeout=EMBED_TIMEOUT_S)
+        focus, _scope = split_quoted_query(question)
+        vecs = await asyncio.wait_for(embed([focus]), timeout=EMBED_TIMEOUT_S)
     except (LLMCallFailed, asyncio.TimeoutError) as e:
         log.warning("Embed failed: %s — fallback only FTS", e)
         return None

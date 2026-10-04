@@ -17,6 +17,8 @@ from datetime import datetime, timedelta
 from vera_shared.projects.rules import QUERY_TRIGGERS, project_from_query
 from vera_shared.timeutil import utc_naive_now
 
+from brain_search.quoted_query import split_quoted_query
+
 TZ_OFFSET_H = int(os.environ.get("VERA_TZ_OFFSET_H", "7"))
 
 
@@ -33,7 +35,8 @@ class ProjectScope:
 
 def resolve_project(q: str) -> ProjectScope | None:
     """Определить упомянутый проект. None — если не упомянут."""
-    name = project_from_query(q)
+    _focus, scope = split_quoted_query(q)
+    name = project_from_query(scope)
     if name is None:
         return None
     return ProjectScope(name=name, triggers=QUERY_TRIGGERS[name])
@@ -49,7 +52,8 @@ _SUMMARY_TRIGGERS = (
 
 
 def is_summary_query(q: str) -> bool:
-    ql = q.lower()
+    _focus, scope = split_quoted_query(q)
+    ql = scope.lower()
     return any(t in ql for t in _SUMMARY_TRIGGERS)
 
 # Понижающие веса: источники-«намерения», а не события мира.
@@ -163,7 +167,8 @@ def parse_time_range(q: str, *, now_utc: datetime | None = None) -> tuple[dateti
     Возвращает (start_utc, end_utc) полуинтервал [start, end).
     """
     now_utc = now_utc or utc_naive_now()
-    ql = q.lower()
+    _focus, scope = split_quoted_query(q)
+    ql = scope.lower()
 
     for pattern, days_ago in _RELATIVE_DAY:
         if pattern.search(ql):

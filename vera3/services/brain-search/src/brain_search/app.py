@@ -36,6 +36,7 @@ from brain_search.query_parse import (
     parse_time_range,
     resolve_project,
 )
+from brain_search.quoted_query import split_quoted_query
 from brain_search.reports import (
     build_monthly_report,
     detect_report_request,
@@ -86,15 +87,16 @@ async def _try_report(question: str) -> AnswerResponse | None:
     """«Отчёт помесячно за <год>» по конкретному чату — точная SQL-агрегация
     ВСЕХ сообщений периода, а не пересказ top-N LLM'ом (см. reports.py).
     Без chat-match не перехватываем: обычный путь справится сам."""
-    wants, year = detect_report_request(question)
+    _focus, scope = split_quoted_query(question)
+    wants, year = detect_report_request(scope)
     if not wants:
         return None
-    match = await find_report_chat(question)
+    match = await find_report_chat(scope)
     if not match:
         return None
     chat_id, chat_title = match
     report = await build_monthly_report(chat_id, chat_title, year)
-    field = detect_target_field(question)
+    field = detect_target_field(scope)
     log.info("Report: chat=%s year=%s messages=%d field=%s",
              chat_title, year, report["total_messages"], field)
     return AnswerResponse(
@@ -153,6 +155,13 @@ async def search(
     if exact_ids and not found.rows:
         return AnswerResponse(
             answer="Указанное событие не найдено среди доступных записей. Это не доказывает, что события не существует в источнике или что поиск охватывает все данные.",
+            results=[], provider=None, cost_usd=0,
+        )
+
+    focus, _scope = split_quoted_query(query.q)
+    if focus != query.q and not found.rows and not query.use_agent:
+        return AnswerResponse(
+            answer="Поиск по указанной цитате не вернул доступных записей. Это ограниченная поисковая выборка; она не доказывает отсутствие цитаты в исходных сообщениях.",
             results=[], provider=None, cost_usd=0,
         )
 
