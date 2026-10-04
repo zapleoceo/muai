@@ -652,6 +652,37 @@ accessible records for this request; it does not prove nonexistence upstream.
 Ordinary ranked search remains a bounded sample and cannot establish that an
 unreturned event does not exist.
 
+For one explicitly requested quotation (`phrase "…"`, `quote "…"`, `фразу «…»`,
+`цитату “…”`), `split_quoted_query()` separates the quoted search text from the
+surrounding scope and answer instructions. A query consisting entirely of one
+quotation uses the same path. The quotation supplies FTS terms and the embedding;
+surrounding words cannot introduce an inferred account ranking bonus. Quoted dates,
+project names, summary/report words and event-ID markers do not set search scope,
+report mode, or a direct event read; dates,
+projects, and summary/report intent outside the quotation still apply. Inferred
+project trigger removal does not discard those words from the quotation itself.
+
+Typed source/account/date/people filters remain AND restrictions before retrieval
+and ANN fusion. This parser does not infer source, account, or chat identity from
+free text: callers must pass supported structured filters for strict scoping.
+The internal `/search` model supports account/project in `filters`; MCP `search`
+supports source/start/end/people/kind, while the gateway `/v1/search` bridge currently
+accepts only q/limit/use_agent. The external ChatGPT wrapper is outside this repo.
+
+Multiple requested quotations, escaped/newline quotations, and quotations longer
+than 500 characters retain the previous search semantics. Ordinary FTS still uses
+OR prefixes, ANN still contributes its bounded pool, and numeric scoring/topK are
+unchanged. This removes demonstrated context pollution; it does not guarantee that
+every exact phrase in the database is retrieved or that quoted words match contiguously.
+The regression tests reproduce a quote lost at topK 3/10 through an inferred account
+bonus in an otherwise identical semantic pool, and quote content incorrectly setting
+date/project scope. PostgreSQL FTS/rank and production performance need separate
+integration validation before rollout. `test_quoted_search_pg.py` uses the existing CI
+PostgreSQL, temporary rows and rollback to compare short/long FTS results at topK 3/10
+while excluding another source/account, hidden rows and out-of-window rows. It performs
+no schema reset or permanent-table writes. Local absence of PostgreSQL is a skipped test,
+not a successful SQL verification.
+
 ### Monthly reports (`reports.py`) — exact aggregation, no LLM
 
 For requests like "отчёт заказов помесячно за 2026 год": summing numbers
