@@ -76,6 +76,9 @@ def build_prompt(*, question: str, self_ctx: str, context: str,
         "2) Если вопрос про ТЕБЯ саму — отвечай по «Твоя конфигурация».\n"
         "3) Если вопрос про факты/события — отвечай по найденным событиям. "
         "Если данных нет — честно скажи.\n"
+        "4) Каждое существенное утверждение о событии сопровождай [event:ID] "
+        "из найденных событий. Если у события есть ссылка на оригинал, "
+        "приведи её рядом; если ссылки нет, не выдумывай её.\n"
         f"{SOURCE_PROMPT_NOTE}{notes}"
     )
 
@@ -94,7 +97,8 @@ async def answer(
 
     self_ctx = await self_context()
     ctx_n = CONTEXT_EVENTS_SUMMARY if summary else CONTEXT_EVENTS
-    blocks = [f"[{r.occurred_at[:16]} | {r.source}] {r.content_preview[:300]}"
+    blocks = [f"[event:{r.event_id} | {r.occurred_at[:16]} | {r.source} | "
+              f"{r.source_url or 'original link unavailable'}] {r.content_preview[:300]}"
               for r in results[:ctx_n]]
     context = "\n\n".join(blocks) if blocks else "(нет данных)"
 
