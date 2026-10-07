@@ -51,7 +51,7 @@ class SearchEventsArgs(BaseModel):
     model_config = ConfigDict(extra="ignore")
 
     q: str = Field(default="", max_length=500)
-    source: Literal["telegram", "gmail", "instagram", "vera_chat", "any"] = "any"
+    source: Literal["telegram", "gmail", "instagram", "slack", "vera_chat", "any"] = "any"
     limit: int = Field(default=20, ge=1, le=MAX_SEARCH_LIMIT)
     date_from: str | None = Field(default=None, max_length=32)
     date_to: str | None = Field(default=None, max_length=32)
@@ -70,7 +70,7 @@ BUILTIN_SPECS: list[ToolDescriptor] = [
     ToolDescriptor(
         name="search_events",
         description=(
-            "Search across ALL events (telegram, gmail, instagram, vera_chat) "
+            "Search across ALL events (telegram, gmail, instagram, slack, vera_chat) "
             "with the same ranking as the initial context. Use when you need MORE "
             "messages than the initial context shows. For time-bound questions "
             "(вчера, за неделю, дата) ALWAYS pass date_from/date_to (ISO date, "
@@ -81,7 +81,7 @@ BUILTIN_SPECS: list[ToolDescriptor] = [
             "properties": {
                 "q": {"type": "string"},
                 "source": {"type": "string",
-                            "enum": ["telegram", "gmail", "instagram", "vera_chat", "any"]},
+                            "enum": ["telegram", "gmail", "instagram", "slack", "vera_chat", "any"]},
                 "limit": {"type": "integer", "default": 20,
                           "minimum": 1, "maximum": MAX_SEARCH_LIMIT},
                 "date_from": {"type": "string",
