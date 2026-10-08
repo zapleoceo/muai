@@ -16,7 +16,10 @@ from dashboard.auth import COOKIE_NAME, require_owner
 
 router = APIRouter()
 ORIGIN = "https://dima.veranda.my"
-HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "no-referrer",
+# Referrer-Policy same-origin, не no-referrer: при no-referrer браузер шлёт POST формы
+# этой же страницы с `Origin: null`, и проверка Origin ниже отвергала законное согласие
+# владельца (08.10.2026, первое подключение dot). same-origin не отдаёт тикет чужим сайтам.
+HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "same-origin",
            "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY",
            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
                                       "form-action 'self'; frame-ancestors 'none'"}

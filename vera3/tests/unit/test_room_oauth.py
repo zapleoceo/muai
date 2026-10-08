@@ -152,9 +152,12 @@ async def test_dashboard_consent_requires_owner_and_same_origin(monkeypatch):
         assert "chatgpt-client-1" in page.text
         assert "chatgpt.com/oauth/callback" in page.text
         assert page.headers["x-frame-options"] == "DENY"
-        bad = await c.post(url, data={"ticket": "test-ticket", "actor": "dot"},
-                           headers={"Origin": "https://elsewhere.example"})
-        assert bad.status_code == 403
+        # no-referrer заставил бы браузер прислать на POST формы `Origin: null`
+        assert page.headers["referrer-policy"] == "same-origin"
+        for origin in ("https://elsewhere.example", "null"):
+            bad = await c.post(url, data={"ticket": "test-ticket", "actor": "dot"},
+                               headers={"Origin": origin})
+            assert bad.status_code == 403
         good = await c.post(url, data={"ticket": "test-ticket", "actor": "dot"},
                             headers={"Origin": PUBLIC_ORIGIN}, follow_redirects=False)
         assert good.status_code == 303
