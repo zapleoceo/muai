@@ -7,6 +7,8 @@ from __future__ import annotations
 
 import html
 import os
+import re
+from urllib.parse import urlparse
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request
@@ -23,6 +25,27 @@ HEADERS = {"Cache-Control": "no-store", "Referrer-Policy": "same-origin",
            "X-Content-Type-Options": "nosniff", "X-Frame-Options": "DENY",
            "Content-Security-Policy": "default-src 'none'; style-src 'unsafe-inline'; "
                                       "form-action 'self'; frame-ancestors 'none'"}
+
+
+_NETLOC = re.compile(r"[A-Za-z0-9.-]+(:[0-9]{1,5})?")
+
+
+def _callback_origin(redirect_uri: str) -> str | None:
+    parsed = urlparse(redirect_uri)
+    # netloc уходит в заголовок CSP: только хост[:порт], без ';', пробелов и учётных данных
+    if parsed.scheme != "https" or not _NETLOC.fullmatch(parsed.netloc):
+        return None
+    return f"https://{parsed.netloc}"
+
+
+def _consent_headers(callback_origin: str) -> dict[str, str]:
+    # form-action действует и на редирект после отправки формы: с одним 'self' браузер
+    # молча блокировал 303 на callback клиента, согласие тратилось, а код до ChatGPT
+    # не доходил (08.10.2026). Разрешён только origin callback этого клиента — MCP
+    # уже сверил его с ROOM_OAUTH_REDIRECT_HOSTS при регистрации.
+    csp = HEADERS["Content-Security-Policy"].replace(
+        "form-action 'self'", f"form-action 'self' {callback_origin}")
+    return {**HEADERS, "Content-Security-Policy": csp}
 
 
 def _ready() -> bool:
@@ -64,6 +87,9 @@ async def room_oauth_consent(request: Request) -> Response:
         return HTMLResponse("Authorization request expired", status_code=400,
                             headers=HEADERS)
     data = response.json()
+    callback_origin = _callback_origin(data["redirect_uri"])
+    if callback_origin is None:
+        return HTMLResponse("Unsupported redirect URI", status_code=400, headers=HEADERS)
     actors = "".join(f"<option value='{html.escape(a)}'>{html.escape(a)}</option>"
                      for a in data["actors"])
     return HTMLResponse(
@@ -75,7 +101,8 @@ async def room_oauth_consent(request: Request) -> Response:
         "<form method='post'>"
         f"<input type='hidden' name='ticket' value='{html.escape(ticket)}'>"
         f"<label>Agent identity <select name='actor'>{actors}</select></label>"
-        "<button type='submit'>Allow room access</button></form>", headers=HEADERS)
+        "<button type='submit'>Allow room access</button></form>",
+        headers=_consent_headers(callback_origin))
 
 
 @router.post("/room/oauth/consent")
