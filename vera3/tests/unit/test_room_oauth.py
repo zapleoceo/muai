@@ -152,6 +152,11 @@ async def test_dashboard_consent_requires_owner_and_same_origin(monkeypatch):
         assert "chatgpt-client-1" in page.text
         assert "chatgpt.com/oauth/callback" in page.text
         assert page.headers["x-frame-options"] == "DENY"
+        # form-action действует и на 303 после формы: без origin callback браузер
+        # молча блокировал возврат в ChatGPT
+        assert ("form-action 'self' https://chatgpt.com;"
+                in page.headers["content-security-policy"])
+        assert "*" not in page.headers["content-security-policy"]
         # no-referrer заставил бы браузер прислать на POST формы `Origin: null`
         assert page.headers["referrer-policy"] == "same-origin"
         for origin in ("https://elsewhere.example", "null"):
@@ -261,3 +266,27 @@ async def test_sdk_dcr_pkce_http_flow(monkeypatch, sqlite_db):
         assert revoked.status_code == 200, revoked.text
         assert await RoomOAuthProvider().load_access_token(
             refreshed.json()["access_token"]) is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("redirect_uri", [
+    "http://chatgpt.com/oauth/callback",
+    "https://chatgpt.com;script-src */cb",
+    "https://user:pw@chatgpt.com/cb",
+])
+async def test_dashboard_consent_refuses_unsafe_callback_origin(monkeypatch, redirect_uri):
+    monkeypatch.setenv("ROOM_OAUTH_ENABLED", "1")
+
+    async def fake_internal(method: str, *, ticket: str, actor: str | None = None):
+        return httpx.Response(200, json={
+            "client_id": "c", "client_name": "x", "redirect_uri": redirect_uri,
+            "scopes": SCOPES, "actors": ["dot"]})
+
+    monkeypatch.setattr(room_oauth_routes, "_internal", fake_internal)
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=dashboard_app),
+                                 base_url=PUBLIC_ORIGIN) as c:
+        cookie, _ = issue_session()
+        c.cookies.set("vera3_session", cookie)
+        page = await c.get("/room/oauth/consent?ticket=t")
+    assert page.status_code == 400
+    assert "chatgpt.com" not in page.headers["content-security-policy"]
