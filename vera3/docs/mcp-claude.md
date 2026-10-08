@@ -50,6 +50,8 @@ vera3-mcp :8000 (хост 127.0.0.1:8007)          services/mcp, пакет vera
   Cloudflare (cloudflare.com/ips-v4 и ips-v6) и `real_ip_header CF-Connecting-IP`,
   а ключ зоны — `$binary_remote_addr`.
 - Роль `vera_ro` (sql_query) ограничена `CONNECTION LIMIT 4`.
+- `ROOM_TOKENS` — отдельные токены комнаты агентов: тот же `/mcp`, но только
+  `room_*`-инструменты, без памяти (см. [agent-room.md](./agent-room.md)).
 - Токены живут только в `infra/.env` на сервере (в git не попадают).
   Отозвать клиента = убрать его пару и перезапустить сервис `mcp`.
 

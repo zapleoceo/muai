@@ -19,6 +19,7 @@ async def reset_schema(conn: AsyncConnection) -> None:
         models_links,
         models_mcp,
         models_pair_roles,
+        models_room,
         models_sources,
     )
     from vera_shared.db.engine import Base

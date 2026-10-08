@@ -22,6 +22,7 @@ in the commit message (for cosmetic refactors only).
 | [security.md](./security.md) | OAuth permanence, owner gate, encryption at rest |
 | [conventions.md](./conventions.md) | File layout, async, types, comments |
 | [links.md](./links.md) | Связи событий с людьми (`event_entities`): автор, получатель, участники созвона, упомянутые; прозвища в области; круг разговора; фильтры поиска и MCP |
+| [agent-room.md](./agent-room.md) | Комната агентов: Claude, Codex и другие переписываются и делят задачи (аренда + fencing) через MCP без доступа к памяти |
 
 ## How to update
 
