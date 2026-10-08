@@ -5,7 +5,12 @@ from contextlib import asynccontextmanager
 
 import httpx
 import pytest
-from vera_mcp.auth import WeakTokenError, load_room_tokens, validate_room_tokens
+from vera_mcp.auth import (
+    WeakTokenError,
+    allowed_rooms,
+    load_room_tokens,
+    validate_room_tokens,
+)
 from vera_mcp.server import build_app
 
 OWNER_TOKEN = "owner-token-0123456789-0123456789"
@@ -56,6 +61,16 @@ def test_room_token_must_not_reuse_an_owner_token():
                               "ROOM_TOKENS": f"claude:{OWNER_TOKEN}"})
 
 
+def test_same_room_token_under_two_names_refuses_start():
+    with pytest.raises(ValueError, match="same token twice"):
+        validate_room_tokens({"ROOM_TOKENS": f"claude:{ROOM_CODEX},codex:{ROOM_CODEX}"})
+
+
+def test_allowed_rooms_default_to_main():
+    assert allowed_rooms({}) == {"main"}
+    assert allowed_rooms({"ROOM_NAMES": "main, proj-a ,"}) == {"main", "proj-a"}
+
+
 def test_short_room_token_refuses_start():
     with pytest.raises(WeakTokenError, match="ROOM tokens for codex"):
         validate_room_tokens({"ROOM_TOKENS": "codex:short"})
@@ -65,7 +80,7 @@ def test_short_room_token_refuses_start():
 async def test_room_token_sees_only_room_tools(room_client):
     async with room_client() as c:
         names = await _tool_names(c, ROOM_CODEX)
-    assert names == {"room_post", "room_inbox", "room_history", "room_task_open",
+    assert names == {"room_post", "room_inbox", "room_ack", "room_history", "room_task_open",
                      "room_task_claim", "room_task_update", "room_task_release",
                      "room_tasks"}
 

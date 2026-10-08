@@ -113,6 +113,7 @@ services:
       MCP_TOKENS: ${MCP_TOKENS:-}
       # комната агентов (docs/agent-room.md): свои токены, только room_*-инструменты
       ROOM_TOKENS: ${ROOM_TOKENS:-}
+      ROOM_NAMES: ${ROOM_NAMES:-main}
       # sql_query: роль vera_ro (миграция 037), НЕ суперпользователь vera.
       # Пусто = sql_query отказывает (остальные инструменты работают).
       MCP_RO_DATABASE_URL: ${MCP_RO_DATABASE_URL:-}

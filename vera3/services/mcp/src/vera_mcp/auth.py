@@ -37,12 +37,19 @@ class WeakTokenError(ValueError):
     """Токен короче MIN_TOKEN_LEN: сервис не должен стартовать с таким."""
 
 
-def _parse_list(raw: str | None, named: dict[str, str]) -> dict[str, str]:
+def _pairs(raw: str | None) -> list[tuple[str, str]]:
+    pairs = []
     for i, item in enumerate(filter(None, (p.strip() for p in (raw or "").split(",")))):
         name, sep, token = item.partition(":")
         if not sep:
             name, token = f"token{i + 1}", item
-        named[token.strip()] = name.strip() or f"token{i + 1}"
+        pairs.append((name.strip() or f"token{i + 1}", token.strip()))
+    return pairs
+
+
+def _parse_list(raw: str | None, named: dict[str, str]) -> dict[str, str]:
+    for name, token in _pairs(raw):
+        named[token] = name
     return named
 
 
@@ -85,6 +92,10 @@ def validate_room_tokens(env: Mapping[str, str] | None = None) -> dict[str, str]
     """Короткий токен или токен, совпавший с MCP_TOKEN(S), — исключение."""
     source = os.environ if env is None else env
     named = _parse_room(source)
+    tokens = [t for _, t in _pairs(source.get("ROOM_TOKENS"))]
+    if len(tokens) != len(set(tokens)):
+        raise ValueError("ROOM_TOKENS lists the same token twice: the author name would be "
+                         "ambiguous")
     weak = sorted(n for t, n in named.items() if len(t) < MIN_TOKEN_LEN)
     if weak:
         raise WeakTokenError(
@@ -95,6 +106,13 @@ def validate_room_tokens(env: Mapping[str, str] | None = None) -> dict[str, str]
         raise ValueError(f"ROOM_TOKENS reuse an MCP token ({', '.join(shared)}): "
                          "a room token must not open the owner's memory")
     return named
+
+
+def allowed_rooms(env: Mapping[str, str] | None = None) -> frozenset[str]:
+    """Комнаты, открытые токенам комнаты (ROOM_NAMES, по умолчанию только main).
+    Пока доступ общий для всех ROOM_TOKENS: привязки токена к комнате нет."""
+    raw = (os.environ if env is None else env).get("ROOM_NAMES") or "main"
+    return frozenset(filter(None, (r.strip() for r in raw.split(","))))
 
 
 def match_token(provided: str | None, tokens: Mapping[str, str]) -> str | None:

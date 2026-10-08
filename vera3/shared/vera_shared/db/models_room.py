@@ -23,6 +23,7 @@ class RoomMessageRow(Base):
     room: Mapped[str] = mapped_column(String(64), nullable=False)
     message_id: Mapped[str] = mapped_column(String(128), nullable=False)
     from_agent: Mapped[str] = mapped_column(String(64), nullable=False)
+    from_session: Mapped[str | None] = mapped_column(String(128), nullable=True)
     to_agent: Mapped[str | None] = mapped_column(String(64), nullable=True)
     task_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     in_reply_to: Mapped[str | None] = mapped_column(String(128), nullable=True)
@@ -57,6 +58,7 @@ class RoomCursorRow(Base):
 
     agent: Mapped[str] = mapped_column(String(64), primary_key=True)
     room: Mapped[str] = mapped_column(String(64), primary_key=True)
+    consumer: Mapped[str] = mapped_column(String(64), primary_key=True, default="default")
     last_message_id: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now())

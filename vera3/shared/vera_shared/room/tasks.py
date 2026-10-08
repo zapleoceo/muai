@@ -73,10 +73,11 @@ async def open_task(*, room: str, task_id: str, agent: str, title: str | None,
 async def claim(*, room: str, task_id: str, agent: str, lease_seconds: int,
                 title: str | None = None, paths: list[str] | None = None,
                 ) -> dict[str, Any]:
-    now = utc_naive_now()
     try:
         async with get_session() as s:
             row = await _locked(s, room, task_id)
+            # время — после блокировки строки: ожидание лока могло длиться дольше аренды
+            now = utc_naive_now()
             if row is None:
                 row = RoomTaskRow(room=room, task_id=task_id, title=title, created_by=agent,
                                   status="open", fencing_token=0, paths=paths or [])
@@ -109,7 +110,7 @@ def _require_lease(row: RoomTaskRow | None, room: str, task_id: str, agent: str,
                    fencing_token: int) -> RoomTaskRow:
     if row is None:
         raise TaskNotFound(room, task_id)
-    now = utc_naive_now()
+    now = utc_naive_now()  # зовётся уже под блокировкой строки
     if (row.lease_holder != agent or row.fencing_token != fencing_token
             or row.lease_until is None or row.lease_until <= now):
         raise StaleLease(f"no live lease on {task_id!r} for {agent} with fencing_token "

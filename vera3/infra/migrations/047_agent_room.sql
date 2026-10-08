@@ -11,7 +11,12 @@
 -- room_tasks — владение задачей через аренду (lease_until) и fencing_token:
 --   каждый новый захват увеличивает токен, и правка с устаревшим токеном
 --   отвергается, даже если старый владелец «проснулся» после истечения аренды.
--- room_cursors — до какого сообщения агент дочитал свой входящий поток.
+-- room_cursors — до какого сообщения потребитель (agent + consumer: напр.
+--   локальная и облачная сессии одного агента) подтвердил обработку.
+--
+-- Порядок id = порядок фиксации внутри комнаты: запись берёт
+-- pg_advisory_xact_lock на комнату до INSERT (vera_shared/room/messages.py),
+-- иначе курсор мог бы перескочить сообщение, чья транзакция закоммитилась позже.
 
 BEGIN;
 
@@ -20,6 +25,7 @@ CREATE TABLE IF NOT EXISTS room_messages (
     room        VARCHAR(64)  NOT NULL,
     message_id  VARCHAR(128) NOT NULL,
     from_agent  VARCHAR(64)  NOT NULL,
+    from_session VARCHAR(128),
     to_agent    VARCHAR(64),
     task_id     VARCHAR(128),
     in_reply_to VARCHAR(128),
@@ -50,9 +56,10 @@ CREATE TABLE IF NOT EXISTS room_tasks (
 CREATE TABLE IF NOT EXISTS room_cursors (
     agent           VARCHAR(64) NOT NULL,
     room            VARCHAR(64) NOT NULL,
+    consumer        VARCHAR(64) NOT NULL DEFAULT 'default',
     last_message_id BIGINT      NOT NULL DEFAULT 0,
     updated_at      TIMESTAMP   NOT NULL DEFAULT NOW(),
-    PRIMARY KEY (agent, room)
+    PRIMARY KEY (agent, room, consumer)
 );
 
 INSERT INTO schema_migrations (version, note)

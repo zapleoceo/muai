@@ -8,6 +8,7 @@ import pytest
 from vera_mcp import room_tools as r
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskRow
+from vera_shared.room.messages import MessageConflict
 from vera_shared.room.tasks import StaleLease, TaskBusy, TaskNotFound
 
 pytestmark = pytest.mark.asyncio
@@ -30,24 +31,40 @@ async def expire_lease(task_id: str, room: str = "main") -> None:
 # ─── сообщения ───────────────────────────────────────────────────────────────
 
 
+@pytest.fixture(autouse=True)
+def _rooms(monkeypatch):
+    monkeypatch.setenv("ROOM_NAMES", "main,other")
+
+
+async def inbox_bodies(c, **kw) -> list[str]:
+    return [m["body"] for m in (await r.room_inbox(c, **kw))["messages"]]
+
+
 async def test_post_author_is_the_token_not_an_argument(sqlite_db):
-    res = await r.room_post("hello", CLAUDE, message_id="m1", status="request")
+    res = await r.room_post("hello", CLAUDE, message_id="m1", status="request",
+                            session="laptop")
     assert res["deduped"] is False
-    assert (res["message"]["from"], res["message"]["status"]) == ("claude", "request")
+    msg = res["message"]
+    assert (msg["from"], msg["status"], msg["session"]) == ("claude", "request", "laptop")
 
 
-async def test_same_message_id_is_idempotent(sqlite_db):
+async def test_same_message_id_and_payload_is_idempotent(sqlite_db):
     first = await r.room_post("hello", CLAUDE, message_id="m1")
-    again = await r.room_post("hello again", CLAUDE, message_id="m1")
+    again = await r.room_post("hello", CLAUDE, message_id="m1")
     assert again["deduped"] is True
     assert again["message"]["id"] == first["message"]["id"]
     assert len((await r.room_history())["messages"]) == 1
 
 
-async def test_foreign_message_id_reuse_is_refused(sqlite_db):
+@pytest.mark.parametrize(("client", "body", "match"), [
+    (CODEX, "hello", "already used by claude"),
+    (CLAUDE, "changed body", "different payload"),
+])
+async def test_message_id_reuse_with_other_author_or_payload_is_refused(
+        sqlite_db, client, body, match):
     await r.room_post("hello", CLAUDE, message_id="m1")
-    with pytest.raises(ValueError, match="already used by claude"):
-        await r.room_post("spoof", CODEX, message_id="m1")
+    with pytest.raises(MessageConflict, match=match):
+        await r.room_post(body, client, message_id="m1")
 
 
 async def test_generated_message_id_is_unique(sqlite_db):
@@ -56,36 +73,52 @@ async def test_generated_message_id_is_unique(sqlite_db):
     assert a["message"]["message_id"] != b["message"]["message_id"]
 
 
-async def test_inbox_shows_others_to_me_or_all_and_ack_moves_cursor(sqlite_db):
+async def test_inbox_shows_others_to_me_or_all_and_needs_explicit_ack(sqlite_db):
     await r.room_post("own", CODEX)
     await r.room_post("broadcast", CLAUDE)
     await r.room_post("direct", CLAUDE, to="codex")
     await r.room_post("not for codex", CLAUDE, to="gemini")
     got = await r.room_inbox(CODEX)
     assert [m["body"] for m in got["messages"]] == ["broadcast", "direct"]
-    assert got["cursor"] == got["messages"][-1]["id"]
-    assert (await r.room_inbox(CODEX))["messages"] == []
+    assert await inbox_bodies(CODEX) == ["broadcast", "direct"]
+    acked = await r.room_ack(got["messages"][-1]["id"], CODEX)
+    assert acked["cursor"] == got["messages"][-1]["id"]
+    assert await inbox_bodies(CODEX) == []
 
 
-async def test_inbox_without_ack_keeps_cursor(sqlite_db):
-    await r.room_post("x", CLAUDE)
-    await r.room_inbox(CODEX, ack=False)
-    assert [m["body"] for m in (await r.room_inbox(CODEX))["messages"]] == ["x"]
+async def test_ack_only_grows_and_stops_at_last_message(sqlite_db):
+    last = (await r.room_post("x", CLAUDE))["message"]["id"]
+    assert (await r.room_ack(last + 100, CODEX))["cursor"] == last
+    assert (await r.room_ack(1, CODEX))["cursor"] == last
 
 
-async def test_inbox_since_id_rereads_without_moving_cursor_back(sqlite_db):
+async def test_consumers_of_one_agent_keep_separate_cursors(sqlite_db):
+    mid = (await r.room_post("job", CLAUDE))["message"]["id"]
+    await r.room_ack(mid, CODEX, consumer="laptop")
+    assert await inbox_bodies(CODEX, consumer="laptop") == []
+    assert await inbox_bodies(CODEX, consumer="cloud") == ["job"]
+
+
+async def test_inbox_since_id_rereads_without_touching_cursor(sqlite_db):
     first = (await r.room_post("one", CLAUDE))["message"]["id"]
-    await r.room_post("two", CLAUDE)
-    await r.room_inbox(CODEX)
-    reread = await r.room_inbox(CODEX, since_id=first - 1, ack=True)
+    second = (await r.room_post("two", CLAUDE))["message"]["id"]
+    await r.room_ack(second, CODEX)
+    reread = await r.room_inbox(CODEX, since_id=first - 1)
     assert [m["body"] for m in reread["messages"]] == ["one", "two"]
-    assert (await r.room_inbox(CODEX))["messages"] == []
+    assert reread["cursor"] == second
 
 
 async def test_rooms_are_separate(sqlite_db):
     await r.room_post("in other", CLAUDE, room="other")
-    assert (await r.room_inbox(CODEX))["messages"] == []
-    assert len((await r.room_inbox(CODEX, room="other"))["messages"]) == 1
+    assert await inbox_bodies(CODEX) == []
+    assert await inbox_bodies(CODEX, room="other") == ["in other"]
+
+
+async def test_room_outside_room_names_is_refused(sqlite_db):
+    with pytest.raises(ValueError, match="not open to room tokens"):
+        await r.room_history(room="secret")
+    with pytest.raises(ValueError, match="not open to room tokens"):
+        await r.room_post("x", CLAUDE, room="secret")
 
 
 async def test_history_filters_by_task_and_pages_backwards(sqlite_db):
