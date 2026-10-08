@@ -105,6 +105,23 @@ def _alive(row: RoomOAuthGrant | None) -> bool:
     return dt > datetime.now(UTC)
 
 
+# /register анонимный: без потолков один IP мог бы наполнять общий Postgres
+# многокилобайтными клиентами (ревью безопасности 08.10.2026, F3).
+MAX_CLIENT_NAME = 200
+MAX_REDIRECT_URIS = 5
+MAX_REDIRECT_URI_LEN = 500
+MAX_CLIENT_METADATA_BYTES = 4096
+
+
+def _check_client_size(client_info: OAuthClientInformationFull) -> None:
+    uris = client_info.redirect_uris or []
+    if (len(client_info.client_name or "") > MAX_CLIENT_NAME
+            or len(uris) > MAX_REDIRECT_URIS
+            or any(len(str(uri)) > MAX_REDIRECT_URI_LEN for uri in uris)
+            or len(client_info.model_dump_json().encode()) > MAX_CLIENT_METADATA_BYTES):
+        raise RegistrationError("invalid_client_metadata", "Client metadata is too large")
+
+
 class RoomOAuthProvider:
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
         async with get_session() as db:
@@ -117,6 +134,7 @@ class RoomOAuthProvider:
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         if not client_info.client_id or not client_info.client_secret:
             raise RegistrationError("invalid_client_metadata", "Confidential client required")
+        _check_client_size(client_info)
         if not client_info.redirect_uris or any(
                 (parsed := urlparse(str(uri))).scheme != "https"
                 or parsed.hostname not in allowed_redirect_hosts()
