@@ -124,7 +124,26 @@ def validate_sql(sql: str) -> str:
         raise SqlRejected(f"'{m.group(0).lower()}' is not allowed in a read-only query")
     if _LOCKING_RE.search(code):
         raise SqlRejected("row locking (FOR UPDATE/SHARE) is not allowed")
+    if not _parentheses_balanced(code):
+        # своя `)` закрыла бы подзапрос обёртки раньше LIMIT — см. limited_sql
+        raise SqlRejected("unbalanced parentheses")
     return sql.strip().rstrip(";").rstrip()
+
+
+def _parentheses_balanced(code: str) -> bool:
+    depth = 0
+    for ch in code:
+        depth += (ch == "(") - (ch == ")")
+        if depth < 0:
+            return False
+    return depth == 0
+
+
+def limited_sql(statement: str, cap: int) -> str:
+    """Проверенный запрос под внешним LIMIT; лишняя строка — признак обрезки."""
+    # Переносы строк: хвостовой `--` в запросе кончается на них, а не съедает
+    # `) AS _q LIMIT` однострочной обёртки.
+    return f"SELECT * FROM (\n{statement}\n) AS _q LIMIT {cap + 1}"
 
 
 def _cell(value: Any) -> Any:
@@ -155,14 +174,14 @@ async def run_readonly(sql: str, max_rows: int = MAX_ROWS) -> dict[str, Any]:
     """Выполнить проверенный запрос; не больше `max_rows` строк (потолок MAX_ROWS)."""
     statement = validate_sql(sql)
     cap = max(1, min(max_rows, MAX_ROWS))
-    # LIMIT снаружи подзапроса: лишняя строка нужна, чтобы честно сказать «обрезано»
-    wrapped = f"SELECT * FROM ({statement}) AS _q LIMIT {cap + 1}"
+    wrapped = limited_sql(statement, cap)
     engine = await get_ro_engine()
     async with engine.connect() as conn:
         await _enter_read_only(conn)
         result = await conn.exec_driver_sql(wrapped)
         columns = list(result.keys())
-        rows = result.fetchall()
+        # не больше cap+1 строк в памяти, даже если LIMIT в SQL как-то обойдён
+        rows = result.fetchmany(cap + 1)
         await conn.rollback()
     return {
         "columns": columns,

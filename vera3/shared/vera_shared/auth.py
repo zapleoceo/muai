@@ -30,4 +30,6 @@ def internal_secret_ok(provided: str | None, expected: str | None) -> bool:
     """
     if not expected or provided is None:
         return False
-    return hmac.compare_digest(provided, expected)
+    # compare_digest на str принимает только ASCII: не-ASCII в заголовке давал
+    # TypeError и 500 вместо отказа. Байты сравниваются при любом содержимом.
+    return hmac.compare_digest(provided.encode(), expected.encode())

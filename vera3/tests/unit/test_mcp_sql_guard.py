@@ -168,3 +168,47 @@ async def test_superuser_role_is_refused(monkeypatch):
          pytest.raises(ro_engine.ReadOnlyUnavailable, match="superuser"):
         await ro_engine.get_ro_engine()
     engine.dispose.assert_awaited_once()
+
+
+
+_SERIES = "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2000) "
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tail", ["--", "-- trailing comment", "/* ok */ --"])
+async def test_trailing_line_comment_keeps_the_row_limit(sqlite_db, ro_env, monkeypatch, tail):
+    # Однострочная обёртка `SELECT * FROM (<запрос>) AS _q LIMIT n`: хвостовой `--`
+    # комментировал её конец, и законный запрос с комментарием падал синтаксисом.
+    from sqlalchemy.ext.asyncio import AsyncConnection
+
+    sent: list[str] = []
+    original = AsyncConnection.exec_driver_sql
+
+    async def spy(self, statement, *args, **kwargs):
+        sent.append(statement)
+        return await original(self, statement, *args, **kwargs)
+
+    monkeypatch.setattr(AsyncConnection, "exec_driver_sql", spy)
+    out = await run_readonly(f"{_SERIES}SELECT i FROM n {tail}", max_rows=5)
+    assert out["row_count"] == 5 and out["truncated"] is True
+    monkeypatch.setattr(AsyncConnection, "exec_driver_sql", original)
+    from vera_mcp.ro_engine import get_ro_engine
+    async with (await get_ro_engine()).connect() as conn:
+        produced = (await conn.exec_driver_sql(sent[-1])).fetchall()
+    assert len(produced) == 6
+
+
+@pytest.mark.parametrize("query", [
+    f"{_SERIES}SELECT i FROM n) AS _q --",
+    f"{_SERIES}SELECT i FROM n) AS _q /* x */",
+    "SELECT (1",
+    "SELECT 1)",
+])
+def test_unbalanced_parentheses_are_rejected(query):
+    # Своя `)` закрывала бы подзапрос обёртки раньше LIMIT: база отдала бы всю выборку.
+    with pytest.raises(SqlRejected, match="parenthes"):
+        validate_sql(query)
+
+
+def test_parentheses_inside_literals_and_comments_do_not_count():
+    assert validate_sql("SELECT ')' AS a, '(' AS b /* ) */ -- (")

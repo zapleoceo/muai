@@ -27,6 +27,10 @@ from vera_shared.auth import internal_secret_ok
     # префикс не считается совпадением
     ("s3cr", "s3cret", False),
     ("s3cretX", "s3cret", False),
+    # не-ASCII в заголовке: compare_digest(str, str) бросал TypeError → 500
+    ("секрет", "s3cret", False),
+    ("s3cret", "секрет", False),
+    ("секрет", "секрет", True),
 ])
 def test_internal_secret_ok(provided, expected, ok):
     assert internal_secret_ok(provided, expected) is ok
