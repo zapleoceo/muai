@@ -25,6 +25,7 @@ from dashboard.journal_routes import router as journal_router
 from dashboard.merge_routes import router as merge_router
 from dashboard.progress_routes import router as progress_router
 from dashboard.render import FAVICON_SVG
+from dashboard.room_oauth_routes import router as room_oauth_router
 from dashboard.search_routes import router as search_router
 from dashboard.settings_routes import router as settings_router
 from dashboard.slack_connect import router as slack_connect_router
@@ -48,6 +49,7 @@ for router in (
     graph_router, gmail_oauth_router, instagram_login_router,
     telegram_login_router, slack_connect_router, source_actions_router,
     assets_router, connection_router, journal_router, merge_router,
+    room_oauth_router,
 ):
     app.include_router(router)
 
