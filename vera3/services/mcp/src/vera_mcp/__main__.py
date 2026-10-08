@@ -7,8 +7,8 @@ import os
 import uvicorn
 
 from vera_mcp.auth import validate_room_tokens, validate_tokens
-from vera_mcp.server import build_app
 from vera_mcp.room_oauth import validate_config as validate_room_oauth
+from vera_mcp.server import build_app
 
 log = logging.getLogger("vera_mcp")
 
