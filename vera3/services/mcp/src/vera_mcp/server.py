@@ -85,7 +85,12 @@ def build_room_mcp(oauth: RoomOAuthProvider | None = None) -> FastMCP:
                 details = await oauth.pending_details(request.query_params.get("ticket", ""))
                 return JSONResponse(details or {"error": "expired"},
                                     status_code=200 if details else 404)
-            body = await request.json()
+            try:
+                body = await request.json()
+            except ValueError:
+                body = None
+            if not isinstance(body, dict):
+                return JSONResponse({"error": "invalid_request"}, status_code=400)
             url = await oauth.approve_pending(str(body.get("ticket", "")),
                                               str(body.get("actor", "")))
             return JSONResponse({"redirect_uri": url} if url else {"error": "expired"},

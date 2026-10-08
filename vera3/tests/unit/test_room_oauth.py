@@ -293,6 +293,20 @@ async def test_dashboard_consent_refuses_unsafe_callback_origin(monkeypatch, red
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("payload", ["[1, 2]", '"ticket"', "null", "{not json"])
+async def test_internal_consent_rejects_non_object_body(monkeypatch, sqlite_db, payload):
+    # тело-не-объект падало на body.get(...) → 500 вместо внятного отказа
+    monkeypatch.setenv("ROOM_OAUTH_ENABLED", "1")
+    monkeypatch.setenv("ROOM_OAUTH_KEY", "unit-test-room-key-not-production-0123456789")
+    monkeypatch.setenv("INTERNAL_SECRET", "test-internal-secret")
+    async with _client() as c:
+        r = await c.post("/oauth/internal/consent", content=payload.encode(),
+                         headers={"X-Internal-Secret": "test-internal-secret",
+                                  "Content-Type": "application/json"})
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("overrides", [
     {"client_name": "x" * 201},
     {"redirect_uris": [AnyUrl(f"https://chatgpt.com/cb{i}") for i in range(6)]},
