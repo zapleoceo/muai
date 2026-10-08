@@ -304,3 +304,29 @@ async def test_internal_consent_rejects_non_object_body(monkeypatch, sqlite_db, 
                          headers={"X-Internal-Secret": "test-internal-secret",
                                   "Content-Type": "application/json"})
     assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("overrides", [
+    {"client_name": "x" * 201},
+    {"redirect_uris": [AnyUrl(f"https://chatgpt.com/cb{i}") for i in range(6)]},
+    {"redirect_uris": [AnyUrl("https://chatgpt.com/" + "a" * 500)]},
+    {"client_uri": AnyUrl("https://chatgpt.com/" + "b" * 4000)},
+])
+async def test_dcr_rejects_oversized_client_metadata(monkeypatch, sqlite_db, overrides):
+    monkeypatch.setenv("ROOM_OAUTH_KEY", "unit-test-room-key-not-production-0123456789")
+    fields = {"client_id": "big", "client_secret": "test-secret",
+              "redirect_uris": [AnyUrl("https://chatgpt.com/oauth/callback")], **overrides}
+    with pytest.raises(RegistrationError, match="too large"):
+        await RoomOAuthProvider().register_client(OAuthClientInformationFull(**fields))
+
+
+@pytest.mark.asyncio
+async def test_dcr_accepts_normal_chatgpt_client(monkeypatch, sqlite_db):
+    monkeypatch.setenv("ROOM_OAUTH_KEY", "unit-test-room-key-not-production-0123456789")
+    info = OAuthClientInformationFull(
+        client_id="normal", client_secret="test-secret", client_name="ChatGPT",
+        token_endpoint_auth_method="client_secret_post",
+        redirect_uris=[AnyUrl("https://chatgpt.com/connector_platform_oauth_redirect")])
+    await RoomOAuthProvider().register_client(info)
+    assert (await RoomOAuthProvider().get_client("normal")).client_name == "ChatGPT"
