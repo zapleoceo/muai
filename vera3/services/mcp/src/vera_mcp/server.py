@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import contextlib
+import os
 from collections.abc import AsyncIterator
 
 from mcp.server.fastmcp import FastMCP
@@ -17,9 +18,13 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.routing import Mount
 from starlette.types import ASGIApp, Receive, Scope, Send
+from vera_shared.auth import internal_secret_ok
 
 from vera_mcp.auth import REALM_SCOPE_KEY, ROOM_REALM, BearerAuthMiddleware
 from vera_mcp.read_tools import READ_TOOLS
+from vera_mcp.room_oauth import RoomOAuthProvider
+from vera_mcp.room_oauth import enabled as room_oauth_enabled
+from vera_mcp.room_oauth import settings as room_oauth_settings
 from vera_mcp.room_tools import ROOM_TOOLS
 from vera_mcp.write_tools import WRITE_TOOLS
 
@@ -41,13 +46,14 @@ ROOM_INSTRUCTIONS = (
 )
 
 
-def _fastmcp(name: str, instructions: str) -> FastMCP:
+def _fastmcp(name: str, instructions: str, **kwargs) -> FastMCP:
     # Аутентификация — bearer-токен (BearerAuthMiddleware). Защита от DNS-rebinding
     # включена по умолчанию только для localhost и отвергла бы Host: dima.veranda.my.
     return FastMCP(
         name, instructions=instructions, stateless_http=True, json_response=True,
         host="0.0.0.0",
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
+        **kwargs,
     )
 
 
@@ -63,10 +69,27 @@ def build_mcp() -> FastMCP:
     return mcp
 
 
-def build_room_mcp() -> FastMCP:
-    mcp = _fastmcp("vera-room", ROOM_INSTRUCTIONS)
+def build_room_mcp(oauth: RoomOAuthProvider | None = None) -> FastMCP:
+    auth_kwargs = ({"auth": room_oauth_settings(), "auth_server_provider": oauth}
+                   if oauth else {})
+    mcp = _fastmcp("vera-room", ROOM_INSTRUCTIONS, **auth_kwargs)
     for tool in ROOM_TOOLS:
         mcp.tool()(tool)
+    if oauth:
+        @mcp.custom_route("/oauth/internal/consent", methods=["GET", "POST"])
+        async def internal_consent(request: Request) -> JSONResponse:
+            if not internal_secret_ok(request.headers.get("X-Internal-Secret"),
+                                      os.environ.get("INTERNAL_SECRET")):
+                return JSONResponse({"error": "unauthorized"}, status_code=401)
+            if request.method == "GET":
+                details = await oauth.pending_details(request.query_params.get("ticket", ""))
+                return JSONResponse(details or {"error": "expired"},
+                                    status_code=200 if details else 404)
+            body = await request.json()
+            url = await oauth.approve_pending(str(body.get("ticket", "")),
+                                              str(body.get("actor", "")))
+            return JSONResponse({"redirect_uri": url} if url else {"error": "expired"},
+                                status_code=200 if url else 404)
     return mcp
 
 
@@ -80,7 +103,8 @@ class _RealmDispatch:
 
 
 def build_app() -> Starlette:
-    vera, room = build_mcp(), build_room_mcp()
+    oauth = RoomOAuthProvider() if room_oauth_enabled() else None
+    vera, room = build_mcp(), build_room_mcp(oauth)
     vera_app, room_app = vera.streamable_http_app(), room.streamable_http_app()
 
     # Mount не пробрасывает lifespan внутрь: менеджеры сессий обоих серверов
@@ -92,5 +116,5 @@ def build_app() -> Starlette:
 
     app = Starlette(routes=[Mount("/", app=_RealmDispatch(vera_app, room_app))],
                     lifespan=lifespan)
-    app.add_middleware(BearerAuthMiddleware)
+    app.add_middleware(BearerAuthMiddleware, room_oauth=oauth)
     return app

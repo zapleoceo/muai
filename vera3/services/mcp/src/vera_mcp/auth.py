@@ -142,8 +142,9 @@ def client_of(ctx: Any) -> str:
 class BearerAuthMiddleware:
     """Чистый ASGI (не BaseHTTPMiddleware) — не буферизует стримы ответа."""
 
-    def __init__(self, app: ASGIApp) -> None:
+    def __init__(self, app: ASGIApp, room_oauth: Any = None) -> None:
         self.app = app
+        self.room_oauth = room_oauth
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
         if scope["type"] == "lifespan" or (
@@ -154,12 +155,29 @@ class BearerAuthMiddleware:
             # websocket и любой будущий тип сюда не ходят: закрываем, не пропуская
             await WebSocketClose(code=1008)(scope, receive, send)
             return
+        path = scope.get("path", "")
+        if self.room_oauth is not None and (path in {
+                "/.well-known/oauth-authorization-server",
+                "/.well-known/oauth-protected-resource/mcp",
+                "/authorize", "/token", "/register", "/revoke",
+                "/oauth/internal/consent"}):
+            scope[REALM_SCOPE_KEY] = ROOM_REALM
+            await self.app(scope, receive, send)
+            return
         provided = bearer_of(scope.get("headers", []))
         client = match_token(provided, load_tokens())
         room_client = match_token(provided, load_room_tokens())
+        if room_client is None and self.room_oauth is not None and provided:
+            grant = await self.room_oauth.load_access_token(provided)
+            if grant is not None:
+                room_client = grant.subject
         if client is None and room_client is None:
+            challenge = 'Bearer'
+            if self.room_oauth is not None:
+                challenge = ('Bearer resource_metadata="https://dima.veranda.my/'
+                             '.well-known/oauth-protected-resource/mcp"')
             response = JSONResponse({"error": "unauthorized"}, status_code=401,
-                                    headers={"WWW-Authenticate": "Bearer"})
+                                    headers={"WWW-Authenticate": challenge})
             await response(scope, receive, send)
             return
         # Совпадение с обоими наборами отсекает validate_room_tokens при старте;

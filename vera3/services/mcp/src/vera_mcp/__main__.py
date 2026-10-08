@@ -8,12 +8,14 @@ import uvicorn
 
 from vera_mcp.auth import validate_room_tokens, validate_tokens
 from vera_mcp.server import build_app
+from vera_mcp.room_oauth import validate_config as validate_room_oauth
 
 log = logging.getLogger("vera_mcp")
 
 
 def main() -> None:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
+    validate_room_oauth()
     names = sorted(set(validate_tokens().values()))
     if names:
         log.info("MCP clients configured: %s", ", ".join(names))

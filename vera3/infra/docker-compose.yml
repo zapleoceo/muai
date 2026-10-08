@@ -114,6 +114,12 @@ services:
       # комната агентов (docs/agent-room.md): свои токены, только room_*-инструменты
       ROOM_TOKENS: ${ROOM_TOKENS:-}
       ROOM_NAMES: ${ROOM_NAMES:-main}
+      # Disabled by default. Dedicated room key; dashboard owns owner consent.
+      # Public OAuth activation requires a separate deployment approval.
+      ROOM_OAUTH_ENABLED: ${ROOM_OAUTH_ENABLED:-0}
+      ROOM_OAUTH_ACTORS: ${ROOM_OAUTH_ACTORS:-dot}
+      ROOM_OAUTH_REDIRECT_HOSTS: ${ROOM_OAUTH_REDIRECT_HOSTS:-chatgpt.com}
+      ROOM_OAUTH_KEY: ${ROOM_OAUTH_KEY:-}
       # sql_query: роль vera_ro (миграция 037), НЕ суперпользователь vera.
       # Пусто = sql_query отказывает (остальные инструменты работают).
       MCP_RO_DATABASE_URL: ${MCP_RO_DATABASE_URL:-}
@@ -437,6 +443,8 @@ services:
       # brain-search и tools-сервер юзербота пускают только с этим секретом.
       # Без него «Спросить Веру» и «подтянуть участников» отвечали 502 (03.10.2026).
       INTERNAL_SECRET: ${INTERNAL_SECRET:?INTERNAL_SECRET must be set}
+      ROOM_OAUTH_ENABLED: ${ROOM_OAUTH_ENABLED:-0}
+      ROOM_OAUTH_INTERNAL_URL: http://mcp:8000
       GMAIL_CLIENT_ID: ${GMAIL_CLIENT_ID}
       GMAIL_CLIENT_SECRET: ${GMAIL_CLIENT_SECRET}
       DASHBOARD_BASE_URL: https://dima.veranda.my
