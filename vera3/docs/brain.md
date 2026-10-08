@@ -821,6 +821,12 @@ from sums rather than silently treated as zero.
 встроенные плюс `load_remote_tool_specs` из `/tools/spec` ingestor-telegram;
 даты `date_from`/`date_to` разбирает `parse_iso_date`, окно локальных дней
 (Jakarta, включительно) строит `date_window`.
+`search_events.source` принимает `telegram`, `gmail`, `instagram`, `slack`,
+`vera_chat` и `any` (по умолчанию). Slack разрешён в `SearchEventsArgs`,
+описании инструмента и JSON-схеме `BUILTIN_SPECS`, которую видит агент;
+значение передаётся без замены в общий `pipeline.search_ranked` вместе с датами
+и лимитом. Это исправляет отклонение `source="slack"` при проверке аргументов;
+полнота выдачи и ложные отрицательные ответы требуют отдельной проверки.
 
 **Даты.** `1.5 млн`, `3.5`, `v1.2.3` больше не даты: `dd.mm` без года
 требует две цифры («09.06»). Относительные дни — вчера/сегодня/позавчера на
