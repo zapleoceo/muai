@@ -30,7 +30,8 @@ def make_row(**kw):
                 "last_progress_at": NOW - timedelta(minutes=10), "last_progress_text": "шаг",
                 "next_checkpoint_at": None, "waiting_until": None, "updated_at": NOW,
                 "priority": 2, "owner": None, "holder_account": "acc", "project": None,
-                "next_action": None, "refs": [], "created_by": "claude", "waiting_reason": None}
+                "next_action": None, "refs": [], "created_by": "claude", "waiting_reason": None,
+                "plan_start": None, "plan_end": None}
     base.update(kw)
     return SimpleNamespace(**base)
 
@@ -41,7 +42,7 @@ def item(question=None, **kw):
 
 
 def event(**kw):
-    base = {"at": NOW, "kind": "progress", "agent": "claude", "text": "ок"}
+    base = {"at": NOW, "kind": "progress", "agent": "claude", "text": "ок", "session": None, "data": None}
     base.update(kw)
     return SimpleNamespace(**base)
 
@@ -101,8 +102,10 @@ def test_page_and_unknown_task_fragment():
     c = {COOKIE_NAME: cookie()}
     client = TestClient(app)
     with patch("dashboard.tasks_routes.load_tabs",
-               AsyncMock(return_value=split_tabs([item(), item(task_id="d", status="done")]))):
-        r = client.get("/tasks?tab=done", cookies=c)
+               AsyncMock(return_value=split_tabs([item(), item(task_id="d", status="done")]))),                patch("dashboard.tasks_routes.load_gantt_rows", AsyncMock(return_value=[])):
+        r = client.get("/tasks?tab=done&span=bogus", cookies=c)
+        r7 = client.get("/tasks?tab=done&span=7d", cookies=c)
     assert r.status_code == 200 and "Готово 1" in r.text and 'href="/tasks"' in r.text
+    assert r7.status_code == 200 and 'href="/tasks?tab=work&amp;span=7d"' in r7.text
     with patch("dashboard.tasks_routes.load_detail", AsyncMock(return_value=None)):
         assert client.get("/tasks/r/nope", cookies=c).status_code == 404

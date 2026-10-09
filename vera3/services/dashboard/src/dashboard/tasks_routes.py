@@ -4,10 +4,18 @@ from __future__ import annotations
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 from vera_shared.room.questions import QuestionNotFound, QuestionState
+from vera_shared.timeutil import utc_naive_now
 
 from dashboard.csrf import owner_post_gate
 from dashboard.render import _render, esc, owner_or_blank_401, owner_or_redirect
-from dashboard.tasks_service import TABS, load_detail, load_tabs, submit_answer
+from dashboard.tasks_gantt import parse_span
+from dashboard.tasks_service import (
+    TABS,
+    load_detail,
+    load_gantt_rows,
+    load_tabs,
+    submit_answer,
+)
 from dashboard.tasks_view import task_detail, tasks_body
 
 router = APIRouter()
@@ -18,11 +26,15 @@ def _problem(msg: str, code: int) -> HTMLResponse:
 
 
 @router.get("/tasks", response_class=HTMLResponse)
-async def tasks_page(request: Request, tab: str = "work"):
+async def tasks_page(request: Request, tab: str = "work", span: str = "24h"):
     if (resp := owner_or_redirect(request)) is not None:
         return resp
     tab = tab if tab in TABS else "work"
-    return HTMLResponse(_render("tasks", tasks_body(tab, await load_tabs())))
+    span = parse_span(span)
+    tabs = await load_tabs()
+    now = utc_naive_now()
+    rows = await load_gantt_rows(tabs[tab], now)
+    return HTMLResponse(_render("tasks", tasks_body(tab, tabs, now, rows, span)))
 
 
 async def _fragment(room: str, task_id: str) -> HTMLResponse:

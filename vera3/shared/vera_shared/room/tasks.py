@@ -160,6 +160,7 @@ async def update(*, room: str, task_id: str, agent: str, fencing_token: int,
         row = _require_lease(await _locked(s, room, task_id), room, task_id, agent,
                              fencing_token)
         now = utc_naive_now()
+        prev_status = row.status
         if status is not None:
             row.status = status
         if note is not None:
@@ -185,6 +186,14 @@ async def update(*, room: str, task_id: str, agent: str, fencing_token: int,
             row.last_progress_text = note if note is not None else f"status: {status}"
             row.waiting_until, row.waiting_reason = None, None
             kind = "progress"
+            # переход блокировки пишется раньше progress: Гантт не рисует вспышку работы
+            flip = ("blocked" if status == "blocked" and prev_status != "blocked" else
+                    "unblocked" if prev_status == "blocked" and status == "in_progress"
+                    else None)
+            if flip:
+                await record_event(s, room=room, task_id=task_id, kind=flip, agent=agent,
+                                   session=row.holder_session, account=row.holder_account,
+                                   fencing_token=fencing_token, data={"status": status})
         else:
             kind = "heartbeat"
         await record_event(s, room=room, task_id=task_id, kind=kind, agent=agent,
