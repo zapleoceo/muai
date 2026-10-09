@@ -106,6 +106,7 @@ def _observation_text(name: str, obs: Any) -> str:
     """Send complete, attributable search cards within the observation budget."""
     if name == "search_events" and isinstance(obs, dict) and isinstance(obs.get("events"), list):
         events = obs["events"]
+        obs_src = obs
         selected: list[dict[str, Any]] = []
         for event in events[:3]:
             if not isinstance(event, dict):
@@ -131,6 +132,8 @@ def _observation_text(name: str, obs: Any) -> str:
             selected.append(card)
         obs = {"found": obs.get("found"), "events": selected,
                "omitted_events": len(events) - len(selected)}
+        if obs_note := str(obs_src.get("identifier_note") or "")[:400]:
+            obs["identifier_note"] = obs_note
         return json.dumps(obs, ensure_ascii=False)
     rendered = json.dumps(obs, ensure_ascii=False)
     return evidence_excerpt(rendered, 3000)

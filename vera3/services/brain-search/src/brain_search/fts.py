@@ -80,3 +80,12 @@ def fts_rank_sql(param: str = "tsq") -> str:
     ranks = [f"NULLIF(ts_rank({_vec(c, col)}, {_query(c, param)}), 0)"
              for c, col in _pairs()]
     return f"COALESCE({', '.join(ranks)}, 0.0)"
+
+
+def fts_phrase_match_sql(param: str) -> str:
+    """Фраза целиком через phraseto_tsquery: тот же парсер, что у индекса
+    (`SIN-4905` -> 'sin' <-> '-4905', число приходит со знаком); ручная строка
+    `sin <-> 4905` на проде не матчится."""
+    ors = " OR ".join(f"{_vec(c, col)} @@ phraseto_tsquery('{c}', :{param})"
+                      for c, col in _pairs())
+    return f"({ors})"

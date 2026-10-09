@@ -5,35 +5,41 @@ from typing import Any
 
 from sqlalchemy import text
 
-from brain_search.fts import fts_match_sql
-from brain_search.identifiers import phrase_tsquery
+from brain_search.fts import fts_phrase_match_sql
 from brain_search.retrieval_filters import semantic_filter
 from brain_search.rows import META_COLUMNS, Candidate
 
 #: Выше любого ts_rank×2 + косинус, но ниже 1000 прямого запроса по event id.
 IDENTIFIER_RANK = 100.0
 PER_IDENTIFIER_LIMIT = 30
+#: Граница по не-буквоцифре: XSIN-4905 и SIN-49055 не считаются совпадением.
+_BOUNDARY = "'(^|[^[:alnum:]])' || {p} || '($|[^[:alnum:]])'"
+
+
+def identifier_sql(i: int, scope_sql: str) -> str:
+    """Фраза по GIN-индексам + проверка границ regex'ом; `:t{i}` — сам тикет."""
+    boundary = _BOUNDARY.format(p=f":t{i}")
+    return f"""
+        SELECT id, source, source_event_id, occurred_at, content_text, importance,
+               NULL AS embedding, {IDENTIFIER_RANK} AS rank, account, {META_COLUMNS}
+        FROM events
+        WHERE {fts_phrase_match_sql(f"t{i}")}
+          AND (content_text ~* ({boundary}) OR transcript_text ~* ({boundary}))
+          AND ({scope_sql})
+        ORDER BY occurred_at DESC
+        LIMIT {PER_IDENTIFIER_LIMIT}
+    """
 
 
 async def fetch_identifier_rows(s, tickets: list[str], *, source: str | None,
                                 links, time_range=None, project=None) -> list[Candidate]:
-    """События, где идентификатор встречается дословно (фраза в GIN + подстрока)."""
+    """События, где идентификатор встречается дословно."""
     scope_sql, scope_params = semantic_filter(project, time_range, source, links)
     out: dict[int, Candidate] = {}
     for i, ticket in enumerate(tickets):
-        stmt = text(f"""
-            SELECT id, source, source_event_id, occurred_at, content_text, importance,
-                   NULL AS embedding, {IDENTIFIER_RANK} AS rank, account, {META_COLUMNS}
-            FROM events
-            WHERE {fts_match_sql(f"idq{i}")}
-              AND (content_text ILIKE :pat{i} OR transcript_text ILIKE :pat{i})
-              AND ({scope_sql})
-            ORDER BY occurred_at DESC
-            LIMIT {PER_IDENTIFIER_LIMIT}
-        """)
-        params: dict[str, Any] = {f"idq{i}": phrase_tsquery(ticket),
-                                  f"pat{i}": f"%{ticket}%", **scope_params}
-        for row in (await s.execute(stmt, params)).all():
+        # ticket состоит только из [A-Za-z0-9-] (identifiers.ticket_ids): в regex безопасен
+        params: dict[str, Any] = {f"t{i}": ticket, **scope_params}
+        for row in (await s.execute(text(identifier_sql(i, scope_sql)), params)).all():
             c = Candidate.of(row)
             out.setdefault(c.id, c)
     return list(out.values())

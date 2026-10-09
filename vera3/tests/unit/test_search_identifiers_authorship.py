@@ -1,11 +1,14 @@
 """Exact ticket identifiers outrank semantic noise; authorship comes from metadata."""
 from __future__ import annotations
 
+import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
+from brain_search import agent, agent_tools, pipeline
+from brain_search.agent_tools import SearchEventsArgs
 from brain_search.authorship import AUTHORSHIP_RULES, author_tag
 from brain_search.identifier_rows import (
     IDENTIFIER_RANK,
@@ -15,13 +18,14 @@ from brain_search.identifier_rows import (
 from brain_search.identifiers import (
     identifier_hits,
     identifier_note,
-    phrase_tsquery,
     ticket_ids,
 )
 from brain_search.models import SearchResult
+from brain_search.retrieval import Candidates
 from brain_search.rows import Candidate
 from brain_search.scoring import score_candidates
 from brain_search.synthesis import build_context, build_prompt
+from vera_shared.events.visibility import NOT_HIDDEN_SQL
 
 _WHEN = datetime(2026, 10, 9, 9, tzinfo=timezone.utc)
 
@@ -40,13 +44,11 @@ def _cand(event_id: int, text: str, *, rank: float = 0.0, vec_sim: float | None 
     ("2026-10-09", []),
     ("e-mail", []),
     ("XSIN-4905-1", []),
+    ("utf-8 gpt-4 covid-19 x-2 mp3-128 iso-8601 sha-256", []),
+    ("AB-12 и A-12 и AB-1", ["AB-12"]),
 ])
 def test_ticket_ids(question: str, expected: list[str]):
     assert ticket_ids(question) == expected
-
-
-def test_phrase_tsquery_is_adjacent_pair():
-    assert phrase_tsquery("SIN-4905") == "sin <-> 4905"
 
 
 def test_exact_identifier_ranks_first_over_semantic_and_fts_noise():
@@ -83,18 +85,66 @@ def test_no_absence_claim_when_lexical_match_exists():
 
 
 @pytest.mark.asyncio
-async def test_fetch_identifier_rows_binds_phrase_and_substring():
+async def test_fetch_identifier_rows_binds_raw_ticket_with_phraseto_and_boundary():
     result = MagicMock()
     result.all.return_value = [(510716, "gmail", "x", _WHEN, "SIN-4905", 50, None,
                                 IDENTIFIER_RANK, "a")]
     session = MagicMock()
     session.execute = AsyncMock(return_value=result)
-    rows = await fetch_identifier_rows(session, ["SIN-4905"], source=None, links=None)
+    rows = await fetch_identifier_rows(session, ["SIN-4905"], source="gmail", links=None,
+                                       time_range=(_WHEN, _WHEN))
     stmt, params = session.execute.await_args.args
-    assert params["idq0"] == "sin <-> 4905"
-    assert params["pat0"] == "%SIN-4905%"
-    assert "ILIKE" in str(stmt)
+    sql = str(stmt)
+    assert params["t0"] == "SIN-4905"
+    assert sql.count("phraseto_tsquery('russian', :t0)") == 2
+    assert "phraseto_tsquery('indonesian', :t0)" in sql
+    assert "<->" not in sql and "ILIKE" not in sql
+    assert "[^[:alnum:]]" in sql
     assert [c.id for c in rows] == [510716]
+
+
+@pytest.mark.asyncio
+async def test_identifier_query_applies_hidden_source_and_period_filters():
+    result = MagicMock()
+    result.all.return_value = []
+    session = MagicMock()
+    session.execute = AsyncMock(return_value=result)
+    await fetch_identifier_rows(session, ["SIN-4905"], source="gmail", links=None,
+                                time_range=(_WHEN, _WHEN))
+    stmt, params = session.execute.await_args.args
+    sql = str(stmt)
+    assert NOT_HIDDEN_SQL in sql
+    assert "source = :src" in sql
+    assert "occurred_at >= :t_start" in sql
+    assert params["src"] == "gmail" and params["t_start"] == _WHEN
+
+
+@pytest.mark.asyncio
+async def test_agent_search_path_passes_tickets_and_ranks_exact_first(monkeypatch):
+    exact = _cand(510716, "SIN-4905", rank=IDENTIFIER_RANK)
+    noise = [_cand(i, "sin", rank=0.35, vec_sim=0.8) for i in range(1, 8)]
+    seen = {}
+
+    async def fake_fetch(**kw):
+        seen.update(kw)
+        return Candidates(merge_identifier_rows(noise, [exact]), "fts+ticket")
+
+    monkeypatch.setattr(pipeline, "fetch_candidates", fake_fetch)
+    monkeypatch.setattr(pipeline, "embed_query", AsyncMock(return_value=None))
+    _found, ranked = await pipeline.search_ranked("SIN-4905", limit=3)
+    assert seen["tickets"] == ["SIN-4905"]
+    assert ranked[0][1].id == 510716
+
+
+@pytest.mark.asyncio
+async def test_agent_tool_result_carries_identifier_note(monkeypatch):
+    exact = _cand(510716, "[Jira] (SIN-4905) Проверить", rank=IDENTIFIER_RANK)
+    monkeypatch.setattr(agent_tools, "search_ranked",
+                        AsyncMock(return_value=(None, [(1.0, exact)])))
+    res = await agent_tools._exec_search_events(SearchEventsArgs(q="SIN-4905"))
+    assert "[event:510716]" in res["identifier_note"]
+    obs = json.loads(agent._observation_text("search_events", res))
+    assert "НЕЛЬЗЯ отвечать" in obs["identifier_note"]
 
 
 def _gladkyi() -> Candidate:
