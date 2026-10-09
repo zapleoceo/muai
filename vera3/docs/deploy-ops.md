@@ -1242,3 +1242,52 @@ Short version:
   искажённых имён).
 - Вопросы владельца на своих данных: `eval_owner_questions.py --lisa <id> --director <id> --oleg <id> --topic <тема>
   [--start ISO --end ISO]`; период по умолчанию — сентябрь 2026.
+
+## Переразбор старых писем Jira по diff-разметке (`reingest_jira_diff.py`)
+
+Зачем: до 2026-10-09 письма об изменении описания задач Jira сохранялись из `text/plain`, где
+удалённое и добавленное слиты (LAM-264, событие 510796). Живой поллер теперь размечает правки
+(`sources.md`, «Jira diff markup»); этот скрипт применяет те же правила к старым событиям.
+Код: `ingestor_gmail/reingest.py` (чистое ядро: `EventSnapshot`, `Candidate`, `sender_of`,
+`is_jira_event`, `has_diff_markers`, `rebuild_content`, `classify`, `snippet_pair`),
+`reingest_store.py` (`load_jira_events`, `embedded_ids`, `write_backup`, `apply_batch`, `rollback`),
+`reingest_run.py` (`RunOptions`, `MessageFetcher`, `collect`, `run`), CLI — `scripts/reingest_jira_diff.py`.
+
+Что делает: берёт `source='gmail'` события с отправителем jira@*.atlassian.net
+(`metadata.from`, иначе строка `From:` в шапке `content_text`), заново скачивает письмо из Gmail тем
+же клиентом, что и поллер (`refresh_access`, `fetch_full_messages`, без новой авторизации), собирает
+текст тем же `_format_event`/`_extract_text` и сравнивает с сохранённым. Кандидат — только то событие,
+где текст отличается И содержит `[удалено: …]`/`[добавлено: …]`; совпавшее («identical») и без маркеров
+(«no_markers») пропускается, поэтому повторный запуск после `--apply` ничего не меняет. Новые события
+не создаются, LLM не вызывается (`llm_calls: 0` в отчёте).
+
+```bash
+cd /var/www/vera3/infra
+RUN="docker compose run --rm --no-deps -v /var/www/vera3/scripts:/scripts \
+  -v /var/lib/vera3-reports:/reports ingestor-gmail python /scripts/reingest_jira_diff.py"
+
+$RUN --dry-run --limit 200            # по умолчанию; БД не пишет, отчёт в /reports
+$RUN --dry-run --event-id 510796      # конкретное событие (можно несколько --event-id)
+$RUN --dry-run --since 2026-01-01     # по occurred_at
+
+# применение — только после просмотра отчёта dry-run и «да» владельца
+$RUN --apply --limit 200
+$RUN --rollback /reports/reingest-jira-backup-<ts>.jsonl
+```
+
+- Образ `ingestor-gmail` должен содержать код с `reingest*.py` (деплой ветки) — иначе смонтировать
+  `-v <ветка>/services/ingestor-gmail/src:/app/src`.
+- Отчёт `/reports/reingest-jira-dry-run-<ts>.json`: счётчики (`jira_events_selected`, `candidate`,
+  `identical`, `no_markers`, `fetch_failed`), время на письмо, фрагменты «до/после» первых 30 кандидатов,
+  `candidate_ids`, оценка эмбеддингов.
+- `--apply`: перед каждой пачкой (`--batch`, 50) строки пишутся в `reingest-jira-backup-<ts>.jsonl`
+  (id, старые `content_text` и `metadata`, fsync) и только потом UPDATE одной транзакцией;
+  `WHERE content_text = <прочитанный>` не даст затереть событие, изменённое между чтением и записью.
+  В `metadata` ставится `reingested_at`. `--rollback` возвращает старые `content_text` и `metadata`
+  (идемпотентно).
+- Полнотекст (GIN-индексы по `to_tsvector(..., content_text)`, миграция 031) пересобирается при UPDATE
+  сам. Вектор события строится из `llm_excerpt(content_text)`; перестраивать его не обязательно: смысл
+  письма тот же, добавились только маркеры. Если захочется: в отчёте `embeddings` — сколько кандидатов
+  имеют вектор и оценка токенов; переэмбеддинг скрипт не запускает. Триаж-выжимка по старому тексту не
+  пересчитывается.
+- Письмо, удалённое из Gmail, или аккаунт с `needs_reauth` попадают в `fetch_failed` и не меняются.
