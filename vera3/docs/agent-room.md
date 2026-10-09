@@ -278,7 +278,7 @@ bearer_token_env_var = "VERA_ROOM_TOKEN"
 
 Дашборд, только чтение, только владелец (`owner_or_redirect`; фрагмент — `owner_or_blank_401`).
 Слои: `tasks_repo` (SQL: `all_tasks`, `one_task`, `task_events`), `tasks_service` (`TaskItem`,
-`classify`, `split_tabs`, `load_tabs`, `load_detail`), `tasks_view` (`tasks_body`, `task_row`,
+`classify`, `split_tabs`, `load_tabs`, `load_detail`), `tasks_view` (`tasks_body`, `tabs_nav`, `task_row`,
 `task_detail`), `tasks_routes` (`tasks_page`, `task_fragment`). Внимание считает
 `task_attention.attention_map` — тот же `attention`, что у MCP.
 
