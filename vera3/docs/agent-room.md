@@ -278,7 +278,9 @@ bearer_token_env_var = "VERA_ROOM_TOKEN"
 
 Дашборд, только чтение, только владелец (`owner_or_redirect`; фрагмент — `owner_or_blank_401`).
 Слои: `tasks_repo` (SQL: `all_tasks`, `one_task`, `task_events`), `tasks_service` (`TaskItem`,
-`classify`, `split_tabs`, `load_tabs`, `load_detail`), `tasks_view` (`tasks_body`, `tabs_nav`, `task_row`,
+`classify`, `split_tabs`, `load_tabs`, `load_detail`, `group_tasks`, `Group`, `Block`, `project_name`,
+`PERSONAL_PROJECTS`, `NO_PROJECT`, `WORK_BLOCK`, `PERSONAL_BLOCK`), `tasks_groups_view` (`grouped_rows`,
+`GROUP_CSS`), `tasks_view` (`tasks_body`, `tabs_nav`, `task_row`,
 `task_detail`), `tasks_routes` (`tasks_page`, `task_fragment`). Внимание считает
 `task_attention.attention_map` — тот же `attention`, что у MCP.
 
@@ -350,7 +352,15 @@ lease_until=)` → список `Segment` (agent, session, kind, start, end); в
 события. `waiting` обрезается по `data.until_seconds`; провал между этим сроком и следующим
 событием той же дорожки — `unknown` (больше нигде не рисуется). Нет событий — нет полос.
 
-Рендер — `dashboard/tasks_gantt.py`: `GanttRow`, `parse_span`, `task_gantt` (карточка: дорожка на
+Группировка `/tasks` (все вкладки): два блока — «Рабочие проекты» (всё, чего нет в личном списке) и
+«Личное и Vera» (`PERSONAL_PROJECTS`: личное, личные проекты, личные интеграции, устройства, vera,
+sniffer; без учёта регистра). Внутри — `<details open>` на проект со счётчиком; без проекта —
+«Без проекта» последней в рабочем блоке. Группы: больше задач «Нужен я», затем имя; внутри группы
+прежняя сортировка. Строки Ганта идут в том же порядке с заголовком группы.
+
+Рендер — `dashboard/tasks_gantt.py`: `GanttRow` (поле `group`), `parse_span`, `resolve_span`, `fit_start`,
+`FIT`, `FIT_LABEL`, `FIT_MIN`, `FIT_DEFAULT_WITHIN`. Окно `?span=fit` («по данным»): от самого раннего
+отрезка показанных задач (минимум 1 ч) до now. Без `?span=` — fit, если вся активность моложе 6 ч, иначе 24h. `task_gantt` (карточка: дорожка на
 агента+сессию), `tasks_gantt` (верх страницы: строка на задачу текущей вкладки, окно `?span=24h|7d`,
 неизвестное значение → `24h`), `span_nav`, константы `SPANS`, `DEFAULT_SPAN`, `KIND_LABELS`, `CSS`,
 `MAX_TICKS`. План (`plan_start`/`plan_end`) — отдельная тонкая полая полоса, с фактом не смешивается.

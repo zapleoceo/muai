@@ -11,6 +11,7 @@ from vera_shared.timeutil import utc_naive_now
 from dashboard.render import esc
 from dashboard.tasks_gantt import CSS as GANTT_CSS
 from dashboard.tasks_gantt import DEFAULT_SPAN, GanttRow, task_gantt, tasks_gantt
+from dashboard.tasks_groups_view import GROUP_CSS, grouped_rows
 from dashboard.tasks_questions_view import Questions, questions_block
 from dashboard.tasks_service import TABS, TaskItem, plan_of, segments_of
 
@@ -75,10 +76,10 @@ def task_row(item: TaskItem, now: datetime) -> str:
 def tasks_body(tab: str, tabs: dict[str, list[TaskItem]], now: datetime | None = None,
                gantt_rows: list[GanttRow] | None = None, span: str = DEFAULT_SPAN) -> str:
     now = now or utc_naive_now()
-    rows = "".join(task_row(i, now) for i in tabs[tab]) or f'<p class="muted">{EMPTY[tab]}</p>'
+    rows = grouped_rows(tabs[tab], lambda i: task_row(i, now)) or f'<p class="muted">{EMPTY[tab]}</p>'
     counts = {t: len(v) for t, v in tabs.items()}
     gantt = tasks_gantt(gantt_rows, now, span, tab) if gantt_rows is not None else ""
-    return (f'{_CSS}{GANTT_CSS}<h1>Задачи</h1>{tabs_nav(tab, counts, span)}{gantt}'
+    return (f'{_CSS}{GROUP_CSS}{GANTT_CSS}<h1>Задачи</h1>{tabs_nav(tab, counts, span)}{gantt}'
             f'{rows}<div id="task-detail"></div>')
 
 

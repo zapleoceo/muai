@@ -27,6 +27,12 @@ from dashboard.tasks_questions_view import Questions
 TABS = ("work", "me", "done")
 ME_STATES = (NEEDS_OWNER, LEASE_EXPIRED, STALE_PROGRESS)
 _FAR_PAST = datetime(1970, 1, 1)
+# Личный блок /tasks; всё остальное — «Рабочие проекты». Сравнение без учёта регистра.
+PERSONAL_PROJECTS = frozenset({"личное", "личные проекты", "личные интеграции", "устройства",
+                               "vera", "sniffer"})
+NO_PROJECT = "Без проекта"
+WORK_BLOCK = "Рабочие проекты"
+PERSONAL_BLOCK = "Личное и Vera"
 
 
 @dataclass(frozen=True)
@@ -53,6 +59,46 @@ def split_tabs(items: list[TaskItem]) -> dict[str, list[TaskItem]]:
     for lst in tabs.values():
         lst.sort(key=_sort_key)
     return tabs
+
+
+@dataclass(frozen=True)
+class Group:
+    name: str
+    items: list[TaskItem]
+    attention: int
+
+
+@dataclass(frozen=True)
+class Block:
+    title: str
+    groups: list[Group]
+
+    @property
+    def count(self) -> int:
+        return sum(len(g.items) for g in self.groups)
+
+
+def project_name(item: TaskItem) -> str:
+    return (item.row.project or "").strip() or NO_PROJECT
+
+
+def group_tasks(items: list[TaskItem]) -> list[Block]:
+    """Два блока, в них группы по проекту: больше задач «нужен я», затем имя; внутри — порядок входа."""
+    by_key: dict[str, list[TaskItem]] = {}
+    names: dict[str, str] = {}
+    for it in items:
+        name = project_name(it)
+        by_key.setdefault(name.casefold(), []).append(it)
+        names.setdefault(name.casefold(), name)
+    work: list[Group] = []
+    personal: list[Group] = []
+    for key, lst in by_key.items():
+        g = Group(names[key], lst, sum(1 for i in lst if i.attention.state in ME_STATES))
+        (personal if key in PERSONAL_PROJECTS else work).append(g)
+    nokey = NO_PROJECT.casefold()
+    work.sort(key=lambda g: (g.name.casefold() == nokey, -g.attention, g.name.casefold()))
+    personal.sort(key=lambda g: (-g.attention, g.name.casefold()))
+    return [b for b in (Block(WORK_BLOCK, work), Block(PERSONAL_BLOCK, personal)) if b.groups]
 
 
 async def load_tabs(now: datetime | None = None) -> dict[str, list[TaskItem]]:
@@ -97,6 +143,7 @@ async def load_gantt_rows(items: list[TaskItem], now: datetime) -> list[GanttRow
     by_task: dict[tuple[str, str], list[RoomTaskEventRow]] = {}
     for e in events:
         by_task.setdefault((e.room, e.task_id), []).append(e)
+    ordered = [(g.name, i) for b in group_tasks(items) for g in b.groups for i in g.items]
     return [GanttRow(i.row.title or i.row.task_id,
                      segments_of(i.row, by_task.get((i.row.room, i.row.task_id), []), now),
-                     plan_of(i.row)) for i in items]
+                     plan_of(i.row), name) for name, i in ordered]

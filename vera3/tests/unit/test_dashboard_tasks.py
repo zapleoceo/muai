@@ -109,3 +109,44 @@ def test_page_and_unknown_task_fragment():
     assert r7.status_code == 200 and 'href="/tasks?tab=work&amp;span=7d"' in r7.text
     with patch("dashboard.tasks_routes.load_detail", AsyncMock(return_value=None)):
         assert client.get("/tasks/r/nope", cookies=c).status_code == 404
+
+
+def _names(blocks):
+    return [(b.title, [(g.name, len(g.items)) for g in b.groups]) for b in blocks]
+
+
+def test_group_blocks_case_insensitive_and_no_project_last():
+    from dashboard.tasks_service import group_tasks
+    items = [item(task_id="1", project="Orchestra"), item(task_id="2", project="VERA"),
+             item(task_id="3", project=None), item(task_id="4", project="  "),
+             item(task_id="5", project="личное"), item(task_id="6", project="Lamas")]
+    assert _names(group_tasks(items)) == [
+        ("Рабочие проекты", [("Lamas", 1), ("Orchestra", 1), ("Без проекта", 2)]),
+        ("Личное и Vera", [("VERA", 1), ("личное", 1)])]
+
+
+def test_group_order_by_attention_then_name_and_empty_block_dropped():
+    from dashboard.tasks_service import group_tasks
+    q = NOW - timedelta(hours=1)
+    blocks = group_tasks([item(task_id="1", project="A"),
+                          item(task_id="5", project="C", question=q)])
+    assert [g.name for g in blocks[0].groups] == ["C", "A"] and len(blocks) == 1
+    assert blocks[0].count == 2 and blocks[0].groups[0].attention == 1
+
+
+def test_view_groups_counts_and_escapes_project():
+    html = tasks_body("work", split_tabs([item(project="<b>x</b>"), item(task_id="2")]), NOW)
+    assert "<b>x</b>" not in html and "&lt;b&gt;x&lt;/b&gt;" in html
+    assert "Рабочие проекты <span" in html and "Без проекта" in html and "<details" in html
+
+
+def test_span_fit_bounds_and_default():
+    from dashboard.tasks_gantt import GanttRow, fit_start, resolve_span, tasks_gantt
+    from vera_shared.room.intervals import WORK, Segment
+    seg = Segment(start=NOW - timedelta(hours=2), end=NOW, kind=WORK, agent="a", session="")
+    rows = [GanttRow("t", [seg])]
+    assert fit_start(rows, NOW) == NOW - timedelta(hours=2)
+    assert fit_start([GanttRow("t", [])], NOW) == NOW - timedelta(hours=1)
+    assert resolve_span(None, rows, NOW) == "fit" and resolve_span("7d", rows, NOW) == "7d"
+    old = [GanttRow("t", [Segment(start=NOW - timedelta(hours=9), end=NOW, kind=WORK, agent="a", session="")])]
+    assert resolve_span(None, old, NOW) == "24h" and "по данным" in tasks_gantt(rows, NOW, "fit", "work")
