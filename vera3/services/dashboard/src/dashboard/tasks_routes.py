@@ -42,7 +42,7 @@ async def task_fragment(request: Request, room: str, task_id: str):
 
 @router.post("/tasks/{room}/{task_id}/answer", response_class=HTMLResponse)
 async def task_answer(request: Request, room: str, task_id: str,
-                      qid: int = Form(...), text: str = Form(...)):  # noqa: B008
+                      qid: int = Form(..., ge=1, le=2**31 - 1), text: str = Form(...)):  # noqa: B008
     if (denied := owner_post_gate(request)) is not None:
         return denied
     try:

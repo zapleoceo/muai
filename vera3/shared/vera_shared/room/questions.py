@@ -22,6 +22,7 @@ from vera_shared.timeutil import utc_naive_now
 
 OWNER = "owner"
 MAX_ANSWER_CHARS = 8000
+MAX_QUESTION_CHARS = 4000
 
 
 class QuestionNotFound(LookupError):
@@ -56,6 +57,9 @@ async def _answers_of(s: AsyncSession, q: RoomTaskQuestionRow) -> list[RoomTaskA
 
 async def ask(*, room: str, task_id: str, agent: str, fencing_token: int, question: str,
               refs: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+    question = question.strip()
+    if not question or len(question) > MAX_QUESTION_CHARS:
+        raise ValueError(f"question must be 1..{MAX_QUESTION_CHARS} characters")
     clean_refs = validate_refs(refs) if refs is not None else None
     async with get_session() as s:
         row = _require_lease(await _locked(s, room, task_id), room, task_id, agent,
@@ -86,6 +90,9 @@ async def answer(*, room: str, task_id: str, qid: int, text: str, by: str = OWNE
         q = await _question(s, room, task_id, qid)
         if q.status not in ("open", "answered"):
             raise QuestionState(f"question {qid} is {q.status}; answers are closed")
+        task = await s.get(RoomTaskRow, (room, task_id))
+        if task is not None and task.status in ("done", "cancelled"):
+            raise QuestionState(f"task {task_id!r} is {task.status}; answers are closed")
         prior = await _answers_of(s, q)
         if prior and prior[-1].text == text:
             return question_dict(q, prior), False
@@ -109,7 +116,7 @@ async def _close(s: AsyncSession, task: RoomTaskRow, q: RoomTaskQuestionRow, age
     await record_event(s, room=q.room, task_id=q.task_id, kind="ack_answer", agent=agent,
                        session=task.holder_session, account=task.holder_account,
                        fencing_token=token, text=text, data=data)
-    if await _unresolved(s, q.room, q.task_id) == 0:
+    if task.status == "blocked" and await _unresolved(s, q.room, q.task_id) == 0:
         task.status, task.owner, task.updated_at = "in_progress", None, utc_naive_now()
         await record_event(s, room=q.room, task_id=q.task_id, kind="unblocked", agent=agent,
                            session=task.holder_session, account=task.holder_account,

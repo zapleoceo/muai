@@ -309,7 +309,7 @@ bearer_token_env_var = "VERA_ROOM_TOKEN"
   `answered`, сообщение `in_reply_to` вопроса адресовано спросившему. **Статус задачи не меняется**:
   она остаётся `blocked`, пока исполнитель не подтвердит. Дословный повтор последнего ответа —
   не запись (`changed=False`); другой текст до подтверждения дописывается в историю. Текст
-  1..`MAX_ANSWER_CHARS`=8000; на `acked`/`withdrawn` — `QuestionState`.
+  1..`MAX_ANSWER_CHARS`=8000; на `acked`/`withdrawn` или у задачи `done`/`cancelled` — `QuestionState` (в роуте 409). Вопрос в `ask` — 1..`MAX_QUESTION_CHARS`=4000; `qid` в роуте 1..2^31-1 (иначе 422). `ack`/`withdraw` возвращают задачу в `in_progress` только из `blocked`.
 - `ack(room, task_id, qid, agent, fencing_token)` — нужна аренда; только из `answered`; вопрос
   `acked`, событие `ack_answer`. Когда не осталось ни `open`, ни `answered`, задача возвращается в
   `in_progress`, `owner=None`, пишется `unblocked`; иначе остаётся `blocked`.

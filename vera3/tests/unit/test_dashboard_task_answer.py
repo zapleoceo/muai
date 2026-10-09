@@ -87,3 +87,12 @@ def test_questions_block_escapes_and_shows_form_only_when_answerable():
     answered = questions_block([(question("answered"), [answer_row()])])
     assert "<form" in answered and "ждёт исполнителя" in answered
     assert questions_block([]) == ""
+
+
+def test_qid_out_of_range_is_422_not_500():
+    c = cookie()
+    with patch("dashboard.tasks_routes.submit_answer", AsyncMock()) as sub:
+        for bad in ("0", "-1", str(2**31)):
+            r = post(headers=SAME, cookies=c, data={"qid": bad, "text": "x"})
+            assert r.status_code == 422
+        sub.assert_not_called()

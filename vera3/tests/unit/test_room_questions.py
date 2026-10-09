@@ -172,3 +172,31 @@ def test_attention_answered_pure():
 def test_mcp_has_no_answer_tool():
     assert {t.__name__ for t in qt.QUESTION_TOOLS} == {
         "room_task_ask", "room_task_answer_ack", "room_task_questions"}
+
+
+async def test_ask_validates_question_length(sqlite_db):
+    tok = await held()
+    for bad in ("   ", "x" * 4001):
+        with pytest.raises(ValueError):
+            await questions.ask(room="main", task_id="T1", agent="claude",
+                                fencing_token=tok, question=bad)
+    assert await questions.questions_of("main", "T1") == []
+
+
+async def test_ack_leaves_status_alone_unless_task_is_blocked(sqlite_db):
+    tok = await held()
+    qid = await ask(tok)
+    await questions.answer(room="main", task_id="T1", qid=qid, text="ok")
+    await r.room_task_update("T1", tok, CLAUDE, status="in_progress")
+    await qt.room_task_answer_ack("T1", tok, qid, CLAUDE)
+    row = await task_row()
+    assert (row.status, row.owner) == ("in_progress", "owner")
+    assert "unblocked" not in await kinds()
+
+
+async def test_answer_rejected_for_finished_task(sqlite_db):
+    tok = await held()
+    qid = await ask(tok)
+    await r.room_task_release("T1", tok, CLAUDE, status="done")
+    with pytest.raises(questions.QuestionState):
+        await questions.answer(room="main", task_id="T1", qid=qid, text="поздно")
