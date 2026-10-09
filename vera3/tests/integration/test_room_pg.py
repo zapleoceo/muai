@@ -100,3 +100,46 @@ async def test_concurrent_claims_of_a_new_task_have_one_winner(pg_db):
     winners = [r for r in results if isinstance(r, dict)]
     assert len(winners) == 1 and winners[0]["fencing_token"] == 1
     assert all(isinstance(r, TaskBusy) for r in results if not isinstance(r, dict))
+
+
+async def test_tracker_columns_and_tables_exist(pg_db):
+    async with pg_db() as s:
+        cols = {r[0] for r in (await s.execute(text(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_name='room_tasks'"))).all()}
+        tables = {r[0] for r in (await s.execute(text(
+            "SELECT table_name FROM information_schema.tables "
+            "WHERE table_schema='public'"))).all()}
+    assert {"priority", "owner", "next_action", "refs", "holder_session", "holder_account",
+            "last_progress_at", "last_progress_text", "next_checkpoint_at",
+            "pending_handoff_to", "plan_start", "plan_end"} <= cols
+    assert {"room_task_events", "room_task_questions", "room_task_answers",
+            "watchdog_state"} <= tables
+
+
+async def test_events_are_written_in_the_same_transaction(pg_db):
+    from vera_shared.room.task_events import list_events
+    from vera_shared.room.tasks import StaleLease, claim, update
+
+    get_session = pg_db
+    t = await claim(room="main", task_id="EV", agent="claude", lease_seconds=60,
+                    session="s1", account="a1")
+    await update(room="main", task_id="EV", agent="claude",
+                 fencing_token=t["fencing_token"], extend_seconds=120)
+    await update(room="main", task_id="EV", agent="claude",
+                 fencing_token=t["fencing_token"], note="step")
+    with pytest.raises(StaleLease):
+        await update(room="main", task_id="EV", agent="claude", fencing_token=99, note="x")
+    async with get_session() as s:
+        events = await list_events(s, room="main", task_id="EV")
+    assert [e["kind"] for e in events] == ["created", "claimed", "heartbeat", "progress"]
+    assert events[1]["session"] == "s1" and events[1]["fencing_token"] == 1
+
+
+async def test_event_kind_check_constraint_rejects_unknown(pg_db):
+    from sqlalchemy.exc import IntegrityError
+
+    with pytest.raises(IntegrityError):
+        async with pg_db() as s:
+            await s.execute(text(
+                "INSERT INTO room_task_events (room, task_id, kind) VALUES ('m','t','bogus')"))

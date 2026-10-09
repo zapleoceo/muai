@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskRow
+from vera_shared.room.task_events import record_event
 from vera_shared.timeutil import utc_naive_now
 
 RELEASE_STATUSES = ("open", "done", "blocked")
@@ -59,7 +60,8 @@ async def open_task(*, room: str, task_id: str, agent: str, title: str | None,
             row = RoomTaskRow(room=room, task_id=task_id, title=title, created_by=agent,
                               status="open", fencing_token=0, paths=paths or [])
             s.add(row)
-            await s.flush()
+            await record_event(s, room=room, task_id=task_id, kind="created", agent=agent,
+                               text=title)
             await s.refresh(row)
             return task_dict(row), True
     except IntegrityError:
@@ -72,6 +74,7 @@ async def open_task(*, room: str, task_id: str, agent: str, title: str | None,
 
 async def claim(*, room: str, task_id: str, agent: str, lease_seconds: int,
                 title: str | None = None, paths: list[str] | None = None,
+                session: str | None = None, account: str | None = None,
                 ) -> dict[str, Any]:
     try:
         async with get_session() as s:
@@ -82,6 +85,8 @@ async def claim(*, room: str, task_id: str, agent: str, lease_seconds: int,
                 row = RoomTaskRow(room=room, task_id=task_id, title=title, created_by=agent,
                                   status="open", fencing_token=0, paths=paths or [])
                 s.add(row)
+                await record_event(s, room=room, task_id=task_id, kind="created",
+                                   agent=agent, text=title)
             elif row.status == "done":
                 raise TaskBusy(f"task {task_id!r} is done; open a new task_id")
             live = bool(row.lease_holder and row.lease_until and row.lease_until > now)
@@ -91,6 +96,10 @@ async def claim(*, room: str, task_id: str, agent: str, lease_seconds: int,
             if not live:
                 row.fencing_token = (row.fencing_token or 0) + 1
                 row.lease_holder = agent
+                row.holder_session, row.holder_account = session, account
+            else:
+                row.holder_session = session or row.holder_session
+                row.holder_account = account or row.holder_account
             row.lease_until = now + timedelta(seconds=lease_seconds)
             row.status = "in_progress"
             if title is not None:
@@ -98,7 +107,10 @@ async def claim(*, room: str, task_id: str, agent: str, lease_seconds: int,
             if paths is not None:
                 row.paths = paths
             row.updated_at = now
-            await s.flush()
+            await record_event(s, room=room, task_id=task_id,
+                               kind="heartbeat" if live else "claimed", agent=agent,
+                               session=session, account=account,
+                               fencing_token=row.fencing_token)
             await s.refresh(row)
             return task_dict(row)
     except IntegrityError:
@@ -134,7 +146,17 @@ async def update(*, room: str, task_id: str, agent: str, fencing_token: int,
         if extend_seconds is not None:
             row.lease_until = now + timedelta(seconds=extend_seconds)
         row.updated_at = now
-        await s.flush()
+        if status is not None or note is not None:
+            # прогресс — содержательная правка; одно продление аренды (heartbeat) его не двигает
+            row.last_progress_at = now
+            row.last_progress_text = note if note is not None else f"status: {status}"
+            kind = "progress"
+        else:
+            kind = "heartbeat"
+        await record_event(s, room=room, task_id=task_id, kind=kind, agent=agent,
+                           session=row.holder_session, account=row.holder_account,
+                           fencing_token=fencing_token, text=note,
+                           data={"status": status} if status is not None else None)
         await s.refresh(row)
         return task_dict(row)
 
@@ -152,7 +174,10 @@ async def release(*, room: str, task_id: str, agent: str, fencing_token: int,
         if note is not None:
             row.note = note
         row.updated_at = utc_naive_now()
-        await s.flush()
+        await record_event(s, room=room, task_id=task_id,
+                           kind="done" if status == "done" else "released", agent=agent,
+                           session=row.holder_session, account=row.holder_account,
+                           fencing_token=fencing_token, text=note, data={"status": status})
         await s.refresh(row)
         return task_dict(row)
 
