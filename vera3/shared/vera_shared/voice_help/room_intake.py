@@ -30,7 +30,9 @@ ACTION_CHARS = 1500
 
 def source_ref(source: dict[str, Any] | None) -> str:
     src = source or {}
-    return f"{src.get('session_id') or '?'}@{src.get('start')}-{src.get('end')}"
+    # session_id приходит от клиента — в комнату и он только через вычистку.
+    return redact_secrets(
+        f"{src.get('session_id') or '?'}@{src.get('start')}-{src.get('end')}")
 
 
 async def open_help_task(*, command_id: str, event_id: int | None, instruction: str,
