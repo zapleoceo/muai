@@ -156,6 +156,8 @@ Returns `AnswerResponse` with `answer`, `results`, `provider`, `cost_usd`,
 | `/entities/queue/merge`, `/entities/queue/reject` | POST | owner cookie + same-origin | Кнопки очереди дублей: «Это один человек» (`queue_merge` → `apply_merge`, журнал, возврат на ту же позицию с `merged=<audit_id>`) и «Разные люди» (`queue_reject`: `set_suggestion_status` или `suggestions.reject_pair` для точного совпадения) |
 | `/api/journal/undo` | POST | owner cookie + same-origin | Вернуть правки по `audit_ids` (`undo_edits`, тело `UndoRequest`): `journal.undo.undo_entry` на каждую, без `force`. Отказ откатa (`UndoRefused`) — 409 и список уже возвращённых |
 | `/journal` | GET | owner cookie | «Журнал правок» (`journal_page`, разметка `journal_body`, `entry_html`, `describe_entry`): последние 80 записей `mcp_audit` (дашборд и агенты MCP) с кнопкой «Вернуть»; имена людей — `entity_ids` + `entity_cards`, всё экранируется. Строки читает `journal.audit.recent_rows` |
+| `/tasks` | GET | owner cookie | Задачи комнаты (`tasks_page`, `?tab=work\|me\|done`), только чтение; см. agent-room.md «шаг 5a» |
+| `/tasks/{room}/{task_id}` | GET | owner cookie (401 без) | htmx-фрагмент карточки (`task_fragment`, `task_detail`): поля, ссылки, события; 404 если задачи нет |
 | `/ui/vera.css`, `/ui/vera.js` | GET | none | Статика дизайн-системы (`vera_css`, `vera_js`): адрес с `?v=<хэш>`, `Cache-Control: immutable`. Данных в них нет, поэтому без входа — ими оформлена и страница входа |
 | `/api/instagram/start` | GET | owner cookie | Instagram login form (`instagram_start_form`) |
 | `/api/instagram/start` | POST | owner cookie | Submit username/password (`instagram_start`) — may return a 2FA/challenge code form |

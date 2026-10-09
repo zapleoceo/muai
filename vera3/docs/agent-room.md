@@ -273,3 +273,20 @@ bearer_token_env_var = "VERA_ROOM_TOKEN"
    `vera3-mcp`).
 3. Перезапуск `mcp`; в логе старта — `Room agents configured: claude, codex`.
 4. Отозвать агента — убрать его пару из `ROOM_TOKENS` и перезапустить `mcp`.
+
+## Трекер задач — шаг 5a: страница `/tasks`
+
+Дашборд, только чтение, только владелец (`owner_or_redirect`; фрагмент — `owner_or_blank_401`).
+Слои: `tasks_repo` (SQL: `all_tasks`, `one_task`, `task_events`), `tasks_service` (`TaskItem`,
+`classify`, `split_tabs`, `load_tabs`, `load_detail`), `tasks_view` (`tasks_body`, `task_row`,
+`task_detail`), `tasks_routes` (`tasks_page`, `task_fragment`). Внимание считает
+`task_attention.attention_map` — тот же `attention`, что у MCP.
+
+Вкладки `?tab=work|me|done` (по умолчанию `work`), счётчики на всех трёх:
+`done` — `done`/`cancelled`; `me` («Нужен я») — `needs_owner`, `lease_expired`,
+`stale_progress` (включая вышедший срок ожидания); `work` — остальное. Порядок: приоритет,
+затем свежесть `last_progress_at` (или `updated_at`). Строка: название, подпись attention,
+держатель и `holder_account`, последний результат (140 знаков) и «N назад». Клик — htmx
+`GET /tasks/{room}/{task_id}` в `#task-detail`: все поля, ссылки (`refs` как указатели,
+`http(s)` — ссылкой, содержимое не читается) и хронология `room_task_events`; неизвестная
+задача — 404. Диаграммы Ганта и форм пока нет. Тесты: `tests/unit/test_dashboard_tasks.py`.
