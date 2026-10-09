@@ -24,7 +24,7 @@ from vera_shared.ingest import AuthorExtractor, insert_events, sync_author_entit
 from vera_shared.text_chunks import clip_content
 from vera_shared.timeutil import utc_naive_now
 
-from ingestor_gmail.html_text import has_diff_markup
+from ingestor_gmail.html_text import has_diff_markup, is_jira_sender
 from ingestor_gmail.html_text import html_to_text as _html_to_text
 
 log = logging.getLogger("gmail")
@@ -174,11 +174,11 @@ def _find_diff_html(payload: dict, message_id: str) -> str | None:
     return None
 
 
-def _extract_text(payload: dict, message_id: str = "") -> str:
+def _extract_text(payload: dict, message_id: str = "", from_: str = "") -> str:
     """Recursive extract plain text from MIME parts."""
-    diff_html = _find_diff_html(payload, message_id)
+    diff_html = _find_diff_html(payload, message_id) if is_jira_sender(from_) else None
     if diff_html:
-        return _html_to_text(diff_html)
+        return _html_to_text(diff_html, jira=True)
     return _extract_plain_first(payload, message_id)
 
 
@@ -251,7 +251,7 @@ def _format_event(account_email: str, msg: dict) -> dict[str, Any]:
     direction = "sent" if account_email.lower() in from_.lower() else "received"
     author_role = "self" if direction == "sent" else "counterparty"
     author_label = "Я" if author_role == "self" else (from_ or "(unknown)")
-    body = clip_content(_extract_text(msg.get("payload", {}), msg.get("id", "")))
+    body = clip_content(_extract_text(msg.get("payload", {}), msg.get("id", ""), from_))
 
     content = (
         f"Author: {author_label} [{author_role}]\n"

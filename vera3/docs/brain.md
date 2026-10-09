@@ -883,4 +883,16 @@ Gladkyi (событие 510732, входящее) раньше пересказ�
 при деплое, release, Done/Closed. То же правило одной фразой стоит в
 триаж-промпте для `signals.summary`. Метки `[удалено: …]` ставит инжестор gmail
 (см. sources.md, `html_text.py`).
-Тесты: `test_search_identifiers_authorship.py`, `test_gmail_diff_markup.py`.
+**Хэши коммитов** (событие 510826, «failed Deploy vera3 … 4398a6d»). Токен из
+7–40 hex-символов с цифрой и буквой a-f (`commit_hashes`) идёт тем же
+точным путём, что тикет (`exact_identifiers` = тикеты + хэши). FTS на проде
+токенизирует `4398a6d` одним токеном, поэтому префильтр — `to_tsquery(h:*)`
+по тем же GIN-индексам (префикс ловит и 40-символьный хэш), затем regex с
+границами `[^0-9a-f]` и хвостом `[0-9a-f]{0,33}` (`MAX_HASH_SUFFIX`); EXPLAIN
+ANALYZE на проде ~114 мс. `is_hash` отличает хэш от тикета. Если вопрос — по
+сути один идентификатор (`is_identifier_only`) и точного попадания нет
+(`has_exact_rows`), `/search` отвечает `NO_EXACT_ANSWER` («точных упоминаний не
+нашла», не «записи нет») без источников, агентский `search_events` возвращает
+пусто; в остальных вопросах `identifier_miss_note` запрещает категоричное «нет».
+Тесты: `test_search_identifiers_authorship.py`, `test_gmail_diff_markup.py`,
+`test_search_commit_hash.py`.

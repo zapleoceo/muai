@@ -21,7 +21,12 @@ from vera_shared.db.models import EventRow
 from vera_shared.timeutil import utc_naive_now
 
 from brain_search.evidence import PRIMARY_CHARS, SECONDARY_CHARS, evidence_excerpt
-from brain_search.identifiers import identifier_hits, identifier_note, ticket_ids
+from brain_search.identifiers import (
+    exact_identifiers,
+    identifier_hits,
+    identifier_miss_note,
+    identifier_note,
+)
 from brain_search.pipeline import search_ranked
 from brain_search.query_parse import TZ_OFFSET_H
 from brain_search.source_links import source_url
@@ -180,8 +185,9 @@ async def _exec_search_events(args: SearchEventsArgs) -> dict[str, Any]:
     _found, ranked = await search_ranked(
         args.q, limit=args.limit, source=args.source,
         time_range=date_window(args.date_from, args.date_to))
-    hits = identifier_hits(ticket_ids(args.q), {c.id: c.content_text for _s, c in ranked})
-    note = identifier_note(hits).strip()
+    identifiers = exact_identifiers(args.q)
+    hits = identifier_hits(identifiers, {c.id: c.content_text for _s, c in ranked})
+    note = (identifier_note(hits) + identifier_miss_note(identifiers, hits)).strip()
     return {
         "found": len(ranked),
         **({"identifier_note": note} if note else {}),
