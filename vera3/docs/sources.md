@@ -119,10 +119,10 @@ telegram/slack/trello свои `[:8000]` сохранили: у них до по
   newsletters and HTML above `MAX_DIFF_HTML_CHARS` (512 KB) keep the old
   path; `html_to_text`
   renders them as `[удалено: …]` / `[добавлено: …]` (constants
-  `REMOVED_OPEN`, `ADDED_OPEN`). Only new ingestions
-  are affected: the raw HTML is not stored, so existing events cannot be
-  re-marked at read time and need a Gmail re-fetch to be backfilled (the
-  source text is never rewritten in place).
+  `REMOVED_OPEN`, `ADDED_OPEN`). Live ingestion
+  marks new events; the raw HTML is not stored, so existing events are
+  re-marked only by a Gmail re-fetch: `scripts/reingest_jira_diff.py`
+  (dry-run by default, backup + rollback, see `deploy-ops.md`).
 
 ## instagram
 
