@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from brain_search.identifier_rows import IDENTIFIER_RANK
 from brain_search.query_parse import BOT_AUTHOR_WEIGHT, source_weight
 from brain_search.rows import Candidate
 from brain_search.source_links import source_url
@@ -18,6 +19,14 @@ def row_similarity(row: Any, q_vec: list[float] | None) -> float:
         return 0.0
     vec_sim = Candidate.of(row).vec_sim
     return 0.0 if vec_sim is None else float(vec_sim)
+
+
+def _order_key(item: tuple[float, Candidate]) -> tuple[bool, float, float]:
+    """Точные тикет-попадания выше всего и между собой по свежести: иначе при
+    равном rank=100 лимит отрезает самое новое обновление тикета."""
+    score, c = item
+    exact = float(c.rank or 0.0) >= IDENTIFIER_RANK
+    return (exact, c.occurred_at.timestamp() if exact else 0.0, score)
 
 
 def score_candidates(rows, q_vec: list[float] | None,
@@ -38,7 +47,7 @@ def score_candidates(rows, q_vec: list[float] | None,
             score += 1.0
         score *= source_weight(c.source) * (BOT_AUTHOR_WEIGHT if c.is_bot else 1.0)
         out.append((score, c))
-    out.sort(key=lambda x: x[0], reverse=True)
+    out.sort(key=_order_key, reverse=True)
     return out
 
 
