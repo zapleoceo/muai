@@ -135,3 +135,37 @@ async def test_search_endpoint_identifier_only_miss_is_not_padded(monkeypatch):
     assert resp.answer == NO_EXACT_ANSWER and resp.results == []
     assert "не нашла" in NO_EXACT_ANSWER and "не доказывает" in NO_EXACT_ANSWER
     synth.assert_not_awaited()
+
+
+def _wire_endpoint(monkeypatch, rows):
+    monkeypatch.setattr(app, "check_internal_secret", lambda _s: None)
+    monkeypatch.setattr(app, "_try_report", AsyncMock(return_value=None))
+    monkeypatch.setattr(app, "embed_query", AsyncMock(return_value=None))
+    fetch = AsyncMock(return_value=Candidates(rows, "fts"))
+    monkeypatch.setattr(app, "fetch_candidates", fetch)
+    synth = AsyncMock(return_value="sentinel")
+    monkeypatch.setattr(app, "synthesize", synth)
+    monkeypatch.setattr(app, "_link_scope", AsyncMock(return_value=None))
+    return fetch, synth
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("question", ["SIN-123", "по SIN-123"])
+async def test_ticket_only_without_verbatim_hit_short_circuits(monkeypatch, question: str):
+    noise = [_cand(i, "sin", rank=0.4) for i in range(1, 6)]
+    _fetch, synth = _wire_endpoint(monkeypatch, noise)
+    resp = await app.search(SearchQuery(q=question, limit=5, use_agent=False), "s")
+    assert resp.answer == NO_EXACT_ANSWER and resp.results == []
+    synth.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_normal_question_with_hex_looking_token_is_not_short_circuited(monkeypatch):
+    noise = [_cand(i, "бюджет", rank=0.4) for i in range(1, 4)]
+    fetch, synth = _wire_endpoint(monkeypatch, noise)
+    question = "что было на decade2026 встрече про бюджет"
+    assert commit_hashes(question) == ["decade2026"]
+    resp = await app.search(SearchQuery(q=question, limit=5, use_agent=False), "s")
+    assert resp == "sentinel"
+    synth.assert_awaited_once()
+    assert fetch.await_args.kwargs["tickets"] == ["decade2026"]

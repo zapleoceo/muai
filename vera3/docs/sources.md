@@ -114,7 +114,8 @@ telegram/slack/trello свои `[:8000]` сохранили: у них до по
   plus the header's class-less inline styles (line-through on #ffebe6 =
   removed, background #e3fcef = added). `diff-changed` wraps a changed span:
   transparent when it holds nested removed/added, otherwise treated as added
-  (current) text. Non-Jira senders, bare `<s>/<del>`/line-through in
+  (current) text. Self-hosted Jira (e.g. jira@company.com) is not
+  recognised: only jira@*.atlassian.net / atlassian.com. Non-Jira senders, bare `<s>/<del>`/line-through in
   newsletters and HTML above `MAX_DIFF_HTML_CHARS` (512 KB) keep the old
   path; `html_to_text`
   renders them as `[удалено: …]` / `[добавлено: …]` (constants

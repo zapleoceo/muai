@@ -893,6 +893,7 @@ ANALYZE на проде ~114 мс. `is_hash` отличает хэш от тик
 сути один идентификатор (`is_identifier_only`) и точного попадания нет
 (`has_exact_rows`), `/search` отвечает `NO_EXACT_ANSWER` («точных упоминаний не
 нашла», не «записи нет») без источников, агентский `search_events` возвращает
-пусто; в остальных вопросах `identifier_miss_note` запрещает категоричное «нет».
+пусто. То же для тикетов: голый «SIN-123» или «по SIN-123» без дословного
+попадания не добавляет смысловых строк-«для заполнения». В остальных вопросах `identifier_miss_note` запрещает категоричное «нет».
 Тесты: `test_search_identifiers_authorship.py`, `test_gmail_diff_markup.py`,
 `test_search_commit_hash.py`.
