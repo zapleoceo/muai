@@ -35,6 +35,7 @@ class TestWhoseVoice:
         watch, sent = _watch()
         _hear(watch, 20)
         watch.on_segment("mic", 5.0, 9.0, PHRASE)
+        watch.chunk_done("mic", 11.0)
         assert len(sent) == 1
         assert sent[0]["instruction"] == "срочно напиши мне что-то в телеграм"
         assert sent[0]["spoken_at"] == "2026-09-30T10:00:05+00:00"
@@ -60,6 +61,7 @@ class TestWhoseVoice:
         watch, sent = _watch()
         _hear(watch, 60, system_speech=[(4.5, 9.5)])
         watch.on_segment("mic", 5.0, 9.0, PHRASE)
+        watch.chunk_done("mic", 11.0)
         assert sent == [] and watch.wants_system_text()
         watch.system.transcribed(4.5, 9.5, [(4.6, "да, я тебя слышу, давай дальше")])
         watch.tick()
@@ -78,6 +80,7 @@ class TestWhoseVoice:
         watch, sent = _watch()
         _hear(watch, 9.5)
         watch.on_segment("mic", 5.0, 9.0, PHRASE)
+        watch.chunk_done("mic", 11.0)
         assert sent == []
         _hear(watch, 20)
         watch.tick()
@@ -136,6 +139,7 @@ class TestInstructionInNextLine:
         assert sent == []
         watch.on_segment("system", 8.0, 9.0, "ага")
         watch.on_segment("mic", 9.0, 12.0, "Срочно напиши мне что-то в телеграм")
+        watch.chunk_done("mic", 14.0)
         assert [c["instruction"] for c in sent] == ["Срочно напиши мне что-то в телеграм"]
 
     def test_too_late_next_line_is_not_an_instruction(self):
@@ -146,7 +150,9 @@ class TestInstructionInNextLine:
         watch.on_segment("mic", 7 + FOLLOWUP_S + 1, 7 + FOLLOWUP_S + 3,
                          "пойду налью кофе")
         watch.close()
-        assert sent == []
+        # Не поручение, а «переспроси»: фраза была, а что сделать — нет.
+        assert [c["kind"] for c in sent] == ["reprompt"]
+        assert sent[0]["instruction"] == ""
 
 
 class TestOneCommandOneMessage:
@@ -212,7 +218,7 @@ class TestCaptureJitter:
         watch, sent = _watch()
         _frames(watch, 30, system_from=0.5)
         watch.on_segment("mic", 1.0, 4.0, PHRASE)
-        watch.tick()
+        watch.chunk_done("mic", 6.0)
         assert len(sent) == 1
 
     def test_system_that_appears_after_the_phrase_is_not_owner(self):

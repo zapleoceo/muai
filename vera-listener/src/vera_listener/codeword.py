@@ -30,15 +30,28 @@ HEAD_FORMS: dict[str, frozenset[str]] = {
 #: 0.87, «мне нужна помощь» без одного слова («мне помощь») — 0.67.
 TAIL_RATIO = 0.8
 
+#: Вес обращения в сходстве фразы: дословное «вера» — 1, словоформа из списка
+#: («веро», «вэра») — 0.95, усечённое «вер» — 0.9. Усечённое чаще всего
+#: оказывается обрывком другого слова, поэтому стоит ниже остальных.
+HEAD_VARIANT = 0.95
+HEAD_CLIPPED = 0.9
+
 _WORD = re.compile(r"\w+", re.UNICODE)
 _NEGATIONS = frozenset({"не", "ни", "нет", "ні"})
 
 
 @dataclass(frozen=True)
 class Hit:
-    """Фраза найдена. `instruction` — всё, что сказано после неё (может быть пусто)."""
+    """Фраза найдена. `instruction` — всё, что сказано после неё (может быть пусто).
+
+    `start` — позиция обращения в реплике (символ), `score` — сходство фразы
+    0.8..1, `quoted` — перед фразой слова пересказа («сказал:», «пишет»).
+    """
 
     instruction: str
+    start: int = 0
+    score: float = 1.0
+    quoted: bool = False
 
 
 def _norm(word: str) -> str:
@@ -54,14 +67,17 @@ def words(text: str) -> list[str]:
     return [_norm(w) for w in _WORD.findall(text)]
 
 
-def _match_at(words: list[str], start: int, phrase: list[str]) -> int | None:
-    """Совпадает ли фраза с места `start`. → индекс слова ПОСЛЕ фразы.
+def _match_at(words: list[str], start: int, phrase: list[str],
+              ) -> tuple[int, float] | None:
+    """Совпадает ли фраза с места `start`. → (индекс слова ПОСЛЕ фразы, сходство).
 
     Длина окна плавает на слово в обе стороны: whisper то склеивает «нужна
     помощь», то разбивает «помощь» пополам.
     """
     if words[start] not in HEAD_FORMS.get(phrase[0], frozenset({phrase[0]})):
         return None
+    head = (1.0 if words[start] == phrase[0]
+            else HEAD_CLIPPED if words[start] in _CLIPPED_HEADS else HEAD_VARIANT)
     tail = " ".join(phrase[1:])
     best: tuple[float, int] | None = None
     for size in (len(phrase) - 2, len(phrase) - 1, len(phrase)):
@@ -78,7 +94,7 @@ def _match_at(words: list[str], start: int, phrase: list[str]) -> int | None:
             best = (score, end)
     if best is None or best[0] < TAIL_RATIO:
         return None
-    return best[1]
+    return best[1], head * best[0]
 
 
 #: Усечённые формы обращения — whisper срезает окончание у «Вера» в начале
@@ -111,14 +127,35 @@ def find(text: str, phrase: str = DEFAULT_PHRASE) -> Hit | None:
     for start in range(len(tokens)):
         if tokens[start] in _CLIPPED_HEADS and not _stands_alone(text, spans, start):
             continue
-        after = _match_at(tokens, start, target)
-        if after is None:
+        matched = _match_at(tokens, start, target)
+        if matched is None:
             continue
+        after, score = matched
         while after < len(tokens):
             again = _match_at(tokens, after, target)
             if again is None:
                 break
-            after = again
+            after = again[0]
         rest = text[spans[after - 1].end():]
-        return Hit(instruction=rest.strip(" \t\n,.;:!?—-–"))
+        at = spans[start].start()
+        return Hit(instruction=rest.strip(" \t\n,.;:!?—-–"), start=at, score=score,
+                   quoted=quote_intro(text[:at]))
     return None
+
+
+#: Пересказ чужих слов: «он сказал: Вера, мне нужна помощь…» — это цитата, а
+#: не просьба владельца. Основы глаголов речи; смотрим не дальше трёх слов
+#: перед обращением, чтобы «сказал» из прошлой мысли не глушил команду.
+_REPORTING = re.compile(
+    r"^(сказа|говор|пиш|написа|спроси|спрашива|ответи|отвеча|крича|цитир|"
+    r"прочита|читае|произн|повтори|мол$|said|says|wrote|writes|asked)")
+_QUOTE_MARKS = ("«", '"', "„", "“")
+QUOTE_LOOKBACK = 3
+
+
+def quote_intro(prefix: str) -> bool:
+    """Заканчивается ли `prefix` вводом цитаты: глагол речи или открытая кавычка."""
+    tail = prefix.rstrip()
+    if tail.endswith(_QUOTE_MARKS):
+        return True
+    return any(_REPORTING.match(w) for w in words(tail)[-QUOTE_LOOKBACK:])
