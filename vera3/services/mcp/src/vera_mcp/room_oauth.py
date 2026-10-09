@@ -37,7 +37,7 @@ from sqlalchemy import delete
 from vera_shared.crypto import decrypt, encrypt
 from vera_shared.db.engine import get_session
 
-from vera_mcp.auth import load_room_tokens, match_token
+from vera_mcp.auth import load_room_tokens, load_tokens, match_token
 from vera_mcp.oauth_models import RoomOAuthClient, RoomOAuthGrant
 
 PUBLIC_ORIGIN = "https://dima.veranda.my"
@@ -74,6 +74,11 @@ def validate_config() -> None:
         raise ValueError("room OAuth requires at least one approved actor")
     if not allowed_redirect_hosts():
         raise ValueError("room OAuth requires an approved redirect host")
+    # Автор в комнате — имя токена. OAuth-actor с именем статического агента писал
+    # бы как он, и история, курсоры и аренды перестали бы их различать.
+    static = set(load_room_tokens().values()) | set(load_tokens().values())
+    if clash := sorted(allowed_actors() & static):
+        raise ValueError(f"ROOM_OAUTH_ACTORS {', '.join(clash)} already used by a static token")
 
 
 def settings() -> AuthSettings:

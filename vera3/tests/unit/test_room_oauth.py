@@ -330,3 +330,36 @@ async def test_dcr_accepts_normal_chatgpt_client(monkeypatch, sqlite_db):
         redirect_uris=[AnyUrl("https://chatgpt.com/connector_platform_oauth_redirect")])
     await RoomOAuthProvider().register_client(info)
     assert (await RoomOAuthProvider().get_client("normal")).client_name == "ChatGPT"
+
+
+_ROOM_KEY = "unit-test-room-key-not-production-0123456789"
+_STRONG = "s" * 40
+
+
+@pytest.mark.parametrize(("actors", "env_name", "env_value"), [
+    ("dot,claude", "ROOM_TOKENS", f"claude:{_STRONG}"),
+    ("codex", "MCP_TOKENS", f"codex:{_STRONG}x"),
+])
+def test_oauth_actor_must_not_reuse_a_static_token_name(monkeypatch, actors, env_name,
+                                                        env_value):
+    # OAuth-клиент с именем статического агента писал бы в комнату как он:
+    # история, курсоры и аренды перестали бы различать их (ревью, F5 CLI)
+    from vera_mcp.room_oauth import validate_config
+
+    monkeypatch.setenv("ROOM_OAUTH_ENABLED", "1")
+    monkeypatch.setenv("ROOM_OAUTH_KEY", _ROOM_KEY)
+    monkeypatch.setenv("ROOM_OAUTH_ACTORS", actors)
+    monkeypatch.setenv(env_name, env_value)
+    with pytest.raises(ValueError, match="already used by a static token"):
+        validate_config()
+
+
+def test_oauth_actor_distinct_from_static_names_starts(monkeypatch):
+    from vera_mcp.room_oauth import validate_config
+
+    monkeypatch.setenv("ROOM_OAUTH_ENABLED", "1")
+    monkeypatch.setenv("ROOM_OAUTH_KEY", _ROOM_KEY)
+    monkeypatch.setenv("ROOM_OAUTH_ACTORS", "dot")
+    monkeypatch.setenv("ROOM_TOKENS", f"claude:{_STRONG},codex:{_STRONG}y")
+    monkeypatch.setenv("MCP_TOKENS", f"claude:{_STRONG}z")
+    validate_config()
