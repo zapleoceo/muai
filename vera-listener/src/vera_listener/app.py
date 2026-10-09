@@ -334,6 +334,8 @@ class Listener:
         if watch is not None and track == SYSTEM:
             watch.system.transcribed(offset, offset + len(pcm) / BYTES_PER_S, heard)
             watch.tick()
+        elif watch is not None:
+            watch.chunk_done(track, offset + len(pcm) / BYTES_PER_S)
 
     def _name_speakers(self, utterances: list[dict[str, Any]], closed: Closed,
                        speakers: SpeakerSession | None) -> int:

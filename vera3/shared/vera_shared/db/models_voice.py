@@ -2,11 +2,13 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Any
 
-from sqlalchemy import BigInteger, DateTime, Index, Integer, String, Text, func
+from sqlalchemy import BigInteger, DateTime, Float, Index, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from vera_shared.db.engine import Base
+from vera_shared.db.models import JsonType
 
 
 class VoiceCommandRow(Base):
@@ -31,6 +33,18 @@ class VoiceCommandRow(Base):
     next_attempt_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Владельцу сообщили, что поручение не выполнено. NULL при error — сообщить.
     notified_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Миграция 052: срочная просьба — задача в комнате и её путь до «Взял».
+    kind: Mapped[str] = mapped_column(String(16), nullable=False, default="command")
+    confidence: Mapped[float | None] = mapped_column(Float, nullable=True)
+    source: Mapped[dict[str, Any] | None] = mapped_column(JsonType, nullable=True)
+    help_state: Mapped[str | None] = mapped_column(String(16), nullable=True)
+    task_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    task_opened_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    confirm_asked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    taken_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    taken_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    escalated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    reminded_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(),
     )

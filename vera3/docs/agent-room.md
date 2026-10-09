@@ -138,7 +138,7 @@ MCP-инструменты поверх журнала шага 1 (код — `v
   не меняют (значения статуса не расширяются), видны только в журнале. `blocked` здесь —
   простая блокировка без вопроса (вопросы — шаг 3).
 - `room_task_update` принимает ещё `next_action`, `priority` (0..3) и `refs` — список
-  `{kind, ref, excerpt}`: `kind` из `REF_KINDS` (jira, url, event, chunk), `ref` 1..500,
+  `{kind, ref, excerpt}`: `kind` из `REF_KINDS` (jira, url, event, chunk; voice_event, voice_command, source — срочная просьба голосом, см. voice-commands.md), `ref` 1..500,
   `excerpt` ≤ 300 символов, не более `MAX_REFS`=20; `validate_refs` отвергает всё
   остальное. Refs — только указатели: по ним ничего не читается из памяти и журналов.
   Правка этих полей без `note`/`status` остаётся `heartbeat`.

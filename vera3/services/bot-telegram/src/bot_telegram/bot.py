@@ -10,11 +10,21 @@ from aiogram.client.default import DefaultBotProperties
 from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
 from bot_telegram import voice_worker
 from bot_telegram.brain import BrainError, ask_brain, save_event
 from bot_telegram.formatting import format_error, format_reply, plain_fallback
+from bot_telegram.help_confirm import (
+    CALLBACK_PREFIX,
+    handle_confirmation,
+    parse_callback,
+)
 
 log = logging.getLogger(__name__)
 
@@ -140,12 +150,48 @@ async def send_to_owner(html: str, plain: str) -> int:
     return sent.message_id
 
 
+async def ask_owner(html: str, plain: str, command_id: str) -> int:
+    """«Это ты сказал?» с кнопками Да / Нет — только владельцу."""
+    if OWNER_ID == 0:
+        raise RuntimeError("OWNER_TELEGRAM_ID not set — refusing to send")
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text="Да", callback_data=f"{CALLBACK_PREFIX}y:{command_id}"),
+        InlineKeyboardButton(text="Нет", callback_data=f"{CALLBACK_PREFIX}n:{command_id}"),
+    ]])
+    try:
+        sent = await bot.send_message(OWNER_ID, html, reply_markup=keyboard)
+    except TelegramBadRequest as e:
+        log.warning("HTML message rejected by Telegram (%s) — plain fallback", e)
+        sent = await bot.send_message(OWNER_ID, plain, parse_mode=None,
+                                      reply_markup=keyboard)
+    return sent.message_id
+
+
+@dp.callback_query(F.data.startswith(CALLBACK_PREFIX))
+async def on_help_confirmation(callback: CallbackQuery):
+    # Нажать «Да» может только владелец: иначе чужой в чате завёл бы задачу.
+    if OWNER_ID == 0 or callback.from_user is None or callback.from_user.id != OWNER_ID:
+        await callback.answer()
+        return
+    parsed = parse_callback(callback.data or "")
+    if parsed is None:
+        await callback.answer()
+        return
+    reply = await handle_confirmation(*parsed)
+    await callback.answer(reply)
+    if isinstance(callback.message, Message):
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except TelegramBadRequest:
+            log.info("help-confirm: кнопки уже сняты")
+
+
 async def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     log.info("Vera 3.0 bot starting, owner=%s", OWNER_ID)
     from vera_shared.db.engine import init_engine
     await init_engine()
-    worker = asyncio.create_task(voice_worker.run_forever(send_to_owner, OWNER_ID),
+    worker = asyncio.create_task(voice_worker.run_forever(send_to_owner, OWNER_ID, ask_owner),
                                  name="voice-worker")
     try:
         await dp.start_polling(bot)

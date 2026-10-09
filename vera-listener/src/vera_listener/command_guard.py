@@ -158,6 +158,17 @@ class SystemTrack:
                 return ECHO
         return OWN
 
+    def speakers_silent(self, at: float, end: float) -> bool:
+        """Молчали ли динамики в окне VAD вокруг реплики — быстрый путь OWN.
+
+        Для уверенности (`command_intake.confidence`): OWN по молчанию
+        динамиков надёжнее, чем OWN по сверке текста с системным звуком.
+        """
+        with self._lock:
+            first = self._frames.first or 0.0
+            return not self._speech.overlapping(max(at - VAD_SLACK_S, first),
+                                                end + VAD_SLACK_S)
+
     def _all_transcribed(self, lo: float, hi: float) -> bool:
         spans = Spans()
         for start, end in sorted(self._transcribed):
