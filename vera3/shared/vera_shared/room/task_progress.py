@@ -26,6 +26,7 @@ async def progress(*, room: str, task_id: str, agent: str, fencing_token: int, r
                              fencing_token)
         now = utc_naive_now()
         row.last_progress_at, row.last_progress_text, row.updated_at = now, result, now
+        row.waiting_until, row.waiting_reason = None, None  # результат закрывает ожидание
         if next_checkpoint_seconds is not None:
             row.next_checkpoint_at = now + timedelta(seconds=next_checkpoint_seconds)
         await record_event(s, room=room, task_id=task_id, kind="progress", agent=agent,

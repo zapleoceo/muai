@@ -99,4 +99,4 @@ async def test_unknown_kind_rejected_and_all_kinds_accepted(sqlite_db):
             await record_event(s, room="main", task_id="T", kind="bogus")
         for k in EVENT_KINDS:
             await record_event(s, room="main", task_id="T", kind=k)
-    assert len(EVENT_KINDS) == 18
+    assert len(EVENT_KINDS) == 19

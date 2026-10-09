@@ -7,15 +7,19 @@
 """
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskRow
 from vera_shared.room.task_events import record_event
+from vera_shared.room.task_fields import (
+    validate_depends_on,
+    validate_open_fields,
+    validate_project,
+)
 from vera_shared.room.task_refs import validate_refs
 from vera_shared.room.task_view import task_dict
 from vera_shared.timeutil import utc_naive_now
@@ -42,15 +46,22 @@ async def _locked(s: Any, room: str, task_id: str) -> RoomTaskRow | None:
 
 
 async def open_task(*, room: str, task_id: str, agent: str, title: str | None,
-                    paths: list[str] | None) -> tuple[dict[str, Any], bool]:
-    """(задача, created). Уже существующая задача возвращается как есть."""
+                    paths: list[str] | None, project: str | None = None,
+                    priority: int | None = None, auto_pickup: bool | None = None,
+                    depends_on: list[str] | None = None, next_action: str | None = None,
+                    refs: list[dict[str, Any]] | None = None,
+                    ) -> tuple[dict[str, Any], bool]:
+    """(задача, created). Существующая возвращается как есть, поля очереди не меняются."""
+    extra = validate_open_fields(task_id, project=project, priority=priority,
+                                 auto_pickup=auto_pickup, depends_on=depends_on,
+                                 next_action=next_action, refs=refs)
     try:
         async with get_session() as s:
             row = await _locked(s, room, task_id)
             if row is not None:
                 return task_dict(row), False
             row = RoomTaskRow(room=room, task_id=task_id, title=title, created_by=agent,
-                              status="open", fencing_token=0, paths=paths or [])
+                              status="open", fencing_token=0, paths=paths or [], **extra)
             s.add(row)
             await record_event(s, room=room, task_id=task_id, kind="created", agent=agent,
                                text=title)
@@ -62,6 +73,27 @@ async def open_task(*, room: str, task_id: str, agent: str, title: str | None,
             if row is None:
                 raise
             return task_dict(row), False
+
+
+def apply_claim(row: RoomTaskRow, *, agent: str, now: datetime, lease_seconds: int,
+                session: str | None, account: str | None) -> bool:
+    """Захват или продление под блокировкой строки. True — продлена своя живая аренда."""
+    live = bool(row.lease_holder and row.lease_until and row.lease_until > now)
+    if live and row.lease_holder != agent:
+        raise TaskBusy(f"task {row.task_id!r} is held by {row.lease_holder} "
+                       f"until {row.lease_until.isoformat()}Z")
+    if not live:
+        row.fencing_token = (row.fencing_token or 0) + 1
+        row.lease_holder = agent
+        row.holder_session, row.holder_account = session, account
+        row.waiting_until, row.waiting_reason = None, None
+    else:
+        row.holder_session = session or row.holder_session
+        row.holder_account = account or row.holder_account
+    row.lease_until = now + timedelta(seconds=lease_seconds)
+    row.status = "in_progress"
+    row.updated_at = now
+    return live
 
 
 async def claim(*, room: str, task_id: str, agent: str, lease_seconds: int,
@@ -81,24 +113,12 @@ async def claim(*, room: str, task_id: str, agent: str, lease_seconds: int,
                                    agent=agent, text=title)
             elif row.status == "done":
                 raise TaskBusy(f"task {task_id!r} is done; open a new task_id")
-            live = bool(row.lease_holder and row.lease_until and row.lease_until > now)
-            if live and row.lease_holder != agent:
-                raise TaskBusy(f"task {task_id!r} is held by {row.lease_holder} "
-                               f"until {row.lease_until.isoformat()}Z")
-            if not live:
-                row.fencing_token = (row.fencing_token or 0) + 1
-                row.lease_holder = agent
-                row.holder_session, row.holder_account = session, account
-            else:
-                row.holder_session = session or row.holder_session
-                row.holder_account = account or row.holder_account
-            row.lease_until = now + timedelta(seconds=lease_seconds)
-            row.status = "in_progress"
+            live = apply_claim(row, agent=agent, now=now, lease_seconds=lease_seconds,
+                               session=session, account=account)
             if title is not None:
                 row.title = title
             if paths is not None:
                 row.paths = paths
-            row.updated_at = now
             await record_event(s, room=room, task_id=task_id,
                                kind="heartbeat" if live else "claimed", agent=agent,
                                session=session, account=account,
@@ -126,10 +146,14 @@ async def update(*, room: str, task_id: str, agent: str, fencing_token: int,
                  status: str | None = None, note: str | None = None,
                  extend_seconds: int | None = None, next_action: str | None = None,
                  priority: int | None = None, refs: list[dict[str, Any]] | None = None,
-                 ) -> dict[str, Any]:
+                 project: str | None = None, depends_on: list[str] | None = None,
+                 auto_pickup: bool | None = None) -> dict[str, Any]:
     if priority is not None and not 0 <= priority <= 3:
         raise ValueError("priority must be 0..3 (0 most urgent, default 2)")
     clean_refs = validate_refs(refs) if refs is not None else None
+    clean_deps = (validate_depends_on(task_id, depends_on)
+                  if depends_on is not None else None)
+    clean_project = validate_project(project) if project is not None else None
     if status is not None and status not in HELD_STATUSES:
         raise ValueError(f"status while holding must be one of {', '.join(HELD_STATUSES)}")
     async with get_session() as s:
@@ -148,11 +172,18 @@ async def update(*, room: str, task_id: str, agent: str, fencing_token: int,
             row.priority = priority
         if clean_refs is not None:
             row.refs = clean_refs
+        if clean_project is not None:
+            row.project = clean_project
+        if clean_deps is not None:
+            row.depends_on = clean_deps
+        if auto_pickup is not None:
+            row.auto_pickup = auto_pickup
         row.updated_at = now
         if status is not None or note is not None:
             # прогресс — содержательная правка; одно продление аренды (heartbeat) его не двигает
             row.last_progress_at = now
             row.last_progress_text = note if note is not None else f"status: {status}"
+            row.waiting_until, row.waiting_reason = None, None
             kind = "progress"
         else:
             kind = "heartbeat"
@@ -174,6 +205,7 @@ async def release(*, room: str, task_id: str, agent: str, fencing_token: int,
         row.status = status
         row.lease_holder = None
         row.lease_until = None
+        row.waiting_until, row.waiting_reason = None, None
         if note is not None:
             row.note = note
         row.updated_at = utc_naive_now()
@@ -183,13 +215,3 @@ async def release(*, room: str, task_id: str, agent: str, fencing_token: int,
                            fencing_token=fencing_token, text=note, data={"status": status})
         await s.refresh(row)
         return task_dict(row)
-
-
-async def list_tasks(*, room: str, status: str | None, limit: int) -> list[dict[str, Any]]:
-    q = select(RoomTaskRow).where(RoomTaskRow.room == room)
-    if status is not None:
-        q = q.where(RoomTaskRow.status == status)
-    async with get_session() as s:
-        rows = (await s.execute(q.order_by(RoomTaskRow.updated_at.desc()).limit(limit))
-                ).scalars().all()
-    return [task_dict(r) for r in rows]

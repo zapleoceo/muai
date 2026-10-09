@@ -154,12 +154,86 @@ MCP-инструменты поверх журнала шага 1 (код — `v
 
 Тесты: `tests/unit/test_room_tracker_progress.py`, `tests/integration/test_room_pg.py`.
 
+## Трекер задач — шаг 2b: внимание и очередь
+
+Миграция `050_room_task_attention.sql` (катится вручную, `scripts/apply_migration.sh`;
+деплой миграции не катит). Колонки `room_tasks`: `project`, `depends_on` (JSONB, список
+`task_id`), `auto_pickup` (по умолчанию `false`), `waiting_until`, `waiting_reason`. CHECK:
+`ck_room_tasks_priority` (0..3), `ck_room_tasks_next_action_len` (≤ 2000 символов) и
+пересозданный `ck_room_task_events_kind` с видом события `waiting`. Все три добавлены
+`NOT VALID` и затем `VALIDATE`; миграция выставляет `lock_timeout = 5s`.
+
+**attention** (`vera_shared/room/attention.py`, функция `attention(task, now)` → `Attention`
+с полями `state`, `label_ru`, `since`, `last_result_at`, `last_result_text`) — единственный
+источник правды для списка, inbox и будущего сторожа. Время передаётся аргументом, функция
+чистая. Считается только из `status`, `lease_holder`, `lease_until`, `last_progress_at`,
+`next_checkpoint_at`, `waiting_until`; heartbeat-события и `updated_at` в расчёте не
+участвуют (`updated_at` — лишь «с какого момента» для задачи без держателя).
+Дополнительные входы: `open_question_at` (открытый вопрос владельцу из
+`room_task_questions`), `paused` (последнее из `paused`/`resumed` в журнале), `claimed_at`
+(последний `claimed` — база отсчёта, когда прогресса ещё не было).
+
+Порядок проверок и состояния:
+
+| state | Условие | Подпись |
+|---|---|---|
+| `done` / `cancelled` | статус задачи | «готово» / «отменена» |
+| `needs_owner` | есть открытый вопрос | «ждёт ответа владельца 2 ч» |
+| `paused` | последнее событие — `paused` | «на паузе» |
+| `blocked` | статус `blocked` | «заблокирована» |
+| `unassigned` | нет держателя | «никто не взял 5 ч» |
+| `waiting` | `waiting_until` в будущем (законное ожидание, раньше аренды) | «ждёт до 2026-10-09 14:00 UTC (ещё 2 ч)» |
+| `lease_expired` | держатель записан, `lease_until` прошёл | «аренда истекла 3 ч назад» |
+| `stale_progress` | аренда жива, но срок ожидания вышел либо нет результата дольше срока | «нет обновления 6 ч», «срок ожидания вышел 1 ч назад» |
+| `in_progress` | остальное | «в работе» |
+
+Срок для `stale_progress`: `next_checkpoint_at`, если он назначен после последнего
+прогресса; иначе `last_progress_at` (или время захвата) + окно по умолчанию
+`DEFAULT_STALE_WINDOW` = 2 ч. Если базы нет вовсе — `in_progress`. Подписи только
+измеримые (`humanize`: «3 ч», «2 ч 15 мин», «1 дн 4 ч»), без оценок вроде «забыто».
+`NEEDS_ATTENTION` — состояния, которые сторож шага 6 поднимает наверх.
+
+**MCP.**
+- `room_tasks` и ответ `room_inbox` (ключ `my_tasks` — мои незавершённые задачи) несут
+  `attention {state, label, since, last_result_at}` (`attention_dict`). `room_tasks` получил
+  фильтр `queue`: `open` — все незавершённые, `unclaimed` — незавершённые без живой аренды
+  (свободные и с истёкшей арендой). Код — `vera_shared/room/task_queue.py`
+  (`list_tasks`, `held_by`) и `task_attention.py` (`attention_map`, `tasks_with_attention`:
+  вопросы, паузы и захваты подтягиваются тремя запросами на весь список).
+- `room_task_wait(task_id, fencing_token, until_seconds, reason)` — ставит
+  `waiting_until`/`waiting_reason` (60 с … 7 дней), пишет событие `waiting`. Ожидание снимают
+  `room_task_progress`, `room_task_update` с `note`/`status`, `release` и новый захват.
+- `room_task_update` принимает `project` (`[A-Za-z0-9_.-]{1,64}`), `depends_on` (до 20
+  `task_id`, без самой задачи и повторов) и `auto_pickup`; проверка — `validate_project`,
+  `validate_depends_on`. `room_task_open` принимает те же `project`, `depends_on`,
+  `auto_pickup` и ещё `priority`, `next_action`, `refs` (проверка `validate_open_fields`
+  как в `room_task_update`), так что задача попадает в очередь уже при создании; у
+  существующей задачи эти поля не меняются.
+- `room_task_next(project=None, session, account)` (`task_queue.next_task`) — атомарно берёт
+  одну задачу: `open`, без живой аренды, `auto_pickup`, все `depends_on` в `done` (несуществующая
+  зависимость не выполнена), нет открытого вопроса, не на паузе; порядок — `priority`, затем
+  `created_at`. Кандидаты (до 50) читаются без блокировки, затем каждый берётся
+  `SELECT … FOR UPDATE SKIP LOCKED`, условия перепроверяются под блокировкой и захват идёт
+  тем же путём, что `claim` (`apply_claim`, новый `fencing_token`, событие `claimed` с
+  `data.via = next`). Подходящей нет — `task: null`.
+
+Не входит в шаг 2b: уведомления и дедупликация (сторож, `watchdog_state`) — шаг 6; вопросы
+владельцу (запись в `room_task_questions`) — шаг 3, пока `needs_owner` читает таблицу.
+
+Тесты: `tests/unit/test_room_attention.py` (чистая функция, подставное время),
+`tests/unit/test_room_queue.py` (список, ожидание, `room_task_next`),
+`tests/integration/test_room_pg.py` (два одновременных захвата открытой задачи — побеждает
+один, одновременный `next_task`, `SKIP LOCKED`, CHECK и вид `waiting`).
+
 ## Код
 
 - `vera_shared/db/models_room.py` — `RoomMessageRow`, `RoomTaskRow`, `RoomCursorRow`,
   `RoomTaskEventRow`, `RoomTaskQuestionRow`, `RoomTaskAnswerRow`, `WatchdogStateRow`,
   `EVENT_KINDS`.
 - `vera_shared/room/task_events.py` — `record_event`, `list_events`, `event_dict`.
+- `vera_shared/room/attention.py`, `task_attention.py`, `task_queue.py`, `task_wait.py`,
+  `task_fields.py` — шаг 2b (см. выше); `list_tasks` переехал из `tasks.py` в
+  `task_queue.py`, захват вынесен в `apply_claim` (`tasks.py`).
 - `vera_shared/room/messages.py` — `post_message`, `inbox`, `ack` (курсор только
   растёт), `history`, `message_dict`; ошибка `MessageConflict`.
 - `vera_shared/room/tasks.py` — `open_task`, `claim`, `update`, `release`,
