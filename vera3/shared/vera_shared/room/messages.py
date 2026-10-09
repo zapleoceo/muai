@@ -39,6 +39,21 @@ async def _lock_room(s: AsyncSession, room: str) -> None:
                         {"k": f"room_messages:{room}"})
 
 
+async def add_message(s: AsyncSession, *, room: str, message_id: str, from_agent: str,
+                      body: str, to_agent: str | None = None, task_id: str | None = None,
+                      in_reply_to: str | None = None, status: str = "info") -> RoomMessageRow:
+    """Запись в транзакции вызывающего: сообщение фиксируется вместе с его правкой."""
+    if status not in MESSAGE_STATUSES:
+        raise ValueError(f"status must be one of {', '.join(MESSAGE_STATUSES)}")
+    await _lock_room(s, room)
+    row = RoomMessageRow(room=room, message_id=message_id, from_agent=from_agent, body=body,
+                         to_agent=to_agent, task_id=task_id, in_reply_to=in_reply_to,
+                         status=status)
+    s.add(row)
+    await s.flush()
+    return row
+
+
 async def _existing(room: str, message_id: str) -> RoomMessageRow | None:
     async with get_session() as s:
         return (await s.execute(select(RoomMessageRow).where(

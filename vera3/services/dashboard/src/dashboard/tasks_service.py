@@ -6,6 +6,7 @@ from datetime import datetime
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskEventRow, RoomTaskRow
+from vera_shared.room import questions
 from vera_shared.room.attention import (
     CANCELLED,
     DONE,
@@ -14,10 +15,12 @@ from vera_shared.room.attention import (
     STALE_PROGRESS,
     Attention,
 )
+from vera_shared.room.question_view import load_questions
 from vera_shared.room.task_attention import attention_map
 from vera_shared.timeutil import utc_naive_now
 
 from dashboard import tasks_repo
+from dashboard.tasks_questions_view import Questions
 
 TABS = ("work", "me", "done")
 ME_STATES = (NEEDS_OWNER, LEASE_EXPIRED, STALE_PROGRESS)
@@ -59,7 +62,7 @@ async def load_tabs(now: datetime | None = None) -> dict[str, list[TaskItem]]:
 
 
 async def load_detail(room: str, task_id: str, now: datetime | None = None,
-                      ) -> tuple[TaskItem, list[RoomTaskEventRow]] | None:
+                      ) -> tuple[TaskItem, list[RoomTaskEventRow], Questions] | None:
     now = now or utc_naive_now()
     async with get_session() as s:
         row = await tasks_repo.one_task(s, room, task_id)
@@ -67,4 +70,9 @@ async def load_detail(room: str, task_id: str, now: datetime | None = None,
             return None
         amap = await attention_map(s, [row], now)
         events = await tasks_repo.task_events(s, room, task_id)
-    return TaskItem(row, amap[(row.room, row.task_id)]), events
+        qs = await load_questions(s, room, task_id)
+    return TaskItem(row, amap[(row.room, row.task_id)]), events, qs
+
+
+async def submit_answer(room: str, task_id: str, qid: int, text: str) -> None:
+    await questions.answer(room=room, task_id=task_id, qid=qid, text=text)
