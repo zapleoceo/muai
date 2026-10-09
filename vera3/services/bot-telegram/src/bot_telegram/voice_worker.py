@@ -105,7 +105,9 @@ async def process_one(send: Send, owner_id: int, ask: Ask | None = None) -> bool
             if ask is None:
                 raise RuntimeError("confirmation needed but no Ask sender")
             # Без «Да» — ни задачи, ни ответа мозга: строка ждёт в waiting.
-            await ask_confirmation(ask, row.command_id, row.instruction, now)
+            quoted = "quoted" in (row.source or {}).get("doubts", [])
+            await ask_confirmation(ask, row.command_id, row.instruction, now,
+                                   quoted=quoted)
             return True
         elif row.answered_at is None:
             if row.help_state == "ready":

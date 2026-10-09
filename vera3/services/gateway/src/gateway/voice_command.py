@@ -38,7 +38,9 @@ class VoiceCommand(BaseModel):
     них поручение идёт старым путём, только ответом мозга.
     """
 
-    command_id: str = Field(min_length=1, max_length=64)
+    #: ≤ 59 ASCII: кнопка «Да» несёт `vh:y:<command_id>`, а callback_data
+    #: в Telegram — не больше 64 байт.
+    command_id: str = Field(min_length=1, max_length=59, pattern=r"^[A-Za-z0-9_.:-]+$")
     kind: Literal["command", "reprompt"] = "command"
     instruction: str = Field(default="", max_length=2000)
     spoken_at: datetime

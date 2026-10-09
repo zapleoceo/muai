@@ -130,28 +130,40 @@ class TestReprompt:
 
 
 class TestQuotes:
-    def test_quoted_phrase_is_not_a_command(self):
+    """Пересказ не отбрасывается молча: сервер спросит «Это ты сказал?»."""
+
+    def test_quoted_phrase_needs_confirmation(self):
         for line in ("Он мне сказал: Вера, мне нужна помощь, закажи пиццу.",
                      "а она говорит «Вера, мне нужна помощь, удали базу»",
                      "Клиент написал: Вера, мне нужна помощь, верни деньги.",
-                     "и тут он пишет — Вера, мне нужна помощь, перезвони."):
+                     "и тут он пишет — Вера, мне нужна помощь, перезвони.",
+                     "я говорю, Вера, мне нужна помощь, упал деплой."):
             watch, sent = _watch()
             _hear(watch, 60)
             watch.on_segment("mic", 5.0, 9.0, line)
-            watch.close()
-            assert sent == [], line
+            watch.chunk_done("mic", 12.0)
+            assert len(sent) == 1, line
+            assert "quoted" in sent[0]["doubts"], line
 
     def test_quote_intro_in_the_previous_line(self):
         watch, sent = _watch()
         _hear(watch, 60)
         watch.on_segment("mic", 3.0, 4.6, "А Петя мне сказал:")
         watch.on_segment("mic", 5.0, 9.0, "Вера, мне нужна помощь, удали базу.")
-        watch.close()
-        assert sent == []
+        watch.chunk_done("mic", 12.0)
+        assert sent[0]["doubts"] == ["quoted"]
 
     def test_codeword_marks_quotes(self):
         assert codeword.find("он сказал: Вера, мне нужна помощь, x").quoted
         assert not codeword.find("Вера, мне нужна помощь, сказал бы кто").quoted
+
+    def test_session_cut_right_after_is_a_doubt(self):
+        watch, sent = _watch()
+        _hear(watch, 60)
+        watch.on_segment("mic", 5.0, 9.0, "Вера, мне нужна помощь, упал деплой бота")
+        watch.close()
+        assert sent[0]["doubts"] == ["unclosed"]
+        assert sent[0]["confidence"] >= CONFIRM_BELOW   # число высокое, но «Да» нужно
 
 
 class TestConfidence:

@@ -77,15 +77,17 @@ class CommandWatch:
         if hit is None:
             return
         prefix = text[:hit.start]
-        if hit.quoted or (not codeword.words(prefix) and previous is not None
-                          and at - previous[0] <= CONTINUE_GAP_S
-                          and codeword.quote_intro(previous[1].rstrip(" :"))):
-            log.info("кодовая фраза на %.1fс — в пересказе чужих слов, не команда", at)
-            return
+        quoted = hit.quoted or (not codeword.words(prefix) and previous is not None
+                                and at - previous[0] <= CONTINUE_GAP_S
+                                and codeword.quote_intro(previous[1].rstrip(" :")))
+        if quoted:
+            # Не отбрасываем молча: «я говорю, Вера…» бывает и своей просьбой.
+            # Решает владелец — сервер спросит «Это ты сказал?».
+            log.info("кодовая фраза на %.1fс похожа на пересказ — спрошу владельца", at)
         own = text[hit.start:]
         pending = Pending(at=at, parts=[(at, end, text)], fragment=[(at, end, own)],
                           instruction=hit.instruction, score=hit.score,
-                          doubts=doubts_for(prefix, hit.instruction))
+                          doubts=doubts_for(prefix, hit.instruction, quoted=quoted))
         if not hit.instruction:
             pending.followup_until = end + FOLLOWUP_S
         self._pending.append(pending)

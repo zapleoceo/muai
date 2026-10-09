@@ -25,6 +25,11 @@
   никто не видел. Обрыв на союзе или запятой задачей не становится вовсе —
   это «переспроси».
 
+Любое сомнение (`doubts`: `quoted` — похоже на пересказ, `mid_sentence`,
+`short`, `unclosed` — пауза после фразы не видна) — задача только после «Да»
+владельца, независимо от числа. Поэтому обрыв сессии сразу за фразой готовой
+задачей не становится никогда.
+
 Порог `CONFIRM_BELOW` = 0.75 выбран так, чтобы звучавшие динамики сами по
 себе всегда требовали подтверждения владельца: максимум при g = 0.4 —
 0.3 + 0.2 + 0.2 = 0.7. При молчавших динамиках и закрытой фразе задача
@@ -112,8 +117,8 @@ class Pending:
         self.after += 1
 
 
-def doubts_for(prefix: str, instruction: str) -> list[str]:
-    found = []
+def doubts_for(prefix: str, instruction: str, *, quoted: bool = False) -> list[str]:
+    found = ["quoted"] if quoted else []
     if len(codeword.words(prefix)) >= MID_SENTENCE_WORDS:
         found.append("mid_sentence")
     if 0 < len(codeword.words(instruction)) < MIN_INSTRUCTION_WORDS:
@@ -141,5 +146,8 @@ def payload(pending: Pending, *, command_id: str, session_id: str, started: date
         "confidence": confidence(pending.score, speakers_silent=speakers_silent,
                                  closed=pending.closed),
         "guard": "own",
-        "doubts": [] if reprompt else pending.doubts,
+        # Паузы после фразы никто не видел (сессия оборвалась) — запас: задача
+        # только через «Да», как бы высоко ни вышла уверенность.
+        "doubts": [] if reprompt else
+                  pending.doubts + ([] if pending.closed else ["unclosed"]),
     }

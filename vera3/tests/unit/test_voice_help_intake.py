@@ -20,7 +20,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models_voice import VoiceCommandRow
 from vera_shared.redact import MASK
 from vera_shared.timeutil import utc_naive_now
-from vera_shared.voice_commands import claim_command
+from vera_shared.voice_commands import claim_command, help_state_for
 from vera_shared.voice_help.policy import SAFETY_NOTE
 from vera_shared.voice_help.queue_state import answer_confirmation
 from voice_help_kit import (
@@ -36,8 +36,10 @@ from voice_help_kit import (
     tasks_in,
 )
 
-pytestmark = pytest.mark.asyncio
-uses_db = pytest.mark.usefixtures("sqlite_db")
+
+def uses_db(test):
+    """Асинхронный тест на SQLite-фикстуре. Метка asyncio — только на async-тестах."""
+    return pytest.mark.asyncio(pytest.mark.usefixtures("sqlite_db")(test))
 
 
 @pytest.fixture(autouse=True)
@@ -107,7 +109,7 @@ async def test_reprompt_asks_again_without_task():
     {"fragment": [{"start": i, "end": i + 1, "text": "x"} for i in range(5)]},
     {"confidence": 1.5},
 ])
-async def test_gateway_rejects_malformed(bad):
+def test_gateway_rejects_malformed(bad):
     with pytest.raises(ValidationError):
         VoiceCommand.model_validate({**help_cmd().model_dump(), **bad})
 
@@ -177,3 +179,61 @@ async def test_secrets_never_reach_the_room():
         for leaked in (key, "qwerty123", "4111 1111 1111 1111", hexed):
             assert leaked not in text
         assert MASK in text or text == task.title
+
+
+@pytest.mark.parametrize(("confidence", "doubts", "state"), [
+    (0.75, [], "ready"),
+    (0.7499, [], "confirm"),
+    (0.9, ["x-unknown"], "confirm"),
+    (0.99, ["unclosed"], "confirm"),
+    (None, [], None),
+])
+def test_help_state_boundaries(confidence, doubts, state):
+    assert help_state_for("command", confidence, doubts) == state
+    assert help_state_for("reprompt", confidence, doubts) is None
+
+
+@uses_db
+async def test_quoted_asks_with_a_note():
+    await accept_voice_command(help_cmd("vc-q", doubts=["quoted"]), x_internal_secret=SECRET)
+    rec = Recorder()
+    await _run(rec)
+    assert rec.sent == [help_worker.confirm_text(INSTRUCTION, quoted=True)]
+    assert "пересказ" in rec.sent[0]
+    assert await tasks_in(ROOM) == []
+
+
+@uses_db
+async def test_expiry_tells_owner_first_and_survives_a_failure():
+    for cid in ("vc-e1", "vc-e2"):
+        await accept_voice_command(help_cmd(cid, confidence=0.5), x_internal_secret=SECRET)
+    await _run(Recorder(), 2)
+    later = utc_naive_now() + timedelta(minutes=11)
+    down = AsyncMock(side_effect=[RuntimeError("telegram down"), 1])
+    assert await help_worker.expire_confirmations(down, later) == 1
+    # Сообщить не вышло — строка не отменена молча и уйдёт следующим проходом.
+    states = sorted([(await queue_row(c)).help_state for c in ("vc-e1", "vc-e2")])
+    assert states == ["asked", "expired"]
+    assert await help_worker.expire_confirmations(Recorder(), later) == 1
+
+
+@pytest.mark.parametrize("command_id", ["x" * 60, "vc-с-кириллицей", "a b"])
+def test_command_id_fits_telegram_callback(command_id):
+    with pytest.raises(ValidationError):
+        help_cmd(command_id)
+    assert len(f"vh:y:{'x' * 59}".encode()) == 64
+
+
+@uses_db
+async def test_nothing_unredacted_anywhere_in_the_room():
+    key = "sk_" + "live_" + "4eC39HqLyjWDarjtT1zdp7dc"
+    said = (f"мой пароль: Qwerty!23 а дальше, карта 4111 1111 1111 1112, "
+            f"api_key={key}, пин 4821, postgres://vera:s3cr3t@db/vera")
+    await accept_voice_command(help_cmd("vc-all", instruction=said, session_id="s-pin-4821"),
+                               x_internal_secret=SECRET)
+    await _run(Recorder())
+    [task] = await tasks_in(ROOM)
+    dump = repr({c.name: getattr(task, c.name) for c in task.__table__.columns})
+    dump += repr([(m.body, m.task_id, m.message_id) for m in await messages_in(ROOM)])
+    for leak in ("Qwerty", "!23", "4111 1111 1111 1112", key, "4821", "s3cr3t"):
+        assert leak not in dump, leak

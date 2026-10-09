@@ -82,7 +82,8 @@ async def create_command(command_id: str, instruction: str, spoken_at: datetime,
                               instruction=instruction, spoken_at=spoken_at,
                               status="pending", kind=kind, confidence=confidence,
                               source={**(source or {}), "app": app,
-                                      "window_title": window_title},
+                                      "window_title": window_title,
+                                      "doubts": list(doubts or [])},
                               help_state=help_state_for(kind, confidence,
                                                         doubts or [])))
         try:

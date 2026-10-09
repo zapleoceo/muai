@@ -26,8 +26,10 @@ from voice_help_kit import (
     tasks_in,
 )
 
-pytestmark = pytest.mark.asyncio
-uses_db = pytest.mark.usefixtures("sqlite_db")
+
+def uses_db(test):
+    """Асинхронный тест на SQLite-фикстуре. Метка asyncio — только на async-тестах."""
+    return pytest.mark.asyncio(pytest.mark.usefixtures("sqlite_db")(test))
 TASK = "help-vc-help1"
 
 
@@ -109,3 +111,22 @@ def test_next_step_rules():
 ])
 def test_project_routing(app, window, project):
     assert project_for(app, window) == project
+
+
+@uses_db
+async def test_one_failing_row_does_not_stop_the_pass():
+    rec, opened = await _opened()
+    await accept_voice_command(help_cmd("vc-help2"), x_internal_secret=SECRET)
+    with patch.object(voice_worker, "ask_brain", AsyncMock(return_value=answer())),          patch.object(voice_worker, "save_event", AsyncMock()):
+        await voice_worker.process_one(rec, OWNER, rec.ask)
+    real = help_worker.escalate
+    calls = []
+
+    async def flaky(*, task_id: str) -> None:
+        calls.append(task_id)
+        if len(calls) == 1:
+            raise RuntimeError("комната недоступна")
+        await real(task_id=task_id)
+    with patch.object(help_worker, "escalate", flaky):
+        assert await help_worker.track_help(rec, opened + timedelta(minutes=30)) == 1
+    assert len(calls) == 2

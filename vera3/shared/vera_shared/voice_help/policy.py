@@ -11,8 +11,6 @@ import os
 from datetime import timedelta
 
 CONFIRM_BELOW = 0.75
-#: Признаки сомнения от слушателя, при которых задача — только после «Да».
-DOUBTS = frozenset({"mid_sentence", "short"})
 
 #: «Это ты сказал?» ждёт ответа столько; потом отмена, без исполнения.
 CONFIRM_TTL = timedelta(minutes=10)
@@ -54,7 +52,9 @@ def project_for(app: str | None, window_title: str | None) -> str:
 
 
 def needs_confirmation(confidence: float, doubts: list[str]) -> bool:
-    return confidence < CONFIRM_BELOW or bool(DOUBTS.intersection(doubts))
+    """Любое сомнение слушателя — даже незнакомое серверу — только через «Да»:
+    новый слушатель может прислать признак раньше, чем сервер его узнает."""
+    return confidence < CONFIRM_BELOW or bool(doubts)
 
 
 def help_task_id(command_id: str) -> str:

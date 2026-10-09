@@ -24,11 +24,12 @@ INSTRUCTION = "упал деплой бота, посмотри логи"
 def help_cmd(command_id: str = "vc-help1", *, confidence: float | None = 0.95,
              instruction: str = INSTRUCTION, kind: str = "command",
              doubts: list[str] | None = None, app: str = "Code.exe",
-             window_title: str = "myAI — vera3", **extra: Any) -> VoiceCommand:
+             window_title: str = "myAI — vera3", session_id: str = "s-9",
+             **extra: Any) -> VoiceCommand:
     return VoiceCommand(
         command_id=command_id, kind=kind, instruction=instruction,
         spoken_at=datetime.now(timezone.utc), app=app, window_title=window_title,
-        session_id="s-9", start=5.0, end=9.0,
+        session_id=session_id, start=5.0, end=9.0,
         fragment=[{"start": 5.0, "end": 9.0,
                    "text": f"Вера, мне нужна помощь, {instruction}"}],
         confidence=confidence, guard="own", doubts=doubts or [], **extra)
@@ -46,11 +47,11 @@ class Recorder:
         self.sent: list[str] = []
         self.asked: list[str] = []
 
-    async def __call__(self, html: str, plain: str) -> int:
+    async def __call__(self, _html: str, plain: str) -> int:
         self.sent.append(plain)
         return len(self.sent)
 
-    async def ask(self, html: str, plain: str, command_id: str) -> int:
+    async def ask(self, _html: str, plain: str, command_id: str) -> int:
         self.asked.append(command_id)
         self.sent.append(plain)
         return len(self.sent)
