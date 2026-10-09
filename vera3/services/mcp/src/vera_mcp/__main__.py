@@ -12,6 +12,11 @@ from vera_mcp.server import build_app
 
 log = logging.getLogger("vera_mcp")
 
+# SIGTERM при пересоздании контейнера: uvicorn перестаёт принимать новые
+# соединения и ждёт текущие запросы до этого срока. Должен быть меньше
+# stop_grace_period сервиса mcp в docker-compose.yml (иначе SIGKILL режет ответ).
+GRACEFUL_SHUTDOWN_S = 25
+
 
 def main() -> None:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
@@ -25,7 +30,8 @@ def main() -> None:
     log.info("Room agents configured: %s", ", ".join(room) if room else "none")
     # nginx стоит перед контейнером: доверяем его X-Forwarded-* только из сети docker
     uvicorn.run(build_app(), host="0.0.0.0", port=8000, proxy_headers=True,
-                forwarded_allow_ips="*", timeout_keep_alive=75)
+                forwarded_allow_ips="*", timeout_keep_alive=75,
+                timeout_graceful_shutdown=GRACEFUL_SHUTDOWN_S)
 
 
 if __name__ == "__main__":

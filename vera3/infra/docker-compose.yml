@@ -134,6 +134,11 @@ services:
       - "127.0.0.1:8007:8000"
     # starlette + mcp SDK + пул на 2 соединения
     mem_limit: 256m
+    # Деплой пересоздаёт контейнер: SIGTERM, затем uvicorn дожидается текущих
+    # запросов до GRACEFUL_SHUTDOWN_S (25с, vera_mcp/__main__.py). Дефолт docker
+    # — 10с, после него SIGKILL обрывал бы ответ на лету. Запас 10с сверх 25.
+    stop_signal: SIGTERM
+    stop_grace_period: 35s
     restart: unless-stopped
     logging: *default-logging
 
