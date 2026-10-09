@@ -290,3 +290,47 @@ bearer_token_env_var = "VERA_ROOM_TOKEN"
 `GET /tasks/{room}/{task_id}` в `#task-detail`: все поля, ссылки (`refs` как указатели,
 `http(s)` — ссылкой, содержимое не читается) и хронология `room_task_events`; неизвестная
 задача — 404. Диаграммы Ганта и форм пока нет. Тесты: `tests/unit/test_dashboard_tasks.py`.
+
+## Трекер задач — шаг 3: вопросы владельцу
+
+Новых миграций нет: таблицы `room_task_questions` (статусы `open`/`answered`/`acked`/`withdrawn`)
+и `room_task_answers` созданы в 049. Код — `vera_shared/room/questions.py` (`ask`, `answer`,
+`ack`, `withdraw`, `questions_of`; ошибки `QuestionNotFound`, `QuestionState`; константы `OWNER`,
+`MAX_ANSWER_CHARS`; `question_message_id`) и `question_view.py` (`question_dict`, `load_questions`,
+`list_questions`). Каждая правка, её событие журнала и сообщение комнаты — в одной транзакции
+(`messages.add_message` пишет в сессии вызывающего; `post_message` остался для `room_post`).
+
+- `ask(room, task_id, agent, fencing_token, question, refs=None)` — нужна живая аренда и текущий
+  токен (`StaleLease` иначе). Вставляет вопрос `open`, ставит задаче `status='blocked'`,
+  `owner='owner'`, пишет событие `question` (в `data` — `qid` и `refs`) и сообщение комнаты
+  `status='question'`, `to=None`, `message_id` вида `task-q-<qid>`, в теле — `#qid`.
+- `answer(room, task_id, qid, text, by='owner')` — только владелец через дашборд, MCP-инструмента
+  ответа нет намеренно. Вставляет строку в `room_task_answers`, вопрос становится `answered`, событие
+  `answered`, сообщение `in_reply_to` вопроса адресовано спросившему. **Статус задачи не меняется**:
+  она остаётся `blocked`, пока исполнитель не подтвердит. Дословный повтор последнего ответа —
+  не запись (`changed=False`); другой текст до подтверждения дописывается в историю. Текст
+  1..`MAX_ANSWER_CHARS`=8000; на `acked`/`withdrawn` — `QuestionState`.
+- `ack(room, task_id, qid, agent, fencing_token)` — нужна аренда; только из `answered`; вопрос
+  `acked`, событие `ack_answer`. Когда не осталось ни `open`, ни `answered`, задача возвращается в
+  `in_progress`, `owner=None`, пишется `unblocked`; иначе остаётся `blocked`.
+- `withdraw(...)` — снять свой вопрос (только спросивший, аренда нужна): `withdrawn`, событие
+  `ack_answer` с `data.withdrawn`, разблокировка по тому же правилу.
+
+**attention.** Открытый вопрос — `needs_owner`. Отвеченный, но не подтверждённый — новое состояние
+`ANSWERED` (`answered`), подпись «ответ получен, ждёт исполнителя N»; аргумент `answered_at` у
+`attention`. В `NEEDS_ATTENTION` и во вкладку «Нужен я» оно не входит (мяч у исполнителя), задача
+остаётся в «В работе» с видимой подписью. Открытый вопрос перекрывает `answered`.
+
+**MCP** (`room_question_tools.py`, `QUESTION_TOOLS`): `room_task_ask(task_id, fencing_token, question,
+refs=None)`, `room_task_answer_ack(task_id, fencing_token, qid, withdraw=False)`,
+`room_task_questions(task_id)` — вопросы с историей ответов, только чтение.
+
+**Дашборд.** Карточка `/tasks/{room}/{task_id}` показывает вопросы с историей (`questions_block`);
+у `open`/`answered` — форма (`answer_url`) `POST /tasks/{room}/{task_id}/answer` (`task_answer`,
+поля `qid`, `text`; сервис `submit_answer`). Защита как у остальных правок владельца —
+`csrf.owner_post_gate`: не владелец — 401, чужой Origin или без `Sec-Fetch-Site: same-origin` — 403.
+После записи возвращается обновлённая карточка (htmx, `#task-detail`). `QuestionNotFound` → 404,
+`QuestionState` → 409, пустой или длинный текст → 422. Всё экранируется.
+
+Тесты: `tests/unit/test_room_questions.py`, `tests/unit/test_dashboard_task_answer.py`,
+`tests/integration/test_room_pg.py` (`test_question_round_trip_on_postgres`).

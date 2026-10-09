@@ -220,3 +220,27 @@ async def test_next_task_skips_a_row_locked_by_another_transaction(pg_db):
         await s.get(RoomTaskRow, ("main", "L1"), with_for_update=True)
         got = await asyncio.wait_for(_pick("claude"), timeout=5)
     assert got and got["task_id"] == "L2"
+
+
+async def test_question_round_trip_on_postgres(pg_db):
+    from vera_shared.room import messages, questions, task_progress, tasks
+
+    await tasks.claim(room="main", task_id="PGQ", agent="claude", lease_seconds=600)
+    q = await questions.ask(room="main", task_id="PGQ", agent="claude", fencing_token=1,
+                            question="Какую БД?")
+    blocked = await tasks.update(room="main", task_id="PGQ", agent="claude",
+                                 fencing_token=1, extend_seconds=600)
+    assert (blocked["status"], blocked["owner"]) == ("blocked", "owner")
+    _, changed = await questions.answer(room="main", task_id="PGQ", qid=q["qid"], text="PG")
+    _, again = await questions.answer(room="main", task_id="PGQ", qid=q["qid"], text="PG")
+    assert changed and not again
+    acked = await questions.ack(room="main", task_id="PGQ", qid=q["qid"], agent="claude",
+                                fencing_token=1)
+    assert acked["status"] == "acked" and len(acked["answers"]) == 1
+    events = await task_progress.history(room="main", task_id="PGQ", since_id=None, limit=20)
+    kinds = [e["kind"] for e in events]
+    assert kinds[kinds.index("question"):] == [
+        "question", "heartbeat", "answered", "ack_answer", "unblocked"]
+    msgs = await messages.history(room="main", limit=10, task_id="PGQ")
+    assert [m["status"] for m in msgs] == ["question", "info"]
+    assert msgs[1]["in_reply_to"] == msgs[0]["message_id"]

@@ -18,6 +18,7 @@ UNASSIGNED, IN_PROGRESS, STALE_PROGRESS, LEASE_EXPIRED = (
     "unassigned", "in_progress", "stale_progress", "lease_expired")
 WAITING, NEEDS_OWNER, BLOCKED, PAUSED, DONE, CANCELLED = (
     "waiting", "needs_owner", "blocked", "paused", "done", "cancelled")
+ANSWERED = "answered"  # владелец ответил, исполнитель ещё не подтвердил
 NEEDS_ATTENTION = (UNASSIGNED, STALE_PROGRESS, LEASE_EXPIRED, NEEDS_OWNER)
 
 
@@ -52,7 +53,8 @@ def _stale_deadline(task: Any, claimed_at: datetime | None) -> datetime | None:
 
 
 def attention(task: Any, now: datetime, *, open_question_at: datetime | None = None,
-              paused: bool = False, claimed_at: datetime | None = None) -> Attention:
+              paused: bool = False, claimed_at: datetime | None = None,
+              answered_at: datetime | None = None) -> Attention:
     """task — строка RoomTaskRow или любой объект с теми же атрибутами."""
     def make(state: str, label: str, since: datetime | None) -> Attention:
         return Attention(state, label, since, task.last_progress_at,
@@ -64,6 +66,10 @@ def attention(task: Any, now: datetime, *, open_question_at: datetime | None = N
     if open_question_at is not None:
         return make(NEEDS_OWNER, f"ждёт ответа владельца {humanize(now - open_question_at)}",
                     open_question_at)
+    if answered_at is not None:
+        return make(ANSWERED,
+                    f"ответ получен, ждёт исполнителя {humanize(now - answered_at)}",
+                    answered_at)
     if paused:
         return make(PAUSED, "на паузе", None)
     if task.status == "blocked":

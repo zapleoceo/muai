@@ -9,6 +9,7 @@ from vera_shared.room.attention import humanize
 from vera_shared.timeutil import utc_naive_now
 
 from dashboard.render import esc
+from dashboard.tasks_questions_view import Questions, questions_block
 from dashboard.tasks_service import TABS, TaskItem
 
 TAB_LABELS = {"work": "В работе", "me": "Нужен я", "done": "Готово"}
@@ -24,6 +25,8 @@ _CSS = """<style>
 .tk-meta{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin-top:.3rem}
 .tk-detail dl{display:grid;grid-template-columns:max-content 1fr;gap:.25rem .9rem}
 .tk-detail dd{margin:0;overflow-wrap:anywhere}.tk-ev{margin:.2rem 0;overflow-wrap:anywhere}
+.tk-q{border:1px solid var(--line);border-radius:var(--r-md);padding:.5rem .7rem;margin:.5rem 0}
+.tk-answer textarea{width:100%;box-sizing:border-box;margin:.3rem 0}
 </style>"""
 
 
@@ -91,7 +94,7 @@ def _event(e: RoomTaskEventRow, now: datetime) -> str:
 
 
 def task_detail(item: TaskItem, events: list[RoomTaskEventRow],
-                now: datetime | None = None) -> str:
+                now: datetime | None = None, questions: Questions | None = None) -> str:
     now = now or utc_naive_now()
     r, a = item.row, item.attention
     refs = "<br>".join(_link_ref(str(x.get("kind", "")), str(x.get("ref", "")))
@@ -110,4 +113,5 @@ def task_detail(item: TaskItem, events: list[RoomTaskEventRow],
     ))
     log = "".join(_event(e, now) for e in events) or '<p class="muted">Событий нет</p>'
     return (f'<article class="tk-detail"><h2>{esc(r.title or r.task_id)}</h2>'
-            f'<dl>{fields}</dl><h3>История</h3>{log}</article>')
+            f'<dl>{fields}</dl>{questions_block(questions or [])}'
+            f'<h3>История</h3>{log}</article>')
