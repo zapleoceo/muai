@@ -11,7 +11,10 @@ import uuid
 from datetime import timedelta
 from typing import Any
 
+from sqlalchemy import select
+
 from vera_shared.db.engine import get_session
+from vera_shared.db.models_room import RoomTaskEventRow
 from vera_shared.room.messages import add_message
 from vera_shared.room.task_events import record_event
 from vera_shared.room.tasks import _locked, _require_lease, task_dict
@@ -61,6 +64,14 @@ async def accept(*, room: str, task_id: str, agent: str, session: str | None = N
         row = await _locked(s, room, task_id)
         if _pending(row, task_id) != agent:
             raise HandoffError(f"handoff of {task_id!r} is not offered to {agent}")
+        if row.status in ("done", "cancelled"):
+            raise HandoffError(f"task {task_id!r} is {row.status}; handoff cannot be accepted")
+        last_state = (await s.execute(select(RoomTaskEventRow.kind).where(
+            RoomTaskEventRow.room == room, RoomTaskEventRow.task_id == task_id,
+            RoomTaskEventRow.kind.in_(("paused", "resumed")))
+            .order_by(RoomTaskEventRow.id.desc()).limit(1))).scalar_one_or_none()
+        if last_state == "paused":
+            raise HandoffError(f"task {task_id!r} is paused; resume it before accepting")
         now = utc_naive_now()
         sender = row.lease_holder
         row.lease_holder, row.lease_until = agent, now + timedelta(seconds=lease_seconds)

@@ -131,3 +131,56 @@ async def test_stale_indicator_is_red_when_old_or_errored():
     assert "warn" in watchdog_badge(old, now)
     assert "warn" in watchdog_badge(err, now) and "<b>" not in watchdog_badge(err, now)
     assert "warn" in watchdog_badge(None, now)
+
+
+async def set_row(task_id: str, **fields) -> None:
+    async with get_session() as s:
+        row = await s.get(RoomTaskRow, ("main", task_id))
+        for k, v in fields.items():
+            setattr(row, k, v)
+
+
+async def test_reclaim_after_old_progress_is_not_reopened(sqlite_db):
+    now = utc_naive_now()
+    await claimed("R1")
+    await set_row("R1", last_progress_at=now - timedelta(hours=5),
+                  lease_until=now - timedelta(hours=1))
+    await tasks.claim(room="main", task_id="R1", agent="codex", lease_seconds=900)
+    out = await watchdog.run_once(now + timedelta(minutes=20))
+    assert out["actions"] == [("main", "R1", "lease_expired")]
+    assert (await row_of("R1")).lease_holder == "codex"
+
+
+async def test_handoff_accept_with_old_progress_is_escalated_not_reopened(sqlite_db):
+    from vera_shared.room import handoff
+    now = utc_naive_now()
+    await claimed("R2")
+    await set_row("R2", last_progress_at=now - timedelta(hours=5))
+    await handoff.offer(room="main", task_id="R2", agent="claude", fencing_token=1,
+                        to_agent="codex")
+    await handoff.accept(room="main", task_id="R2", agent="codex")
+    out = await watchdog.run_once(now + timedelta(minutes=20))
+    assert out["actions"] == [("main", "R2", "lease_expired")]
+    assert (await row_of("R2")).status == "in_progress"
+
+
+async def test_state_write_failure_is_logged(sqlite_db, monkeypatch, caplog):
+    async def boom(*a, **k):
+        raise RuntimeError("no disk")
+
+    monkeypatch.setattr(watchdog, "write_state", boom)
+    with caplog.at_level("WARNING"):
+        await watchdog.run_once(utc_naive_now())
+    assert "cannot write watchdog_state" in caplog.text and "no disk" in caplog.text
+
+
+async def test_failing_task_is_logged_by_id(sqlite_db, monkeypatch, caplog):
+    await claimed("L1")
+
+    async def boom(*a, **k):
+        raise RuntimeError("bad row")
+
+    monkeypatch.setattr(watchdog, "check_task", boom)
+    with caplog.at_level("WARNING"):
+        await watchdog.run_once(utc_naive_now())
+    assert "main/L1" in caplog.text and "bad row" in caplog.text

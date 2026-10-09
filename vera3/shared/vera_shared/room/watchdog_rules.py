@@ -50,7 +50,8 @@ def decide(task: Any, att: Attention, *, now: datetime, claimed_at: datetime | N
 
 def _expired(task: Any, att: Attention, now: datetime, claimed_at: datetime | None,
              last_event: tuple[str, int | None] | None) -> list[Action]:
-    base = task.last_progress_at or claimed_at or task.lease_until
+    marks = [t for t in (task.last_progress_at, claimed_at) if t is not None]
+    base = max(marks) if marks else task.lease_until
     idle = now - base
     limit = RECOVERY_FACTOR * lease_length(task.lease_until, claimed_at)
     reopen = idle >= limit

@@ -97,3 +97,18 @@ async def test_attention_shows_pending_handoff_and_release_clears_it(sqlite_db):
     t = await tasks.release(room="main", task_id="H1", agent="claude", fencing_token=1,
                             status="open")
     assert t["pending_handoff_to"] is None
+
+
+async def test_accept_rejected_for_done_cancelled_and_paused(sqlite_db):
+    for tid, how in (("X1", "done"), ("X2", "cancelled"), ("X3", "paused")):
+        await held(tid)
+        await handoff.offer(room="main", task_id=tid, agent="claude", fencing_token=1,
+                            to_agent="codex")
+        if how == "paused":
+            await task_progress.set_state(room="main", task_id=tid, agent="claude",
+                                          fencing_token=1, state="paused", reason="r")
+        else:
+            async with get_session() as s:
+                (await s.get(RoomTaskRow, ("main", tid))).status = how
+        with pytest.raises(handoff.HandoffError, match=how):
+            await handoff.accept(room="main", task_id=tid, agent="codex")

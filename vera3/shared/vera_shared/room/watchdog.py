@@ -89,6 +89,14 @@ async def write_state(error: str | None, now: datetime) -> None:
         row.last_run_at, row.last_error = now, error
 
 
+async def save_state(error: str | None, now: datetime) -> None:
+    """Сбой записи состояния логируется и не обрывает цикл: следующий проход повторит."""
+    try:
+        await write_state(error, now)
+    except Exception:
+        log.warning("watchdog: cannot write watchdog_state (error=%r)", error, exc_info=True)
+
+
 async def run_once(now: datetime | None = None) -> dict[str, Any]:
     """Один проход. Ошибка задачи пишется в last_error и не останавливает остальные."""
     now = now or utc_naive_now()
@@ -99,7 +107,7 @@ async def run_once(now: datetime | None = None) -> dict[str, Any]:
             ids = await _candidates(s)
     except Exception as e:
         log.warning("watchdog: cannot list tasks: %s", e)
-        await write_state(f"{type(e).__name__}: {e}"[:500], now)
+        await save_state(f"{type(e).__name__}: {e}"[:500], now)
         return {"checked": 0, "actions": [], "error": str(e)}
     for room, task_id in ids:
         try:
@@ -107,5 +115,5 @@ async def run_once(now: datetime | None = None) -> dict[str, Any]:
         except Exception as e:
             log.warning("watchdog: task %s/%s failed: %s", room, task_id, e)
             errors.append(f"{room}/{task_id}: {type(e).__name__}: {e}")
-    await write_state("; ".join(errors)[:500] or None, now)
+    await save_state("; ".join(errors)[:500] or None, now)
     return {"checked": len(ids), "actions": done, "error": errors[0] if errors else None}

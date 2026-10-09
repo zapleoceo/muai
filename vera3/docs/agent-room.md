@@ -397,7 +397,8 @@ sniffer; без учёта регистра). Внутри — `<details open>` 
   транзакции сообщение получателю (`add_message`, статус `request`). Аренда и токен остаются
   у отправителя. Второе предложение при висящем — `HandoffError`; себе передать нельзя.
 - `room_task_handoff_accept(task_id, lease_seconds, session, account)` → `handoff.accept`:
-  принять может только `pending_handoff_to`. Аренда переходит получателю на
+  принять может только `pending_handoff_to`, и только если задача не `done`/`cancelled` и не
+  на паузе (иначе `HandoffError`). Аренда переходит получателю на
   `lease_seconds` (по умолчанию `DEFAULT_HANDOFF_LEASE_S` = 900), `fencing_token` растёт на 1
   (токен отправителя сразу устаревает — `StaleLease`), `holder_session`/`holder_account`
   берутся из приёма, `pending_handoff_to` сбрасывается, событие `handoff_accept`.
@@ -427,7 +428,8 @@ watchdog.py`): кандидаты — задачи `in_progress`/`blocked` с д
   `open`, держатель снят, `fencing_token` прежний (старый держатель получает `StaleLease`),
   событие `watchdog_action` с `data.action = reopen`. Длина аренды (`lease_length`) —
   `lease_until − последний claimed/handoff_accept`, не меньше `MIN_LEASE` (15 мин);
-  прогресс считается от `last_progress_at`, а при его отсутствии от захвата. Иначе задача
+  простой считается от более позднего из `last_progress_at` и последнего claimed/handoff_accept
+(новый держатель не наследует чужое старое бездействие). Иначе задача
   не трогается и видна в «Нужен я» (`lease_expired` в attention).
 - Просроченная контрольная точка без прогресса после неё: одно `watchdog_action`
   (`data.checkpoint` — метка точки) и одно сообщение от `watchdog` исполнителю (а без
@@ -437,7 +439,8 @@ watchdog.py`): кандидаты — задачи `in_progress`/`blocked` с д
 
 `run_once` каждый раз пишет `watchdog_state('room', last_run_at, last_error)`
 (`write_state`, имя — `STATE_NAME`). Ошибка по задаче пишется в `last_error`, логируется
-на WARNING, остальные задачи обрабатываются. Шапка `/tasks` показывает «сторож: N с назад»
+на WARNING с идентификатором задачи, остальные задачи обрабатываются; сбой самой записи
+состояния (`save_state`) тоже пишется на WARNING и не обрывает цикл. Шапка `/tasks` показывает «сторож: N с назад»
 (`watchdog_badge`, `load_watchdog` в `dashboard/watchdog_view.py`); красным — если прошло
 больше `STALE_AFTER_S` (180 с, три интервала) или есть `last_error`.
 
