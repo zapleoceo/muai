@@ -6,6 +6,7 @@ from typing import Any
 
 from sqlalchemy import (
     BigInteger,
+    Boolean,
     CheckConstraint,
     DateTime,
     ForeignKey,
@@ -48,6 +49,10 @@ class RoomMessageRow(Base):
 class RoomTaskRow(Base):
     """Каждый новый захват увеличивает fencing_token — устаревший держатель отвергается."""
     __tablename__ = "room_tasks"
+    __table_args__ = (
+        CheckConstraint("priority BETWEEN 0 AND 3", name="ck_room_tasks_priority"),
+        CheckConstraint("length(next_action) <= 2000", name="ck_room_tasks_next_action_len"),
+    )
 
     room: Mapped[str] = mapped_column(String(64), primary_key=True)
     task_id: Mapped[str] = mapped_column(String(128), primary_key=True)
@@ -75,6 +80,11 @@ class RoomTaskRow(Base):
     pending_handoff_to: Mapped[str | None] = mapped_column(String(64), nullable=True)
     plan_start: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     plan_end: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    project: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    depends_on: Mapped[list[Any]] = mapped_column(JsonType, nullable=False, default=list)
+    auto_pickup: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    waiting_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    waiting_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
 
 class RoomCursorRow(Base):
@@ -91,7 +101,7 @@ class RoomCursorRow(Base):
 EVENT_KINDS = (
     "created", "claimed", "progress", "heartbeat", "paused", "resumed", "review", "blocked",
     "unblocked", "question", "answered", "ack_answer", "handoff_offer", "handoff_accept",
-    "released", "done", "lease_expired", "watchdog_action",
+    "released", "done", "lease_expired", "watchdog_action", "waiting",
 )
 _KINDS_SQL = ", ".join(f"'{k}'" for k in EVENT_KINDS)
 

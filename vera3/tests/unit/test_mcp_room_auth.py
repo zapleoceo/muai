@@ -82,8 +82,8 @@ async def test_room_token_sees_only_room_tools(room_client):
         names = await _tool_names(c, ROOM_CODEX)
     assert names == {"room_post", "room_inbox", "room_ack", "room_history", "room_task_open",
                      "room_task_claim", "room_task_update", "room_task_progress",
-                     "room_task_state", "room_task_history", "room_task_release",
-                     "room_tasks"}
+                     "room_task_state", "room_task_history", "room_task_wait",
+                     "room_task_next", "room_task_release", "room_tasks"}
 
 
 @pytest.mark.asyncio

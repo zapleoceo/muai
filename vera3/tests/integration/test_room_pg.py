@@ -158,3 +158,65 @@ async def test_progress_vs_heartbeat_on_postgres(pg_db):
     assert done["last_progress_at"] and done["next_checkpoint_at"]
     events = await task_progress.history(room="main", task_id="PG2", since_id=None, limit=10)
     assert [e["kind"] for e in events] == ["created", "claimed", "heartbeat", "progress"]
+
+
+async def test_concurrent_claims_of_an_existing_open_task_have_one_winner(pg_db):
+    from vera_shared.room.tasks import TaskBusy, claim, open_task
+
+    await open_task(room="main", task_id="OPEN", agent="owner", title=None, paths=None)
+    results = await asyncio.gather(
+        *(claim(room="main", task_id="OPEN", agent=a, lease_seconds=60, session=f"s-{a}")
+          for a in ("claude", "codex")), return_exceptions=True)
+    winners = [r for r in results if isinstance(r, dict)]
+    assert len(winners) == 1 and winners[0]["fencing_token"] == 1
+    assert all(isinstance(r, TaskBusy) for r in results if not isinstance(r, dict))
+
+
+async def test_attention_constraints_and_waiting_kind_exist(pg_db):
+    from sqlalchemy.exc import IntegrityError
+
+    async with pg_db() as s:
+        await s.execute(text(
+            "INSERT INTO room_task_events (room, task_id, kind) VALUES ('m','t','waiting')"))
+    for column, value in (("priority", "4"), ("next_action", "repeat('x', 2001)")):
+        with pytest.raises(IntegrityError):
+            async with pg_db() as s:
+                await s.execute(text(
+                    f"INSERT INTO room_tasks (room, task_id, created_by, {column}) "
+                    f"VALUES ('m','bad','c', {value})"))
+
+
+async def _queue_open_task(task_id: str) -> None:
+    from vera_shared.room import tasks
+
+    t = await tasks.claim(room="main", task_id=task_id, agent="owner", lease_seconds=60)
+    await tasks.update(room="main", task_id=task_id, agent="owner",
+                       fencing_token=t["fencing_token"], auto_pickup=True)
+    await tasks.release(room="main", task_id=task_id, agent="owner",
+                        fencing_token=t["fencing_token"], status="open")
+
+
+def _pick(agent: str):
+    from vera_shared.room.task_queue import next_task
+
+    return next_task(room="main", agent=agent, project=None, lease_seconds=60,
+                     session=None, account=None)
+
+
+async def test_next_task_concurrent_pickers_get_different_tasks(pg_db):
+    for tid in ("Q1", "Q2"):
+        await _queue_open_task(tid)
+    got = await asyncio.gather(_pick("claude"), _pick("codex"), _pick("claude"))
+    assert sorted(t["task_id"] for t in got if t) == ["Q1", "Q2"]
+    assert sum(t is None for t in got) == 1
+
+
+async def test_next_task_skips_a_row_locked_by_another_transaction(pg_db):
+    from vera_shared.db.models_room import RoomTaskRow
+
+    for tid in ("L1", "L2"):
+        await _queue_open_task(tid)
+    async with pg_db() as s:
+        await s.get(RoomTaskRow, ("main", "L1"), with_for_update=True)
+        got = await asyncio.wait_for(_pick("claude"), timeout=5)
+    assert got and got["task_id"] == "L2"

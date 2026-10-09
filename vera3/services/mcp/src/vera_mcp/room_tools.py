@@ -6,7 +6,7 @@ from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import Context
 from pydantic import Field
-from vera_shared.room import messages, task_progress, tasks
+from vera_shared.room import messages, task_progress, task_queue, task_wait, tasks
 
 from vera_mcp.auth import allowed_rooms, client_of
 
@@ -14,6 +14,7 @@ Room = Annotated[str, Field(pattern=r"^[a-z0-9_-]{1,64}$")]
 Ident = Annotated[str, Field(min_length=1, max_length=128)]
 Agent = Annotated[str, Field(min_length=1, max_length=64)]
 Consumer = Annotated[str, Field(pattern=r"^[a-z0-9_.-]{1,64}$")]
+Project = Annotated[str, Field(pattern=r"^[A-Za-z0-9_.-]{1,64}$")]
 Paths = Annotated[list[Annotated[str, Field(max_length=500)]], Field(max_length=50)]
 MAX_BODY_CHARS = 20_000
 DEFAULT_LEASE_S = 900
@@ -48,12 +49,15 @@ async def room_inbox(
     limit: Annotated[int, Field(ge=1, le=200)] = 50,
     since_id: Annotated[int | None, Field(ge=0)] = None,
 ) -> dict[str, Any]:
-    """Чужие сообщения мне или всем после курсора потребителя. Курсор НЕ двигается: после обработки вызови room_ack. Разные runtime одного агента — разные consumer. Unread messages; confirm with room_ack after handling."""
+    """Чужие сообщения мне или всем после курсора потребителя. Курсор НЕ двигается: после обработки вызови room_ack. Разные runtime одного агента — разные consumer. Unread messages; confirm with room_ack after handling. my_tasks — мои незавершённые задачи с attention {state, label, since, last_result_at}."""
     me = client_of(ctx)
     items, cursor = await messages.inbox(agent=me, room=_room(room), consumer=consumer,
                                          limit=limit, since_id=since_id)
+    mine = await task_queue.held_by(room=_room(room), agent=me)
     return {"agent": me, "consumer": consumer, "room": room, "messages": items,
-            "cursor": cursor, "more": len(items) == limit}
+            "cursor": cursor, "more": len(items) == limit,
+            "my_tasks": [{"task_id": t["task_id"], "title": t["title"],
+                          "attention": t["attention"]} for t in mine]}
 
 
 async def room_ack(
@@ -107,12 +111,16 @@ async def room_task_update(
     next_action: Annotated[str | None, Field(max_length=2000)] = None,
     priority: Annotated[int | None, Field(ge=0, le=3)] = None,
     refs: Annotated[list[dict[str, Any]] | None, Field(max_length=20)] = None,
+    project: Project | None = None,
+    depends_on: Annotated[list[Ident] | None, Field(max_length=20)] = None,
+    auto_pickup: bool | None = None,
 ) -> dict[str, Any]:
-    """Обновить свою задачу (статус/заметка/продление аренды/next_action/priority 0..3, 0 срочнее/refs [{kind: jira|url|event|chunk, ref, excerpt<=300}] — только указатели); устаревший fencing_token отвергается. Update a task you hold."""
+    """project/depends_on [task_id, не сама на себя]/auto_pickup — поля очереди для room_task_next. Обновить свою задачу (статус/заметка/продление аренды/next_action/priority 0..3, 0 срочнее/refs [{kind: jira|url|event|chunk, ref, excerpt<=300}] — только указатели); устаревший fencing_token отвергается. Update a task you hold."""
     task = await tasks.update(room=_room(room), task_id=task_id, agent=client_of(ctx),
                               fencing_token=fencing_token, status=status, note=note,
                               extend_seconds=extend_seconds, next_action=next_action,
-                              priority=priority, refs=refs)
+                              priority=priority, refs=refs, project=project,
+                              depends_on=depends_on, auto_pickup=auto_pickup)
     return {"ok": True, "task": task}
 
 
@@ -140,6 +148,31 @@ async def room_task_state(
     return {"ok": True, "task": task}
 
 
+async def room_task_wait(
+    task_id: Ident, fencing_token: Annotated[int, Field(ge=1)], ctx: Context,
+    until_seconds: Annotated[int, Field(ge=60, le=604_800)],
+    reason: Annotated[str, Field(min_length=1, max_length=4000)], room: Room = "main",
+) -> dict[str, Any]:
+    """Законно ждать внешнее событие до срока (until_seconds от сейчас): до срока задача — waiting, после — stale_progress. Любой room_task_progress ожидание снимает. Wait for an external event with a deadline."""
+    task = await task_wait.wait(
+        room=_room(room), task_id=task_id, agent=client_of(ctx), fencing_token=fencing_token,
+        until_seconds=until_seconds, reason=reason)
+    return {"ok": True, "task": task}
+
+
+async def room_task_next(
+    ctx: Context, room: Room = "main", project: Project | None = None,
+    lease_seconds: Annotated[int, Field(ge=60, le=MAX_LEASE_S)] = DEFAULT_LEASE_S,
+    session: Annotated[str | None, Field(max_length=128)] = None,
+    account: Annotated[str | None, Field(max_length=64)] = None,
+) -> dict[str, Any]:
+    """Атомарно взять ОДНУ следующую задачу: open, без живой аренды, auto_pickup, все depends_on done, нет открытого вопроса владельцу, не на паузе; сперва priority (0 срочнее), затем created_at. task=null, если подходящей нет. Claim the next eligible task."""
+    task = await task_queue.next_task(
+        room=_room(room), agent=client_of(ctx), project=project, lease_seconds=lease_seconds,
+        session=session, account=account)
+    return {"ok": True, "task": task}
+
+
 async def room_task_history(
     task_id: Ident, room: Room = "main", since_id: Annotated[int | None, Field(ge=0)] = None,
     limit: Annotated[int, Field(ge=1, le=200)] = 100,
@@ -164,12 +197,14 @@ async def room_tasks(
     room: Room = "main",
     status: Literal["open", "in_progress", "blocked", "done"] | None = None,
     limit: Annotated[int, Field(ge=1, le=200)] = 50,
+    queue: Literal["open", "unclaimed"] | None = None,
 ) -> dict[str, Any]:
-    """Список задач комнаты со статусом и живым держателем аренды. List room tasks."""
-    return {"room": room, "tasks": await tasks.list_tasks(room=_room(room), status=status,
-                                                          limit=limit)}
+    """Список задач комнаты со статусом, живым держателем и attention {state, label, since, last_result_at}. queue=open — все незавершённые, queue=unclaimed — незавершённые без живой аренды. List room tasks."""
+    return {"room": room, "tasks": await task_queue.list_tasks(
+        room=_room(room), status=status, limit=limit, queue=queue)}
 
 
 ROOM_TOOLS = (room_post, room_inbox, room_ack, room_history, room_task_open,
               room_task_claim, room_task_update, room_task_progress, room_task_state,
-              room_task_history, room_task_release, room_tasks)
+              room_task_history, room_task_wait, room_task_next, room_task_release,
+              room_tasks)
