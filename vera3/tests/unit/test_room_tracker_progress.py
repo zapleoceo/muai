@@ -2,11 +2,10 @@
 from __future__ import annotations
 
 import pytest
+from tests.unit.test_mcp_room_tools import CLAUDE, CODEX, expire_lease
 from vera_mcp import room_tools as r
 from vera_shared.room import task_progress, tasks
 from vera_shared.room.tasks import StaleLease
-
-from tests.unit.test_mcp_room_tools import CLAUDE, CODEX, expire_lease
 
 pytestmark = pytest.mark.asyncio
 
