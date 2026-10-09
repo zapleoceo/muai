@@ -26,4 +26,5 @@ def task_dict(r: RoomTaskRow) -> dict[str, Any]:
             "last_progress_text": r.last_progress_text,
             "next_checkpoint_at": _iso(r.next_checkpoint_at), "project": r.project,
             "depends_on": list(r.depends_on or []), "auto_pickup": bool(r.auto_pickup),
-            "waiting_until": _iso(r.waiting_until), "waiting_reason": r.waiting_reason}
+            "waiting_until": _iso(r.waiting_until), "waiting_reason": r.waiting_reason,
+            "responsible": r.responsible}

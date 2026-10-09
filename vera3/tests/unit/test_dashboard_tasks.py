@@ -30,7 +30,7 @@ def make_row(**kw):
                 "last_progress_at": NOW - timedelta(minutes=10), "last_progress_text": "шаг",
                 "next_checkpoint_at": None, "waiting_until": None, "updated_at": NOW,
                 "priority": 2, "owner": None, "holder_account": "acc", "project": None,
-                "next_action": None, "refs": [], "created_by": "claude", "waiting_reason": None,
+                "next_action": None, "refs": [], "created_by": "claude", "waiting_reason": None, "responsible": None,
                 "plan_start": None, "plan_end": None}
     base.update(kw)
     return SimpleNamespace(**base)

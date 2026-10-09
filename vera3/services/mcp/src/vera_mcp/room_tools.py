@@ -87,12 +87,13 @@ async def room_task_open(
     depends_on: Annotated[list[Ident] | None, Field(max_length=20)] = None,
     next_action: Annotated[str | None, Field(max_length=2000)] = None,
     refs: Annotated[list[dict[str, Any]] | None, Field(max_length=20)] = None,
+    responsible: Annotated[str | None, Field(max_length=128)] = None,
 ) -> dict[str, Any]:
-    """Завести задачу без захвата (чтобы её мог взять другой агент); project/priority/auto_pickup/depends_on/next_action/refs — поля очереди, проверяются как в room_task_update, у существующей задачи не меняются. Create an unclaimed task."""
+    """Завести задачу без захвата (чтобы её мог взять другой агент); project/priority/auto_pickup/depends_on/next_action/refs/responsible (метка ответственного) — поля очереди, проверяются как в room_task_update, у существующей задачи не меняются. Create an unclaimed task."""
     task, created = await tasks.open_task(
         room=_room(room), task_id=task_id, agent=client_of(ctx), title=title, paths=paths,
         project=project, priority=priority, auto_pickup=auto_pickup, depends_on=depends_on,
-        next_action=next_action, refs=refs)
+        next_action=next_action, refs=refs, responsible=responsible)
     return {"ok": True, "created": created, "task": task}
 
 
@@ -121,13 +122,15 @@ async def room_task_update(
     project: Project | None = None,
     depends_on: Annotated[list[Ident] | None, Field(max_length=20)] = None,
     auto_pickup: bool | None = None,
+    responsible: Annotated[str | None, Field(max_length=128)] = None,
 ) -> dict[str, Any]:
-    """project/depends_on [task_id, не сама на себя]/auto_pickup — поля очереди для room_task_next. Обновить свою задачу (статус/заметка/продление аренды/next_action/priority 0..3, 0 срочнее/refs [{kind: jira|url|event|chunk, ref, excerpt<=300}] — только указатели); устаревший fencing_token отвергается. Update a task you hold."""
+    """responsible — метка ответственного (пустая = не менять, очистить нельзя, только заменить). project/depends_on [task_id, не сама на себя]/auto_pickup — поля очереди для room_task_next. Обновить свою задачу (статус/заметка/продление аренды/next_action/priority 0..3, 0 срочнее/refs [{kind: jira|url|event|chunk, ref, excerpt<=300}] — только указатели); устаревший fencing_token отвергается. Update a task you hold."""
     task = await tasks.update(room=_room(room), task_id=task_id, agent=client_of(ctx),
                               fencing_token=fencing_token, status=status, note=note,
                               extend_seconds=extend_seconds, next_action=next_action,
                               priority=priority, refs=refs, project=project,
-                              depends_on=depends_on, auto_pickup=auto_pickup)
+                              depends_on=depends_on, auto_pickup=auto_pickup,
+                              responsible=responsible)
     return {"ok": True, "task": task}
 
 
