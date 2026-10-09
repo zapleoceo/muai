@@ -16,6 +16,14 @@ def validate_project(project: str) -> str:
     return project
 
 
+def clean_responsible(value: str | None) -> str | None:
+    """Метка ответственного: strip, ≤128; пустая = None (поле не меняется)."""
+    text = (value or "").strip()
+    if len(text) > 128:
+        raise ValueError("responsible must be at most 128 chars")
+    return text or None
+
+
 def validate_depends_on(task_id: str, depends_on: list[str]) -> list[str]:
     if not isinstance(depends_on, list) or len(depends_on) > MAX_DEPENDS_ON:
         raise ValueError(f"depends_on must be a list of at most {MAX_DEPENDS_ON} task_ids")
@@ -32,7 +40,7 @@ def validate_depends_on(task_id: str, depends_on: list[str]) -> list[str]:
 def validate_open_fields(task_id: str, *, project: str | None, priority: int | None,
                          auto_pickup: bool | None, depends_on: list[str] | None,
                          next_action: str | None, refs: list[dict[str, Any]] | None,
-                         ) -> dict[str, Any]:
+                         responsible: str | None = None) -> dict[str, Any]:
     """Поля очереди при создании задачи: только заданные, проверки те же, что в update."""
     if priority is not None and not 0 <= priority <= 3:
         raise ValueError("priority must be 0..3 (0 most urgent, default 2)")
@@ -43,5 +51,6 @@ def validate_open_fields(task_id: str, *, project: str | None, priority: int | N
         "priority": priority, "auto_pickup": auto_pickup, "next_action": next_action,
         "depends_on": (validate_depends_on(task_id, depends_on)
                        if depends_on is not None else None),
-        "refs": validate_refs(refs) if refs is not None else None}
+        "refs": validate_refs(refs) if refs is not None else None,
+        "responsible": clean_responsible(responsible)}
     return {k: v for k, v in checked.items() if v is not None}

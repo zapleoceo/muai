@@ -85,6 +85,7 @@ class RoomTaskRow(Base):
     auto_pickup: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     waiting_until: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     waiting_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    responsible: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
 
 class RoomCursorRow(Base):

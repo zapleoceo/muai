@@ -62,11 +62,12 @@ def task_row(item: TaskItem, now: datetime) -> str:
     if r.last_progress_text:
         progress = (f'<div class="muted">{esc(_trim(r.last_progress_text))} '
                     f'· {esc(ago(r.last_progress_at, now))}</div>')
+    resp = f'<span class="muted">отв.: {esc(r.responsible)}</span>' if r.responsible else ""
     return (f'<a class="tk-row" href="{_href(item)}" hx-get="{_href(item)}" '
             f'hx-target="#task-detail" hx-swap="innerHTML">'
             f'<b>{esc(r.title or r.task_id)}</b>'
             f'<div class="tk-meta"><span class="pill {tone}">{esc(a.label_ru)}</span>'
-            f'<span class="muted">{who}{acct}</span>'
+            f'<span class="muted">{who}{acct}</span>{resp}'
             f'<span class="muted">{esc(PRIORITY.get(r.priority, r.priority))}</span></div>'
             f'{progress}</a>')
 
@@ -111,6 +112,7 @@ def task_detail(item: TaskItem, events: list[RoomTaskEventRow],
         _field("Держатель", esc(r.lease_holder or "—")),
         _field("Аккаунт", esc(r.holder_account or "—")),
         _field("Владелец", esc(r.owner or "—")),
+        _field("Ответственный", esc(r.responsible or "—")),
         _field("Проект", esc(r.project or "—")),
         _field("Следующий шаг", esc(r.next_action or "—")),
         _field("Последний результат", esc(r.last_progress_text or "—")),

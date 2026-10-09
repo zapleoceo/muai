@@ -16,6 +16,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskRow
 from vera_shared.room.task_events import record_event
 from vera_shared.room.task_fields import (
+    clean_responsible,
     validate_depends_on,
     validate_open_fields,
     validate_project,
@@ -50,11 +51,12 @@ async def open_task(*, room: str, task_id: str, agent: str, title: str | None,
                     priority: int | None = None, auto_pickup: bool | None = None,
                     depends_on: list[str] | None = None, next_action: str | None = None,
                     refs: list[dict[str, Any]] | None = None,
-                    ) -> tuple[dict[str, Any], bool]:
+                    responsible: str | None = None) -> tuple[dict[str, Any], bool]:
     """(задача, created). Существующая возвращается как есть, поля очереди не меняются."""
     extra = validate_open_fields(task_id, project=project, priority=priority,
                                  auto_pickup=auto_pickup, depends_on=depends_on,
-                                 next_action=next_action, refs=refs)
+                                 next_action=next_action, refs=refs,
+                                 responsible=responsible)
     try:
         async with get_session() as s:
             row = await _locked(s, room, task_id)
@@ -147,13 +149,15 @@ async def update(*, room: str, task_id: str, agent: str, fencing_token: int,
                  extend_seconds: int | None = None, next_action: str | None = None,
                  priority: int | None = None, refs: list[dict[str, Any]] | None = None,
                  project: str | None = None, depends_on: list[str] | None = None,
-                 auto_pickup: bool | None = None) -> dict[str, Any]:
+                 auto_pickup: bool | None = None,
+                 responsible: str | None = None) -> dict[str, Any]:
     if priority is not None and not 0 <= priority <= 3:
         raise ValueError("priority must be 0..3 (0 most urgent, default 2)")
     clean_refs = validate_refs(refs) if refs is not None else None
     clean_deps = (validate_depends_on(task_id, depends_on)
                   if depends_on is not None else None)
     clean_project = validate_project(project) if project is not None else None
+    clean_resp = clean_responsible(responsible)
     if status is not None and status not in HELD_STATUSES:
         raise ValueError(f"status while holding must be one of {', '.join(HELD_STATUSES)}")
     async with get_session() as s:
@@ -179,6 +183,8 @@ async def update(*, room: str, task_id: str, agent: str, fencing_token: int,
             row.depends_on = clean_deps
         if auto_pickup is not None:
             row.auto_pickup = auto_pickup
+        if clean_resp is not None:
+            row.responsible = clean_resp
         row.updated_at = now
         if status is not None or note is not None:
             # прогресс — содержательная правка; одно продление аренды (heartbeat) его не двигает

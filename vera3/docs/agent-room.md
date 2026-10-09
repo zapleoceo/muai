@@ -361,3 +361,17 @@ lease_until=)` → список `Segment` (agent, session, kind, start, end); в
 `tasks_service.load_gantt_rows`, `plan_of`, `segments_of`. Тесты: `tests/unit/test_room_intervals.py`.
 
 Через `tasks.update` смена статуса на `blocked` пишет событие `blocked`, а `blocked` -> `in_progress` — `unblocked` (до `progress`), чтобы Гантт показывал блок.
+
+## Трекер задач — поле `responsible`
+
+Миграция `051_room_task_responsible.sql` (вручную, `scripts/apply_migration.sh`): колонка
+`room_tasks.responsible VARCHAR(128)`, NULL по умолчанию. Это смысловая метка ответственного
+(человек или агент), в отличие от `owner` — служебного значения, которое ставится в `owner`,
+пока вопрос ждёт владельца, и снимается по ack.
+
+`room_task_open` и `room_task_update` принимают необязательный `responsible`: значение
+обрезается по краям, длина ≤ 128 (`clean_responsible` в `task_fields.py`). Пустая строка и
+`None` означают «не менять»; очистить поле нельзя, только заменить другой меткой. Открытие уже
+существующей задачи поле не меняет. Поле входит в вывод `task_dict` (а значит, в `room_tasks`,
+`room_task_state`, inbox) и показывается на `/tasks`: «отв.: …» в строке и «Ответственный»
+в карточке. Тесты: `tests/unit/test_room_responsible.py`.
