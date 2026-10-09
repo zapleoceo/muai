@@ -10,12 +10,14 @@ from vera_shared.events.visibility import NOT_HIDDEN_SQL
 from vera_shared.llm.client import LLMCallFailed, chat_async
 
 from brain_search.agent import run_agent
+from brain_search.authorship import AUTHORSHIP_RULES, author_tag
 from brain_search.evidence import (
     EVIDENCE_RULES,
     PRIMARY_CHARS,
     SECONDARY_CHARS,
     evidence_excerpt,
 )
+from brain_search.identifiers import identifier_hits, identifier_note, ticket_ids
 from brain_search.models import AnswerResponse, HistoryItem, SearchQuery, SearchResult
 from brain_search.query_parse import SOURCE_PROMPT_NOTE
 from brain_search.rows import Candidate
@@ -72,12 +74,9 @@ def _history_block(history: list[HistoryItem], question: str) -> str:
 
 def build_prompt(*, question: str, self_ctx: str, context: str,
                  history_block: str, notes: str) -> str:
+    """Стабильные инструкции спереди (prompt cache), данные запроса и notes — в хвосте."""
     return (
         "Ты — Вера, личная память Димы.\n\n"
-        f"### Твоя конфигурация (твоя реальная, не из писем!)\n{self_ctx}\n\n"
-        f"{history_block}"
-        f"### Текущий вопрос Димы:\n{question}\n\n"
-        f"### Найденные события:\n{context}\n\n"
         "ВАЖНО:\n"
         "1) Учитывай предыдущий разговор для уточняющих вопросов.\n"
         "2) Если вопрос про ТЕБЯ саму — отвечай по «Твоя конфигурация».\n"
@@ -86,8 +85,28 @@ def build_prompt(*, question: str, self_ctx: str, context: str,
         "4) Каждое существенное утверждение о событии сопровождай [event:ID] "
         "из найденных событий. Если у события есть ссылка на оригинал, "
         "приведи её рядом; если ссылки нет, не выдумывай её.\n"
-        f"{EVIDENCE_RULES}{SOURCE_PROMPT_NOTE}{notes}"
+        f"{AUTHORSHIP_RULES}{EVIDENCE_RULES}{SOURCE_PROMPT_NOTE}\n"
+        f"### Твоя конфигурация (твоя реальная, не из писем!)\n{self_ctx}\n\n"
+        f"{history_block}"
+        f"### Текущий вопрос Димы:\n{question}\n\n"
+        f"### Найденные события:\n{context}\n"
+        f"{notes}"
     )
+
+
+def build_context(results: list[SearchResult], by_id: dict[int, Candidate]) -> str:
+    """Блоки событий; автор и направление — из metadata, не из владельца ящика."""
+    blocks = []
+    for i, r in enumerate(results):
+        c = by_id[r.event_id]
+        tag = author_tag(c)
+        limit = PRIMARY_CHARS if i < 3 else SECONDARY_CHARS
+        blocks.append(
+            f"[event:{r.event_id} | {r.occurred_at[:16]} UTC | {r.source} | "
+            f"{r.source_url or 'original link unavailable'}"
+            f"{' | ' + tag if tag else ''}] "
+            f"{evidence_excerpt(c.content_text, limit)}")
+    return "\n\n".join(blocks) if blocks else "(нет данных)"
 
 
 async def answer(
@@ -105,13 +124,9 @@ async def answer(
 
     self_ctx = await self_context()
     ctx_n = CONTEXT_EVENTS_SUMMARY if summary else CONTEXT_EVENTS
-    blocks = [
-        f"[event:{r.event_id} | {r.occurred_at[:16]} UTC | {r.source} | "
-        f"{r.source_url or 'original link unavailable'}] "
-        f"{evidence_excerpt(full_text_by_id[r.event_id], PRIMARY_CHARS if i < 3 else SECONDARY_CHARS)}"
-        for i, r in enumerate(results[:ctx_n])
-    ]
-    context = "\n\n".join(blocks) if blocks else "(нет данных)"
+    context = build_context(results[:ctx_n], {c.id: c for c in map(Candidate.of, rows)})
+    hits = identifier_hits(ticket_ids(query.q),
+                           {r.event_id: full_text_by_id[r.event_id] for r in results})
 
     history: list[HistoryItem] = []
     if query.conversation:
@@ -120,7 +135,7 @@ async def answer(
         history = list(query.history)
     history_block = _history_block(history, query.q)
 
-    notes = _SUMMARY_NOTE if summary else ""
+    notes = (_SUMMARY_NOTE if summary else "") + identifier_note(hits)
     if project:
         notes += (f"\n\nВопрос про проект «{project}». Все события ниже уже "
                   f"отобраны как относящиеся к нему (рабочие ящики + чаты). "

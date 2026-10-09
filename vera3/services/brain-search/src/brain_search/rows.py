@@ -17,6 +17,7 @@ META_COLUMNS = (
     "OR metadata->>'is_bot' = 'true') AS is_bot, "
     "metadata->>'author_role' AS author_role, "
     "metadata->>'author_label' AS author_label, "
+    "metadata->>'direction' AS direction, "
     "metadata->>'chat_title' AS chat_title, "
     "metadata->>'permalink' AS source_permalink"
 )
@@ -36,6 +37,7 @@ class Candidate(NamedTuple):
     is_bot: bool = False
     author_role: str | None = None
     author_label: str | None = None
+    direction: str | None = None
     chat_title: str | None = None
     source_permalink: str | None = None
 
@@ -51,6 +53,7 @@ class Candidate(NamedTuple):
             is_bot=bool(getattr(row, "is_bot", False)),
             author_role=getattr(row, "author_role", None),
             author_label=getattr(row, "author_label", None),
+            direction=getattr(row, "direction", None),
             chat_title=getattr(row, "chat_title", None),
             source_permalink=getattr(row, "source_permalink", None),
         )

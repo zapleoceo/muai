@@ -29,6 +29,7 @@ from brain_search.agent_tools import (
     execute_tool,
     load_remote_tool_specs,
 )
+from brain_search.authorship import AUTHORSHIP_RULES
 from brain_search.evidence import EVIDENCE_RULES, evidence_excerpt
 
 log = logging.getLogger(__name__)
@@ -98,7 +99,7 @@ SYSTEM_PROMPT = """Ты — Вера, цифровая память Димы. Т
     найденных событий. Если у события есть source_url, добавь ссылку.
     Не придумывай адрес оригинала, если source_url отсутствует.
 """
-SYSTEM_PROMPT += EVIDENCE_RULES
+SYSTEM_PROMPT += AUTHORSHIP_RULES + EVIDENCE_RULES
 
 
 def _observation_text(name: str, obs: Any) -> str:
@@ -118,6 +119,7 @@ def _observation_text(name: str, obs: Any) -> str:
                 "occurred_at": str(event.get("occurred_at") or "")[:32],
                 "author_role": str(event.get("author_role") or "")[:30],
                 "author_label": str(event.get("author_label") or "")[:120],
+                "direction": str(event.get("direction") or "")[:20],
                 "chat_title": str(event.get("chat_title") or "")[:120],
             }
             url = event.get("source_url")

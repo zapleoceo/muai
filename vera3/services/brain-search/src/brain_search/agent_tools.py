@@ -187,6 +187,7 @@ async def _exec_search_events(args: SearchEventsArgs) -> dict[str, Any]:
              "occurred_at": f"{str(c.occurred_at)[:19]} UTC",
              "author_role": c.author_role,
              "author_label": c.author_label,
+            "direction": c.direction,
              "chat_title": c.chat_title,
              "preview": evidence_excerpt(
                  c.content_text, PRIMARY_CHARS if i < 3 else SECONDARY_CHARS)}

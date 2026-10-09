@@ -67,7 +67,7 @@ async def test_slack_search_preserves_filter_dates_and_result(monkeypatch: pytes
     assert result == {"found": 1, "events": [{
         "event_id": 900001, "source": "slack", "source_url": candidate.source_permalink,
         "occurred_at": "2026-10-01 12:00:00 UTC", "author_role": "counterparty",
-        "author_label": "Synthetic author", "chat_title": "Synthetic channel",
+        "author_label": "Synthetic author", "direction": None, "chat_title": "Synthetic channel",
         "preview": "Synthetic Slack note.",
     }]}
 

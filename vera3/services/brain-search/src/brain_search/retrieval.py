@@ -26,6 +26,7 @@ from vera_shared.db.vectors import as_pg_vector
 
 from brain_search.ann import fetch_ann_rows, merge_candidates, vec_sim_column
 from brain_search.fts import fts_match_sql, fts_rank_sql
+from brain_search.identifier_rows import fetch_identifier_rows, merge_identifier_rows
 from brain_search.retrieval_filters import (
     NOT_A_WORLD_EVENT,
     LinkScope,
@@ -98,6 +99,7 @@ async def fetch_candidates(
     q_vec: list[float] | None, limit: int, source: str | None = None,
     links: LinkScope | None = None,
     exact_event_ids: list[int] | None = None,
+    tickets: list[str] | None = None,
 ) -> Candidates:
     """Кандидаты для скоринга: основной режим + смысловые из ANN."""
     async with get_session() as s:
@@ -114,6 +116,12 @@ async def fetch_candidates(
             before = len(found.rows)
             found.rows = merge_candidates(found.rows, semantic)
             log.info("retrieval=%s+ann: %d → %d", found.mode, before, len(found.rows))
+        if tickets:
+            exact = await fetch_identifier_rows(
+                s, tickets, source=source, links=links,
+                time_range=time_range, project=project)
+            found.rows = merge_identifier_rows(found.rows, exact)
+            found.mode += "+ticket"
     found.rows = [Candidate.of(r) for r in found.rows]
     return found
 
