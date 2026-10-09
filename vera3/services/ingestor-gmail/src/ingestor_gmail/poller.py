@@ -9,13 +9,14 @@ import asyncio
 import base64
 import logging
 import os
-import re
 from datetime import UTC, datetime, timedelta
 from email.utils import parsedate_to_datetime
 from typing import Any
 
 import httpx
 from sqlalchemy import select, update
+from ingestor_gmail.html_text import has_diff_markup
+from ingestor_gmail.html_text import html_to_text as _html_to_text
 from vera_shared.crypto import decrypt
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
@@ -145,28 +146,6 @@ async def fetch_messages(access_token: str, query: str, max_total: int = 500) ->
     return await fetch_full_messages(access_token, ids)
 
 
-_SCRIPT_STYLE_RE = re.compile(
-    r"<(script|style)[^>]*>.*?</\1>", re.IGNORECASE | re.DOTALL
-)
-_TAG_RE = re.compile(r"<[^>]+>")
-_WS_RE = re.compile(r"\s+")
-
-
-def _html_to_text(html: str) -> str:
-    """HTML → text. Убирает <script>/<style> ПОЛНОСТЬЮ (содержимое и теги).
-
-    Старый regex `<[^>]+>` оставлял JS-код в тексте — попадал в LLM, тратил
-    токены и мог стать prompt injection через email-newsletter с JS внутри.
-    """
-    html = _SCRIPT_STYLE_RE.sub(" ", html)
-    text = _TAG_RE.sub(" ", html)
-    text = (text
-            .replace("&nbsp;", " ").replace("&amp;", "&")
-            .replace("&lt;", "<").replace("&gt;", ">")
-            .replace("&quot;", '"').replace("&#39;", "'"))
-    return _WS_RE.sub(" ", text).strip()
-
-
 def _decode_part(payload: dict, message_id: str) -> str | None:
     """Тело MIME-части из base64url; None — часть пустая или не декодируется
     (тогда в журнал уходит id письма, а тело остаётся пустым: событие с
@@ -182,14 +161,33 @@ def _decode_part(payload: dict, message_id: str) -> str | None:
         return None
 
 
+def _find_diff_html(payload: dict, message_id: str) -> str | None:
+    """HTML-часть с diff-разметкой: в text/plain-альтернативе Jira её нет."""
+    if payload.get("mimeType") == "text/html":
+        raw = _decode_part(payload, message_id)
+        return raw if raw and has_diff_markup(raw) else None
+    for part in payload.get("parts", []) or []:
+        found = _find_diff_html(part, message_id)
+        if found:
+            return found
+    return None
+
+
 def _extract_text(payload: dict, message_id: str = "") -> str:
     """Recursive extract plain text from MIME parts."""
+    diff_html = _find_diff_html(payload, message_id)
+    if diff_html:
+        return _html_to_text(diff_html)
+    return _extract_plain_first(payload, message_id)
+
+
+def _extract_plain_first(payload: dict, message_id: str) -> str:
     if payload.get("mimeType") == "text/plain":
         raw = _decode_part(payload, message_id)
         if raw is not None:
             return raw
     for part in payload.get("parts", []) or []:
-        txt = _extract_text(part, message_id)
+        txt = _extract_plain_first(part, message_id)
         if txt:
             return txt
     if payload.get("mimeType") == "text/html":

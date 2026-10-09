@@ -103,6 +103,20 @@ telegram/slack/trello свои `[:8000]` сохранили: у них до по
   code fetched the 500 NEWEST, jumped the cursor to today, and silently
   lost the older tail forever (`after:` is date-granular).
   `poller.fetch_messages()` remains as a thin list+get composition.
+- Jira diff markup (2026-10-09, `ingestor_gmail/html_text.py`): in a Jira
+  description-change email the removed text is struck through and the added
+  text underlined, but the `text/plain` alternative drops both, merging the
+  old and new versions (LAM-264, event 510796: ADR 0014 "platform pays out"
+  read as current next to ADR 0022). `poller._extract_text` now prefers an
+  HTML part when `has_diff_markup` finds Jira's
+  `diff-html-removed|added` classes (bare `<s>/<del>`/line-through in
+  newsletters do not count; HTML above `MAX_DIFF_HTML_CHARS`, 512 KB, keeps
+  the old path); `html_to_text`
+  renders them as `[удалено: …]` / `[добавлено: …]` (constants
+  `REMOVED_OPEN`, `ADDED_OPEN`). Only new ingestions
+  are affected: the raw HTML is not stored, so existing events cannot be
+  re-marked at read time and need a Gmail re-fetch to be backfilled (the
+  source text is never rewritten in place).
 
 ## instagram
 
