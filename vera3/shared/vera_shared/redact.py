@@ -23,11 +23,11 @@ _KEYS = re.compile(
     r"\b(?:sk-(?:ant-)?[A-Za-z0-9_-]{16,}|[sprk]k_(?:live|test)_[A-Za-z0-9]{8,}"
     r"|ghp_[A-Za-z0-9]{20,}|AKIA[0-9A-Z]{16}"
     r"|\d{8,10}:AA[A-Za-z0-9_-]{30,}|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_.-]{10,})")
-_URL_CREDS = re.compile(r"(\b[a-z][a-z0-9+.-]*://[^\s:/@]+:)([^\s@/]+)(@)", re.I)
+_URL_CREDS = re.compile(r"(\b[a-z][a-z0-9+.-]*://[^\s:/@]+:)([^\s/]+)(@)", re.I)
 _BEARER = re.compile(
-    r"(?i)(\b(?:bearer|token|токен|ключ|key|secret|api_?key|access_?key))(\s*[:=]?\s*)"
+    r"(?i)(\b(?:bearer|token|токен|ключ|key|secret|секрет|api_?key|access_?key))([\"']?\s*[:=]?\s*[\"']?)"
     r"([A-Za-z0-9._~+/=-]{12,})")
-_IBAN = re.compile(r"\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{4}){2,7}(?:[ ]?[A-Z0-9]{1,3})?\b")
+_IBAN = re.compile(r"\b[A-Z]{2}\d{2}(?:[ ]?[A-Z0-9]{4}){2,7}(?:[ ]?[A-Z0-9]{1,3})?\b", re.I)
 _HEX = re.compile(r"\b[0-9a-fA-F]{32,}\b")
 # base64/urlsafe: длинный слиток с цифрами и буквами обоих регистров.
 _B64 = re.compile(r"(?<![\w/+=-])(?=[A-Za-z0-9+/=_-]*\d)(?=[A-Za-z0-9+/=_-]*[a-z])"

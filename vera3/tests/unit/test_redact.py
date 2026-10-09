@@ -76,3 +76,35 @@ def test_review_leaks_are_masked(text, leaks):
 ])
 def test_review_negatives_are_kept(text):
     assert redact_secrets(text) == text
+
+
+SECRET = "abcdefghijklmnop" + "1234"
+
+
+@pytest.mark.parametrize(("text", "leak"), [
+    ("iban ua21 3223 1300 0002 6007 2335 6600 1", "3223 1300"),
+    ("iban ua213223130000026007233566001", "3223130000026007"),
+    ('{"api_key": "' + SECRET + '"}', SECRET),
+    ('secret "' + SECRET + '"', SECRET),
+    ('"token":"' + SECRET + '"', SECRET),
+    ("секрет: " + SECRET, SECRET),
+    ("https://user:p@ss@host/x", "p@ss"),
+])
+def test_second_review_leaks_are_masked(text, leak):
+    out = redact_secrets(text)
+    assert leak not in out, out
+    assert MASK in out
+
+
+def test_url_password_with_at_keeps_host():
+    assert redact_secrets("https://user:p@ss@host/x") == f"https://user:{MASK}@host/x"
+
+
+@pytest.mark.parametrize("text", [
+    "звони 0671234567",
+    "звони +38 (067) 123-45-67",
+    "звони +380671234567",
+    "сумма 15 000 грн, срок 01.11.2026",
+])
+def test_phones_amounts_dates_survive_new_rules(text):
+    assert redact_secrets(text) == text
