@@ -1,13 +1,31 @@
 """Трекер задач, шаг 2: progress ≠ heartbeat, состояния, refs, история."""
 from __future__ import annotations
 
+from datetime import timedelta
+from types import SimpleNamespace
+
 import pytest
-from tests.unit.test_mcp_room_tools import CLAUDE, CODEX, expire_lease
 from vera_mcp import room_tools as r
+from vera_shared.db.engine import get_session
+from vera_shared.db.models_room import RoomTaskRow
 from vera_shared.room import task_progress, tasks
 from vera_shared.room.tasks import StaleLease
 
 pytestmark = pytest.mark.asyncio
+
+
+def ctx(client: str):
+    return SimpleNamespace(request_context=SimpleNamespace(
+        request=SimpleNamespace(scope={"mcp_client": client})))
+
+
+CLAUDE, CODEX = ctx("claude"), ctx("codex")
+
+
+async def expire_lease(task_id: str, room: str = "main") -> None:
+    async with get_session() as s:
+        row = await s.get(RoomTaskRow, (room, task_id))
+        row.lease_until = row.lease_until - timedelta(hours=10)
 
 
 async def kinds(task_id: str = "T1") -> list[str]:

@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from datetime import datetime
+from types import SimpleNamespace
 
 import pytest
-from tests.unit.test_mcp_room_tools import CLAUDE, CODEX, ctx
 from vera_mcp import room_tools as r
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskQuestionRow, RoomTaskRow
@@ -12,6 +12,14 @@ from vera_shared.room import tasks
 from vera_shared.room.tasks import StaleLease
 
 pytestmark = pytest.mark.asyncio
+
+
+def ctx(client: str):
+    return SimpleNamespace(request_context=SimpleNamespace(
+        request=SimpleNamespace(scope={"mcp_client": client})))
+
+
+CLAUDE, CODEX = ctx("claude"), ctx("codex")
 
 LONG_AGO = datetime(2020, 1, 1)
 OWNER = ctx("owner")
