@@ -89,10 +89,13 @@ async def room_task_claim(
     task_id: Ident, ctx: Context, room: Room = "main",
     lease_seconds: Annotated[int, Field(ge=60, le=MAX_LEASE_S)] = DEFAULT_LEASE_S,
     title: Annotated[str | None, Field(max_length=500)] = None, paths: Paths | None = None,
+    session: Annotated[str | None, Field(max_length=128)] = None,
+    account: Annotated[str | None, Field(max_length=64)] = None,
 ) -> dict[str, Any]:
     """Захватить задачу в аренду; верни fencing_token во все последующие правки. Повтор своим агентом продлевает аренду. Claim a task lease; pass the returned fencing_token to update/release."""
     task = await tasks.claim(room=_room(room), task_id=task_id, agent=client_of(ctx),
-                             lease_seconds=lease_seconds, title=title, paths=paths)
+                             lease_seconds=lease_seconds, title=title, paths=paths,
+                             session=session, account=account)
     return {"ok": True, "task": task}
 
 

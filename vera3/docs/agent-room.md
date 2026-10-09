@@ -92,9 +92,40 @@
   двумя агентами упирается в первичный ключ, проигравший получает `TaskBusy`
   «retry the claim».
 
+## Трекер задач — шаг 1
+
+Миграция `049_room_task_tracker.sql` (только добавляет). Шаг 1 — журнал событий;
+вопросы, ответы и сторож пока только как таблицы (`room_task_questions`,
+`room_task_answers`, `watchdog_state`), кода к ним ещё нет.
+
+**Колонки `room_tasks`:** `priority` (по умолчанию 2), `owner`, `next_action`,
+`refs`, `holder_session`, `holder_account`, `last_progress_at`,
+`last_progress_text`, `next_checkpoint_at`, `pending_handoff_to`, `plan_start`,
+`plan_end`. `claim` (и MCP-инструмент `room_task_claim`) принимает необязательные
+`session` и `account` и сохраняет их в `holder_session`/`holder_account` при новом
+захвате; без них поведение прежнее.
+
+**Журнал `room_task_events`** — только дописывается (`record_event`, без правки и
+удаления; чтение — `list_events`). Событие пишется в той же транзакции, что и
+правка задачи: откатилась правка — нет и события. Виды (`EVENT_KINDS`, CHECK в БД):
+`created`, `claimed`, `progress`, `heartbeat`, `paused`, `resumed`, `review`,
+`blocked`, `unblocked`, `question`, `answered`, `ack_answer`, `handoff_offer`,
+`handoff_accept`, `released`, `done`, `lease_expired`, `watchdog_action`.
+Шаг 1 пишет: `created` (`open_task` или первый `claim`), `claimed` (новый захват),
+`heartbeat`, `progress`, `released` и `done` (по статусу `release`).
+
+**heartbeat ≠ progress.** `update` только с `extend_seconds` и повторный `claim`
+своей живой аренды — `heartbeat`: аренда продлена, `last_progress_at` не меняется.
+`update` с `note` или `status` — `progress`: ставит `last_progress_at` и
+`last_progress_text` (заметка либо `status: …`). «Давно ли задача реально
+двигается» читается только из `last_progress_at`.
+
 ## Код
 
-- `vera_shared/db/models_room.py` — `RoomMessageRow`, `RoomTaskRow`, `RoomCursorRow`.
+- `vera_shared/db/models_room.py` — `RoomMessageRow`, `RoomTaskRow`, `RoomCursorRow`,
+  `RoomTaskEventRow`, `RoomTaskQuestionRow`, `RoomTaskAnswerRow`, `WatchdogStateRow`,
+  `EVENT_KINDS`.
+- `vera_shared/room/task_events.py` — `record_event`, `list_events`, `event_dict`.
 - `vera_shared/room/messages.py` — `post_message`, `inbox`, `ack` (курсор только
   растёт), `history`, `message_dict`; ошибка `MessageConflict`.
 - `vera_shared/room/tasks.py` — `open_task`, `claim`, `update`, `release`,
