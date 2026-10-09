@@ -15,8 +15,6 @@ from typing import Any
 
 import httpx
 from sqlalchemy import select, update
-from ingestor_gmail.html_text import has_diff_markup
-from ingestor_gmail.html_text import html_to_text as _html_to_text
 from vera_shared.crypto import decrypt
 from vera_shared.db.engine import get_session, init_engine
 from vera_shared.db.models import EventRow
@@ -25,6 +23,9 @@ from vera_shared.graph.sender_entity import sender_entity
 from vera_shared.ingest import AuthorExtractor, insert_events, sync_author_entities
 from vera_shared.text_chunks import clip_content
 from vera_shared.timeutil import utc_naive_now
+
+from ingestor_gmail.html_text import has_diff_markup
+from ingestor_gmail.html_text import html_to_text as _html_to_text
 
 log = logging.getLogger("gmail")
 
