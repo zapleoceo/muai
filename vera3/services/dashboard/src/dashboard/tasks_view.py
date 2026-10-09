@@ -9,8 +9,10 @@ from vera_shared.room.attention import humanize
 from vera_shared.timeutil import utc_naive_now
 
 from dashboard.render import esc
+from dashboard.tasks_gantt import CSS as GANTT_CSS
+from dashboard.tasks_gantt import DEFAULT_SPAN, GanttRow, task_gantt, tasks_gantt
 from dashboard.tasks_questions_view import Questions, questions_block
-from dashboard.tasks_service import TABS, TaskItem
+from dashboard.tasks_service import TABS, TaskItem, plan_of, segments_of
 
 TAB_LABELS = {"work": "В работе", "me": "Нужен я", "done": "Готово"}
 EMPTY = {"work": "Задач в работе пока нет", "me": "Ничего не ждёт вашего внимания",
@@ -43,9 +45,10 @@ def _href(item: TaskItem) -> str:
     return f"/tasks/{quote(item.row.room, safe='')}/{quote(item.row.task_id, safe='')}"
 
 
-def tabs_nav(active: str, counts: dict[str, int]) -> str:
+def tabs_nav(active: str, counts: dict[str, int], span: str = DEFAULT_SPAN) -> str:
+    extra = "" if span == DEFAULT_SPAN else f"&amp;span={esc(span)}"
     chips = "".join(
-        f'<a class="chip{" on" if t == active else ""}" href="/tasks?tab={t}">'
+        f'<a class="chip{" on" if t == active else ""}" href="/tasks?tab={t}{extra}">'
         f'{TAB_LABELS[t]} {counts[t]}</a>' for t in TABS)
     return f'<div class="chips">{chips}</div>'
 
@@ -68,11 +71,13 @@ def task_row(item: TaskItem, now: datetime) -> str:
             f'{progress}</a>')
 
 
-def tasks_body(tab: str, tabs: dict[str, list[TaskItem]], now: datetime | None = None) -> str:
+def tasks_body(tab: str, tabs: dict[str, list[TaskItem]], now: datetime | None = None,
+               gantt_rows: list[GanttRow] | None = None, span: str = DEFAULT_SPAN) -> str:
     now = now or utc_naive_now()
     rows = "".join(task_row(i, now) for i in tabs[tab]) or f'<p class="muted">{EMPTY[tab]}</p>'
     counts = {t: len(v) for t, v in tabs.items()}
-    return (f'{_CSS}<h1>Задачи</h1>{tabs_nav(tab, counts)}'
+    gantt = tasks_gantt(gantt_rows, now, span, tab) if gantt_rows is not None else ""
+    return (f'{_CSS}{GANTT_CSS}<h1>Задачи</h1>{tabs_nav(tab, counts, span)}{gantt}'
             f'{rows}<div id="task-detail"></div>')
 
 
@@ -114,4 +119,5 @@ def task_detail(item: TaskItem, events: list[RoomTaskEventRow],
     log = "".join(_event(e, now) for e in events) or '<p class="muted">Событий нет</p>'
     return (f'<article class="tk-detail"><h2>{esc(r.title or r.task_id)}</h2>'
             f'<dl>{fields}</dl>{questions_block(questions or [])}'
+            f'{task_gantt(segments_of(r, events, now), plan_of(r))}'
             f'<h3>История</h3>{log}</article>')

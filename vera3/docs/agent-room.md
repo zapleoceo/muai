@@ -334,3 +334,28 @@ refs=None)`, `room_task_answer_ack(task_id, fencing_token, qid, withdraw=False)`
 
 Тесты: `tests/unit/test_room_questions.py`, `tests/unit/test_dashboard_task_answer.py`,
 `tests/integration/test_room_pg.py` (`test_question_round_trip_on_postgres`).
+
+## Трекер задач — шаг 5b (Гантт)
+
+Диаграммы фактического выполнения на `/tasks`, серверный SVG без JS-библиотек, только чтение.
+Вывод отрезков — чистая функция `vera_shared/room/intervals.py`: `build_segments(events, now=,
+lease_until=)` → список `Segment` (agent, session, kind, start, end); виды `SEGMENT_KINDS`:
+`WORK`, `PAUSED`, `REVIEW`, `BLOCKED`, `WAITING`, `UNKNOWN`. Дорожка — агент+сессия. Берутся только
+метки событий, `lease_until` и `now`, прошлое не достраивается. Правила: `claimed`/`resumed`/
+`unblocked`/`handoff_accept`/`ack_answer` → работа; `paused`, `review`, `blocked`/`question`,
+`waiting` → свои виды; `progress`/`heartbeat` открывают работу только на пустой дорожке (или после
+срока `waiting`) и не выводят из паузы/проверки/блока; `released`/`done`/`lease_expired` закрывают
+(`lease_expired` без агента — все дорожки); `claimed` и `handoff_accept` закрывают чужие открытые
+дорожки. Открытый отрезок: аренда жива — до `now`, иначе до `lease_until`, иначе до последнего
+события. `waiting` обрезается по `data.until_seconds`; провал между этим сроком и следующим
+событием той же дорожки — `unknown` (больше нигде не рисуется). Нет событий — нет полос.
+
+Рендер — `dashboard/tasks_gantt.py`: `GanttRow`, `parse_span`, `task_gantt` (карточка: дорожка на
+агента+сессию), `tasks_gantt` (верх страницы: строка на задачу текущей вкладки, окно `?span=24h|7d`,
+неизвестное значение → `24h`), `span_nav`, константы `SPANS`, `DEFAULT_SPAN`, `KIND_LABELS`, `CSS`,
+`MAX_TICKS`. План (`plan_start`/`plan_end`) — отдельная тонкая полая полоса, с фактом не смешивается.
+Подписи оси — `<time data-utc>` (часовой пояс браузера, как в остальном дашборде); у каждого
+отрезка `<title>` с агентом, видом и временем (UTC); легенда: работа / пауза / проверка / блок /
+ожидание / неизвестно / план. Цвета — токены темы; на узком экране горизонтальный скролл только
+внутри диаграммы. Данные: `tasks_repo.events_of_tasks`, `GANTT_EVENTS_LIMIT`;
+`tasks_service.load_gantt_rows`, `plan_of`, `segments_of`. Тесты: `tests/unit/test_room_intervals.py`.

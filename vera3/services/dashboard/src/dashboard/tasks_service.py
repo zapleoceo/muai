@@ -15,11 +15,13 @@ from vera_shared.room.attention import (
     STALE_PROGRESS,
     Attention,
 )
+from vera_shared.room.intervals import Segment, build_segments
 from vera_shared.room.question_view import load_questions
 from vera_shared.room.task_attention import attention_map
 from vera_shared.timeutil import utc_naive_now
 
 from dashboard import tasks_repo
+from dashboard.tasks_gantt import GanttRow
 from dashboard.tasks_questions_view import Questions
 
 TABS = ("work", "me", "done")
@@ -76,3 +78,25 @@ async def load_detail(room: str, task_id: str, now: datetime | None = None,
 
 async def submit_answer(room: str, task_id: str, qid: int, text: str) -> None:
     await questions.answer(room=room, task_id=task_id, qid=qid, text=text)
+
+
+def plan_of(row: RoomTaskRow) -> tuple[datetime, datetime] | None:
+    if row.plan_start and row.plan_end and row.plan_end > row.plan_start:
+        return (row.plan_start, row.plan_end)
+    return None
+
+
+def segments_of(row: RoomTaskRow, events: list[RoomTaskEventRow], now: datetime) -> list[Segment]:
+    return build_segments(events, now=now, lease_until=row.lease_until)
+
+
+async def load_gantt_rows(items: list[TaskItem], now: datetime) -> list[GanttRow]:
+    async with get_session() as s:
+        events = await tasks_repo.events_of_tasks(
+            s, [(i.row.room, i.row.task_id) for i in items])
+    by_task: dict[tuple[str, str], list[RoomTaskEventRow]] = {}
+    for e in events:
+        by_task.setdefault((e.room, e.task_id), []).append(e)
+    return [GanttRow(i.row.title or i.row.task_id,
+                     segments_of(i.row, by_task.get((i.row.room, i.row.task_id), []), now),
+                     plan_of(i.row)) for i in items]
