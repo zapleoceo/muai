@@ -14,6 +14,7 @@ from datetime import datetime
 from vera_shared.llm.client import LLMCallFailed, embed
 
 from brain_search.fts import build_ts_query
+from brain_search.identifiers import ticket_ids
 from brain_search.lang import content_words
 from brain_search.query_parse import ProjectScope, extract_account_terms
 from brain_search.quoted_query import split_quoted_query
@@ -81,5 +82,5 @@ async def search_ranked(
     found = await fetch_candidates(
         ts_query=ts, acc_words=acc_words, time_range=time_range, project=project,
         q_vec=q_vec, limit=limit, source=source, links=links,
-        exact_event_ids=exact_ids)
+        exact_event_ids=exact_ids, tickets=ticket_ids(question))
     return found, score_candidates(found.rows, q_vec, found.acc_words)[:limit]

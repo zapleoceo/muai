@@ -29,6 +29,7 @@ from vera_shared.db.engine import close_engine, init_engine
 from vera_shared.links.context import owner_entity_id
 from vera_shared.links.filters import FilterError, build_where, from_dict
 
+from brain_search.identifiers import ticket_ids
 from brain_search.models import AnswerResponse, SearchQuery
 from brain_search.pipeline import embed_query, explicit_event_ids, query_terms
 from brain_search.query_parse import (
@@ -149,7 +150,7 @@ async def search(
     found = await fetch_candidates(
         ts_query=ts, acc_words=acc_words, time_range=time_range,
         project=project, q_vec=q_vec, limit=eff_limit, links=await _link_scope(query),
-        exact_event_ids=exact_ids,
+        exact_event_ids=exact_ids, tickets=ticket_ids(query.q),
     )
 
     if exact_ids and not found.rows:
