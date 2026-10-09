@@ -17,6 +17,7 @@ from dashboard.tasks_service import (
     submit_answer,
 )
 from dashboard.tasks_view import task_detail, tasks_body
+from dashboard.watchdog_view import load_watchdog, watchdog_badge
 
 router = APIRouter()
 
@@ -34,7 +35,8 @@ async def tasks_page(request: Request, tab: str = "work", span: str | None = Non
     now = utc_naive_now()
     rows = await load_gantt_rows(tabs[tab], now)
     span = resolve_span(span, rows, now)
-    return HTMLResponse(_render("tasks", tasks_body(tab, tabs, now, rows, span)))
+    badge = watchdog_badge(await load_watchdog(), now)
+    return HTMLResponse(_render("tasks", tasks_body(tab, tabs, now, rows, span, badge)))
 
 
 async def _fragment(room: str, task_id: str) -> HTMLResponse:

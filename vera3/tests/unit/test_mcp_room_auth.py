@@ -84,7 +84,8 @@ async def test_room_token_sees_only_room_tools(room_client):
                      "room_task_claim", "room_task_update", "room_task_progress",
                      "room_task_state", "room_task_history", "room_task_wait",
                      "room_task_next", "room_task_release", "room_tasks", "room_task_ask",
-                     "room_task_answer_ack", "room_task_questions"}
+                     "room_task_answer_ack", "room_task_questions", "room_task_handoff",
+                     "room_task_handoff_accept", "room_task_handoff_decline"}
 
 
 @pytest.mark.asyncio

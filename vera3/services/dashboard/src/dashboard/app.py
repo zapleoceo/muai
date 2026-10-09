@@ -33,13 +33,18 @@ from dashboard.source_actions import router as source_actions_router
 from dashboard.sources_routes import router as sources_router
 from dashboard.tasks_routes import router as tasks_router
 from dashboard.telegram_login import router as telegram_login_router
+from dashboard.watchdog_loop import start_watchdog, stop_watchdog
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await init_engine()
-    yield
-    await close_engine()
+    watchdog = start_watchdog()  # ссылка держится: иначе задачу собирает GC
+    try:
+        yield
+    finally:
+        await stop_watchdog(watchdog)
+        await close_engine()
 
 
 app = FastAPI(title="Vera 3.0 Dashboard", lifespan=lifespan)

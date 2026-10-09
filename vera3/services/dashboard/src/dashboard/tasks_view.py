@@ -74,12 +74,13 @@ def task_row(item: TaskItem, now: datetime) -> str:
 
 
 def tasks_body(tab: str, tabs: dict[str, list[TaskItem]], now: datetime | None = None,
-               gantt_rows: list[GanttRow] | None = None, span: str = DEFAULT_SPAN) -> str:
+               gantt_rows: list[GanttRow] | None = None, span: str = DEFAULT_SPAN,
+               watchdog: str = "") -> str:
     now = now or utc_naive_now()
     rows = grouped_rows(tabs[tab], lambda i: task_row(i, now)) or f'<p class="muted">{EMPTY[tab]}</p>'
     counts = {t: len(v) for t, v in tabs.items()}
     gantt = tasks_gantt(gantt_rows, now, span, tab) if gantt_rows is not None else ""
-    return (f'{_CSS}{GROUP_CSS}{GANTT_CSS}<h1>Задачи</h1>{tabs_nav(tab, counts, span)}{gantt}'
+    return (f'{_CSS}{GROUP_CSS}{GANTT_CSS}<h1>Задачи</h1>{watchdog}{tabs_nav(tab, counts, span)}{gantt}'
             f'{rows}<div id="task-detail"></div>')
 
 
