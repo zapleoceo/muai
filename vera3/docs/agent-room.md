@@ -359,3 +359,5 @@ lease_until=)` → список `Segment` (agent, session, kind, start, end); в
 ожидание / неизвестно / план. Цвета — токены темы; на узком экране горизонтальный скролл только
 внутри диаграммы. Данные: `tasks_repo.events_of_tasks`, `GANTT_EVENTS_LIMIT`;
 `tasks_service.load_gantt_rows`, `plan_of`, `segments_of`. Тесты: `tests/unit/test_room_intervals.py`.
+
+Через `tasks.update` смена статуса на `blocked` пишет событие `blocked`, а `blocked` -> `in_progress` — `unblocked` (до `progress`), чтобы Гантт показывал блок.

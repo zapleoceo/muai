@@ -191,7 +191,7 @@ async def test_ack_leaves_status_alone_unless_task_is_blocked(sqlite_db):
     await qt.room_task_answer_ack("T1", tok, qid, CLAUDE)
     row = await task_row()
     assert (row.status, row.owner) == ("in_progress", "owner")
-    assert "unblocked" not in await kinds()
+    assert (await kinds()).count("unblocked") == 1  # от update, ack своего не добавил
 
 
 async def test_answer_rejected_for_finished_task(sqlite_db):

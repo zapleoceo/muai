@@ -115,3 +115,9 @@ def test_span_param_and_legend():
     for word in ("работа", "пауза", "проверка", "блок", "ожидание", "неизвестно", "план"):
         assert word in html
     assert "интервалов нет" in tasks_gantt([GanttRow("t", [])], NOW, "24h", "work")
+
+
+def test_update_blocked_sequence_draws_block_not_work():
+    segs = build_segments([ev(0, "claimed"), ev(10, "blocked"), ev(10, "progress"),
+                           ev(20, "unblocked"), ev(20, "progress"), ev(30, "released")], now=NOW)
+    assert spans(segs) == [("work", 0, 10), ("blocked", 10, 20), ("work", 20, 30)]

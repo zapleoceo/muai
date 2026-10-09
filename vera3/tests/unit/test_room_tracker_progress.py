@@ -137,3 +137,12 @@ async def test_history_order_since_and_limit(sqlite_db):
     limited = (await r.room_task_history("T1", limit=2))["events"]
     assert [e["id"] for e in limited] == ids[:2]
     assert (await r.room_task_history("other-task"))["events"] == []
+
+
+async def test_update_status_blocked_and_back_writes_transition_events(sqlite_db):
+    await r.room_task_claim("T1", CLAUDE)
+    await r.room_task_update("T1", 1, CLAUDE, status="blocked", note="жду")
+    await r.room_task_update("T1", 1, CLAUDE, status="blocked")
+    await r.room_task_update("T1", 1, CLAUDE, status="in_progress")
+    assert await kinds() == ["created", "claimed", "blocked", "progress", "progress",
+                             "unblocked", "progress"]
