@@ -191,7 +191,7 @@ def tasks_gantt(rows: list[GanttRow], now: datetime, span: str, tab: str) -> str
     visible = [r for r in rows
                if any(s.end > t0 and s.start < t1 for s in r.segments)
                or (r.plan and r.plan[1] > t0 and r.plan[0] < t1)]
-    fmt = "time" if parse_span(span) == "24h" else "date"
+    fmt = "time" if t1 - t0 <= timedelta(days=1) else "datetime"
     body = (_chart(visible, t0, t1, fmt) if visible
             else '<p class="muted">В этом окне интервалов нет</p>')
     return f'<div class="gt">{span_nav(tab, parse_span(span))}{body}</div>'
