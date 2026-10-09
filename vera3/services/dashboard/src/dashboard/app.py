@@ -31,6 +31,7 @@ from dashboard.settings_routes import router as settings_router
 from dashboard.slack_connect import router as slack_connect_router
 from dashboard.source_actions import router as source_actions_router
 from dashboard.sources_routes import router as sources_router
+from dashboard.tasks_routes import router as tasks_router
 from dashboard.telegram_login import router as telegram_login_router
 
 
@@ -49,7 +50,7 @@ for router in (
     graph_router, gmail_oauth_router, instagram_login_router,
     telegram_login_router, slack_connect_router, source_actions_router,
     assets_router, connection_router, journal_router, merge_router,
-    room_oauth_router,
+    room_oauth_router, tasks_router,
 ):
     app.include_router(router)
 

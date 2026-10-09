@@ -84,6 +84,7 @@ this project's own "~200 lines, one responsibility per file" convention):
 | `source_panel.py` / `sources_script.py` | Подробности источника одним куском (`panel_html`, `panel_actions`, `disconnect_form`) для спойлера `/sources` и страницы `/sources/{key}`; скрипт спойлеров (`#open=` в адресе, ленивая подгрузка htmx) |
 | `manual_roles_ui.py` | Подписи ролей диалога «Указать связь» (`ROLE_TEXT`, `manual_roles_json`); ключи — `vera_shared.graph.manual_roles` |
 | `journal_routes.py` / `journal_view.py` | `/journal` — журнал правок с откатом |
+| `tasks_routes.py` / `tasks_service.py` / `tasks_view.py` / `tasks_repo.py` | `/tasks` — задачи комнаты (чтение), см. agent-room.md «шаг 5a» |
 | `assets_routes.py` | `/ui/vera.css`, `/ui/vera.js` — статика темы с хэшем в адресе |
 | `search_view.py` | `sources_html` — «На чём основан ответ»: человеческая строка, дедуп по событию и цепочке писем; `headline`, `dedupe_key` |
 | `source_detail.py` | Провайдеры разбивок по источнику — отдают блоки `rows`/`table`, не разметку. `Html` помечает готовую разметку, всё прочее страница экранирует |
