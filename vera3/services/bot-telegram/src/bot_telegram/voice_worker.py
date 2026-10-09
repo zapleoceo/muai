@@ -34,9 +34,19 @@ from vera_shared.voice_commands import (
     pending_notifications,
     revive_stale,
 )
+from vera_shared.voice_help.queue_state import mark_opened
+from vera_shared.voice_help.room_intake import open_help_task
 
 from bot_telegram.brain import BrainError, ask_brain, save_event
 from bot_telegram.formatting import format_reply, plain_fallback
+from bot_telegram.help_worker import (
+    REPROMPT_TEXT,
+    Ask,
+    ask_confirmation,
+    expire_confirmations,
+    opened_ack_text,
+    track_help,
+)
 
 log = logging.getLogger(__name__)
 
@@ -68,7 +78,7 @@ def failed_text(instruction: str) -> str:
     return "Не смогла выполнить голосовое поручение."
 
 
-async def process_one(send: Send, owner_id: int) -> bool:
+async def process_one(send: Send, owner_id: int, ask: Ask | None = None) -> bool:
     """Ответить на одно поручение. False — очередь пуста.
 
     Гарантия — ответ не теряется и обычно приходит один раз. Дубль возможен в
@@ -81,14 +91,32 @@ async def process_one(send: Send, owner_id: int) -> bool:
     if row is None:
         return False
     try:
-        age = utc_naive_now() - row.spoken_at
+        now = utc_naive_now()
+        age = now - row.spoken_at
         if row.answered_at is None and row.acked_at is None and age > MAX_AGE:
             text = stale_text(row.instruction, age)
             await send(escape(text, quote=False), text)
             await mark_answered(row.command_id)
+        elif row.kind == "reprompt":
+            if row.answered_at is None:
+                await send(REPROMPT_TEXT, REPROMPT_TEXT)
+                await mark_answered(row.command_id)
+        elif row.help_state == "confirm":
+            if ask is None:
+                raise RuntimeError("confirmation needed but no Ask sender")
+            # Без «Да» — ни задачи, ни ответа мозга: строка ждёт в waiting.
+            await ask_confirmation(ask, row.command_id, row.instruction, now)
+            return True
         elif row.answered_at is None:
+            if row.help_state == "ready":
+                task_id = await open_help_task(
+                    command_id=row.command_id, event_id=row.event_id,
+                    instruction=row.instruction, source=row.source)
+                await mark_opened(row.command_id, task_id, now)
             if row.acked_at is None:
-                ack = ack_text(row.instruction)
+                ack = (opened_ack_text(row.instruction)
+                       if row.help_state in ("ready", "opened")
+                       else ack_text(row.instruction))
                 # Поручение — распознанная речь, и «<» в ней сломал бы HTML.
                 await send(escape(ack, quote=False), ack)
                 await mark_acked(row.command_id)
@@ -138,7 +166,7 @@ async def notify_failed(send: Send) -> int:
     return done
 
 
-async def run_forever(send: Send, owner_id: int) -> None:
+async def run_forever(send: Send, owner_id: int, ask: Ask | None = None) -> None:
     if owner_id == 0:
         # Fail-closed, как `_owner_only` в боте: без адресата поручения ждут
         # в очереди, а не уходят кому попало.
@@ -149,7 +177,9 @@ async def run_forever(send: Send, owner_id: int) -> None:
         try:
             await revive_stale()
             await notify_failed(send)
-            busy = await process_one(send, owner_id)
+            await expire_confirmations(send, utc_naive_now())
+            await track_help(send, utc_naive_now())
+            busy = await process_one(send, owner_id, ask)
         except asyncio.CancelledError:
             raise
         except Exception:

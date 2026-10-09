@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from typing import Any
 
-REF_KINDS = ("jira", "url", "event", "chunk")
+#: voice_event / voice_command / source — срочная просьба голосом
+#: (`vera_shared.voice_help`): событие, строка очереди и место в записи.
+REF_KINDS = ("jira", "url", "event", "chunk", "voice_event", "voice_command", "source")
 MAX_REFS = 20
 MAX_REF_LEN = 500
 MAX_EXCERPT_LEN = 300

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timedelta
+from typing import Any
 
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.exc import IntegrityError
@@ -21,6 +22,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_voice import VoiceCommandRow
 from vera_shared.timeutil import utc_naive_now
+from vera_shared.voice_help.policy import needs_confirmation
 
 log = logging.getLogger(__name__)
 
@@ -35,11 +37,26 @@ STALE_MINUTES = 10
 
 
 def event_text(instruction: str) -> str:
+    if not instruction:
+        return "Голосовое обращение к Вере: поручение не расслышано"
     return f"Голосовое поручение Вере: {instruction}"
+
+
+def help_state_for(kind: str, confidence: float | None, doubts: list[str]) -> str | None:
+    """Куда идёт просьба: None — только ответ мозга (переспрос или старый
+    слушатель без уверенности), confirm — сначала «Это ты сказал?», ready —
+    сразу срочная задача в комнате."""
+    if kind != "command" or confidence is None:
+        return None
+    return "confirm" if needs_confirmation(confidence, doubts) else "ready"
 
 
 async def create_command(command_id: str, instruction: str, spoken_at: datetime,
                          *, app: str | None, window_title: str | None,
+                         kind: str = "command", confidence: float | None = None,
+                         doubts: list[str] | None = None,
+                         source: dict[str, Any] | None = None,
+                         fragment: list[dict[str, Any]] | None = None,
                          ) -> tuple[int | None, bool]:
     """→ (event_id, повтор ли это). Повтор той же команды ничего не пишет."""
     async with get_session() as s:
@@ -54,14 +71,20 @@ async def create_command(command_id: str, instruction: str, spoken_at: datetime,
             category="command", content_text=event_text(instruction),
             occurred_at=spoken_at,
             metadata_={"app": app, "window_title": window_title,
-                       "author_role": "self", "author_label": "Я"},
+                       "author_role": "self", "author_label": "Я",
+                       "kind": kind, "confidence": confidence,
+                       "fragment": fragment or []},
             triage_status="pending",
         )
         s.add(event)
         await s.flush()
         s.add(VoiceCommandRow(command_id=command_id, event_id=event.id,
                               instruction=instruction, spoken_at=spoken_at,
-                              status="pending"))
+                              status="pending", kind=kind, confidence=confidence,
+                              source={**(source or {}), "app": app,
+                                      "window_title": window_title},
+                              help_state=help_state_for(kind, confidence,
+                                                        doubts or [])))
         try:
             await s.flush()
         except IntegrityError:
