@@ -108,8 +108,10 @@ telegram/slack/trello свои `[:8000]` сохранили: у них до по
   text underlined, but the `text/plain` alternative drops both, merging the
   old and new versions (LAM-264, event 510796: ADR 0014 "platform pays out"
   read as current next to ADR 0022). `poller._extract_text` now prefers an
-  HTML part when `has_diff_markup` finds `<del>/<s>/<strike>/<ins>`,
-  `diff-html-removed|added` classes or `line-through`; `html_to_text`
+  HTML part when `has_diff_markup` finds Jira's
+  `diff-html-removed|added` classes (bare `<s>/<del>`/line-through in
+  newsletters do not count; HTML above `MAX_DIFF_HTML_CHARS`, 512 KB, keeps
+  the old path); `html_to_text`
   renders them as `[удалено: …]` / `[добавлено: …]` (constants
   `REMOVED_OPEN`, `ADDED_OPEN`). Only new ingestions
   are affected: the raw HTML is not stored, so existing events cannot be

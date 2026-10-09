@@ -31,20 +31,60 @@ def test_removed_and_added_are_marked():
     assert "[добавлено: 0022 студент платит школе]" in out
 
 
-def test_del_s_strike_and_linethrough_marked_as_removed():
-    for html in ("<del>x</del>", "<s>x</s>", "<strike>x</strike>",
-                 '<span style="text-decoration: line-through">x</span>'):
-        assert html_to_text(f"a {html} b") == "a [удалено: x] b"
+R = '<span class="diff-html-removed">'
 
 
-def test_nested_tags_inside_removed_close_correctly():
-    out = html_to_text("<del><b>старое</b> требование</del> новое")
-    assert out == "[удалено: старое требование] новое"
+def _old(html: str) -> str:
+    import re
+    html = re.sub(r"<(script|style)[^>]*>.*?</\1>", " ", html, flags=re.I | re.S)
+    text = re.sub(r"<[^>]+>", " ", html)
+    text = (text.replace("&nbsp;", " ").replace("&amp;", "&")
+            .replace("&lt;", "<").replace("&gt;", ">")
+            .replace("&quot;", '"').replace("&#39;", "'"))
+    return re.sub(r"\s+", " ", text).strip()
 
 
-def test_plain_html_unchanged():
-    assert html_to_text("<p>Привет, <b>Дима</b>!</p>") == "Привет, Дима !"
-    assert not has_diff_markup("<p>текст</p>")
+def test_ordinary_html_is_byte_identical_to_old_path():
+    for html in ("<p>a [ 1 ] b ]</p>", "<p>Привет, <b>Дима</b>!</p>",
+                 "<div>x ]  y</div><style>.a{}</style>", "a &amp; [ b ]"):
+        assert html_to_text(html) == _old(html)
+
+
+def test_brackets_in_diff_email_text_are_kept():
+    out = html_to_text(f"<p>a [ 1 ] b ] {R}x</span></p>")
+    assert out == "a [ 1 ] b ] [удалено: x]"
+
+
+def test_newsletter_strikethrough_is_not_a_diff():
+    for html in ("<s>$50</s> $30", "<del>$50</del> $30", "<strike>$50</strike> $30",
+                 '<span class="line-through">$50</span> $30',
+                 '<span style="text-decoration: line-through">$50</span> $30'):
+        assert not has_diff_markup(html)
+        assert html_to_text(html) == _old(html)
+
+
+def test_stray_end_tag_does_not_lose_closing_marker():
+    assert html_to_text(f"{R}a</b>b</span> c") == "[удалено: ab] c"
+
+
+def test_unclosed_marker_is_closed_at_end():
+    assert html_to_text(f"x {R}a <b>b") == "x [удалено: a b]"
+
+
+def test_nested_markers_are_not_doubled():
+    out = html_to_text(f"{R}a {R}b</span> c</span> d")
+    assert out.count("[удалено:") == 1 and out.count("]") == 1
+
+
+def test_oversize_falls_back_and_pathological_input_is_fast():
+    import time
+    big = R + "x" * (512 * 1024) + "</span>"
+    assert not has_diff_markup(big)
+    t = time.monotonic()
+    html_to_text(big)
+    html_to_text("<p>" * 150000 + R + "x</span>")
+    assert time.monotonic() - t < 5
+
 
 
 def test_multipart_prefers_html_with_diff_over_plain():
