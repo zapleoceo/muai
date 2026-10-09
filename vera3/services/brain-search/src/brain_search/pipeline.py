@@ -14,7 +14,8 @@ from datetime import datetime
 from vera_shared.llm.client import LLMCallFailed, embed
 
 from brain_search.fts import build_ts_query
-from brain_search.identifiers import ticket_ids
+from brain_search.identifier_rows import has_exact_rows
+from brain_search.identifiers import exact_identifiers, is_identifier_only
 from brain_search.lang import content_words
 from brain_search.query_parse import ProjectScope, extract_account_terms
 from brain_search.quoted_query import split_quoted_query
@@ -77,10 +78,13 @@ async def search_ranked(
 ) -> tuple[Candidates, list[tuple[float, Candidate]]]:
     """Полный проход поиска. Пустой вопрос = только окно времени, без вектора."""
     exact_ids = explicit_event_ids(question)
+    identifiers = exact_identifiers(question)
     q_vec = await embed_query(question) if question.strip() and not exact_ids else None
     ts, acc_words = query_terms(question, project)
     found = await fetch_candidates(
         ts_query=ts, acc_words=acc_words, time_range=time_range, project=project,
         q_vec=q_vec, limit=limit, source=source, links=links,
-        exact_event_ids=exact_ids, tickets=ticket_ids(question))
+        exact_event_ids=exact_ids, tickets=identifiers)
+    if is_identifier_only(question, identifiers) and not has_exact_rows(found.rows):
+        return found, []
     return found, score_candidates(found.rows, q_vec, found.acc_words)[:limit]

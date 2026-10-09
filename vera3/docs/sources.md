@@ -108,10 +108,16 @@ telegram/slack/trello свои `[:8000]` сохранили: у них до по
   text underlined, but the `text/plain` alternative drops both, merging the
   old and new versions (LAM-264, event 510796: ADR 0014 "platform pays out"
   read as current next to ADR 0022). `poller._extract_text` now prefers an
-  HTML part when `has_diff_markup` finds Jira's
-  `diff-html-removed|added` classes (bare `<s>/<del>`/line-through in
-  newsletters do not count; HTML above `MAX_DIFF_HTML_CHARS`, 512 KB, keeps
-  the old path); `html_to_text`
+  HTML part when the sender passes `is_jira_sender` (jira@*.atlassian.net)
+  and `has_diff_markup` finds Jira's real markup: body classes
+  `diff-removed`, `diff-added`, `diff-changed` (and legacy `diff-html-*`),
+  plus the header's class-less inline styles (line-through on #ffebe6 =
+  removed, background #e3fcef = added). `diff-changed` wraps a changed span:
+  transparent when it holds nested removed/added, otherwise treated as added
+  (current) text. Self-hosted Jira (e.g. jira@company.com) is not
+  recognised: only jira@*.atlassian.net / atlassian.com. Non-Jira senders, bare `<s>/<del>`/line-through in
+  newsletters and HTML above `MAX_DIFF_HTML_CHARS` (512 KB) keep the old
+  path; `html_to_text`
   renders them as `[удалено: …]` / `[добавлено: …]` (constants
   `REMOVED_OPEN`, `ADDED_OPEN`). Only new ingestions
   are affected: the raw HTML is not stored, so existing events cannot be

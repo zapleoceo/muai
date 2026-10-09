@@ -17,7 +17,12 @@ from brain_search.evidence import (
     SECONDARY_CHARS,
     evidence_excerpt,
 )
-from brain_search.identifiers import identifier_hits, identifier_note, ticket_ids
+from brain_search.identifiers import (
+    exact_identifiers,
+    identifier_hits,
+    identifier_miss_note,
+    identifier_note,
+)
 from brain_search.models import AnswerResponse, HistoryItem, SearchQuery, SearchResult
 from brain_search.query_parse import SOURCE_PROMPT_NOTE
 from brain_search.rows import Candidate
@@ -125,7 +130,8 @@ async def answer(
     self_ctx = await self_context()
     ctx_n = CONTEXT_EVENTS_SUMMARY if summary else CONTEXT_EVENTS
     context = build_context(results[:ctx_n], {c.id: c for c in map(Candidate.of, rows)})
-    hits = identifier_hits(ticket_ids(query.q),
+    identifiers = exact_identifiers(query.q)
+    hits = identifier_hits(identifiers,
                            {r.event_id: full_text_by_id[r.event_id] for r in results})
 
     history: list[HistoryItem] = []
@@ -135,7 +141,7 @@ async def answer(
         history = list(query.history)
     history_block = _history_block(history, query.q)
 
-    notes = (_SUMMARY_NOTE if summary else "") + identifier_note(hits)
+    notes = (_SUMMARY_NOTE if summary else "") + identifier_note(hits) + identifier_miss_note(identifiers, hits)
     if project:
         notes += (f"\n\nВопрос про проект «{project}». Все события ниже уже "
                   f"отобраны как относящиеся к нему (рабочие ящики + чаты). "

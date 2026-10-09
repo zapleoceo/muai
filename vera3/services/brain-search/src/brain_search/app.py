@@ -29,7 +29,12 @@ from vera_shared.db.engine import close_engine, init_engine
 from vera_shared.links.context import owner_entity_id
 from vera_shared.links.filters import FilterError, build_where, from_dict
 
-from brain_search.identifiers import ticket_ids
+from brain_search.identifier_rows import has_exact_rows
+from brain_search.identifiers import (
+    NO_EXACT_ANSWER,
+    exact_identifiers,
+    is_identifier_only,
+)
 from brain_search.models import AnswerResponse, SearchQuery
 from brain_search.pipeline import embed_query, explicit_event_ids, query_terms
 from brain_search.query_parse import (
@@ -147,11 +152,15 @@ async def search(
     summary = False if exact_ids else is_summary_query(query.q)
     eff_limit = max(query.limit, SUMMARY_MIN_LIMIT) if summary else query.limit
 
+    identifiers = exact_identifiers(query.q)
     found = await fetch_candidates(
         ts_query=ts, acc_words=acc_words, time_range=time_range,
         project=project, q_vec=q_vec, limit=eff_limit, links=await _link_scope(query),
-        exact_event_ids=exact_ids, tickets=ticket_ids(query.q),
+        exact_event_ids=exact_ids, tickets=identifiers,
     )
+
+    if is_identifier_only(query.q, identifiers) and not has_exact_rows(found.rows):
+        return AnswerResponse(answer=NO_EXACT_ANSWER, results=[], provider=None, cost_usd=0)
 
     if exact_ids and not found.rows:
         return AnswerResponse(
