@@ -6,7 +6,7 @@ from typing import Annotated, Any, Literal
 
 from mcp.server.fastmcp import Context
 from pydantic import Field
-from vera_shared.room import messages, tasks
+from vera_shared.room import messages, task_progress, tasks
 
 from vera_mcp.auth import allowed_rooms, client_of
 
@@ -104,12 +104,49 @@ async def room_task_update(
     room: Room = "main", status: Literal["in_progress", "blocked"] | None = None,
     note: Annotated[str | None, Field(max_length=4000)] = None,
     extend_seconds: Annotated[int | None, Field(ge=60, le=MAX_LEASE_S)] = None,
+    next_action: Annotated[str | None, Field(max_length=2000)] = None,
+    priority: Annotated[int | None, Field(ge=0, le=3)] = None,
+    refs: Annotated[list[dict[str, Any]] | None, Field(max_length=20)] = None,
 ) -> dict[str, Any]:
-    """Обновить свою задачу (статус/заметка/продление аренды); устаревший fencing_token отвергается. Update a task you hold."""
+    """Обновить свою задачу (статус/заметка/продление аренды/next_action/priority 0..3, 0 срочнее/refs [{kind: jira|url|event|chunk, ref, excerpt<=300}] — только указатели); устаревший fencing_token отвергается. Update a task you hold."""
     task = await tasks.update(room=_room(room), task_id=task_id, agent=client_of(ctx),
                               fencing_token=fencing_token, status=status, note=note,
-                              extend_seconds=extend_seconds)
+                              extend_seconds=extend_seconds, next_action=next_action,
+                              priority=priority, refs=refs)
     return {"ok": True, "task": task}
+
+
+async def room_task_progress(
+    task_id: Ident, fencing_token: Annotated[int, Field(ge=1)], ctx: Context,
+    result: Annotated[str, Field(min_length=1, max_length=4000)], room: Room = "main",
+    next_checkpoint_seconds: Annotated[int | None, Field(ge=60, le=86_400)] = None,
+) -> dict[str, Any]:
+    """Содержательный прогресс (что сделано) — единственное, что двигает last_progress_at; продление аренды прогрессом не считается. next_checkpoint_seconds — когда ждать следующий отчёт. Report real progress, distinct from lease heartbeat."""
+    task = await task_progress.progress(
+        room=_room(room), task_id=task_id, agent=client_of(ctx), fencing_token=fencing_token,
+        result=result, next_checkpoint_seconds=next_checkpoint_seconds)
+    return {"ok": True, "task": task}
+
+
+async def room_task_state(
+    task_id: Ident, fencing_token: Annotated[int, Field(ge=1)], ctx: Context,
+    state: Literal["paused", "review", "resumed", "blocked", "unblocked"],
+    reason: Annotated[str, Field(min_length=1, max_length=4000)], room: Room = "main",
+) -> dict[str, Any]:
+    """Сменить состояние: paused/review — только событие журнала, blocked/unblocked/resumed меняют статус (blocked/in_progress). Вопросы владельцу — отдельно. Record a task state change."""
+    task = await task_progress.set_state(
+        room=_room(room), task_id=task_id, agent=client_of(ctx), fencing_token=fencing_token,
+        state=state, reason=reason)
+    return {"ok": True, "task": task}
+
+
+async def room_task_history(
+    task_id: Ident, room: Room = "main", since_id: Annotated[int | None, Field(ge=0)] = None,
+    limit: Annotated[int, Field(ge=1, le=200)] = 100,
+) -> dict[str, Any]:
+    """Журнал событий задачи по возрастанию id (только чтение, после since_id). Task event log, oldest first."""
+    return {"room": room, "task_id": task_id, "events": await task_progress.history(
+        room=_room(room), task_id=task_id, since_id=since_id, limit=limit)}
 
 
 async def room_task_release(
@@ -134,4 +171,5 @@ async def room_tasks(
 
 
 ROOM_TOOLS = (room_post, room_inbox, room_ack, room_history, room_task_open,
-              room_task_claim, room_task_update, room_task_release, room_tasks)
+              room_task_claim, room_task_update, room_task_progress, room_task_state,
+              room_task_history, room_task_release, room_tasks)

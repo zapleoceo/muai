@@ -34,10 +34,12 @@ def event_dict(r: RoomTaskEventRow) -> dict[str, Any]:
 
 async def list_events(db: AsyncSession, *, room: str, task_id: str,
                       kinds: tuple[str, ...] | None = None, limit: int = 100,
-                      ) -> list[dict[str, Any]]:
+                      since_id: int | None = None) -> list[dict[str, Any]]:
     q = select(RoomTaskEventRow).where(RoomTaskEventRow.room == room,
                                        RoomTaskEventRow.task_id == task_id)
     if kinds:
         q = q.where(RoomTaskEventRow.kind.in_(kinds))
+    if since_id is not None:
+        q = q.where(RoomTaskEventRow.id > since_id)
     rows = (await db.execute(q.order_by(RoomTaskEventRow.id).limit(limit))).scalars().all()
     return [event_dict(r) for r in rows]

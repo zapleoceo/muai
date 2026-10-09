@@ -16,6 +16,8 @@ from sqlalchemy.exc import IntegrityError
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskRow
 from vera_shared.room.task_events import record_event
+from vera_shared.room.task_refs import validate_refs
+from vera_shared.room.task_view import task_dict
 from vera_shared.timeutil import utc_naive_now
 
 RELEASE_STATUSES = ("open", "done", "blocked")
@@ -33,16 +35,6 @@ class TaskBusy(RuntimeError):
 
 class StaleLease(RuntimeError):
     """Аренда не твоя, истекла или fencing_token устарел."""
-
-
-def task_dict(r: RoomTaskRow) -> dict[str, Any]:
-    now = utc_naive_now()
-    live = bool(r.lease_holder and r.lease_until and r.lease_until > now)
-    return {"task_id": r.task_id, "room": r.room, "title": r.title, "status": r.status,
-            "created_by": r.created_by, "lease_holder": r.lease_holder if live else None,
-            "lease_until": r.lease_until.isoformat() if live and r.lease_until else None,
-            "fencing_token": r.fencing_token, "paths": list(r.paths or []), "note": r.note,
-            "updated_at": r.updated_at.isoformat()}
 
 
 async def _locked(s: Any, room: str, task_id: str) -> RoomTaskRow | None:
@@ -132,7 +124,12 @@ def _require_lease(row: RoomTaskRow | None, room: str, task_id: str, agent: str,
 
 async def update(*, room: str, task_id: str, agent: str, fencing_token: int,
                  status: str | None = None, note: str | None = None,
-                 extend_seconds: int | None = None) -> dict[str, Any]:
+                 extend_seconds: int | None = None, next_action: str | None = None,
+                 priority: int | None = None, refs: list[dict[str, Any]] | None = None,
+                 ) -> dict[str, Any]:
+    if priority is not None and not 0 <= priority <= 3:
+        raise ValueError("priority must be 0..3 (0 most urgent, default 2)")
+    clean_refs = validate_refs(refs) if refs is not None else None
     if status is not None and status not in HELD_STATUSES:
         raise ValueError(f"status while holding must be one of {', '.join(HELD_STATUSES)}")
     async with get_session() as s:
@@ -145,6 +142,12 @@ async def update(*, room: str, task_id: str, agent: str, fencing_token: int,
             row.note = note
         if extend_seconds is not None:
             row.lease_until = now + timedelta(seconds=extend_seconds)
+        if next_action is not None:
+            row.next_action = next_action
+        if priority is not None:
+            row.priority = priority
+        if clean_refs is not None:
+            row.refs = clean_refs
         row.updated_at = now
         if status is not None or note is not None:
             # прогресс — содержательная правка; одно продление аренды (heartbeat) его не двигает
