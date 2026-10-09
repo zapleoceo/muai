@@ -92,6 +92,32 @@ async def test_update_validates_and_stores_queue_fields(sqlite_db):
                                **bad)
 
 
+async def test_open_accepts_queue_fields_so_task_is_pickable_at_creation(sqlite_db):
+    refs = [{"kind": "jira", "ref": "SIN-1", "excerpt": "x"}]
+    opened = (await r.room_task_open("Q", OWNER, project="vera3", priority=0, auto_pickup=True,
+                                     depends_on=["A"], next_action="start", refs=refs))
+    task_ = opened["task"]
+    assert (task_["project"], task_["priority"], task_["auto_pickup"], task_["depends_on"],
+            task_["next_action"], task_["refs"]) == ("vera3", 0, True, ["A"], "start", refs)
+    assert (await r.room_task_next(CLAUDE))["task"] is None  # зависимость A не done
+    again = (await r.room_task_open("Q", CODEX, priority=3))["task"]
+    assert again["priority"] == 0  # существующую задачу открытие не правит
+    await r.room_task_open("A", OWNER)
+    await r.room_task_claim("A", OWNER)
+    await r.room_task_release("A", 1, OWNER)
+    assert (await r.room_task_next(CLAUDE, project="vera3"))["task"]["task_id"] == "Q"
+
+
+@pytest.mark.parametrize("bad", [
+    {"depends_on": ["Q"]}, {"project": "bad name"}, {"priority": 4},
+    {"next_action": "x" * 2001}, {"refs": [{"kind": "nope", "ref": "x"}]}])
+async def test_open_validates_queue_fields(sqlite_db, bad):
+    with pytest.raises(ValueError, match="depend|project|priority|next_action|ref"):
+        await tasks.open_task(room="main", task_id="Q", agent="owner", title=None, paths=None,
+                              **bad)
+    assert (await r.room_tasks())["tasks"] == []
+
+
 # ─── room_task_next ──────────────────────────────────────────────────────────
 
 

@@ -205,8 +205,10 @@ MCP-инструменты поверх журнала шага 1 (код — `v
   `room_task_progress`, `room_task_update` с `note`/`status`, `release` и новый захват.
 - `room_task_update` принимает `project` (`[A-Za-z0-9_.-]{1,64}`), `depends_on` (до 20
   `task_id`, без самой задачи и повторов) и `auto_pickup`; проверка — `validate_project`,
-  `validate_depends_on`. Задачу в очередь ставят так: захватить → `room_task_update(auto_pickup=true, …)` →
-  `room_task_release(status=open)`.
+  `validate_depends_on`. `room_task_open` принимает те же `project`, `depends_on`,
+  `auto_pickup` и ещё `priority`, `next_action`, `refs` (проверка `validate_open_fields`
+  как в `room_task_update`), так что задача попадает в очередь уже при создании; у
+  существующей задачи эти поля не меняются.
 - `room_task_next(project=None, session, account)` (`task_queue.next_task`) — атомарно берёт
   одну задачу: `open`, без живой аренды, `auto_pickup`, все `depends_on` в `done` (несуществующая
   зависимость не выполнена), нет открытого вопроса, не на паузе; порядок — `priority`, затем

@@ -15,7 +15,11 @@ from sqlalchemy.exc import IntegrityError
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskRow
 from vera_shared.room.task_events import record_event
-from vera_shared.room.task_fields import validate_depends_on, validate_project
+from vera_shared.room.task_fields import (
+    validate_depends_on,
+    validate_open_fields,
+    validate_project,
+)
 from vera_shared.room.task_refs import validate_refs
 from vera_shared.room.task_view import task_dict
 from vera_shared.timeutil import utc_naive_now
@@ -42,15 +46,22 @@ async def _locked(s: Any, room: str, task_id: str) -> RoomTaskRow | None:
 
 
 async def open_task(*, room: str, task_id: str, agent: str, title: str | None,
-                    paths: list[str] | None) -> tuple[dict[str, Any], bool]:
-    """(задача, created). Уже существующая задача возвращается как есть."""
+                    paths: list[str] | None, project: str | None = None,
+                    priority: int | None = None, auto_pickup: bool | None = None,
+                    depends_on: list[str] | None = None, next_action: str | None = None,
+                    refs: list[dict[str, Any]] | None = None,
+                    ) -> tuple[dict[str, Any], bool]:
+    """(задача, created). Существующая возвращается как есть, поля очереди не меняются."""
+    extra = validate_open_fields(task_id, project=project, priority=priority,
+                                 auto_pickup=auto_pickup, depends_on=depends_on,
+                                 next_action=next_action, refs=refs)
     try:
         async with get_session() as s:
             row = await _locked(s, room, task_id)
             if row is not None:
                 return task_dict(row), False
             row = RoomTaskRow(room=room, task_id=task_id, title=title, created_by=agent,
-                              status="open", fencing_token=0, paths=paths or [])
+                              status="open", fencing_token=0, paths=paths or [], **extra)
             s.add(row)
             await record_event(s, room=room, task_id=task_id, kind="created", agent=agent,
                                text=title)

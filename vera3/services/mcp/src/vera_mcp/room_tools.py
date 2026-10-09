@@ -82,10 +82,17 @@ async def room_history(
 async def room_task_open(
     task_id: Ident, ctx: Context, room: Room = "main",
     title: Annotated[str | None, Field(max_length=500)] = None, paths: Paths | None = None,
+    project: Project | None = None, priority: Annotated[int | None, Field(ge=0, le=3)] = None,
+    auto_pickup: bool | None = None,
+    depends_on: Annotated[list[Ident] | None, Field(max_length=20)] = None,
+    next_action: Annotated[str | None, Field(max_length=2000)] = None,
+    refs: Annotated[list[dict[str, Any]] | None, Field(max_length=20)] = None,
 ) -> dict[str, Any]:
-    """Завести задачу без захвата (чтобы её мог взять другой агент). Create an unclaimed task."""
-    task, created = await tasks.open_task(room=_room(room), task_id=task_id,
-                                          agent=client_of(ctx), title=title, paths=paths)
+    """Завести задачу без захвата (чтобы её мог взять другой агент); project/priority/auto_pickup/depends_on/next_action/refs — поля очереди, проверяются как в room_task_update, у существующей задачи не меняются. Create an unclaimed task."""
+    task, created = await tasks.open_task(
+        room=_room(room), task_id=task_id, agent=client_of(ctx), title=title, paths=paths,
+        project=project, priority=priority, auto_pickup=auto_pickup, depends_on=depends_on,
+        next_action=next_action, refs=refs)
     return {"ok": True, "created": created, "task": task}
 
 
