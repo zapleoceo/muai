@@ -385,3 +385,60 @@ sniffer; без учёта регистра). Внутри — `<details open>` 
 существующей задачи поле не меняет. Поле входит в вывод `task_dict` (а значит, в `room_tasks`,
 `room_task_state`, inbox) и показывается на `/tasks`: «отв.: …» в строке и «Ответственный»
 в карточке. Тесты: `tests/unit/test_room_responsible.py`.
+
+## Трекер задач — шаг 4 — handoff
+
+Передача задачи другому агенту с подтверждением получателя. Миграции нет: колонка
+`pending_handoff_to` и виды событий `handoff_offer`/`handoff_accept` есть с 049. Код —
+`vera_shared/room/handoff.py`, MCP — `vera_mcp/room_handoff_tools.py` (`HANDOFF_TOOLS`).
+
+- `room_task_handoff(task_id, fencing_token, to, note)` → `handoff.offer`: нужна живая
+  аренда и текущий токен; ставит `pending_handoff_to`, пишет `handoff_offer` и в той же
+  транзакции сообщение получателю (`add_message`, статус `request`). Аренда и токен остаются
+  у отправителя. Второе предложение при висящем — `HandoffError`; себе передать нельзя.
+- `room_task_handoff_accept(task_id, lease_seconds, session, account)` → `handoff.accept`:
+  принять может только `pending_handoff_to`. Аренда переходит получателю на
+  `lease_seconds` (по умолчанию `DEFAULT_HANDOFF_LEASE_S` = 900), `fencing_token` растёт на 1
+  (токен отправителя сразу устаревает — `StaleLease`), `holder_session`/`holder_account`
+  берутся из приёма, `pending_handoff_to` сбрасывается, событие `handoff_accept`.
+- `room_task_handoff_decline(task_id, …)` → `handoff.decline` (получатель) и с `cancel=true`
+  → `handoff.cancel` (отправитель, нужен токен): сбрасывают `pending_handoff_to`, задача
+  остаётся у отправителя. Отдельных видов событий нет: пишется `handoff_offer` с
+  `data.action` = `offer` / `decline` / `cancel`, поэтому CHECK не менялся.
+- Новый захват и `release` тоже сбрасывают `pending_handoff_to`. `task_dict` отдаёт поле.
+- attention: при живой аренде и висящей передаче состояние `handoff_pending`
+  (`HANDOFF_PENDING`), подпись «ждёт приёма codex». Во вкладке `/tasks` это «В работе».
+
+Тесты: `tests/unit/test_room_handoff.py`, `tests/integration/test_room_pg.py`.
+
+## Трекер задач — шаг 6 — сторож
+
+Сторож не зависит от исполнителей: цикл `watchdog_loop` (`dashboard/watchdog_loop.py`,
+`INTERVAL_S` = 60) запускается в lifespan дашборда через `start_watchdog`, ссылка на
+`asyncio.Task` держится до `stop_watchdog`. Проход — `watchdog.run_once` (`vera_shared/room/
+watchdog.py`): кандидаты — задачи `in_progress`/`blocked` с держателем
+(`CANDIDATE_STATUSES`); каждая обрабатывается в своей транзакции под `FOR UPDATE`
+(`check_task`), решения принимает чистая `watchdog_rules.decide` (время — аргумент).
+
+Правила (`Action` — результат решения):
+- Аренда истекла: одно событие `lease_expired` на пару (задача, `fencing_token`) —
+  дедупликация по последнему событию задачи.
+- Истекла и прогресса нет дольше `RECOVERY_FACTOR` (2) длин аренды — задача уходит в
+  `open`, держатель снят, `fencing_token` прежний (старый держатель получает `StaleLease`),
+  событие `watchdog_action` с `data.action = reopen`. Длина аренды (`lease_length`) —
+  `lease_until − последний claimed/handoff_accept`, не меньше `MIN_LEASE` (15 мин);
+  прогресс считается от `last_progress_at`, а при его отсутствии от захвата. Иначе задача
+  не трогается и видна в «Нужен я» (`lease_expired` в attention).
+- Просроченная контрольная точка без прогресса после неё: одно `watchdog_action`
+  (`data.checkpoint` — метка точки) и одно сообщение от `watchdog` исполнителю (а без
+  держателя — ответственному) на каждую точку.
+- Пауза, открытый вопрос владельцу, `done`, `cancelled`, ожидание (`waiting`) в правила не
+  попадают, ничего не удаляется.
+
+`run_once` каждый раз пишет `watchdog_state('room', last_run_at, last_error)`
+(`write_state`, имя — `STATE_NAME`). Ошибка по задаче пишется в `last_error`, логируется
+на WARNING, остальные задачи обрабатываются. Шапка `/tasks` показывает «сторож: N с назад»
+(`watchdog_badge`, `load_watchdog` в `dashboard/watchdog_view.py`); красным — если прошло
+больше `STALE_AFTER_S` (180 с, три интервала) или есть `last_error`.
+
+Тесты: `tests/unit/test_room_watchdog.py`, `tests/integration/test_room_pg.py`.

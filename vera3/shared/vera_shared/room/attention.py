@@ -18,6 +18,7 @@ UNASSIGNED, IN_PROGRESS, STALE_PROGRESS, LEASE_EXPIRED = (
     "unassigned", "in_progress", "stale_progress", "lease_expired")
 WAITING, NEEDS_OWNER, BLOCKED, PAUSED, DONE, CANCELLED = (
     "waiting", "needs_owner", "blocked", "paused", "done", "cancelled")
+HANDOFF_PENDING = "handoff_pending"  # передача предложена, получатель ещё не принял
 ANSWERED = "answered"  # владелец ответил, исполнитель ещё не подтвердил
 NEEDS_ATTENTION = (UNASSIGNED, STALE_PROGRESS, LEASE_EXPIRED, NEEDS_OWNER)
 
@@ -78,6 +79,9 @@ def attention(task: Any, now: datetime, *, open_question_at: datetime | None = N
         # у задачи без держателя нет heartbeat'ов: updated_at = момент, когда её отпустили
         return make(UNASSIGNED, f"никто не взял {humanize(now - task.updated_at)}",
                     task.updated_at)
+    pending_to = getattr(task, "pending_handoff_to", None)
+    if pending_to and task.lease_until is not None and task.lease_until > now:
+        return make(HANDOFF_PENDING, f"ждёт приёма {pending_to}", None)
     waiting_until = task.waiting_until
     if waiting_until is not None and waiting_until > now:
         return make(WAITING, f"ждёт до {waiting_until:%Y-%m-%d %H:%M} UTC "

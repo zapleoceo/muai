@@ -244,3 +244,32 @@ async def test_question_round_trip_on_postgres(pg_db):
     msgs = await messages.history(room="main", limit=10, task_id="PGQ")
     assert [m["status"] for m in msgs] == ["question", "info"]
     assert msgs[1]["in_reply_to"] == msgs[0]["message_id"]
+
+
+async def test_handoff_and_watchdog_round_trip_on_postgres(pg_db):
+    from vera_shared.db.models_room import WatchdogStateRow
+    from vera_shared.room import handoff, task_progress, tasks, watchdog
+    from vera_shared.room.tasks import StaleLease
+
+    await tasks.claim(room="main", task_id="PGH", agent="claude", lease_seconds=600)
+    await handoff.offer(room="main", task_id="PGH", agent="claude", fencing_token=1,
+                        to_agent="codex", note="дальше ты")
+    moved = await handoff.accept(room="main", task_id="PGH", agent="codex", session="s1")
+    assert (moved["lease_holder"], moved["fencing_token"]) == ("codex", 2)
+    with pytest.raises(StaleLease):
+        await tasks.update(room="main", task_id="PGH", agent="claude", fencing_token=1,
+                           note="поздно")
+    late = utc_naive_now() + timedelta(hours=3)
+    first = await watchdog.run_once(late)
+    assert first["actions"] == [("main", "PGH", "lease_expired"),
+                                ("main", "PGH", "watchdog_action")]
+    assert (await watchdog.run_once(late + timedelta(minutes=1)))["actions"] == []
+    kinds = [e["kind"] for e in await task_progress.history(
+        room="main", task_id="PGH", since_id=None, limit=50)]
+    assert kinds.count("lease_expired") == 1 and kinds[-1] == "watchdog_action"
+    async with pg_db() as s:
+        st = await s.get(WatchdogStateRow, "room")
+    assert st.last_run_at == late + timedelta(minutes=1) and st.last_error is None
+    reopened = await tasks.claim(room="main", task_id="PGH", agent="gemini",
+                                 lease_seconds=600)
+    assert reopened["fencing_token"] == 3

@@ -89,6 +89,7 @@ def apply_claim(row: RoomTaskRow, *, agent: str, now: datetime, lease_seconds: i
         row.lease_holder = agent
         row.holder_session, row.holder_account = session, account
         row.waiting_until, row.waiting_reason = None, None
+        row.pending_handoff_to = None
     else:
         row.holder_session = session or row.holder_session
         row.holder_account = account or row.holder_account
@@ -221,6 +222,7 @@ async def release(*, room: str, task_id: str, agent: str, fencing_token: int,
         row.lease_holder = None
         row.lease_until = None
         row.waiting_until, row.waiting_reason = None, None
+        row.pending_handoff_to = None
         if note is not None:
             row.note = note
         row.updated_at = utc_naive_now()

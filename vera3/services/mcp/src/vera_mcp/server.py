@@ -22,6 +22,7 @@ from vera_shared.auth import internal_secret_ok
 
 from vera_mcp.auth import REALM_SCOPE_KEY, ROOM_REALM, BearerAuthMiddleware
 from vera_mcp.read_tools import READ_TOOLS
+from vera_mcp.room_handoff_tools import HANDOFF_TOOLS
 from vera_mcp.room_oauth import RoomOAuthProvider
 from vera_mcp.room_oauth import enabled as room_oauth_enabled
 from vera_mcp.room_oauth import settings as room_oauth_settings
@@ -75,7 +76,7 @@ def build_room_mcp(oauth: RoomOAuthProvider | None = None) -> FastMCP:
     auth_kwargs = ({"auth": room_oauth_settings(), "auth_server_provider": oauth}
                    if oauth else {})
     mcp = _fastmcp("vera-room", ROOM_INSTRUCTIONS, **auth_kwargs)
-    for tool in (*ROOM_TOOLS, *QUESTION_TOOLS):
+    for tool in (*ROOM_TOOLS, *QUESTION_TOOLS, *HANDOFF_TOOLS):
         mcp.tool()(tool)
     if oauth:
         @mcp.custom_route("/oauth/internal/consent", methods=["GET", "POST"])
