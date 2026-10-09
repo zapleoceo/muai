@@ -22,6 +22,10 @@ from dashboard.render import esc, local_dt
 
 SPANS = {"24h": timedelta(hours=24), "7d": timedelta(days=7)}
 DEFAULT_SPAN = "24h"
+FIT = "fit"
+FIT_LABEL = "по данным"
+FIT_MIN = timedelta(hours=1)
+FIT_DEFAULT_WITHIN = timedelta(hours=6)
 KIND_LABELS = {WORK: "работа", PAUSED: "пауза", REVIEW: "проверка", BLOCKED: "блок",
                WAITING: "ожидание", UNKNOWN: "неизвестно"}
 _FILL = {WORK: "var(--ok)", PAUSED: "var(--faint)", REVIEW: "var(--accent)",
@@ -32,6 +36,7 @@ MAX_TICKS = 8
 
 CSS = """<style>
 .gt{margin:.6rem 0 1rem}.gt-scroll{overflow-x:auto}.gt-in{min-width:640px}
+.gt-grp{font-size:.75rem;font-weight:600;color:var(--text-strong);margin:.5rem 0 .1rem}
 .gt-row{display:flex;align-items:center;gap:.5rem}
 .gt-lab{flex:0 0 9rem;font-size:.8rem;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .gt-row svg{flex:1;height:20px;display:block}
@@ -48,10 +53,26 @@ class GanttRow:
     label: str
     segments: list[Segment]
     plan: tuple[datetime, datetime] | None = None
+    group: str = ""
 
 
 def parse_span(value: str | None) -> str:
-    return value if value in SPANS else DEFAULT_SPAN
+    return value if value in SPANS or value == FIT else DEFAULT_SPAN
+
+
+def resolve_span(value: str | None, rows: list[GanttRow], now: datetime) -> str:
+    """Явный `?span=` главнее; без него — fit, если вся активность моложе 6 ч, иначе 24h."""
+    if value in SPANS or value == FIT:
+        return str(value)
+    starts = [s.start for r in rows for s in r.segments]
+    if starts and min(starts) >= now - FIT_DEFAULT_WITHIN:
+        return FIT
+    return DEFAULT_SPAN
+
+
+def fit_start(rows: list[GanttRow], now: datetime) -> datetime:
+    starts = [s.start for r in rows for s in r.segments if s.start < now]
+    return min(min(starts, default=now), now - FIT_MIN)
 
 
 def _ticks(t0: datetime, t1: datetime) -> list[datetime]:
@@ -119,8 +140,15 @@ def _legend(with_plan: bool) -> str:
 
 def _chart(rows: list[GanttRow], t0: datetime, t1: datetime, fmt: str) -> str:
     ticks = _ticks(t0, t1)
-    body = "".join(f'<div class="gt-row"><div class="gt-lab" title="{esc(r.label)}">'
-                   f'{esc(r.label)}</div>{_svg(r, t0, t1, ticks)}</div>' for r in rows)
+    parts: list[str] = []
+    group: str | None = None
+    for r in rows:
+        if r.group and r.group != group:
+            parts.append(f'<div class="gt-grp">{esc(r.group)}</div>')
+        group = r.group
+        parts.append(f'<div class="gt-row"><div class="gt-lab" title="{esc(r.label)}">'
+                     f'{esc(r.label)}</div>{_svg(r, t0, t1, ticks)}</div>')
+    body = "".join(parts)
     return (f'<div class="gt-scroll"><div class="gt-in">{body}{_axis(ticks, t0, t1, fmt)}'
             f'</div></div>{_legend(any(r.plan for r in rows))}')
 
@@ -152,14 +180,14 @@ def task_gantt(segments: list[Segment], plan: tuple[datetime, datetime] | None) 
 
 def span_nav(tab: str, span: str) -> str:
     chips = "".join(f'<a class="chip{" on" if k == span else ""}" href="/tasks?tab={esc(tab)}'
-                    f'&amp;span={k}">{k}</a>' for k in SPANS)
+                    f'&amp;span={k}">{FIT_LABEL if k == FIT else k}</a>' for k in (*SPANS, FIT))
     return f'<div class="chips">{chips}</div>'
 
 
 def tasks_gantt(rows: list[GanttRow], now: datetime, span: str, tab: str) -> str:
     """Сводка по задачам вкладки за окно `span`; строки без отрезков в окне не рисуются."""
     t1 = now
-    t0 = now - SPANS[parse_span(span)]
+    t0 = fit_start(rows, now) if span == FIT else now - SPANS[parse_span(span)]
     visible = [r for r in rows
                if any(s.end > t0 and s.start < t1 for s in r.segments)
                or (r.plan and r.plan[1] > t0 and r.plan[0] < t1)]
