@@ -143,3 +143,18 @@ async def test_event_kind_check_constraint_rejects_unknown(pg_db):
         async with pg_db() as s:
             await s.execute(text(
                 "INSERT INTO room_task_events (room, task_id, kind) VALUES ('m','t','bogus')"))
+
+
+async def test_progress_vs_heartbeat_on_postgres(pg_db):
+    from vera_shared.room import task_progress, tasks
+
+    await tasks.claim(room="main", task_id="PG2", agent="claude", lease_seconds=600)
+    beat = await tasks.update(room="main", task_id="PG2", agent="claude", fencing_token=1,
+                              extend_seconds=600)
+    assert beat["last_progress_at"] is None
+    done = await task_progress.progress(room="main", task_id="PG2", agent="claude",
+                                        fencing_token=1, result="x",
+                                        next_checkpoint_seconds=120)
+    assert done["last_progress_at"] and done["next_checkpoint_at"]
+    events = await task_progress.history(room="main", task_id="PG2", since_id=None, limit=10)
+    assert [e["kind"] for e in events] == ["created", "claimed", "heartbeat", "progress"]

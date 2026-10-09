@@ -53,7 +53,10 @@
 | `room_history` | Вся переписка комнаты, включая адресные сообщения (комната общая), по возрастанию; `before_id`, `task_id` |
 | `room_task_open` | Завести задачу без захвата — чтобы её взял другой |
 | `room_task_claim` | Аренда задачи (60 с…4 ч, по умолчанию 15 мин). Возвращает `fencing_token` |
-| `room_task_update` | Статус in_progress/blocked, заметка, продление — только с текущим `fencing_token` |
+| `room_task_update` | Статус in_progress/blocked, заметка, продление, `next_action`, `priority` (0..3, 0 срочнее, по умолчанию 2), `refs` — только с текущим `fencing_token` |
+| `room_task_progress` | Содержательный прогресс (`result`, необязательный `next_checkpoint_seconds` 60..86400) — единственный путь к `last_progress_at` |
+| `room_task_state` | `paused`/`review`/`resumed`/`blocked`/`unblocked` с `reason` |
+| `room_task_history` | Журнал событий задачи по возрастанию id (`since_id`, `limit` ≤ 200), только чтение |
 | `room_task_release` | done / blocked / open (вернуть в пул) — тоже с `fencing_token` |
 | `room_tasks` | Задачи комнаты с живым держателем аренды |
 
@@ -119,6 +122,37 @@
 `update` с `note` или `status` — `progress`: ставит `last_progress_at` и
 `last_progress_text` (заметка либо `status: …`). «Давно ли задача реально
 двигается» читается только из `last_progress_at`.
+
+## Трекер задач — шаг 2
+
+MCP-инструменты поверх журнала шага 1 (код — `vera_shared/room/task_progress.py`,
+`task_refs.py`, `task_view.py`; новых миграций нет). Все три пишущих требуют живой
+аренды и текущего `fencing_token` (`StaleLease` иначе); автор — имя токена.
+
+- `room_task_progress(task_id, fencing_token, result, next_checkpoint_seconds=None)` —
+  ставит `last_progress_at`/`last_progress_text`, при заданном числе — `next_checkpoint_at`
+  (границы `MIN_CHECKPOINT_S`=60 … `MAX_CHECKPOINT_S`=86400 с), пишет событие `progress`.
+  Продление аренды (heartbeat) этих полей не двигает.
+- `room_task_state(..., state, reason)` — пишет событие того же вида. Статус задачи:
+  `blocked` → `blocked`, `unblocked`/`resumed` → `in_progress`; `paused` и `review` статус
+  не меняют (значения статуса не расширяются), видны только в журнале. `blocked` здесь —
+  простая блокировка без вопроса (вопросы — шаг 3).
+- `room_task_update` принимает ещё `next_action`, `priority` (0..3) и `refs` — список
+  `{kind, ref, excerpt}`: `kind` из `REF_KINDS` (jira, url, event, chunk), `ref` 1..500,
+  `excerpt` ≤ 300 символов, не более `MAX_REFS`=20; `validate_refs` отвергает всё
+  остальное. Refs — только указатели: по ним ничего не читается из памяти и журналов.
+  Правка этих полей без `note`/`status` остаётся `heartbeat`.
+- `room_task_history(task_id, since_id=None, limit=100)` — события задачи по возрастанию
+  id (`list_events(since_id=…)`); имя выбрано вместо `room_task_events`, чтобы не
+  путаться с таблицей `room_task_events` (по аналогии с `room_history`).
+- `room_tasks` и ответы остальных инструментов содержат `priority`, `owner`, `next_action`,
+  `refs`, `holder_session`, `holder_account`, `last_progress_at`, `last_progress_text`,
+  `next_checkpoint_at` (`task_dict`).
+
+Функции слоя: `progress`, `set_state` (допустимые — `STATE_KINDS`, соответствие статусу —
+`STATE_TO_STATUS`), `history`.
+
+Тесты: `tests/unit/test_room_tracker_progress.py`, `tests/integration/test_room_pg.py`.
 
 ## Код
 
