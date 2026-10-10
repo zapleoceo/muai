@@ -41,18 +41,12 @@ def answer() -> BrainAnswer:
 
 
 class Recorder:
-    """И `Send(html, plain)`, и `Ask(html, plain, command_id)`."""
+    """`Send(html, plain)` — ровно два аргумента: места под клавиатуру нет."""
 
     def __init__(self) -> None:
         self.sent: list[str] = []
-        self.asked: list[str] = []
 
     async def __call__(self, _html: str, plain: str) -> int:
-        self.sent.append(plain)
-        return len(self.sent)
-
-    async def ask(self, _html: str, plain: str, command_id: str) -> int:
-        self.asked.append(command_id)
         self.sent.append(plain)
         return len(self.sent)
 

@@ -22,7 +22,6 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_voice import VoiceCommandRow
 from vera_shared.timeutil import utc_naive_now
-from vera_shared.voice_help.policy import needs_confirmation
 
 log = logging.getLogger(__name__)
 
@@ -42,13 +41,14 @@ def event_text(instruction: str) -> str:
     return f"Голосовое поручение Вере: {instruction}"
 
 
-def help_state_for(kind: str, confidence: float | None, doubts: list[str]) -> str | None:
+def help_state_for(kind: str, confidence: float | None) -> str | None:
     """Куда идёт просьба: None — только ответ мозга (переспрос или старый
-    слушатель без уверенности), confirm — сначала «Это ты сказал?», ready —
-    сразу срочная задача в комнате."""
+    слушатель без уверенности), ready — сразу срочная задача в комнате.
+    Сомнения (`doubts`) маршрут не меняют: они помечают задачу при открытии
+    (`policy.source_uncertain`), подтверждения кнопкой нет."""
     if kind != "command" or confidence is None:
         return None
-    return "confirm" if needs_confirmation(confidence, doubts) else "ready"
+    return "ready"
 
 
 async def create_command(command_id: str, instruction: str, spoken_at: datetime,
@@ -84,8 +84,7 @@ async def create_command(command_id: str, instruction: str, spoken_at: datetime,
                               source={**(source or {}), "app": app,
                                       "window_title": window_title,
                                       "doubts": list(doubts or [])},
-                              help_state=help_state_for(kind, confidence,
-                                                        doubts or [])))
+                              help_state=help_state_for(kind, confidence)))
         try:
             await s.flush()
         except IntegrityError:

@@ -20,9 +20,10 @@ from __future__ import annotations
 import asyncio
 import logging
 from collections.abc import Awaitable, Callable
-from datetime import timedelta
+from datetime import datetime, timedelta
 from html import escape
 
+from vera_shared.db.models_voice import VoiceCommandRow
 from vera_shared.timeutil import utc_naive_now
 from vera_shared.voice_commands import (
     claim_command,
@@ -34,19 +35,13 @@ from vera_shared.voice_commands import (
     pending_notifications,
     revive_stale,
 )
+from vera_shared.voice_help.policy import source_uncertain
 from vera_shared.voice_help.queue_state import mark_opened
 from vera_shared.voice_help.room_intake import open_help_task
 
 from bot_telegram.brain import BrainError, ask_brain, save_event
 from bot_telegram.formatting import format_reply, plain_fallback
-from bot_telegram.help_worker import (
-    REPROMPT_TEXT,
-    Ask,
-    ask_confirmation,
-    expire_confirmations,
-    opened_ack_text,
-    track_help,
-)
+from bot_telegram.help_worker import REPROMPT_TEXT, opened_text, say, track_help
 
 log = logging.getLogger(__name__)
 
@@ -54,6 +49,10 @@ POLL_S = 2.0
 #: `Send(html, plain)` → id отправленного сообщения. plain — запасной текст на
 #: случай, если Telegram отклонит HTML (см. formatting.plain_fallback).
 Send = Callable[[str, str], Awaitable[int]]
+
+#: Строки, по которым открывается срочная задача. `confirm` — от версии с
+#: кнопкой «Это ты сказал?»: такие строки теперь открываются так же.
+HELP_TO_OPEN = ("ready", "confirm", "opened")
 
 
 #: Поручение старше этого не исполняется: «срочно напиши» через сутки после
@@ -78,7 +77,34 @@ def failed_text(instruction: str) -> str:
     return "Не смогла выполнить голосовое поручение."
 
 
-async def process_one(send: Send, owner_id: int, ask: Ask | None = None) -> bool:
+def _ms(since: datetime | None, now: datetime) -> str:
+    return "?" if since is None else f"{(now - since).total_seconds() * 1000:.0f}"
+
+
+async def open_and_notify(send: Send, row: VoiceCommandRow, now: datetime) -> bool:
+    """Открыть задачу и сообщить владельцу. → неподтверждён ли источник.
+
+    Неподтверждённый источник — только задача с пометкой и уведомление:
+    ответ мозга не запускается, ничего не исполняется.
+    """
+    uncertain = source_uncertain(row.confidence, (row.source or {}).get("doubts") or [])
+    task_id = await open_help_task(
+        command_id=row.command_id, event_id=row.event_id,
+        instruction=row.instruction, source=row.source, uncertain=uncertain)
+    if row.help_state != "opened":
+        await mark_opened(row.command_id, task_id, now)
+    opened = utc_naive_now()
+    if row.acked_at is None:
+        await say(send, opened_text(task_id, row.instruction, uncertain=uncertain))
+        await mark_acked(row.command_id)
+    log.info("voice-worker: %s очередь→задача %s мс, →уведомление %s мс%s",
+             row.command_id, _ms(row.created_at, opened),
+             _ms(row.created_at, utc_naive_now()),
+             " (источник не подтверждён)" if uncertain else "")
+    return uncertain
+
+
+async def process_one(send: Send, owner_id: int) -> bool:
     """Ответить на одно поручение. False — очередь пуста.
 
     Гарантия — ответ не теряется и обычно приходит один раз. Дубль возможен в
@@ -101,26 +127,13 @@ async def process_one(send: Send, owner_id: int, ask: Ask | None = None) -> bool
             if row.answered_at is None:
                 await send(REPROMPT_TEXT, REPROMPT_TEXT)
                 await mark_answered(row.command_id)
-        elif row.help_state == "confirm":
-            if ask is None:
-                raise RuntimeError("confirmation needed but no Ask sender")
-            # Без «Да» — ни задачи, ни ответа мозга: строка ждёт в waiting.
-            quoted = "quoted" in (row.source or {}).get("doubts", [])
-            await ask_confirmation(ask, row.command_id, row.instruction, now,
-                                   quoted=quoted)
-            return True
         elif row.answered_at is None:
-            if row.help_state == "ready":
-                task_id = await open_help_task(
-                    command_id=row.command_id, event_id=row.event_id,
-                    instruction=row.instruction, source=row.source)
-                await mark_opened(row.command_id, task_id, now)
-            if row.acked_at is None:
-                ack = (opened_ack_text(row.instruction)
-                       if row.help_state in ("ready", "opened")
-                       else ack_text(row.instruction))
-                # Поручение — распознанная речь, и «<» в ней сломал бы HTML.
-                await send(escape(ack, quote=False), ack)
+            if row.help_state in HELP_TO_OPEN:
+                if await open_and_notify(send, row, now):
+                    await finish_command(row.command_id)
+                    return True
+            elif row.acked_at is None:
+                await say(send, ack_text(row.instruction))
                 await mark_acked(row.command_id)
             answer = await ask_brain(row.instruction, owner_id, owner_id)
             msg_id = await send(
@@ -168,7 +181,7 @@ async def notify_failed(send: Send) -> int:
     return done
 
 
-async def run_forever(send: Send, owner_id: int, ask: Ask | None = None) -> None:
+async def run_forever(send: Send, owner_id: int) -> None:
     if owner_id == 0:
         # Fail-closed, как `_owner_only` в боте: без адресата поручения ждут
         # в очереди, а не уходят кому попало.
@@ -179,9 +192,8 @@ async def run_forever(send: Send, owner_id: int, ask: Ask | None = None) -> None
         try:
             await revive_stale()
             await notify_failed(send)
-            await expire_confirmations(send, utc_naive_now())
             await track_help(send, utc_naive_now())
-            busy = await process_one(send, owner_id, ask)
+            busy = await process_one(send, owner_id)
         except asyncio.CancelledError:
             raise
         except Exception:

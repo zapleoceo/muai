@@ -190,7 +190,8 @@ class Listener:
             self._watches[self.session] = CommandWatch(
                 session_id, self._session_wall, self.commands.put,
                 phrase=self.config.codeword, app=session.app,
-                window_title=session.window_title)
+                window_title=session.window_title,
+                clock=lambda zero=self._session_zero: time.monotonic() - zero)
         self.status.set_state(TALKING)
         if part > 1:
             log.info("разговор продолжается, часть %d (%s)", part, meeting_id)
@@ -212,6 +213,14 @@ class Listener:
             # эхо, а обычный кусок набирается минуту речи. Отдаём накопленное
             # на ближайшей паузе — иначе ответ ждал бы конца чужого монолога.
             self._queue_chunk(SYSTEM)
+        elif (frame.track == MIC and watch is not None
+              and recorder.silence_s >= PAUSE_FLUSH_S):
+            # Кодовую фразу видно только после распознавания, а обычный кусок
+            # микрофона ждёт минуту речи — короткая просьба дожидалась бы
+            # закрытия сессии (60 с тишины). Пока поручения включены, кусок
+            # микрофона уходит на каждой паузе ≥2 с: фраза распознаётся через
+            # секунды, а `chunk_done` закрывает поручение.
+            self._queue_chunk(MIC)
         if self._held and self._system_confirmed():
             self._flush_held()
 

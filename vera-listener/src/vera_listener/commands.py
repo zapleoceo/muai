@@ -45,7 +45,8 @@ class CommandWatch:
     def __init__(self, session_id: str, started_wall: datetime,
                  deliver: Callable[[dict[str, Any]], None], *,
                  phrase: str = codeword.DEFAULT_PHRASE,
-                 app: str | None = None, window_title: str | None = None):
+                 app: str | None = None, window_title: str | None = None,
+                 clock: Callable[[], float] | None = None):
         self.session_id = session_id
         self.started_wall = started_wall
         self.deliver = deliver
@@ -53,6 +54,9 @@ class CommandWatch:
         self.app = app
         self.window_title = window_title
         self.system = SystemTrack()
+        #: Часы сессии в тех же секундах, что и `at` реплик. Без внешних —
+        #: часы захвата: в тестах кадры идут быстрее настоящего времени.
+        self.clock = clock or (lambda: self.system.heard_until)
         self._pending: list[Pending] = []
         self._sent: list[tuple[float, str]] = []
         self._seen: set[tuple[float, str]] = set()
@@ -82,14 +86,16 @@ class CommandWatch:
                                 and codeword.quote_intro(previous[1].rstrip(" :")))
         if quoted:
             # Не отбрасываем молча: «я говорю, Вера…» бывает и своей просьбой.
-            # Решает владелец — сервер спросит «Это ты сказал?».
-            log.info("кодовая фраза на %.1fс похожа на пересказ — спрошу владельца", at)
+            # Сервер откроет задачу с пометкой «источник не подтверждён».
+            log.info("кодовая фраза на %.1fс похожа на пересказ — уйдёт как "
+                     "неподтверждённое", at)
         own = text[hit.start:]
         pending = Pending(at=at, parts=[(at, end, text)], fragment=[(at, end, own)],
                           instruction=hit.instruction, score=hit.score,
                           doubts=doubts_for(prefix, hit.instruction, quoted=quoted))
         if not hit.instruction:
             pending.followup_until = end + FOLLOWUP_S
+        pending.detected_at = self.clock()
         self._pending.append(pending)
         log.info("кодовая фраза на %.1fс сессии %s%s", at, self.session_id,
                  "" if hit.instruction else " — поручение жду следующей репликой")
@@ -159,13 +165,20 @@ class CommandWatch:
                 continue
             verdicts = {self.system.verdict(a, e, t, final=final)
                         for a, e, t in pending.parts}
-            if BLIND in verdicts:
-                log.warning("кодовая фраза на %.1fс: звук с динамиков не пишется "
-                            "(нет кадров системной дорожки) — чей голос, не "
-                            "проверить, не исполняю", pending.at)
-            elif ECHO in verdicts:
+            if ECHO in verdicts:
                 log.warning("кодовая фраза на %.1fс похожа на голос собеседника "
                             "из динамиков — не исполняю", pending.at)
+            elif verdicts <= {OWN, BLIND} and BLIND in verdicts:
+                # Слепота — не улика против владельца: чаще всего фраза открыла
+                # сессию раньше первого кадра loopback. Отбросить — потерять
+                # просьбу молча; с сомнением `blind` сервер откроет задачу с
+                # пометкой «источник не подтверждён» и ничего не исполнит.
+                log.info("кодовая фраза на %.1fс: звук с динамиков не проверить "
+                         "(нет кадров системной дорожки) — уйдёт как неподтверждённое",
+                         pending.at)
+                if "blind" not in pending.doubts:
+                    pending.doubts.append("blind")
+                self._accept(pending)
             elif verdicts == {OWN}:
                 self._accept(pending)
             else:
@@ -190,7 +203,8 @@ class CommandWatch:
         self._sent.append((pending.at, norm))
         digest = hashlib.sha1(
             f"{self.session_id}|{round(pending.at, 1)}".encode()).hexdigest()[:16]
-        silent = all(self.system.speakers_silent(a, e) for a, e, _ in pending.parts)
+        silent = "blind" not in pending.doubts and all(
+            self.system.speakers_silent(a, e) for a, e, _ in pending.parts)
         command = payload(pending, command_id=f"vc-{digest}", session_id=self.session_id,
                           started=self.started_wall, app=self.app,
                           window_title=self.window_title, speakers_silent=silent)
@@ -198,4 +212,8 @@ class CommandWatch:
                  "в очередь отправки", pending.at, command["kind"],
                  len(command["instruction"]), command["confidence"])
         log.debug("поручение: %s", command["instruction"])
+        now, phrase_end = self.clock(), pending.fragment[-1][1]
+        log.info("задержка %s: конец фразы→распознано %d мс, →в очередь %d мс",
+                 command["command_id"], (pending.detected_at - phrase_end) * 1000,
+                 (now - phrase_end) * 1000)
         self.deliver(command)
