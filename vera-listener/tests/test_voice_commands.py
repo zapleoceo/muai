@@ -111,14 +111,15 @@ class TestDeadLoopback:
         watch.tick()
         assert sent == []
 
-    def test_no_system_frames_is_rejected_on_close_too(self):
+    def test_no_system_frames_goes_to_confirmation_on_close(self):
         watch, sent = _watch()
         self._mic_only(watch, 30)
         watch.on_segment("mic", 5.0, 9.0, PHRASE)
         watch.close()
-        assert sent == []
+        assert len(sent) == 1
+        assert "blind" in sent[0]["doubts"]
 
-    def test_gap_in_system_frames_inside_window_is_not_owner(self):
+    def test_gap_in_system_frames_inside_window_needs_confirmation(self):
         watch, sent = _watch()
         t = 0.0
         while t < 30:
@@ -128,7 +129,8 @@ class TestDeadLoopback:
             t += 0.5
         watch.on_segment("mic", 5.0, 9.0, PHRASE)
         watch.close()
-        assert sent == []
+        assert len(sent) == 1
+        assert "blind" in sent[0]["doubts"]
 
 
 class TestInstructionInNextLine:
@@ -206,12 +208,13 @@ class TestCaptureJitter:
             watch.close()
             assert len(sent) == 1, pause
 
-    def test_long_gap_in_system_frames_is_not_owner(self):
+    def test_long_gap_in_system_frames_needs_confirmation(self):
         watch, sent = _watch()
         _frames(watch, 30, gaps=[(7.0, 1.5)])
         watch.on_segment("mic", 5.0, 9.0, PHRASE)
         watch.close()
-        assert sent == []
+        assert len(sent) == 1
+        assert "blind" in sent[0]["doubts"]
 
     def test_command_in_first_seconds_of_session(self):
         """Loopback открылся на полсекунды позже микрофона — это не слепота."""
@@ -221,7 +224,7 @@ class TestCaptureJitter:
         watch.chunk_done("mic", 6.0)
         assert len(sent) == 1
 
-    def test_system_that_appears_after_the_phrase_is_not_owner(self):
+    def test_system_that_appears_after_the_phrase_needs_confirmation(self):
         """Loopback заработал только через 30 с — фразу на 2-й секунде никто
         не проверял. Раньше окно «от первого кадра» сжималось в пустоту, и
         пустое окно считалось покрытым: выходило «владелец»."""
@@ -229,4 +232,33 @@ class TestCaptureJitter:
         _frames(watch, 40, system_from=30.0)
         watch.on_segment("mic", 2.0, 5.0, PHRASE)
         watch.close()
+        assert len(sent) == 1
+        assert "blind" in sent[0]["doubts"]
+
+    def test_phrase_that_opened_the_session_goes_to_owner_confirmation(self):
+        """Прод 11.10: фраза на 0.0 с открыла сессию, первый кадр loopback —
+        на миллисекунды позже. Раньше это молча отбрасывалось как слепота."""
+        watch, sent = _watch()
+        _frames(watch, 30, system_from=0.01)
+        watch.on_segment("mic", 0.0, 4.0, PHRASE)
+        watch.chunk_done("mic", 6.0)
+        assert len(sent) == 1
+        assert sent[0]["instruction"] == "срочно напиши мне что-то в телеграм"
+        assert "blind" in sent[0]["doubts"]
+        assert sent[0]["confidence"] < 0.75
+
+    def test_echo_is_dropped_even_when_blind_elsewhere(self):
+        watch, sent = _watch()
+        _hear(watch, 60, system_speech=[(4.5, 9.5)])
+        watch.system.transcribed(4.5, 9.5, [(4.6, PHRASE)])
+        watch.on_segment("mic", 5.0, 9.0, PHRASE)
+        watch.close()
         assert sent == []
+
+    def test_owner_with_frames_has_no_blind_doubt(self):
+        watch, sent = _watch()
+        _frames(watch, 30)
+        watch.on_segment("mic", 5.0, 9.0, PHRASE)
+        watch.chunk_done("mic", 11.0)
+        assert len(sent) == 1
+        assert "blind" not in sent[0]["doubts"]

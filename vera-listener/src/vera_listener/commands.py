@@ -159,13 +159,19 @@ class CommandWatch:
                 continue
             verdicts = {self.system.verdict(a, e, t, final=final)
                         for a, e, t in pending.parts}
-            if BLIND in verdicts:
-                log.warning("кодовая фраза на %.1fс: звук с динамиков не пишется "
-                            "(нет кадров системной дорожки) — чей голос, не "
-                            "проверить, не исполняю", pending.at)
-            elif ECHO in verdicts:
+            if ECHO in verdicts:
                 log.warning("кодовая фраза на %.1fс похожа на голос собеседника "
                             "из динамиков — не исполняю", pending.at)
+            elif verdicts <= {OWN, BLIND} and BLIND in verdicts:
+                # Слепота — не улика против владельца: чаще всего фраза открыла
+                # сессию раньше первого кадра loopback. Отбросить — потерять
+                # просьбу молча; сомнение `blind` отдаёт решение владельцу «Да».
+                log.info("кодовая фраза на %.1fс: звук с динамиков не проверить "
+                         "(нет кадров системной дорожки) — спрошу владельца",
+                         pending.at)
+                if "blind" not in pending.doubts:
+                    pending.doubts.append("blind")
+                self._accept(pending)
             elif verdicts == {OWN}:
                 self._accept(pending)
             else:
@@ -190,7 +196,8 @@ class CommandWatch:
         self._sent.append((pending.at, norm))
         digest = hashlib.sha1(
             f"{self.session_id}|{round(pending.at, 1)}".encode()).hexdigest()[:16]
-        silent = all(self.system.speakers_silent(a, e) for a, e, _ in pending.parts)
+        silent = "blind" not in pending.doubts and all(
+            self.system.speakers_silent(a, e) for a, e, _ in pending.parts)
         command = payload(pending, command_id=f"vc-{digest}", session_id=self.session_id,
                           started=self.started_wall, app=self.app,
                           window_title=self.window_title, speakers_silent=silent)
