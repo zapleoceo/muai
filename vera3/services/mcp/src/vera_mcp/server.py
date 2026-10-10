@@ -22,6 +22,7 @@ from vera_shared.auth import internal_secret_ok
 
 from vera_mcp.auth import REALM_SCOPE_KEY, ROOM_REALM, BearerAuthMiddleware
 from vera_mcp.read_tools import READ_TOOLS
+from vera_mcp.request_log import RequestLogMiddleware
 from vera_mcp.room_handoff_tools import HANDOFF_TOOLS
 from vera_mcp.room_oauth import RoomOAuthProvider
 from vera_mcp.room_oauth import enabled as room_oauth_enabled
@@ -125,4 +126,5 @@ def build_app() -> Starlette:
     app = Starlette(routes=[Mount("/", app=_RealmDispatch(vera_app, room_app))],
                     lifespan=lifespan)
     app.add_middleware(BearerAuthMiddleware, room_oauth=oauth)
+    app.add_middleware(RequestLogMiddleware)  # добавлен последним = снаружи auth
     return app

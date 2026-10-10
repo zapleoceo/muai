@@ -311,6 +311,33 @@ brain-search (`retrieval.py`, `agent.py`, `reports.py`, история чата 
 Статус `hidden` не берёт ни триаж (клеймит только `pending`), ни сторож.
 Скрытие не трогает граф: связи снимаются отдельно (`relationship_retire`).
 
+## Журнал запросов /mcp
+
+`vera_mcp.request_log.RequestLogMiddleware` (чистый ASGI, снаружи
+`BearerAuthMiddleware`) пишет одну INFO-строку на каждый запрос к `/mcp`
+(логгер `vera_mcp.request`; старт запроса — DEBUG `mcp_start`). Нужен, чтобы
+клиентское «user cancelled MCP tool call» сопоставить с тем, что увидел сервер.
+
+```
+mcp_request cid=3f9a… method=POST path=/mcp actor=claude ua=claude-code/2.1 rpc=tools/call tool=room_post rpc_id=7 status=200 ms=412 outcome=ok
+```
+
+- `cid` — `X-Request-ID` (или `X-Correlation-ID`) клиента, если он ≤64 символов
+  `[A-Za-z0-9._-]`; иначе `uuid4().hex[:16]`. Возвращается заголовком ответа
+  `X-Request-ID`. Функция `pick_cid`.
+- `actor` — имя клиента из токена/OAuth (`claude`, `codex`, `dot`), не токен;
+  `-` при 401 (auth отклонил запрос).
+- `rpc`, `tool`, `rpc_id` — метод JSON-RPC, имя инструмента только для
+  `tools/call`, id; из первых 64 КБ тела (`rpc_summary`). Тело уходит приложению
+  без изменений; params/arguments и тела в лог не попадают.
+- `outcome`: `ok`; `http_error` (статус ≥400); `client_disconnected` (клиент
+  оборвал соединение до конца ответа); `server_exception` (исключение
+  пробрасывается дальше).
+
+Поиск по cid: `docker logs vera3-mcp 2>&1 | grep 'cid=<cid>'`. Access-лог nginx
+cid не содержит, пока nginx не передаёт `X-Request-ID` (конфиг не менялся) —
+сопоставляй по времени и `actor`/`ua`.
+
 ## Legacy: локальный stdio `vera-mcp`
 
 Старый скрипт `~/.claude/mcp-servers/vera-mcp/server.py` (stdio, PEP 723)
