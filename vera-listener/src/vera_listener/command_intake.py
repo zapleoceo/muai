@@ -104,6 +104,8 @@ class Pending:
     closed: bool | None = None
     #: Фраза без поручения так и осталась — переспросить.
     reprompt: bool = False
+    #: Часы сессии, когда фраза распознана, — для лога задержки.
+    detected_at: float = 0.0
 
     def continues(self, at: float, text: str) -> bool:
         _, last_end, last_text = self.fragment[-1]

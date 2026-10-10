@@ -45,7 +45,8 @@ class CommandWatch:
     def __init__(self, session_id: str, started_wall: datetime,
                  deliver: Callable[[dict[str, Any]], None], *,
                  phrase: str = codeword.DEFAULT_PHRASE,
-                 app: str | None = None, window_title: str | None = None):
+                 app: str | None = None, window_title: str | None = None,
+                 clock: Callable[[], float] | None = None):
         self.session_id = session_id
         self.started_wall = started_wall
         self.deliver = deliver
@@ -53,6 +54,9 @@ class CommandWatch:
         self.app = app
         self.window_title = window_title
         self.system = SystemTrack()
+        #: Часы сессии в тех же секундах, что и `at` реплик. Без внешних —
+        #: часы захвата: в тестах кадры идут быстрее настоящего времени.
+        self.clock = clock or (lambda: self.system.heard_until)
         self._pending: list[Pending] = []
         self._sent: list[tuple[float, str]] = []
         self._seen: set[tuple[float, str]] = set()
@@ -90,6 +94,7 @@ class CommandWatch:
                           doubts=doubts_for(prefix, hit.instruction, quoted=quoted))
         if not hit.instruction:
             pending.followup_until = end + FOLLOWUP_S
+        pending.detected_at = self.clock()
         self._pending.append(pending)
         log.info("кодовая фраза на %.1fс сессии %s%s", at, self.session_id,
                  "" if hit.instruction else " — поручение жду следующей репликой")
@@ -205,4 +210,8 @@ class CommandWatch:
                  "в очередь отправки", pending.at, command["kind"],
                  len(command["instruction"]), command["confidence"])
         log.debug("поручение: %s", command["instruction"])
+        now, phrase_end = self.clock(), pending.fragment[-1][1]
+        log.info("задержка %s: конец фразы→распознано %d мс, →в очередь %d мс",
+                 command["command_id"], (pending.detected_at - phrase_end) * 1000,
+                 (now - phrase_end) * 1000)
         self.deliver(command)

@@ -58,6 +58,8 @@ class CommandOutbox:
         #: id поручения → (когда можно снова, текущая пауза).
         self._retry: dict[str, tuple[float, float]] = {}
         self._wake = threading.Event()
+        #: id → когда поставлено, для лога «очередь→сервер».
+        self._queued: dict[str, float] = {}
 
     def put(self, command: dict[str, Any]) -> Path:
         path = self.ready_dir / f"{command['command_id']}.json"
@@ -67,6 +69,7 @@ class CommandOutbox:
             fh.flush()
             os.fsync(fh.fileno())
         os.replace(tmp, path)
+        self._queued[command["command_id"]] = self.clock()
         self._wake.set()
         return path
 
@@ -98,7 +101,10 @@ class CommandOutbox:
         if ok:
             path.unlink(missing_ok=True)
             self._retry.pop(path.stem, None)
-            log.info("поручение %s доставлено на сервер", path.stem)
+            queued = self._queued.pop(path.stem, None)
+            log.info("поручение %s доставлено на сервер (очередь→сервер %s)",
+                     path.stem, "?" if queued is None
+                     else f"{(self.clock() - queued) * 1000:.0f} мс")
             return
         if _code(info) in POISON_CODES:
             self._park(path, info)
