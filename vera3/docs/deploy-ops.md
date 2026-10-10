@@ -248,21 +248,31 @@ Docker (82% всех) никем не востребованы** плюс **3.74
 
 ## Preflight: те же гейты, что в CI, одной командой
 
-Перед push: `PREFLIGHT_PY=<python> bash vera3/scripts/preflight.sh`
-(`--fast` — pytest только по затронутым тестам, пороги покрытия и diff-cover
-помечаются SKIP; `--base REF` — своя база диффа).
+`PREFLIGHT_PY=<python> PREFLIGHT_PG_URL=<postgresql+asyncpg://…> bash vera3/scripts/preflight.sh`
 
+- **Режим по умолчанию — гейт.** `RESULT: PASS` (код 0) только если выполнен
+  весь обязательный набор и он зелёный: гейты docs / secret scan / ruff /
+  vulture / docs name-sync, полный pytest вместе с PG-интеграцией, пороги
+  покрытия, diff-cover. Не хватает PG URL, `pytest-cov`, `diff-cover`, ruff или
+  vulture — `RESULT: INCOMPLETE` (код 3) со списком пропусков. Упал гейт —
+  `FAIL` (код 1). Не удался `git fetch` — блокер `stale base: fetch failed`,
+  код 1 (база по устаревшему `origin/master` — не доказательство).
+- **`--partial`** — диагностика, не допуск к push: `PASS` не печатается,
+  итог `RESULT: PARTIAL` (код 0, если выполненное зелёное), PG-строка
+  `PG integration: not run — CI authoritative`. **`--fast`** (pytest только по
+  затронутым тестам, без порогов покрытия и diff-cover) подразумевает
+  `--partial`. `--base REF` — своя база диффа.
 - База — `git merge-base origin/master HEAD` после `git fetch`.
-- Гейты docs, secret scan, ruff, vulture и docs name-sync исполняют те же
-  `scripts/ci_gate_*.sh`, что и `deploy.yml` — разойтись им нечему.
+- Гейты исполняют те же `scripts/ci_gate_*.sh`, что и `deploy.yml` — разойтись
+  им нечему. Режимы скрипта покрыты `tests/unit/test_preflight_script.py`.
 - pytest идёт как в CI: cwd `vera3`, `pytest tests/`, без ini-файла
   (rootdir `vera3` → asyncio strict). Из `vera3/shared` не запускать:
   `shared/pyproject.toml` включает `asyncio_mode=auto`, и тесты, зелёные там,
   краснеют в CI.
-- Без `PREFLIGHT_PG_URL` тесты `tests/pg` и `tests/integration` пропускаются
-  (в CI они идут на живом Postgres); без `pytest-cov`/`diff-cover` пороги
-  покрытия не считаются. Всё это печатается в итоговой таблице как SKIP,
-  а не PASS. Код возврата ненулевой при любом FAIL.
+- Окружение как в CI: `bash scripts/ci_install.sh test` и `… lint` (vulture
+  ставится только режимом `lint`). На Windows скрипт берёт корень через
+  `pwd` (`/d/…`), который pip не понимает, — запускайте копию с Windows-путём
+  в `ROOT`; набор пакетов от этого не меняется.
 
 ## Restricted SSH key
 
