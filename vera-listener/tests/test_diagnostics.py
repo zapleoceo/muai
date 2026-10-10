@@ -24,7 +24,7 @@ def test_command_stage_distinguishes_asr_and_codeword_results() -> None:
     activity = CaptureActivity()
     activity.observe(MIC, 1.0, True)
     assert command_stage(activity, 0, 0) == "mic_asr_not_run"
-    activity.tracks[MIC].asr_calls = 1
+    activity.tracks[MIC].asr_attempts = 1
     assert command_stage(activity, 0, 0) == "mic_asr_no_text"
     activity.tracks[MIC].asr_segments = 1
     assert command_stage(activity, 0, 0) == "no_codeword"

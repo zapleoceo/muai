@@ -114,7 +114,18 @@ def test_mic_asr_without_codeword_reports_exact_stage(tmp_path, caplog):
             listener._run_job(listener.jobs.get())
     assert listener.commands.ready() == []
     assert "stage=no_codeword" in caplog.text
-    assert "mic_asr=1 mic_text_segments=1" in caplog.text
+    assert "mic_asr_attempts=1 mic_text_segments=1" in caplog.text
+
+
+def test_record_survives_diagnostics_cleanup_during_session_stop(tmp_path):
+    listener = _listener(tmp_path)
+    session = listener.session
+    assert session is not None
+    listener._log_diagnostics(session, None, "too_short")
+    listener._record(Frame(MIC, FRAME_S, PCM), True)
+    listener.session = None
+    listener._record(Frame(MIC, 2 * FRAME_S, PCM), True)
+    assert listener.recorders[MIC].speech_s == 2 * FRAME_S
 
 
 def test_no_early_mic_flush_when_commands_are_off(tmp_path):
