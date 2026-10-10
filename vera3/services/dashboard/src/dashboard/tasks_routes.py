@@ -6,6 +6,7 @@ from fastapi.responses import HTMLResponse
 from vera_shared.room.questions import QuestionNotFound, QuestionState
 from vera_shared.timeutil import utc_naive_now
 
+from dashboard.attention_view import attention_panel, load_attention
 from dashboard.csrf import owner_post_gate
 from dashboard.render import _render, esc, owner_or_blank_401, owner_or_redirect
 from dashboard.tasks_gantt import resolve_span
@@ -36,7 +37,8 @@ async def tasks_page(request: Request, tab: str = "work", span: str | None = Non
     rows = await load_gantt_rows(tabs[tab], now)
     span = resolve_span(span, rows, now)
     badge = watchdog_badge(await load_watchdog(), now)
-    return HTMLResponse(_render("tasks", tasks_body(tab, tabs, now, rows, span, badge)))
+    panel = attention_panel(*await load_attention())
+    return HTMLResponse(_render("tasks", tasks_body(tab, tabs, now, rows, span, badge, panel)))
 
 
 async def _fragment(room: str, task_id: str) -> HTMLResponse:

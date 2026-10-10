@@ -6,6 +6,7 @@ from datetime import datetime
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskEventRow, RoomTaskRow
+from vera_shared.owner_attention.gate import on_owner_message
 from vera_shared.room import questions
 from vera_shared.room.attention import (
     CANCELLED,
@@ -124,6 +125,7 @@ async def load_detail(room: str, task_id: str, now: datetime | None = None,
 
 async def submit_answer(room: str, task_id: str, qid: int, text: str) -> None:
     await questions.answer(room=room, task_id=task_id, qid=qid, text=text)
+    await on_owner_message()
 
 
 def plan_of(row: RoomTaskRow) -> tuple[datetime, datetime] | None:

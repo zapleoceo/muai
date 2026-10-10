@@ -24,6 +24,7 @@ from datetime import datetime, timedelta
 from html import escape
 
 from vera_shared.db.models_voice import VoiceCommandRow
+from vera_shared.owner_attention import gate
 from vera_shared.timeutil import utc_naive_now
 from vera_shared.voice_commands import (
     claim_command,
@@ -118,6 +119,7 @@ async def process_one(send: Send, owner_id: int) -> bool:
     if row is None:
         return False
     try:
+        await gate.on_owner_message()  # голосовое поручение - слово владельца
         now = utc_naive_now()
         held = row.help_state in WATCHED
         age = now - row.spoken_at
@@ -127,7 +129,8 @@ async def process_one(send: Send, owner_id: int) -> bool:
             await mark_answered(row.command_id)
         elif row.kind == "reprompt":
             if row.answered_at is None:
-                await send(REPROMPT_TEXT, REPROMPT_TEXT)
+                await gate.deliver(send, REPROMPT_TEXT, REPROMPT_TEXT, kind=gate.QUESTION,
+                                   key=f"reprompt:{row.command_id}")
                 await mark_answered(row.command_id)
         elif row.answered_at is None:
             if row.help_state in HELP_TO_OPEN:
@@ -178,7 +181,8 @@ async def notify_failed(send: Send) -> int:
             continue
         text = failed_text(instruction)
         try:
-            await send(escape(text, quote=False), text)
+            await gate.deliver(send, escape(text, quote=False), text, kind="alert",
+                               key=f"voice-fail:{command_id}")
         except Exception as e:
             log.warning("voice-worker: не сообщила об ошибке поручения %s (%s) — "
                         "повторю", command_id, type(e).__name__)
@@ -198,6 +202,7 @@ async def run_forever(send: Send, owner_id: int) -> None:
     while True:
         try:
             await revive_stale()
+            await gate.tick(send)
             await notify_failed(send)
             await track_help(send, utc_naive_now())
             busy = await process_one(send, owner_id)

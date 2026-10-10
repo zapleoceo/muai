@@ -14,6 +14,7 @@ from dashboard.tasks_gantt import DEFAULT_SPAN, GanttRow, task_gantt, tasks_gant
 from dashboard.tasks_groups_view import GROUP_CSS, grouped_rows
 from dashboard.tasks_questions_view import Questions, questions_block
 from dashboard.tasks_service import TABS, TaskItem, plan_of, segments_of
+from dashboard.tasks_table import tasks_table
 
 TAB_LABELS = {"work": "В работе", "me": "Нужен я", "done": "Готово"}
 EMPTY = {"work": "Задач в работе пока нет", "me": "Ничего не ждёт вашего внимания",
@@ -28,6 +29,7 @@ _CSS = """<style>
 .tk-meta{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin-top:.3rem}
 .tk-detail dl{display:grid;grid-template-columns:max-content 1fr;gap:.25rem .9rem}
 .tk-detail dd{margin:0;overflow-wrap:anywhere}.tk-ev{margin:.2rem 0;overflow-wrap:anywhere}
+.tk-table{width:100%;border-collapse:collapse;margin:.5rem 0}.tk-table th,.tk-table td{text-align:left;padding:.3rem .5rem;border-bottom:1px solid var(--line);overflow-wrap:anywhere}
 .tk-q{border:1px solid var(--line);border-radius:var(--r-md);padding:.5rem .7rem;margin:.5rem 0}
 .tk-answer textarea{width:100%;box-sizing:border-box;margin:.3rem 0}
 </style>"""
@@ -75,13 +77,13 @@ def task_row(item: TaskItem, now: datetime) -> str:
 
 def tasks_body(tab: str, tabs: dict[str, list[TaskItem]], now: datetime | None = None,
                gantt_rows: list[GanttRow] | None = None, span: str = DEFAULT_SPAN,
-               watchdog: str = "") -> str:
+               watchdog: str = "", attention: str = "") -> str:
     now = now or utc_naive_now()
     rows = grouped_rows(tabs[tab], lambda i: task_row(i, now)) or f'<p class="muted">{EMPTY[tab]}</p>'
     counts = {t: len(v) for t, v in tabs.items()}
     gantt = tasks_gantt(gantt_rows, now, span, tab) if gantt_rows is not None else ""
-    return (f'{_CSS}{GROUP_CSS}{GANTT_CSS}<h1>Задачи</h1>{watchdog}{tabs_nav(tab, counts, span)}{gantt}'
-            f'{rows}<div id="task-detail"></div>')
+    return (f'{_CSS}{GROUP_CSS}{GANTT_CSS}<h1>Задачи</h1>{watchdog}{attention}{tabs_nav(tab, counts, span)}'
+            f'{tasks_table(tabs[tab], now)}{gantt}{rows}<div id="task-detail"></div>')
 
 
 def _link_ref(kind: str, ref: str) -> str:

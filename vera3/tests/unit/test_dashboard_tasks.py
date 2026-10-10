@@ -19,6 +19,7 @@ from dashboard.tasks_service import TaskItem, classify, split_tabs  # noqa: E402
 from dashboard.tasks_view import task_detail, tasks_body  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from starlette.responses import Response  # noqa: E402
+from vera_shared.owner_attention.store import Attention  # noqa: E402
 from vera_shared.room.attention import attention  # noqa: E402
 
 NOW = datetime(2026, 10, 9, 12, 0)
@@ -102,7 +103,7 @@ def test_page_and_unknown_task_fragment():
     c = {COOKIE_NAME: cookie()}
     client = TestClient(app)
     with patch("dashboard.tasks_routes.load_tabs",
-               AsyncMock(return_value=split_tabs([item(), item(task_id="d", status="done")]))),                patch("dashboard.tasks_routes.load_gantt_rows", AsyncMock(return_value=[])), patch("dashboard.tasks_routes.load_watchdog", AsyncMock(return_value=None)):
+               AsyncMock(return_value=split_tabs([item(), item(task_id="d", status="done")]))),                patch("dashboard.tasks_routes.load_gantt_rows", AsyncMock(return_value=[])), patch("dashboard.tasks_routes.load_watchdog", AsyncMock(return_value=None)), patch("dashboard.tasks_routes.load_attention", AsyncMock(return_value=(Attention(), []))):
         r = client.get("/tasks?tab=done&span=bogus", cookies=c)
         r7 = client.get("/tasks?tab=done&span=7d", cookies=c)
     assert r.status_code == 200 and "Готово 1" in r.text and 'href="/tasks"' in r.text

@@ -173,3 +173,8 @@ from vera_shared.db import models_room_events  # noqa: E402
 
 # Импорт ради регистрации таблиц MCP Events в общей metadata комнаты.
 _ROOM_EVENT_MODELS = models_room_events
+
+from vera_shared.db import models_attention  # noqa: E402
+
+# Импорт ради регистрации таблиц внимания владельца в общей metadata.
+_ATTENTION_MODELS = models_attention

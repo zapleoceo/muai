@@ -11,6 +11,7 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
+from vera_shared.owner_attention.gate import on_owner_message
 
 from bot_telegram import voice_worker
 from bot_telegram.brain import BrainError, ask_brain, save_event
@@ -91,6 +92,7 @@ async def on_message(message: Message):
     query = message.text or ""
     if not query.strip():
         return
+    await on_owner_message()
 
     chat_id = message.chat.id
     user_id = message.from_user.id

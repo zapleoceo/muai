@@ -20,6 +20,7 @@ from datetime import datetime
 from html import escape
 
 from vera_shared.db.models_voice import VoiceCommandRow
+from vera_shared.owner_attention.gate import deliver
 from vera_shared.redact import redact_secrets
 from vera_shared.voice_help.hold import lift_hold
 from vera_shared.voice_help.policy import help_room
@@ -61,9 +62,11 @@ ESCALATED_TEXT = "Пока никто не взял, эскалировала do
 REMIND_TEXT = "Срочную просьбу всё ещё никто не взял (20 мин). Посмотри комнату."
 
 
-async def say(send: Send, text: str) -> None:
-    """Распознанная речь в тексте: «<» в ней сломал бы HTML."""
-    await send(escape(text, quote=False), text)
+async def say(send: Send, text: str, *, kind: str = "status", key: str | None = None,
+              task_id: str | None = None) -> None:
+    """Распознанная речь в тексте: «<» в ней сломал бы HTML. Идёт через шлюз тишины."""
+    await deliver(send, escape(text, quote=False), text, kind=kind, key=key, task_id=task_id,
+                  room=help_room() if task_id else None)
 
 
 async def track_help(send: Send, now: datetime) -> int:
@@ -92,15 +95,17 @@ async def _track_one(send: Send, row: VoiceCommandRow, now: datetime) -> str | N
     elapsed = now - (row.task_opened_at or now)
     step = next_step(row.help_state, elapsed, holder, status)
     if step == TAKEN and holder:
-        await say(send, taken_text(holder))
+        await say(send, taken_text(holder), key=f"help:{row.task_id}:taken", task_id=row.task_id)
         await mark_taken(row.command_id, holder, now)
         await release_held(row.command_id, now)
     elif step == ESCALATE:
         await escalate(task_id=row.task_id)
-        await say(send, ESCALATED_TEXT)
+        await say(send, ESCALATED_TEXT, kind="alert", key=f"help:{row.task_id}:escalated",
+                  task_id=row.task_id)
         await mark_escalated(row.command_id, now)
     elif step == REMIND:
-        await say(send, REMIND_TEXT)
+        await say(send, REMIND_TEXT, kind="alert", key=f"help:{row.task_id}:remind",
+                  task_id=row.task_id)
         await mark_reminded(row.command_id, now)
     elif step == CLOSED:
         await mark_closed(row.command_id, now)
