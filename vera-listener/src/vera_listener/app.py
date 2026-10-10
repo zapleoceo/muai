@@ -221,8 +221,10 @@ class Listener:
                      session.window_title or "?")
 
     def _record(self, frame: Frame, speech: bool) -> None:
-        if self.session is not None:
-            self._session_activity[self.session].observe(frame.track, frame.at, speech)
+        session = self.session
+        activity = self._session_activity.get(session) if session is not None else None
+        if activity is not None:
+            activity.observe(frame.track, frame.at, speech)
         recorder = self.recorders[frame.track]
         recorder.add(frame.pcm, speech, frame.at - self._session_zero)
         watch = self._watches.get(self.session) if self.session else None
@@ -345,7 +347,7 @@ class Listener:
         # а непустой она без него не станет. Поймано сквозным тестом.
         activity = self._session_activity.get(path)
         if activity is not None:
-            activity.tracks[track].asr_calls += 1
+            activity.tracks[track].asr_attempts += 1
         audio = (pcm_to_float(pcm)
                  if speakers is not None and track == SYSTEM else None)
         watch = self._watches.get(path)
@@ -468,12 +470,12 @@ class Listener:
         stage = (command_stage(activity, hits, queued)
                  if self.config.voice_commands else "commands_disabled")
         log.info("command_pipeline session=%s gate=%s stage=%s "
-                 "mic_frames=%d mic_vad=%d mic_asr=%d mic_text_segments=%d "
-                 "system_frames=%d system_vad=%d system_asr=%d "
+                 "mic_frames=%d mic_vad=%d mic_asr_attempts=%d mic_text_segments=%d "
+                 "system_frames=%d system_vad=%d system_asr_attempts=%d "
                  "codeword_hits=%d commands_queued=%d",
                  path.name, gate_reason, stage, mic.frames, mic.vad_frames,
-                 mic.asr_calls, mic.asr_segments, system.frames,
-                 system.vad_frames, system.asr_calls, hits, queued)
+                 mic.asr_attempts, mic.asr_segments, system.frames,
+                 system.vad_frames, system.asr_attempts, hits, queued)
 
     def _run_job(self, job: tuple) -> None:
         kind = job[0]

@@ -10,7 +10,7 @@ from vera_listener.gate import MIC, SYSTEM
 class TrackActivity:
     frames: int = 0
     vad_frames: int = 0
-    asr_calls: int = 0
+    asr_attempts: int = 0
     asr_segments: int = 0
     last_frame_at: float | None = None
 
@@ -49,7 +49,7 @@ def command_stage(activity: CaptureActivity, hits: int, queued: int) -> str:
         return "no_mic_frames"
     if not mic.vad_frames:
         return "mic_vad_zero"
-    if not mic.asr_calls:
+    if not mic.asr_attempts:
         return "mic_asr_not_run"
     if not mic.asr_segments:
         return "mic_asr_no_text"
