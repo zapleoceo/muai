@@ -75,8 +75,8 @@ IP (`events_net.post_pinned`, общий для challenge и доставки): 
 
 ## Доставка (`events_deliver.py`)
 
-`deliver_due(now=None, limit=50)` — одна итерация для существующего poll-цикла (в работающий сервис
-пока не подключена). Берёт `pending` строки с `next_attempt_at <= now`, по одной попытке на строку
+`deliver_due(now=None, limit=50)` — одна итерация; её крутит `events_loop.run_delivery_loop` (см. ниже). Берёт `pending` строки
+с `next_attempt_at <= now`, по одной попытке на строку
 (`_attempt` фиксирует результат в своей транзакции, поэтому после рестарта продолжаются только
 `pending`).
 

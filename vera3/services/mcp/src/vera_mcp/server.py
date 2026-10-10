@@ -22,6 +22,7 @@ from vera_shared.auth import internal_secret_ok
 
 from vera_mcp.auth import REALM_SCOPE_KEY, ROOM_REALM, BearerAuthMiddleware
 from vera_mcp.events_catalog import AdvertiseEvents
+from vera_mcp.events_loop import delivery_running
 from vera_mcp.events_register import register_events
 from vera_mcp.read_tools import READ_TOOLS
 from vera_mcp.request_log import RequestLogMiddleware
@@ -125,7 +126,8 @@ def build_app() -> Starlette:
     # запускаются здесь, иначе первый же запрос упадёт на «task group not initialized».
     @contextlib.asynccontextmanager
     async def lifespan(_app: Starlette) -> AsyncIterator[None]:
-        async with vera.session_manager.run(), room.session_manager.run():
+        async with (vera.session_manager.run(), room.session_manager.run(),
+                    delivery_running()):
             yield
 
     app = Starlette(routes=[Mount("/", app=_RealmDispatch(vera_app, room_app))],
