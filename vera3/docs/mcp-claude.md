@@ -332,7 +332,9 @@ mcp_request cid=3f9a… method=POST path=/mcp actor=claude ua=claude-code/2.1 rp
   без изменений; params/arguments и тела в лог не попадают.
 - `outcome`: `ok`; `http_error` (статус ≥400); `client_disconnected` (клиент
   оборвал соединение до конца ответа); `server_exception` (исключение
-  пробрасывается дальше).
+  пробрасывается дальше); `aborted` (задача обработчика прервана,
+  напр. `CancelledError`; причина не известна — это факт транспорта, не действие
+  пользователя).
 
 Поиск по cid: `docker logs vera3-mcp 2>&1 | grep 'cid=<cid>'`. Access-лог nginx
 cid не содержит, пока nginx не передаёт `X-Request-ID` (конфиг не менялся) —

@@ -39,7 +39,7 @@ def rpc_summary(body: bytes) -> tuple[str, str, str]:
     """(method, tool, id) из JSON-RPC; пустые строки, если разобрать нельзя."""
     try:
         data: Any = json.loads(body)
-    except ValueError:
+    except (ValueError, RecursionError):
         return "", "", ""
     if isinstance(data, list):
         data = next((d for d in data if isinstance(d, dict)), None)
@@ -117,6 +117,9 @@ class RequestLogMiddleware:
         except Exception:
             outcome = "server_exception"
             state["status"] = state["status"] or 500
+            raise
+        except BaseException:
+            outcome = "aborted"
             raise
         else:
             if state["disconnected"] and not state["complete"]:
