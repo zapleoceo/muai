@@ -85,3 +85,5 @@ SDK: `mcp==2.3.x` (`MCPServer` вместо `FastMCP`), `streamable_http_app(sta
   (256 КиБ) — `dropped`.
 - В логи идут только id события и подписки, номер попытки и исход; секрет, URL и тело не пишутся
   (`last_error` — короткий код: `http_500`, `timeout`, `address_not_public`).
+
+Таблицы MCP Events (`models_room_events`) регистрируются в общей metadata комнаты импортом из `models_room.py`.
