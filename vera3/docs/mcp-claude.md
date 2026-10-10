@@ -336,7 +336,27 @@ mcp_request cid=3f9a… method=POST path=/mcp actor=claude ua=claude-code/2.1 rp
   напр. `CancelledError`; причина не известна — это факт транспорта, не действие
   пользователя).
 
-Поиск по cid: `docker logs vera3-mcp 2>&1 | grep 'cid=<cid>'`. Access-лог nginx
+**Персистентный журнал.** Каждая строка дублируется в таблицу `mcp_request_log`
+(миграция 052): `at` (UTC), `cid`, `method`, `actor`, `ua`, `rpc`, `tool`,
+`rpc_id`, `status`, `ms`, `outcome` — те же очищенные и обрезанные значения, что
+в INFO-строке; тел, params/arguments, заголовков и токенов в таблице нет.
+Запись — фоновой задачей `request_log_store.schedule_insert` (SQL в
+`request_log_repo`), не на пути ответа. Ошибка БД не влияет на ответ: один
+WARNING в минуту и строка теряется. Пул БД общий с room-инструментами, поэтому одновременно идут не более 2 записей,
+на каждую 3 с (включая ожидание очереди; таймаут — строка теряется), и не более
+100 незавершённых — сверх лимита строка отбрасывается со счётчиком. Хранение 30 дней
+(`scripts/prune_usage_log.sql`).
+
+```sql
+SELECT at, method, actor, rpc, tool, status, ms, outcome
+FROM mcp_request_log WHERE cid = '<cid>' ORDER BY at;
+```
+
+**Ограничение:** запись асинхронная, при падении процесса или жёстком убийстве
+контейнера хвост последних строк может пропасть. Гарантии «ни одной потери» нет;
+полнота — только у stdout-лога.
+
+Поиск по cid в stdout: `docker logs vera3-mcp 2>&1 | grep 'cid=<cid>'`. Access-лог nginx
 cid не содержит, пока nginx не передаёт `X-Request-ID` (конфиг не менялся) —
 сопоставляй по времени и `actor`/`ua`.
 

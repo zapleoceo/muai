@@ -115,3 +115,11 @@ async def ro_env(sqlite_db, monkeypatch):
     await forget_ro_engine()
     yield
     await forget_ro_engine()
+
+
+@pytest.fixture(autouse=True)
+def _no_mcp_request_log_db(monkeypatch):
+    """Журнал /mcp пишет в БД фоновой задачей; юнит-тестам middleware база не нужна."""
+    async def _noop(row):
+        return None
+    monkeypatch.setattr("vera_mcp.request_log_repo.insert_request", _noop)
