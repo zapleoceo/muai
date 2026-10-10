@@ -21,6 +21,8 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 from vera_shared.auth import internal_secret_ok
 
 from vera_mcp.auth import REALM_SCOPE_KEY, ROOM_REALM, BearerAuthMiddleware
+from vera_mcp.events_catalog import AdvertiseEvents
+from vera_mcp.events_register import register_events
 from vera_mcp.read_tools import READ_TOOLS
 from vera_mcp.request_log import RequestLogMiddleware
 from vera_mcp.room_handoff_tools import HANDOFF_TOOLS
@@ -81,6 +83,7 @@ def build_room_mcp(oauth: RoomOAuthProvider | None = None) -> MCPServer:
     mcp = _server("vera-room", ROOM_INSTRUCTIONS, **auth_kwargs)
     for tool in (*ROOM_TOOLS, *QUESTION_TOOLS, *HANDOFF_TOOLS):
         mcp.tool()(tool)
+    register_events(mcp)
     if oauth:
         @mcp.custom_route("/oauth/internal/consent", methods=["GET", "POST"])
         async def internal_consent(request: Request) -> JSONResponse:
@@ -116,7 +119,7 @@ class _RealmDispatch:
 def build_app() -> Starlette:
     oauth = RoomOAuthProvider() if room_oauth_enabled() else None
     vera, room = build_mcp(), build_room_mcp(oauth)
-    vera_app, room_app = _http_app(vera), _http_app(room)
+    vera_app, room_app = _http_app(vera), AdvertiseEvents(_http_app(room))
 
     # Mount не пробрасывает lifespan внутрь: менеджеры сессий обоих серверов
     # запускаются здесь, иначе первый же запрос упадёт на «task group not initialized».
