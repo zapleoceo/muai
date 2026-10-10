@@ -43,7 +43,7 @@ async def _opened() -> tuple[Recorder, object]:
     rec = Recorder()
     with patch.object(voice_worker, "ask_brain", AsyncMock(return_value=answer())), \
          patch.object(voice_worker, "save_event", AsyncMock()):
-        await voice_worker.process_one(rec, OWNER, rec.ask)
+        await voice_worker.process_one(rec, OWNER)
     rec.sent.clear()
     return rec, (await queue_row("vc-help1")).task_opened_at
 
@@ -118,7 +118,7 @@ async def test_one_failing_row_does_not_stop_the_pass():
     rec, opened = await _opened()
     await accept_voice_command(help_cmd("vc-help2"), x_internal_secret=SECRET)
     with patch.object(voice_worker, "ask_brain", AsyncMock(return_value=answer())),          patch.object(voice_worker, "save_event", AsyncMock()):
-        await voice_worker.process_one(rec, OWNER, rec.ask)
+        await voice_worker.process_one(rec, OWNER)
     real = help_worker.escalate
     calls = []
 
