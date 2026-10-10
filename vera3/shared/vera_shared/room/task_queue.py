@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from sqlalchemy import exists, or_, select
+from sqlalchemy import String, cast, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.engine import get_session
@@ -96,6 +96,10 @@ async def next_task(*, room: str, agent: str, project: str | None, lease_seconds
         .order_by(RoomTaskRow.priority, RoomTaskRow.created_at).limit(CANDIDATES))
     if project is not None:
         q = q.where(RoomTaskRow.project == project)
+    if skip_ref_prefix:
+        # в SQL, иначе первые CANDIDATES уже обработанных задач прячут новые;
+        # грубый LIKE по тексту refs, точная проверка префикса — ниже под блокировкой
+        q = q.where(~cast(RoomTaskRow.refs, String).contains(skip_ref_prefix))
     async with get_session() as s:
         candidates = (await s.execute(q)).scalars().all()
     for task_id in candidates:

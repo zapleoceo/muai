@@ -178,18 +178,33 @@ Postgres (`tests/integration/test_voice_help_pg.py`): на SQLite `FOR UPDATE`
 сначала сообщение, потом отметка: at-least-once, как у ответа.
 
 **Диспетчер** (`bot_telegram/dispatcher.py`, `dispatch_one()`; зовётся в том же
-`run_forever` после `process_one`, без LLM): `task_queue.next_task(project="Vera",
+`run_forever` после `process_one`, без LLM). Один проход: сначала ожидающие
+квитанции, затем новая задача. Новая: `task_queue.next_task(project="Vera",
 skip_ref_prefix=DISPATCHED_PREFIX)` берёт от имени `AGENT` (`vera`) первую
-`auto_pickup`-задачу без ref `dispatched:` и без открытого вопроса → `room_post`
+`auto_pickup`-задачу без ref `dispatched:` и без открытого вопроса (фильтр по refs
+— в SQL, поэтому 50+ уже обработанных задач не прячут новые) → `room_post`
 получателю (`recipient_of`: ref `result_recipient: X`, иначе `dot`) с
 `message_id=dispatch-<task_id>`, `task_id`, `origin` и очищенным заголовком
-(`dispatch_body`) → ref `dispatched: dispatch-<task_id>` → release в `open`, чтобы
-настоящий исполнитель взял задачу следующим. Повтор и рестарт дают тот же пост
-(дедуп по id и телу). Сбой поста: ref `dispatch_attempts: N`, release `open`; на
-`MAX_ATTEMPTS` (3) — release `blocked` с `BLOCKED_NOTE` («получатель не подтвердил
-получение»). Потерянная аренда (`StaleLease`) — пропуск. `task_holder` игнорирует
-claim от `AGENT`, поэтому `track_help` не шлёт владельцу «Взял: vera»: «Взял»
-приходит только про настоящего исполнителя. Тесты: `tests/unit/test_office_dispatch.py`.
+(`dispatch_body`).
+
+**Успешный `room_post` — не квитанция.** Задача остаётся за `vera`
+(`in_progress`) в `room_task_wait` на `RECEIPT_WAIT_S` (10 мин), refs:
+`dispatched: dispatch-<id>`, `dispatch_attempts: N`, `dispatch_next_at: <iso>`.
+Квитанция доставки — ответ именно получателя на именно это сообщение:
+`room_post(status="ack", in_reply_to="dispatch-<task_id>")`. Только она ведёт к
+release в `open`, после чего реальный исполнитель берёт задачу. Это отдельно от
+квитанции исполнения (`done`/`blocked` по задаче, другое сообщение): такой ответ,
+ack от другого агента или ack на другое сообщение доставкой не считаются.
+
+Нет квитанции к `dispatch_next_at` — повтор того же сообщения (тот же id и тело,
+дедуп), пауза удваивается (`RECEIPT_WAIT_S * 2^(N-1)`, джиттер ±20%, `backoff_s`).
+Сбой самого поста — та же попытка и та же пауза, без горячего цикла. После
+`MAX_ATTEMPTS` (3) без квитанции — release `blocked` с `BLOCKED_NOTE` («получатель
+не подтвердил получение»): задача видна, не потеряна. Аренда продлевается на
+паузу; истекла (процесс лежал) — следующий проход берёт её заново и продолжает без
+дублей. Потерянная аренда (`StaleLease`) — пропуск. `task_holder` игнорирует claim
+от `AGENT`, поэтому `track_help` не шлёт владельцу «Взял: vera»: «Взял» приходит
+только про настоящего исполнителя. Тесты: `tests/unit/test_office_dispatch.py`.
 
 **Тесты** — комната `voice-test` (фикстура ставит `VOICE_HELP_ROOM`), боевая
 `main` не появляется: `tests/unit/test_voice_help_intake.py`,
@@ -211,3 +226,5 @@ claim от `AGENT`, поэтому `track_help` не шлёт владельцу
   получен — владелец получает «Не смогла выполнить».
 - **Текст поручения в логах — только DEBUG.** В колонку `error` пишется лишь
   тип исключения.
+
+Проверка получения — `has_reply` (`vera_shared/room/messages.py`): есть ли от получателя сообщение со статусом `ack` и `in_reply_to` на `dispatch-<task_id>`.
