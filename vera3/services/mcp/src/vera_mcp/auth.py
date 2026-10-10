@@ -21,6 +21,12 @@ from typing import Any
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 from starlette.websockets import WebSocketClose
+from vera_shared.office.acl import (
+    OfficePrincipal,
+    check_disjoint,
+    parse_registry,
+    resolve,
+)
 
 log = logging.getLogger(__name__)
 
@@ -31,6 +37,9 @@ CLIENT_SCOPE_KEY = "mcp_client"
 REALM_SCOPE_KEY = "mcp_realm"
 VERA_REALM = "vera"
 ROOM_REALM = "room"
+OFFICE_REALM = "office"
+OFFICE_PREFIX = "/office/v1/"
+OFFICE_PRINCIPAL_KEY = "office_principal"
 
 
 class WeakTokenError(ValueError):
@@ -108,6 +117,23 @@ def validate_room_tokens(env: Mapping[str, str] | None = None) -> dict[str, str]
     return named
 
 
+def load_office_registry(env: Mapping[str, str] | None = None) -> dict[str, OfficePrincipal]:
+    """Битый OFFICE_SERVICE_TOKENS на лету = пустой реестр (все 401); при старте ловит validate."""
+    try:
+        return parse_registry((os.environ if env is None else env).get("OFFICE_SERVICE_TOKENS"))
+    except ValueError:
+        log.error("OFFICE_SERVICE_TOKENS is invalid; office intake refuses all requests")
+        return {}
+
+
+def validate_office_tokens(env: Mapping[str, str] | None = None) -> dict[str, OfficePrincipal]:
+    """Старт: битая запись, короткий токен или токен MCP/комнаты — исключение."""
+    source = os.environ if env is None else env
+    registry = parse_registry(source.get("OFFICE_SERVICE_TOKENS"))
+    check_disjoint(registry, {*_parse(source), *_parse_room(source)})
+    return registry
+
+
 def allowed_rooms(env: Mapping[str, str] | None = None) -> frozenset[str]:
     """Комнаты, открытые токенам комнаты (ROOM_NAMES, по умолчанию только main).
     Пока доступ общий для всех ROOM_TOKENS: привязки токена к комнате нет."""
@@ -156,6 +182,17 @@ class BearerAuthMiddleware:
             await WebSocketClose(code=1008)(scope, receive, send)
             return
         path = scope.get("path", "")
+        if path.startswith(OFFICE_PREFIX):
+            # Сервисный токен живёт только здесь; на /mcp он не совпадёт ни с одним набором.
+            principal = resolve(bearer_of(scope.get("headers", [])), load_office_registry())
+            if principal is None:
+                await JSONResponse({"error": "unauthorized", "retryable": False},
+                                   status_code=401, headers={"WWW-Authenticate": "Bearer"})(scope, receive, send)
+                return
+            scope[OFFICE_PRINCIPAL_KEY] = principal
+            scope[CLIENT_SCOPE_KEY], scope[REALM_SCOPE_KEY] = principal.name, OFFICE_REALM
+            await self.app(scope, receive, send)
+            return
         if self.room_oauth is not None and (path in {
                 "/.well-known/oauth-authorization-server",
                 "/.well-known/oauth-protected-resource/mcp",

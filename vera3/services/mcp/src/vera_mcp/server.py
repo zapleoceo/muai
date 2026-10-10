@@ -20,10 +20,17 @@ from starlette.routing import Mount
 from starlette.types import ASGIApp, Receive, Scope, Send
 from vera_shared.auth import internal_secret_ok
 
-from vera_mcp.auth import REALM_SCOPE_KEY, ROOM_REALM, BearerAuthMiddleware
+from vera_mcp.auth import (
+    OFFICE_REALM,
+    REALM_SCOPE_KEY,
+    ROOM_REALM,
+    BearerAuthMiddleware,
+    validate_office_tokens,
+)
 from vera_mcp.events_catalog import AdvertiseEvents
 from vera_mcp.events_loop import delivery_running
 from vera_mcp.events_register import register_events
+from vera_mcp.office_routes import office_app
 from vera_mcp.read_tools import READ_TOOLS
 from vera_mcp.request_log import RequestLogMiddleware
 from vera_mcp.room_handoff_tools import HANDOFF_TOOLS
@@ -113,11 +120,18 @@ class _RealmDispatch:
         self.vera, self.room = vera, room
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        app = self.room if scope.get(REALM_SCOPE_KEY) == ROOM_REALM else self.vera
+        realm = scope.get(REALM_SCOPE_KEY)
+        if realm == OFFICE_REALM:
+            # сервисный принципал на MCP-путях — отказ, а не «вера по умолчанию»
+            await JSONResponse({"error": "forbidden", "retryable": False},
+                                status_code=403)(scope, receive, send)
+            return
+        app = self.room if realm == ROOM_REALM else self.vera
         await app(scope, receive, send)
 
 
 def build_app() -> Starlette:
+    validate_office_tokens()
     oauth = RoomOAuthProvider() if room_oauth_enabled() else None
     vera, room = build_mcp(), build_room_mcp(oauth)
     vera_app, room_app = _http_app(vera), AdvertiseEvents(_http_app(room))
@@ -130,7 +144,8 @@ def build_app() -> Starlette:
                     delivery_running()):
             yield
 
-    app = Starlette(routes=[Mount("/", app=_RealmDispatch(vera_app, room_app))],
+    app = Starlette(routes=[Mount("/office/v1", app=office_app()),
+                            Mount("/", app=_RealmDispatch(vera_app, room_app))],
                     lifespan=lifespan)
     app.add_middleware(BearerAuthMiddleware, room_oauth=oauth)
     app.add_middleware(RequestLogMiddleware)  # добавлен последним = снаружи auth
