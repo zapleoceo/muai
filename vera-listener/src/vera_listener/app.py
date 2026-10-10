@@ -21,6 +21,7 @@ from vera_listener.commands import CommandWatch
 from vera_listener.config import Config
 from vera_listener.counterpart import counterpart
 from vera_listener.dedup import mark_echo
+from vera_listener.diagnostics import CaptureActivity, command_stage
 from vera_listener.gate import judge, system_audio_allowed
 from vera_listener.hold import BYTES_PER_S, Hold
 from vera_listener.outbox import Outbox, read_payload
@@ -46,6 +47,7 @@ CONTEXT_POLL_S = 2.0
 HOLD_MAX_S = 600.0
 #: сколько секунд без кадров считаем глухотой, а не переоткрытием устройства
 DEAF_AFTER_TICKS = 3
+CAPTURE_REPORT_S = 60.0
 
 
 class Listener:
@@ -93,6 +95,9 @@ class Listener:
         # сразу — значит платить за каждый ютуб полностью (см. hold.py).
         self._held = Hold(int(HOLD_MAX_S * BYTES_PER_S))
         self._silent_ticks = 0
+        self._capture_activity = CaptureActivity()
+        self._capture_report_at = time.monotonic() + CAPTURE_REPORT_S
+        self._session_activity: dict[Path, CaptureActivity] = {}
         self._stop = threading.Event()
 
     def run(self) -> None:
@@ -134,6 +139,8 @@ class Listener:
 
             speech = self.detectors[frame.track].is_speech(frame.pcm)
             now = time.monotonic()
+            self._capture_activity.observe(frame.track, now, speech)
+            self._report_capture(now)
             # Спрашиваем «кто сейчас звучит», только когда ответ кому-то нужен.
             # Перебор звуковых сессий Windows стоит 28 мс процессора на вызов
             # (замер 04.09) — раз в две секунды это 1.4% ядра НЕПРЕРЫВНО, то
@@ -156,6 +163,7 @@ class Listener:
     def _tick_idle(self) -> None:
         """Кадров нет (устройство переоткрывается) — но тишина всё равно течёт."""
         self._silent_ticks += 1
+        self._report_capture(time.monotonic())
         # Три пустых секунды подряд — это уже не «переоткрываю поток», а
         # глухота: чужая сессия Windows либо выдернули устройство. В трее это
         # красный, чтобы не выглядело работающим.
@@ -164,6 +172,18 @@ class Listener:
         closed = self.segmenter.feed(time.monotonic(), MIC, False)
         if closed:
             self._finish(closed)
+
+    def _report_capture(self, now: float) -> None:
+        if now < self._capture_report_at:
+            return
+        mic = self._capture_activity.tracks[MIC]
+        system = self._capture_activity.tracks[SYSTEM]
+        log.info("capture_health mic_frames=%d mic_vad=%d mic_age_s=%.1f "
+                 "system_frames=%d system_vad=%d system_age_s=%.1f",
+                 mic.frames, mic.vad_frames, mic.age(now), system.frames,
+                 system.vad_frames, system.age(now))
+        self._capture_activity.reset_window()
+        self._capture_report_at = now + CAPTURE_REPORT_S
 
     def _ensure_open(self) -> None:
         session = self.segmenter.current
@@ -186,6 +206,7 @@ class Listener:
             device_hint=self.capture.device_hint,
             meeting_id=meeting_id, part=part,
         )
+        self._session_activity[self.session] = CaptureActivity()
         if self.config.voice_commands:
             self._watches[self.session] = CommandWatch(
                 session_id, self._session_wall, self.commands.put,
@@ -200,6 +221,8 @@ class Listener:
                      session.window_title or "?")
 
     def _record(self, frame: Frame, speech: bool) -> None:
+        if self.session is not None:
+            self._session_activity[self.session].observe(frame.track, frame.at, speech)
         recorder = self.recorders[frame.track]
         recorder.add(frame.pcm, speech, frame.at - self._session_zero)
         watch = self._watches.get(self.session) if self.session else None
@@ -320,6 +343,9 @@ class Listener:
         # истинности. С проверкой на истинность отпечатки не снимались бы
         # НИКОГДА: первый же кусок видит пустую сессию и пропускает её,
         # а непустой она без него не станет. Поймано сквозным тестом.
+        activity = self._session_activity.get(path)
+        if activity is not None:
+            activity.tracks[track].asr_calls += 1
         audio = (pcm_to_float(pcm)
                  if speakers is not None and track == SYSTEM else None)
         watch = self._watches.get(path)
@@ -331,6 +357,8 @@ class Listener:
             # занять слот говорящего тишиной. Нашло ревью.
             if not segment.text.strip():
                 continue
+            if activity is not None:
+                activity.tracks[track].asr_segments += 1
             self.outbox.append(path, offset + segment.at, track, segment.text)
             heard.append((offset + segment.at, segment.text))
             if watch is not None:
@@ -424,10 +452,28 @@ class Listener:
         for watch in list(self._watches.values()):
             watch.tick()
 
-    def _close_watch(self, path: Path) -> None:
+    def _close_watch(self, path: Path) -> CommandWatch | None:
         watch = self._watches.pop(path, None)
         if watch is not None:
             watch.close()
+        return watch
+
+    def _log_diagnostics(self, path: Path, watch: CommandWatch | None,
+                         gate_reason: str) -> None:
+        activity = self._session_activity.pop(path, CaptureActivity())
+        mic = activity.tracks[MIC]
+        system = activity.tracks[SYSTEM]
+        hits = watch.codeword_hits if watch is not None else 0
+        queued = watch.commands_queued if watch is not None else 0
+        stage = (command_stage(activity, hits, queued)
+                 if self.config.voice_commands else "commands_disabled")
+        log.info("command_pipeline session=%s gate=%s stage=%s "
+                 "mic_frames=%d mic_vad=%d mic_asr=%d mic_text_segments=%d "
+                 "system_frames=%d system_vad=%d system_asr=%d "
+                 "codeword_hits=%d commands_queued=%d",
+                 path.name, gate_reason, stage, mic.frames, mic.vad_frames,
+                 mic.asr_calls, mic.asr_segments, system.frames,
+                 system.vad_frames, system.asr_calls, hits, queued)
 
     def _run_job(self, job: tuple) -> None:
         kind = job[0]
@@ -442,6 +488,7 @@ class Listener:
             # оно висело бы до конца жизни процесса, а `_tick_watches` гонял
             # бы его вечно.
             self._close_watch(job[1])
+            self._session_activity.pop(job[1], None)
 
     def _close_session(self, job: tuple) -> None:
         _, path, closed, speech_s, ended_wall, held, held_lost_s, speakers = job
@@ -458,7 +505,8 @@ class Listener:
             self.status.note_dropped()
             # Поручение не зависит от того, попадёт ли разговор в мозг: владелец
             # мог сказать фразу и в коротком монологе, который ворота отбросят.
-            self._close_watch(path)
+            watch = self._close_watch(path)
+            self._log_diagnostics(path, watch, verdict.reason)
             self.outbox.drop(path)
             return
         # Сессию берём — теперь придержанный системный звук стоит распознать.
@@ -467,7 +515,8 @@ class Listener:
                         held_lost_s)
         for offset, pcm in held:
             self._transcribe_into(path, SYSTEM, offset, pcm, speakers)
-        self._close_watch(path)
+        watch = self._close_watch(path)
+        self._log_diagnostics(path, watch, verdict.reason)
         payload = read_payload(path)
         if payload is None:
             self.outbox.drop(path)
