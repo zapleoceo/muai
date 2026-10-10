@@ -197,9 +197,9 @@ async def answer(principal: OfficePrincipal, task_id: str, question_id: int, tex
                     if q["status"] == "open"}
         if question_id not in open_ids:
             raise IntakeNotFound("open question not found")
-        # questions.answer идёт в своей сессии и строку задачи не пишет: блокировка не мешает
+        # ответ, событие, outbox, updated_at и ключ фиксируются одной транзакцией
         await questions.answer(room=room, task_id=task_id, qid=question_id, text=text,
-                               by=f"svc-{principal.name}")
+                               by=f"svc-{principal.name}", s=s)
         revision = await repo.revision_of(s, room, task_id)
         task.updated_at = utc_naive_now()  # updated_since должен увидеть ответ
         await repo.insert_answer_key(

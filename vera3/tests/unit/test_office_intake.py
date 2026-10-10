@@ -210,7 +210,7 @@ async def test_mark_delivered_is_idempotent_and_monotonic():
         await intake.mark_delivered(BOT, made["task_id"], top + 5)
 
 
-def test_registry_parsing_is_strict():
+async def test_registry_parsing_is_strict():
     token = "t" * 32
     assert acl.parse_registry(f"vbot:Veranda:{token}")[token] == BOT
     for bad in ("vbot:Veranda:short", "vbot:Veranda", f"BAD NAME:Veranda:{token}",
@@ -334,3 +334,52 @@ async def test_answer_and_delivered_bump_updated_at_for_updated_since():
     await age()
     await intake.mark_delivered(BOT, made["task_id"], done["revision"])  # повтор: без изменений
     assert (await intake.list_tasks(BOT, since))["tasks"] == []
+
+
+async def _state(task_id: str) -> dict:
+    from sqlalchemy import func, select
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models_room import (
+        RoomMessageRow,
+        RoomTaskAnswerRow,
+        RoomTaskEventRow,
+        RoomTaskQuestionRow,
+    )
+
+    async with get_session() as s:
+        def count(model, *where):
+            return s.scalar(select(func.count()).select_from(model).where(*where))
+
+        return {
+            "answers": await count(RoomTaskAnswerRow),
+            "keys": await count(OfficeAnswerKeyRow),
+            "events": await count(RoomTaskEventRow, RoomTaskEventRow.task_id == task_id,
+                                  RoomTaskEventRow.kind == "answered"),
+            "messages": await count(RoomMessageRow, RoomMessageRow.message_id.like("task-a-%")),
+            "open": await count(RoomTaskQuestionRow, RoomTaskQuestionRow.status == "open"),
+        }
+
+
+async def test_answer_is_atomic_when_failing_after_questions_write(monkeypatch):
+    made = await _create()
+    qid = await _ask(made["task_id"])
+    rev = await _revision(made["task_id"])
+    clean = await _state(made["task_id"])
+    assert clean == {"answers": 0, "keys": 0, "events": 0, "messages": 0, "open": 1}
+    real = repository.insert_answer_key
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("crash before commit")
+
+    monkeypatch.setattr(repository, "insert_answer_key", boom)
+    with pytest.raises(RuntimeError, match="crash"):
+        await intake.answer(BOT, made["task_id"], qid, "Две", rev, "k-a")
+    assert await _state(made["task_id"]) == clean  # ни ответа, ни события, ни ключа
+    assert await _revision(made["task_id"]) == rev
+    monkeypatch.setattr(repository, "insert_answer_key", real)
+    done = await intake.answer(BOT, made["task_id"], qid, "Две", rev, "k-a")
+    assert not done["replayed"] and done["revision"] > rev
+    again = await intake.answer(BOT, made["task_id"], qid, "Две", rev, "k-a")
+    assert again["replayed"] and again["revision"] == done["revision"]
+    assert await _state(made["task_id"]) == {"answers": 1, "keys": 1, "events": 1,
+                                             "messages": 1, "open": 0}

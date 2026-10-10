@@ -97,3 +97,51 @@ async def test_concurrent_answers_with_different_keys_second_gets_409():
     async with get_session() as s:
         answers = (await s.execute(select(func.count()).select_from(RoomTaskAnswerRow))).scalar()
     assert answers == 1
+
+
+@pytest.mark.usefixtures("pg_db")
+async def test_answer_commits_atomically_or_not_at_all(monkeypatch):
+    from sqlalchemy import func, select
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models_office import OfficeAnswerKeyRow
+    from vera_shared.db.models_room import (
+        RoomMessageRow,
+        RoomTaskAnswerRow,
+        RoomTaskEventRow,
+        RoomTaskQuestionRow,
+    )
+    from vera_shared.office import intake, repository
+    from vera_shared.room import questions, tasks
+
+    made = await _create()
+    held = await tasks.claim(room=ROOM, task_id=made["task_id"], agent="claude",
+                             lease_seconds=300)
+    q = await questions.ask(room=ROOM, task_id=made["task_id"], agent="claude",
+                            fencing_token=held["fencing_token"], question="Сколько?")
+
+    async def state() -> tuple[int, ...]:
+        async with get_session() as s:
+            async def n(model, *where):
+                return await s.scalar(select(func.count()).select_from(model).where(*where))
+            return (await n(RoomTaskAnswerRow), await n(OfficeAnswerKeyRow),
+                    await n(RoomTaskEventRow, RoomTaskEventRow.kind == "answered"),
+                    await n(RoomMessageRow, RoomMessageRow.message_id.like("task-a-%")),
+                    await n(RoomTaskQuestionRow, RoomTaskQuestionRow.status == "open"))
+
+    async with get_session() as s:
+        rev = await repository.revision_of(s, ROOM, made["task_id"])
+    assert await state() == (0, 0, 0, 0, 1)
+    real = repository.insert_answer_key
+
+    async def boom(*_a, **_k):
+        raise RuntimeError("crash before commit")
+
+    monkeypatch.setattr(repository, "insert_answer_key", boom)
+    with pytest.raises(RuntimeError, match="crash"):
+        await intake.answer(_principal(), made["task_id"], q["qid"], "Две", rev, "k")
+    assert await state() == (0, 0, 0, 0, 1)
+    monkeypatch.setattr(repository, "insert_answer_key", real)
+    done = await intake.answer(_principal(), made["task_id"], q["qid"], "Две", rev, "k")
+    again = await intake.answer(_principal(), made["task_id"], q["qid"], "Две", rev, "k")
+    assert not done["replayed"] and again["replayed"] and again["revision"] == done["revision"]
+    assert await state() == (1, 1, 1, 1, 0)

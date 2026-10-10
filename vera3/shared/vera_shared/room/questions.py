@@ -81,33 +81,43 @@ async def ask(*, room: str, task_id: str, agent: str, fencing_token: int, questi
 
 
 async def answer(*, room: str, task_id: str, qid: int, text: str, by: str = OWNER,
-                 ) -> tuple[dict[str, Any], bool]:
-    """(вопрос, changed). Дословный повтор последнего ответа — не запись. Статус задачи не меняется."""
+                 s: AsyncSession | None = None) -> tuple[dict[str, Any], bool]:
+    """(вопрос, changed). Дословный повтор последнего ответа — не запись. Статус задачи не меняется.
+
+    С `s` все записи идут в сессии вызывающего и не фиксируются здесь: фиксирует вызывающий.
+    """
     text = text.strip()
     if not text or len(text) > MAX_ANSWER_CHARS:
         raise ValueError(f"answer must be 1..{MAX_ANSWER_CHARS} characters")
-    async with get_session() as s:
-        q = await _question(s, room, task_id, qid)
-        if q.status not in ("open", "answered"):
-            raise QuestionState(f"question {qid} is {q.status}; answers are closed")
-        task = await s.get(RoomTaskRow, (room, task_id))
-        if task is not None and task.status in ("done", "cancelled"):
-            raise QuestionState(f"task {task_id!r} is {task.status}; answers are closed")
-        prior = await _answers_of(s, q)
-        if prior and prior[-1].text == text:
-            return question_dict(q, prior), False
-        row = RoomTaskAnswerRow(qid=qid, text=text, answered_by=by)
-        s.add(row)
-        q.status = "answered"
-        await s.flush()
-        await record_event(s, room=room, task_id=task_id, kind="answered", agent=by,
-                           text=text, data={"qid": qid})
-        await add_message(s, room=room, message_id=f"task-a-{row.id}", from_agent=by,
-                          to_agent=q.asked_by, task_id=task_id, status="info",
-                          in_reply_to=question_message_id(qid),
-                          body=f"[ответ на вопрос #{qid} по {task_id}] {text}")
-        await s.refresh(row)
-        return question_dict(q, [*prior, row]), True
+    if s is not None:
+        return await _answer_in(s, room, task_id, qid, text, by)
+    async with get_session() as own:
+        return await _answer_in(own, room, task_id, qid, text, by)
+
+
+async def _answer_in(s: AsyncSession, room: str, task_id: str, qid: int, text: str, by: str,
+                     ) -> tuple[dict[str, Any], bool]:
+    q = await _question(s, room, task_id, qid)
+    if q.status not in ("open", "answered"):
+        raise QuestionState(f"question {qid} is {q.status}; answers are closed")
+    task = await s.get(RoomTaskRow, (room, task_id))
+    if task is not None and task.status in ("done", "cancelled"):
+        raise QuestionState(f"task {task_id!r} is {task.status}; answers are closed")
+    prior = await _answers_of(s, q)
+    if prior and prior[-1].text == text:
+        return question_dict(q, prior), False
+    row = RoomTaskAnswerRow(qid=qid, text=text, answered_by=by)
+    s.add(row)
+    q.status = "answered"
+    await s.flush()
+    await record_event(s, room=room, task_id=task_id, kind="answered", agent=by,
+                       text=text, data={"qid": qid})
+    await add_message(s, room=room, message_id=f"task-a-{row.id}", from_agent=by,
+                      to_agent=q.asked_by, task_id=task_id, status="info",
+                      in_reply_to=question_message_id(qid),
+                      body=f"[ответ на вопрос #{qid} по {task_id}] {text}")
+    await s.refresh(row)
+    return question_dict(q, [*prior, row]), True
 
 
 async def _close(s: AsyncSession, task: RoomTaskRow, q: RoomTaskQuestionRow, agent: str,

@@ -53,7 +53,9 @@ client_task_id)`, `payload_hash`, `origin`, `result_recipient`, `context`, `atta
 ключом и новой ревизией разрешён. В списке `list_tasks` у задачи есть `status`, открытые вопросы,
 `result`, `revision`, `delivered_revision` и `lease_live` (задача `in_progress` с живой арендой).
 
-Параллельные ответы сериализуются блокировкой строки задачи (`SELECT … FOR UPDATE`) до проверки
+Ответ, событие журнала, outbox, сообщение комнаты, `updated_at` и ключ идемпотентности
+фиксируются одной транзакцией (`questions.answer(..., s=сессия)` пишет в сессии вызывающего и не
+фиксирует сам); сбой до коммита не оставляет ничего. Параллельные ответы сериализуются блокировкой строки задачи (`SELECT … FOR UPDATE`) до проверки
 ревизии: второй получает 409 `revision_mismatch`. `answer` и `mark_delivered` (когда отметка выросла)
 обновляют `room_tasks.updated_at`, чтобы `updated_since` их показал.
 

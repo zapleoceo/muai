@@ -235,5 +235,5 @@ async def test_token_and_task_text_never_reach_logs(client, caplog, monkeypatch)
     assert OFFICE not in r.text and "зебра-42" not in r.text
 
 
-def test_principal_key_is_set_only_by_auth():
+async def test_principal_key_is_set_only_by_auth():
     assert OFFICE_PRINCIPAL_KEY == "office_principal" and OfficePrincipal("a", "P").type == "service"
