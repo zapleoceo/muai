@@ -50,25 +50,8 @@ jobs:
       - name: Verify vera3/docs updated alongside code
         shell: bash
         run: |
-          set -euo pipefail
           BASE="$(bash vera3/scripts/ci_diff_base.sh)"
-          HEAD="$CI_HEAD"
-          CHANGED="$(git diff --name-only "$BASE" "$HEAD")"
-          echo "changed files:"; echo "$CHANGED"
-
-          if git log --format=%B "${BASE}..${HEAD}" 2>/dev/null | grep -qiF "docs-not-needed"; then
-            echo "::notice::'docs-not-needed' marker found, skipping docs gate"
-            exit 0
-          fi
-
-          CODE="$(echo "$CHANGED" | grep -E '^vera3/(services|shared)/' || true)"
-          DOCS="$(echo "$CHANGED" | grep -E '^vera3/docs/' || true)"
-          if [ -n "$CODE" ] && [ -z "$DOCS" ]; then
-            echo "::error::Code changed in vera3/services or vera3/shared but vera3/docs was not updated."
-            echo "Update the relevant doc OR add 'docs-not-needed' to a commit message."
-            exit 1
-          fi
-          echo "docs gate passed"
+          bash vera3/scripts/ci_gate_docs.sh "$BASE" "$CI_HEAD"
 
   # ─── 2. Quality gate ─────────────────────────────────────────────────────
   # Strict static analysis on the diff (no tests here — coverage is in `test`):
@@ -115,17 +98,7 @@ jobs:
         # hit is a real credential, not a false alarm.
         shell: bash
         run: |
-          BASE="${{ steps.base.outputs.base }}"
-          HEAD="${{ steps.base.outputs.head }}"
-          ADDED="$(git diff "$BASE" "$HEAD" | grep -E '^\+' | grep -v '^\+\+\+' || true)"
-          PATTERNS='[0-9]{8,10}:AA[A-Za-z0-9_-]{30,}|sk-ant-[A-Za-z0-9_-]{20,}|sk-[A-Za-z0-9]{32,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|ghp_[A-Za-z0-9]{30,}'
-          if HITS="$(echo "$ADDED" | grep -nEo "$PATTERNS" | sed -E 's/(.{12}).*/\1…<redacted>/')" && [ -n "$HITS" ]; then
-            echo "::error::A credential appears in this diff — do NOT push it."
-            echo "$HITS"
-            echo "Revoke the exposed credential first, then remove it from the change."
-            exit 1
-          fi
-          echo "✓ no credentials in the diff"
+          bash vera3/scripts/ci_gate_secrets.sh "${{ steps.base.outputs.base }}" "${{ steps.base.outputs.head }}"
 
       - name: Ruff (strict, changed files only)
         # E501 line-too-long excluded — no formatter on the project yet.
@@ -134,111 +107,17 @@ jobs:
         # 1000-file fix-everything migration.
         shell: bash
         run: |
-          BASE="${{ steps.base.outputs.base }}"
-          HEAD="${{ steps.base.outputs.head }}"
-          CHANGED="$(git diff --name-only --diff-filter=AM "$BASE" "$HEAD" \
-                      | grep -E '^vera3/(services|shared|tests)/.*\.py$' || true)"
-          if [ -z "$CHANGED" ]; then
-            echo "No changed .py files — skip ruff"
-            exit 0
-          fi
-          echo "Linting:"; echo "$CHANGED"
-          # B008 ignored: Depends()/Query()/File() in FastAPI param defaults
-          # is THE idiomatic pattern (ruff docs recommend ignoring it for
-          # FastAPI). Matches AIbroker's config.
-          # RUF006 (dangling create_task): ловит фоновую задачу, созданную без
-          # ссылки — цикл держит на неё только слабую, GC может собрать её на
-          # полпути. Проект защищается от этого руками в шести местах, и ровно
-          # в двух самых важных (watchdog и retry-цикл триажа) забыл. Линтер
-          # дешевле, чем ещё один такой пропуск.
-          #
-          # DTZ003 (datetime.utcnow): deprecated с 3.12, снята с плана
-          # поддержки. Вместо неё vera_shared.timeutil.utc_naive_now().
-          # Только DTZ003, а не весь DTZ: DTZ001 ругается на конструктор
-          # datetime(2026,...) в фикстурах тестов — там это ровно то, что надо.
-          echo "$CHANGED" | xargs ruff check \
-            --select E,F,W,I,B,UP,SIM,C4,RET,RUF006,DTZ003 --ignore E501,E402,B008
+          bash vera3/scripts/ci_gate_ruff.sh "${{ steps.base.outputs.base }}" "${{ steps.base.outputs.head }}"
 
       - name: Vulture (dead-code on changed files)
         shell: bash
         run: |
-          BASE="${{ steps.base.outputs.base }}"
-          HEAD="${{ steps.base.outputs.head }}"
-          CHANGED="$(git diff --name-only --diff-filter=AM "$BASE" "$HEAD" \
-                      | grep -E '^vera3/(services|shared)/.*\.py$' || true)"
-          if [ -z "$CHANGED" ]; then
-            echo "No Python changes under vera3/services|shared — skip."
-            exit 0
-          fi
-          echo "Scanning:"; echo "$CHANGED"
-          # --min-confidence 80 is conservative; raises only when 4/5 sure.
-          # --ignore-names cls: vulture считает `cls` в @classmethod неиспользуемой
-          # переменной, хотя это обязательный параметр языка. Так выглядит каждый
-          # валидатор pydantic, и ловушка вылезает при ПЕРВОМ касании файла:
-          # events/schema.py жил с двумя такими валидаторами — ворота их не видели,
-          # потому что линтуются только изменённые файлы, — а на третьем деплой упал.
-          echo "$CHANGED" | xargs vulture --min-confidence 80 --ignore-names cls \
-            --exclude '*/tests/*,*/__init__.py' || {
-              echo "::warning::Vulture found suspected dead code — see above."
-              exit 1
-            }
+          bash vera3/scripts/ci_gate_vulture.sh "${{ steps.base.outputs.base }}" "${{ steps.base.outputs.head }}"
 
       - name: Docs name-sync
         shell: bash
         run: |
-          set -euo pipefail
-          BASE="${{ steps.base.outputs.base }}"
-          HEAD="${{ steps.base.outputs.head }}"
-          if git log --format=%B "${BASE}..${HEAD}" 2>/dev/null | grep -qiF "docs-not-needed"; then
-            echo "::notice::'docs-not-needed' marker — skip docs name-sync"
-            exit 0
-          fi
-          # Public names = lowercase def + PascalCase class. Skip _private, test_, dunder.
-          # Also skip generic entrypoint/lifecycle names (main/run/... — every
-          # service has a `def main()`): they're not documentable API symbols,
-          # and the literal-grep below false-positives on the common word "main"
-          # scattered across docs (main loop, main.py, git main) whenever such a
-          # file is added or deleted.
-          # `Source` — по той же причине, что `main`: это обычное английское
-          # слово, которое стоит в доках повсюду («Source pushes an envelope»,
-          # «Source-specific config»), поэтому проверка на осиротевшее
-          # упоминание срабатывала бы ложно при любом удалении такого класса.
-          SKIP='^test_|^_|^(main|run|serve|create_app|lifespan|healthz|startup|shutdown|Source)$'
-          NAME_RE='^[+-](async )?def [a-z][a-z0-9_]*\(|^[+-]class [A-Z][A-Za-z0-9_]*[\(:]'
-          DIFF="$(git diff "$BASE" "$HEAD" -- 'vera3/services/**/*.py' 'vera3/shared/**/*.py' || true)"
-          ADDED="$(echo "$DIFF" | grep -E "^\+" | grep -E "$NAME_RE" \
-                    | sed -E 's/^\+(async )?def ([a-z][a-z0-9_]*)\(.*/\2/;
-                              s/^\+class ([A-Z][A-Za-z0-9_]*).*/\1/' \
-                    | grep -vE "$SKIP" | sort -u || true)"
-          REMOVED="$(echo "$DIFF" | grep -E "^-" | grep -E "$NAME_RE" \
-                      | sed -E 's/^-(async )?def ([a-z][a-z0-9_]*)\(.*/\2/;
-                                s/^-class ([A-Z][A-Za-z0-9_]*).*/\1/' \
-                      | grep -vE "$SKIP" | sort -u || true)"
-          NET_ADDED="$(comm -23 <(echo "$ADDED") <(echo "$REMOVED") | grep -v '^$' || true)"
-          NET_REMOVED="$(comm -23 <(echo "$REMOVED") <(echo "$ADDED") | grep -v '^$' || true)"
-          fail=0
-          if [ -n "$NET_ADDED" ]; then
-            echo "Added public names: $NET_ADDED"
-            for name in $NET_ADDED; do
-              # По границам слова, а не подстрокой: иначе удаление `Foo`
-              # «находится» в доке, где упомянут только `FooBar`.
-              if ! grep -rqE -- "\b$name\b" vera3/docs/ 2>/dev/null; then
-                echo "::error::Added public symbol '$name' not mentioned anywhere in vera3/docs/"
-                fail=1
-              fi
-            done
-          fi
-          if [ -n "$NET_REMOVED" ]; then
-            echo "Removed public names: $NET_REMOVED"
-            for name in $NET_REMOVED; do
-              if grep -rqE -- "\b$name\b" vera3/docs/ 2>/dev/null; then
-                echo "::error::Removed symbol '$name' still referenced in vera3/docs/ (orphan)"
-                fail=1
-              fi
-            done
-          fi
-          [ "$fail" -eq 0 ] && echo "docs name-sync passed"
-          exit $fail
+          bash vera3/scripts/ci_gate_docs_namesync.sh "${{ steps.base.outputs.base }}" "${{ steps.base.outputs.head }}"
 
   # ─── 3. Test gate ────────────────────────────────────────────────────────
   # Один прогон pytest на весь воркфлоу: из его coverage.xml берутся и пороги

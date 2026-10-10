@@ -246,6 +246,24 @@ Docker (82% всех) никем не востребованы** плюс **3.74
 файловые системы повторно. Мерить надо `du --exclude=merged` либо суммой
 `overlay2/*/diff`.
 
+## Preflight: те же гейты, что в CI, одной командой
+
+Перед push: `PREFLIGHT_PY=<python> bash vera3/scripts/preflight.sh`
+(`--fast` — pytest только по затронутым тестам, пороги покрытия и diff-cover
+помечаются SKIP; `--base REF` — своя база диффа).
+
+- База — `git merge-base origin/master HEAD` после `git fetch`.
+- Гейты docs, secret scan, ruff, vulture и docs name-sync исполняют те же
+  `scripts/ci_gate_*.sh`, что и `deploy.yml` — разойтись им нечему.
+- pytest идёт как в CI: cwd `vera3`, `pytest tests/`, без ini-файла
+  (rootdir `vera3` → asyncio strict). Из `vera3/shared` не запускать:
+  `shared/pyproject.toml` включает `asyncio_mode=auto`, и тесты, зелёные там,
+  краснеют в CI.
+- Без `PREFLIGHT_PG_URL` тесты `tests/pg` и `tests/integration` пропускаются
+  (в CI они идут на живом Postgres); без `pytest-cov`/`diff-cover` пороги
+  покрытия не считаются. Всё это печатается в итоговой таблице как SKIP,
+  а не PASS. Код возврата ненулевой при любом FAIL.
+
 ## Restricted SSH key
 
 Generated once on a dev box:
