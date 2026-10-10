@@ -3,9 +3,10 @@ from __future__ import annotations
 
 import json
 import uuid
+from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import or_, select
+from sqlalchemy import delete, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.models_room import RoomTaskEventRow
@@ -68,8 +69,7 @@ async def enqueue_task_event(db: AsyncSession, row: RoomTaskEventRow) -> list[Ro
     revision, now, actor = row.id, utc_naive_now(), row.agent or "system"
     q = select(RoomEventSubscriptionRow).where(
         RoomEventSubscriptionRow.room == row.room, RoomEventSubscriptionRow.event_name == name,
-        RoomEventSubscriptionRow.status == "active",
-        or_(RoomEventSubscriptionRow.expires_at.is_(None), RoomEventSubscriptionRow.expires_at > now))
+        RoomEventSubscriptionRow.status == "active", RoomEventSubscriptionRow.expires_at > now)
     event_id = event_id_for(row.room, row.task_id, revision, row.kind)
     queued: list[RoomEventOutboxRow] = []
     for sub in (await db.execute(q)).scalars():
@@ -91,3 +91,14 @@ async def enqueue_task_event(db: AsyncSession, row: RoomTaskEventRow) -> list[Ro
 
 def parse_body(body: str) -> dict[str, Any]:
     return json.loads(body)
+
+
+TERMINAL_STATUSES = ("delivered", "dropped", "failed", "revoked")
+
+
+async def prune_outbox(db: AsyncSession, *, older_than_days: int = 30) -> int:
+    """Удаляет завершённые строки старше N суток; pending не трогает. Пока не подключено к циклу."""
+    cutoff = utc_naive_now() - timedelta(days=older_than_days)
+    res = await db.execute(delete(RoomEventOutboxRow).where(
+        RoomEventOutboxRow.status.in_(TERMINAL_STATUSES), RoomEventOutboxRow.created_at < cutoff))
+    return int(res.rowcount or 0)
