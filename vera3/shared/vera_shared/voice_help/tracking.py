@@ -13,7 +13,7 @@ from sqlalchemy import select
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskEventRow, RoomTaskRow
-from vera_shared.voice_help.policy import ESCALATE_AFTER, REMIND_AFTER
+from vera_shared.voice_help.policy import AGENT, ESCALATE_AFTER, REMIND_AFTER
 
 TAKEN, ESCALATE, REMIND, CLOSED = "taken", "escalate", "remind", "closed"
 FINAL_TASK_STATUSES = ("done", "cancelled")
@@ -25,6 +25,7 @@ async def task_holder(room: str, task_id: str) -> tuple[str | None, str | None]:
     async with get_session() as s:
         agent = (await s.execute(
             select(ev.agent).where(ev.room == room, ev.task_id == task_id,
+                                   ev.agent != AGENT,  # claim диспетчера — не исполнитель
                                    ev.kind.in_(("claimed", "handoff_accept")))
             .order_by(ev.id).limit(1))).scalar_one_or_none()
         row = await s.get(RoomTaskRow, (room, task_id))

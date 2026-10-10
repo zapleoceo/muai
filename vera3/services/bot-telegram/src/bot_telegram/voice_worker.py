@@ -40,6 +40,7 @@ from vera_shared.voice_help.queue_state import WATCHED, hold_command, mark_opene
 from vera_shared.voice_help.room_intake import open_help_task
 
 from bot_telegram.brain import BrainError, ask_brain, save_event
+from bot_telegram.dispatcher import dispatch_one
 from bot_telegram.formatting import format_reply, plain_fallback
 from bot_telegram.help_worker import REPROMPT_TEXT, opened_text, say, track_help
 
@@ -200,6 +201,7 @@ async def run_forever(send: Send, owner_id: int) -> None:
             await notify_failed(send)
             await track_help(send, utc_naive_now())
             busy = await process_one(send, owner_id)
+            busy = await dispatch_one() or busy
         except asyncio.CancelledError:
             raise
         except Exception:

@@ -85,7 +85,8 @@ async def _still_eligible(s: AsyncSession, row: RoomTaskRow, now: Any) -> bool:
 
 
 async def next_task(*, room: str, agent: str, project: str | None, lease_seconds: int,
-                    session: str | None, account: str | None) -> dict[str, Any] | None:
+                    session: str | None, account: str | None,
+                    skip_ref_prefix: str | None = None) -> dict[str, Any] | None:
     """Берёт одну подходящую задачу. Каждый кандидат блокируется FOR UPDATE SKIP LOCKED
     и перепроверяется под блокировкой: параллельный подбор не отдаст одну задачу двоим."""
     q = (select(RoomTaskRow.task_id).where(
@@ -105,6 +106,9 @@ async def next_task(*, room: str, agent: str, project: str | None, lease_seconds
                 .with_for_update(skip_locked=True))).scalar_one_or_none()
             now = utc_naive_now()  # после блокировки: ожидание могло занять время
             if row is None or not await _still_eligible(s, row, now):
+                continue
+            if skip_ref_prefix and any(str(r.get("ref", "")).startswith(skip_ref_prefix)
+                                       for r in row.refs or []):
                 continue
             apply_claim(row, agent=agent, now=now, lease_seconds=lease_seconds,
                         session=session, account=account)
