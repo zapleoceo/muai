@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from dashboard.attention_view import attention_panel
 from dashboard.tasks_service import TaskItem, split_tabs
 from dashboard.tasks_table import HEAD, tasks_table
@@ -65,3 +66,27 @@ def test_render_static_page():
     assert "Внимание владельца" in body and "tk-table" in body
     OUT.parent.mkdir(parents=True, exist_ok=True)
     OUT.write_text(f'<!doctype html><meta charset="utf-8"><body>{body}</body>', encoding="utf-8")
+
+
+@pytest.mark.asyncio
+async def test_panel_flag_off_does_not_touch_tables(monkeypatch):
+    from unittest.mock import AsyncMock, patch
+
+    from dashboard.attention_view import OFF_TEXT, attention_html
+    monkeypatch.setenv("OWNER_QUIET_ENABLED", "0")
+    with patch("vera_shared.owner_attention.store.load_state", AsyncMock(side_effect=AssertionError)):
+        assert OFF_TEXT in await attention_html()
+
+
+@pytest.mark.asyncio
+async def test_panel_flag_on_missing_table_logs_and_degrades(monkeypatch, caplog):
+    from unittest.mock import AsyncMock, patch
+
+    from dashboard.attention_view import BROKEN_TEXT, attention_html
+    from sqlalchemy.exc import OperationalError
+    monkeypatch.setenv("OWNER_QUIET_ENABLED", "1")
+    err = OperationalError("select", {}, Exception("no such table: owner_attention"))
+    with patch("vera_shared.owner_attention.store.load_state", AsyncMock(side_effect=err)):
+        html = await attention_html()
+    assert BROKEN_TEXT in html
+    assert any(r.levelname == "WARNING" for r in caplog.records)

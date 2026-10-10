@@ -103,7 +103,7 @@ def test_page_and_unknown_task_fragment():
     c = {COOKIE_NAME: cookie()}
     client = TestClient(app)
     with patch("dashboard.tasks_routes.load_tabs",
-               AsyncMock(return_value=split_tabs([item(), item(task_id="d", status="done")]))),                patch("dashboard.tasks_routes.load_gantt_rows", AsyncMock(return_value=[])), patch("dashboard.tasks_routes.load_watchdog", AsyncMock(return_value=None)), patch("dashboard.tasks_routes.load_attention", AsyncMock(return_value=(Attention(), []))):
+               AsyncMock(return_value=split_tabs([item(), item(task_id="d", status="done")]))),                patch("dashboard.tasks_routes.load_gantt_rows", AsyncMock(return_value=[])), patch("dashboard.tasks_routes.load_watchdog", AsyncMock(return_value=None)), patch("dashboard.attention_view.load_attention", AsyncMock(return_value=(Attention(), []))):
         r = client.get("/tasks?tab=done&span=bogus", cookies=c)
         r7 = client.get("/tasks?tab=done&span=7d", cookies=c)
     assert r.status_code == 200 and "Готово 1" in r.text and 'href="/tasks"' in r.text
