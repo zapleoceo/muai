@@ -86,3 +86,5 @@ size, duration, w, h, url, url_expires_at), `causation_id`. Значение `nu
 Остальное: `repository.origin_by_client`, `origin_of`, `drop_origin`, `answer_key`, `insert_answer_key`,
 `drop_answer_key`, `set_key_revision`, `result_text_of`, `own_tasks_page`; исключения `IntakeNotFound`,
 `IntakeConflict`, `IntakeBusy`.
+
+HTTP-фасад собирается в `office_app` (`vera_mcp/office_routes.py`) и монтируется рядом с `/mcp`.
