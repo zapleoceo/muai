@@ -7,7 +7,7 @@ import json
 import os
 import secrets
 import uuid
-from datetime import timedelta
+from datetime import datetime, timedelta
 from types import SimpleNamespace
 from typing import Any
 
@@ -16,7 +16,7 @@ from mcp import types
 from mcp.server.context import ServerRequestContext
 from mcp.shared.exceptions import MCPError
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import update
+from sqlalchemy import func, select, update
 from vera_shared.crypto import encrypt
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import EVENT_KINDS
@@ -31,7 +31,7 @@ from vera_mcp.events_catalog import TASK_KINDS
 from vera_mcp.events_net import (
     CallbackRejected,
     check_callback_url,
-    http_client,
+    post_pinned,
     signed_headers,
     validate_secret,
 )
@@ -40,6 +40,8 @@ CALLBACK_ENDPOINT_ERROR = -32015
 INVALID_PARAMS = -32602
 DEFAULT_TTL_MS = 24 * 3600 * 1000
 MAX_TTL_MS = 30 * 24 * 3600 * 1000
+MAX_SUBSCRIPTIONS_PER_PRINCIPAL = 20
+MAX_TASK_ID_LEN = 128
 
 
 class Delivery(BaseModel):
@@ -65,7 +67,7 @@ class UnsubscribeParams(types.RequestParams):
 class RoomArguments(BaseModel):
     model_config = {"extra": "forbid"}
     room: str
-    task_id: str | None = None
+    task_id: str | None = Field(default=None, max_length=MAX_TASK_ID_LEN)
     kind: list[str] = Field(default_factory=list)
 
 
@@ -99,13 +101,12 @@ def _check_name(name: str) -> None:
         raise _invalid("unknown_event")
 
 
-async def _challenge(sub_id: str, url: str, secret: str) -> None:
+async def _challenge(sub_id: str, url: str, addresses: list[str], secret: str) -> None:
     token = secrets.token_urlsafe(24)
     body = json.dumps({"type": "verification", "challenge": token}, separators=(",", ":"))
     headers = signed_headers(secret, f"vrf_{uuid.uuid4().hex}", body, sub_id)
     try:
-        async with http_client(timeout=5.0) as client:
-            resp = await client.post(url, content=body, headers=headers)
+        resp = await post_pinned(url, addresses, content=body, headers=headers, timeout=5.0)
     except httpx.TimeoutException as exc:
         raise MCPError(CALLBACK_ENDPOINT_ERROR, "CallbackEndpointError", {"reason": "timeout"}) from exc
     except httpx.HTTPError as exc:
@@ -120,10 +121,19 @@ async def _challenge(sub_id: str, url: str, secret: str) -> None:
         raise MCPError(CALLBACK_ENDPOINT_ERROR, "CallbackEndpointError", {"reason": "challenge_failed"})
 
 
-def _expiry(ttl_ms: int | None):
-    if ttl_ms is None:
-        return None
-    return utc_naive_now() + timedelta(milliseconds=min(max(ttl_ms, 1), MAX_TTL_MS))
+def _expiry(ttl_ms: int | None) -> datetime:
+    """Срок есть всегда: отсутствующий ttlMs = DEFAULT_TTL_MS, потолок MAX_TTL_MS."""
+    ttl = DEFAULT_TTL_MS if ttl_ms is None else ttl_ms
+    return utc_naive_now() + timedelta(milliseconds=min(max(ttl, 1), MAX_TTL_MS))
+
+
+async def _check_quota(principal: str, sub_id: str) -> None:
+    q = select(func.count()).select_from(RoomEventSubscriptionRow).where(
+        RoomEventSubscriptionRow.principal == principal, RoomEventSubscriptionRow.status == "active",
+        RoomEventSubscriptionRow.expires_at > utc_naive_now(), RoomEventSubscriptionRow.id != sub_id)
+    async with get_session() as s:
+        if (await s.execute(q)).scalar_one() >= MAX_SUBSCRIPTIONS_PER_PRINCIPAL:
+            raise _invalid("too_many_subscriptions")
 
 
 async def subscribe(ctx: ServerRequestContext, params: SubscribeParams) -> dict[str, Any]:
@@ -135,11 +145,12 @@ async def subscribe(ctx: ServerRequestContext, params: SubscribeParams) -> dict[
     args = canonical_arguments(params.arguments)
     try:
         validate_secret(d.secret)
-        await check_callback_url(d.url)
+        addresses = await check_callback_url(d.url)
     except CallbackRejected as exc:
         raise _invalid(exc.reason) from exc
     sub_id = subscription_id(principal, d.url, params.name, args)
-    await _challenge(sub_id, d.url, d.secret)
+    await _check_quota(principal, sub_id)
+    await _challenge(sub_id, d.url, addresses, d.secret)
     expires = _expiry(params.ttl_ms)
     values = {"principal": principal, "room": args["room"], "event_name": params.name,
               "task_id": args["task_id"], "kinds": args["kind"], "callback_url": d.url,
@@ -152,7 +163,7 @@ async def subscribe(ctx: ServerRequestContext, params: SubscribeParams) -> dict[
         else:
             for key, value in values.items():
                 setattr(row, key, value)
-    refresh = expires.isoformat(timespec="seconds") + "Z" if expires else None
+    refresh = expires.isoformat(timespec="seconds") + "Z"
     return {"resultType": "complete", "id": sub_id, "refreshBefore": refresh,
             "cursor": None, "truncated": False}
 

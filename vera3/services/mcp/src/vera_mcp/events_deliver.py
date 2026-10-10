@@ -4,6 +4,7 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import random
@@ -20,19 +21,23 @@ from vera_shared.db.models_room_events import (
 )
 from vera_shared.timeutil import utc_naive_now
 
+from vera_mcp.auth import allowed_rooms, load_room_tokens, load_tokens
 from vera_mcp.events_net import (
     MAX_BODY_BYTES,
     CallbackRejected,
     check_callback_url,
-    http_client,
+    post_pinned,
     signed_headers,
 )
+from vera_mcp.room_oauth import allowed_actors
 
 log = logging.getLogger(__name__)
 
 MAX_ATTEMPTS = 6
 BASE_DELAY_S = 5.0
 MAX_DELAY_S = 900.0
+MAX_CONCURRENCY = 5
+ATTEMPT_DEADLINE_S = 20.0
 
 
 def backoff_delay(attempt: int, rand: Callable[[], float] = random.random) -> float:
@@ -54,13 +59,20 @@ async def _revoke_all(sub_id: str) -> None:
                                RoomEventOutboxRow.status == "pending").values(status="revoked"))
 
 
-async def _post(sub: RoomEventSubscriptionRow, row: RoomEventOutboxRow) -> int | str:
+def principal_still_authorised(principal: str, room: str) -> bool:
+    """Токен/актор принципала ещё существует и комната по-прежнему разрешена."""
+    known = set(load_room_tokens().values()) | set(load_tokens().values()) | set(allowed_actors())
+    return principal in known and room in allowed_rooms()
+
+
+async def _post(sub: RoomEventSubscriptionRow, row: RoomEventOutboxRow,
+                addresses: list[str]) -> int | str:
     """HTTP-статус или короткий код сетевой ошибки; тела и URL в логи не попадают."""
     secret = decrypt(sub.encrypted_secret, secret=os.environ["ROOM_OAUTH_KEY"])
     headers = signed_headers(secret, row.event_id, row.body, sub.id)
     try:
-        async with http_client() as client:
-            resp = await client.post(sub.callback_url, content=row.body.encode(), headers=headers)
+        resp = await post_pinned(sub.callback_url, addresses, content=row.body.encode(),
+                                 headers=headers)
     except httpx.TimeoutException:
         return "timeout"
     except httpx.HTTPError:
@@ -83,12 +95,19 @@ async def _attempt(row_id: int, now: datetime) -> None:
         if len(row.body.encode()) > MAX_BODY_BYTES:
             _close(row, "dropped", "body_too_large", now)
             return
+        if not principal_still_authorised(sub.principal, sub.room):
+            sub.status = "revoked"
+            _close(row, "revoked", "principal_not_authorised", now)
+            await s.execute(update(RoomEventOutboxRow).where(
+                RoomEventOutboxRow.subscription_id == sub.id, RoomEventOutboxRow.status == "pending",
+                RoomEventOutboxRow.id != row.id).values(status="revoked"))
+            return
         try:
-            await check_callback_url(sub.callback_url)
+            addresses = await check_callback_url(sub.callback_url)
         except CallbackRejected as exc:
             _close(row, "dropped", exc.reason, now)
             return
-        outcome = await _post(sub, row)
+        outcome = await _post(sub, row, addresses)
         row.attempts += 1
         if isinstance(outcome, int) and 200 <= outcome < 300:
             _close(row, "delivered", None, now)
@@ -110,10 +129,20 @@ async def deliver_due(*, now: datetime | None = None, limit: int = 50) -> int:
     """Одна итерация: берёт созревшие pending-строки и делает по одной попытке. Возвращает число попыток."""
     moment = now or utc_naive_now()
     async with get_session() as s:
-        q = (select(RoomEventOutboxRow.id)
+        q = (select(RoomEventOutboxRow.id, RoomEventOutboxRow.subscription_id)
              .where(RoomEventOutboxRow.status == "pending", RoomEventOutboxRow.next_attempt_at <= moment)
              .order_by(RoomEventOutboxRow.id).limit(limit))
-        ids = list((await s.execute(q)).scalars())
-    for row_id in ids:
-        await _attempt(row_id, moment)
-    return len(ids)
+        due = [(r[0], r[1]) for r in (await s.execute(q)).all()]
+    gate = asyncio.Semaphore(MAX_CONCURRENCY)
+    # строки одной подписки идут строго по очереди: 410 на первой гасит остальные до их попытки
+    per_sub = {sub_id: asyncio.Lock() for _, sub_id in due}
+
+    async def bounded(row_id: int, sub_id: str) -> None:
+        async with per_sub[sub_id], gate:
+            try:
+                await asyncio.wait_for(_attempt(row_id, moment), ATTEMPT_DEADLINE_S)
+            except TimeoutError:
+                log.warning("mcp event delivery row=%s exceeded %ss deadline", row_id, ATTEMPT_DEADLINE_S)
+
+    await asyncio.gather(*(bounded(i, sub_id) for i, sub_id in due))
+    return len(due)

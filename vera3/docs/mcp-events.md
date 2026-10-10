@@ -33,21 +33,26 @@ SDK: `mcp==2.3.x` (`MCPServer` вместо `FastMCP`), `streamable_http_app(sta
    у него просто другой id.
 3. Callback только HTTPS. `events_net.check_callback_url` режет `http`, userinfo, литеральные и
    разрешённые через DNS адреса, которые не глобальны (loopback, private, link-local, IPv6 local,
-   IPv4-mapped). Редиректы не выполняются (`http_client`: `follow_redirects=False`).
+   IPv4-mapped, NAT64 `64:ff9b::/96` и `64:ff9b:1::/48`, 6to4, Teredo, `::/96` с проверкой вшитого IPv4
+   через `_is_public`). Ошибки разбора имени хоста (`UnicodeError`/`ValueError`) дают `bad_url`.
+   `check_callback_url` возвращает проверенные адреса. Редиректы не выполняются (`http_client`: `follow_redirects=False`).
    Секрет проверяет `validate_secret`: `whsec_` + base64 на 24..64 байта.
 4. Challenge: `{"type":"verification","challenge":<случайный>}`, подпись Standard Webhooks
    (`signed_headers`, `standardwebhooks==1.1.0`). Получатель обязан вернуть тот же challenge,
    сравнение constant-time; иначе `-32015` (`CallbackEndpointError`, `data.reason`:
    `challenge_failed` | `timeout` | `unreachable`). Подписка в БД не создаётся.
 5. Секрет хранится зашифрованным (`vera_shared.crypto.encrypt`, ключ `ROOM_OAUTH_KEY`, как в 048).
-   Ответ: `{id, refreshBefore, cursor: null, truncated: false}`; `ttlMs` по умолчанию 24 ч,
-   максимум 30 суток, `null` = без срока. Повторный subscribe продлевает срок.
+   Ответ: `{id, refreshBefore, cursor: null, truncated: false}`; `ttlMs` по умолчанию 24 ч
+   (`DEFAULT_TTL_MS`), максимум 30 суток (`MAX_TTL_MS`); отсутствующий или `null` = по умолчанию,
+   бессрочных подписок нет (`_expiry`). Не более `MAX_SUBSCRIPTIONS_PER_PRINCIPAL` (20) активных подписок
+   на принципала, иначе `-32602` `too_many_subscriptions`. `task_id` не длиннее `MAX_TASK_ID_LEN` (128). Повторный subscribe продлевает срок.
 6. `events/unsubscribe` идемпотентен; `revoke_subscription` гасит и непоставленные строки outbox.
 
-Ограничение: адрес проверяется при подписке и при каждой попытке доставки, но соединение не
-закрепляется на проверенный IP (окно DNS-rebinding остаётся). Для тестов подменяются только
-`events_net.net.resolver` и `net.transport` (класс `EventsNet`, функция `system_resolver`);
-проверки адресов остаются в силе.
+DNS-rebinding закрыт: имя резолвится один раз, все адреса проверяются, соединение идёт на проверенный
+IP (`events_net.post_pinned`, общий для challenge и доставки): URL с IP, заголовок `Host` и SNI/проверка
+сертификата по исходному имени (`sni_hostname`). Клиенты `httpx` работают с `trust_env=False` (прокси из
+окружения игнорируются). Для тестов подменяются только `events_net.net.resolver` и `net.transport`
+(класс `EventsNet`, функция `system_resolver`); проверки адресов остаются в силе.
 
 ## Outbox (миграция `053_mcp_events.sql`)
 
@@ -81,6 +86,15 @@ SDK: `mcp==2.3.x` (`MCPServer` вместо `FastMCP`), `streamable_http_app(sta
 - `2xx` — `delivered`; `410` — подписка и все её `pending` отзываются, без повторов; `413` — событие
   `dropped`, без повторов; остальное (5xx, 4xx, сеть, таймаут) — повтор через `backoff_delay`
   (экспонента от 5 с до 900 с, джиттер 50..100%), после `MAX_ATTEMPTS` (6) — `failed`.
+- Перед попыткой `principal_still_authorised(principal, room)` проверяет, что имя принципала ещё есть
+  среди токенов комнаты/MCP или OAuth-акторов и комната входит в `allowed_rooms()`; иначе подписка
+  `revoked`, её `pending` строки тоже `revoked` (`principal_not_authorised`). В outbox статуса `cancelled`
+  нет (CHECK в 053), используется `revoked`.
+- Конкурентность: `deliver_due` гонит попытки через `asyncio.Semaphore(MAX_CONCURRENCY=5)`, каждая
+  ограничена `ATTEMPT_DEADLINE_S` (20 с); строки одной подписки идут по очереди (410 гасит остальные до попытки); просроченная откатывается и остаётся `pending` до следующей итерации.
+- Хранение: `vera_shared.room.event_outbox.prune_outbox(db, older_than_days=30)` удаляет завершённые
+  (`delivered`, `dropped`, `failed`, `revoked`) строки старше N суток, `pending` не трогает.
+  В работающий цикл не подключена; вызывающий коммитит транзакцию.
 - Просроченная или отозванная подписка гасит строки в `revoked`; тело больше `MAX_BODY_BYTES`
   (256 КиБ) — `dropped`.
 - В логи идут только id события и подписки, номер попытки и исход; секрет, URL и тело не пишутся
