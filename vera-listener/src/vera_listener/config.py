@@ -139,6 +139,10 @@ class Config:
         return self.root / "listener.log"
 
     @property
+    def crash_dir(self) -> Path:
+        return self.root / "crash"
+
+    @property
     def model_dir(self) -> Path:
         """Модель и кэш компиляции OpenVINO. Рядом с очередью — один корень
         на всё состояние слушателя, чтобы переезд был копированием каталога."""
