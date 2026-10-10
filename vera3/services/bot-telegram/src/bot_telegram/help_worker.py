@@ -1,7 +1,9 @@
 """Срочная просьба голосом: «Открыл задачу», «Взял: …» и эскалация dot.
 
 Живёт в том же цикле, что `voice_worker`: второй шины нет, состояние — в
-строке очереди (`vera_shared.voice_help.queue_state`). Каждый шаг — сначала
+строке очереди (`vera_shared.voice_help.queue_state`): до claim она в
+`status=opened`, на claim/отмене — `release_held`. Ответ владельца на вопрос
+неподтверждённой задачи снимает удержание (`voice_help.hold.lift_hold`). Каждый шаг — сначала
 сообщение владельцу, потом отметка: упади бот между ними, следующий проход
 повторит сообщение (at-least-once, как у ответа на поручение).
 
@@ -18,15 +20,18 @@ from datetime import datetime
 from html import escape
 
 from vera_shared.db.models_voice import VoiceCommandRow
+from vera_shared.redact import redact_secrets
+from vera_shared.voice_help.hold import lift_hold
 from vera_shared.voice_help.policy import help_room
 from vera_shared.voice_help.queue_state import (
     mark_closed,
     mark_escalated,
     mark_reminded,
     mark_taken,
+    release_held,
     watched_help,
 )
-from vera_shared.voice_help.room_intake import escalate
+from vera_shared.voice_help.room_intake import escalate, normal_action
 from vera_shared.voice_help.tracking import (
     CLOSED,
     ESCALATE,
@@ -80,12 +85,16 @@ async def track_help(send: Send, now: datetime) -> int:
 
 
 async def _track_one(send: Send, row: VoiceCommandRow, now: datetime) -> str | None:
+    if row.instruction and await lift_hold(
+            help_room(), row.task_id, normal_action(redact_secrets(row.instruction))):
+        log.info("help-worker: %s источник подтверждён владельцем", row.command_id)
     holder, status = await task_holder(help_room(), row.task_id)
     elapsed = now - (row.task_opened_at or now)
     step = next_step(row.help_state, elapsed, holder, status)
     if step == TAKEN and holder:
         await say(send, taken_text(holder))
         await mark_taken(row.command_id, holder, now)
+        await release_held(row.command_id, now)
     elif step == ESCALATE:
         await escalate(task_id=row.task_id)
         await say(send, ESCALATED_TEXT)
@@ -95,4 +104,5 @@ async def _track_one(send: Send, row: VoiceCommandRow, now: datetime) -> str | N
         await mark_reminded(row.command_id, now)
     elif step == CLOSED:
         await mark_closed(row.command_id, now)
+        await release_held(row.command_id, now)
     return step

@@ -19,6 +19,9 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models_voice import VoiceCommandRow
 
 WATCHED = ("opened", "escalated", "reminded")
+#: `status` строки очереди, пока задачу никто не взял: не `pending` (бот взял
+#: бы её снова) и не `done` — закрывает её `release_held` на claim/отмене.
+HELD = "opened"
 
 
 async def _set(command_id: str, now: datetime, **values: object) -> None:
@@ -30,6 +33,19 @@ async def _set(command_id: str, now: datetime, **values: object) -> None:
 
 async def mark_opened(command_id: str, task_id: str, now: datetime) -> None:
     await _set(command_id, now, help_state="opened", task_id=task_id, task_opened_at=now)
+
+
+async def hold_command(command_id: str, now: datetime) -> None:
+    await _set(command_id, now, status=HELD, error=None)
+
+
+async def release_held(command_id: str, now: datetime) -> None:
+    """Задачу взяли или закрыли — строка очереди готова (текст живёт в событии)."""
+    async with get_session() as s:
+        await s.execute(update(VoiceCommandRow)
+                        .where(VoiceCommandRow.command_id == command_id,
+                               VoiceCommandRow.status == HELD)
+                        .values(status="done", instruction="", updated_at=now))
 
 
 async def watched_help() -> list[VoiceCommandRow]:
