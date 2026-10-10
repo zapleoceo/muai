@@ -79,6 +79,8 @@ async def tick(send: Send, now: datetime | None = None) -> store.Attention:
     if state.state == store.QUIET and state.quiet_until is not None and now >= state.quiet_until:
         await _flush(send, now)
         return store.Attention()
+    if state.state == store.ACTIVE and await store.pending():
+        await _flush(send, now)
     return state
 
 

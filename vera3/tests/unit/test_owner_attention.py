@@ -185,3 +185,14 @@ async def test_flag_off_sends_immediately_and_keeps_state(monkeypatch):
     assert send.sent == ["q1", "n"]
     assert (await store.load_state()).state == store.ACTIVE
     assert await store.pending() == []
+
+
+async def test_dashboard_answer_in_quiet_flushes_digest_on_next_tick():
+    await _go_quiet(Recorder())
+    await gate.deliver(Recorder(), "held", "held", kind="alert", key="h", task_id="T1", now=vn(2, 0))
+    await gate.on_owner_message(vn(3, 0))  # ответ из дашборда: send нет
+    assert (await store.load_state()).state == store.ACTIVE
+    send = Recorder()
+    await gate.tick(send, vn(3, 1))
+    await gate.tick(send, vn(3, 2))
+    assert len(send.sent) == 1 and "held" in send.sent[0]
