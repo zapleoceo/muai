@@ -305,3 +305,30 @@ async def test_list_reports_lease_live():
     await tasks.claim(room=ROOM, task_id=made["task_id"], agent="claude", lease_seconds=300)
     item = (await intake.list_tasks(BOT))["tasks"][0]
     assert item["status"] == "in_progress" and item["lease_live"] is True
+
+
+async def test_answer_and_delivered_bump_updated_at_for_updated_since():
+    from datetime import datetime
+
+    from sqlalchemy import update
+    from vera_shared.db.engine import get_session
+    since = "2026-06-01T00:00:00"
+    made = await _create()
+    qid = await _ask(made["task_id"])
+
+    async def age() -> None:
+        async with get_session() as s:
+            await s.execute(update(RoomTaskRow).values(updated_at=datetime(2026, 1, 1)))
+
+    await age()
+    rev = await _revision(made["task_id"])
+    assert (await intake.list_tasks(BOT, since))["tasks"] == []
+    done = await intake.answer(BOT, made["task_id"], qid, "Две", rev, "k-u")
+    assert [t["task_id"] for t in (await intake.list_tasks(BOT, since))["tasks"]
+            ] == [made["task_id"]]
+    await age()
+    await intake.mark_delivered(BOT, made["task_id"], done["revision"])
+    assert len((await intake.list_tasks(BOT, since))["tasks"]) == 1
+    await age()
+    await intake.mark_delivered(BOT, made["task_id"], done["revision"])  # повтор: без изменений
+    assert (await intake.list_tasks(BOT, since))["tasks"] == []
