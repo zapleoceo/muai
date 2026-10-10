@@ -15,6 +15,7 @@ from typing import Any
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from vera_mcp.auth import CLIENT_SCOPE_KEY
+from vera_mcp.request_log_store import schedule_insert
 
 log = logging.getLogger("vera_mcp.request")
 
@@ -132,10 +133,16 @@ class RequestLogMiddleware:
             except Exception:  # noqa: BLE001 — журнал не должен маскировать ответ или исходную ошибку
                 rpc_method, tool, rid = "", "", ""
             ua = next((v.decode("latin-1") for k, v in headers if k.lower() == b"user-agent"), "")
+            fields = {
+                "actor": _clean(str(scope.get(CLIENT_SCOPE_KEY, "-")), 64),
+                "ua": _clean(ua, 80), "rpc": _clean(rpc_method, 64),
+                "tool": _clean(tool, 64), "rpc_id": _clean(rid, 32)}
+            ms = int((time.perf_counter() - started) * 1000)
             log.info(
                 "mcp_request cid=%s method=%s path=%s actor=%s ua=%s rpc=%s tool=%s "
                 "rpc_id=%s status=%s ms=%d outcome=%s",
-                cid, method, MCP_PATH, _clean(str(scope.get(CLIENT_SCOPE_KEY, "-")), 64),
-                _clean(ua, 80) or "-", _clean(rpc_method, 64) or "-", _clean(tool, 64) or "-",
-                _clean(rid, 32) or "-", state["status"],
-                (time.perf_counter() - started) * 1000, outcome)
+                cid, method, MCP_PATH, fields["actor"], fields["ua"] or "-",
+                fields["rpc"] or "-", fields["tool"] or "-", fields["rpc_id"] or "-",
+                state["status"], ms, outcome)
+            schedule_insert({"cid": cid, "method": method[:8], **fields,
+                             "status": state["status"], "ms": ms, "outcome": outcome})

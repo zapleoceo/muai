@@ -42,3 +42,24 @@ BEGIN
     END LOOP;
     RAISE NOTICE 'usage_log: удалено % строк старше %', total, cutoff;
 END $$;
+
+-- mcp_request_log (миграция 052): метаданные журнала /mcp, срок 30 дней.
+-- Тот же приём — порции с COMMIT; индекс по `at` делает выборку дешёвой.
+DO $$
+DECLARE
+    cutoff timestamp := now() - interval '30 days';
+    killed integer;
+    total  integer := 0;
+BEGIN
+    LOOP
+        DELETE FROM mcp_request_log
+        WHERE id IN (
+            SELECT id FROM mcp_request_log WHERE at < cutoff LIMIT 50000
+        );
+        GET DIAGNOSTICS killed = ROW_COUNT;
+        total := total + killed;
+        EXIT WHEN killed = 0;
+        COMMIT;
+    END LOOP;
+    RAISE NOTICE 'mcp_request_log: удалено % строк старше %', total, cutoff;
+END $$;
