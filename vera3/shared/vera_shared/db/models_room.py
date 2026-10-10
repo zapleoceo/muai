@@ -168,3 +168,7 @@ class WatchdogStateRow(Base):
     name: Mapped[str] = mapped_column(String(64), primary_key=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+from vera_shared.db import (
+    models_room_events,  # noqa: E402,F401  таблицы MCP Events живут в одной metadata с комнатой
+)

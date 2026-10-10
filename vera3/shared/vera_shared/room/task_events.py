@@ -7,6 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.models_room import EVENT_KINDS, RoomTaskEventRow
+from vera_shared.room.event_outbox import enqueue_task_event
 
 
 async def record_event(
@@ -23,6 +24,7 @@ async def record_event(
                            fencing_token=fencing_token, text=text, data=data)
     db.add(row)
     await db.flush()
+    await enqueue_task_event(db, row)
     return row
 
 
