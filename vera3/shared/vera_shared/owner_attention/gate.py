@@ -1,6 +1,7 @@
 """Шлюз уведомлений владельцу: единственная точка, через которую бот пишет первым."""
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import datetime
@@ -35,9 +36,12 @@ async def on_owner_message(now: datetime | None = None, send: Send | None = None
     if state.state == store.ACTIVE:
         return
     if state.state == store.QUIET and send is not None:
-        await _flush(send, now)
-    else:
-        await store.save_state(store.Attention(), now)
+        try:
+            await _flush(send, now)
+        except Exception as e:
+            # Сообщение владельца важнее сводки: состояние active, сводку повторит tick.
+            log.warning("owner-attention: сводка не ушла (%s), повторит tick", type(e).__name__)
+    await store.save_state(store.Attention(), now)
 
 
 async def _settle(state: store.Attention, now: datetime) -> store.Attention:
@@ -57,7 +61,15 @@ def _digest(items: list[store.Deferred]) -> tuple[str, str]:
     return escape(plain, quote=False), plain
 
 
+_FLUSH_LOCK = asyncio.Lock()
+
+
 async def _flush(send: Send, now: datetime) -> None:
+    async with _FLUSH_LOCK:
+        await _flush_locked(send, now)
+
+
+async def _flush_locked(send: Send, now: datetime) -> None:
     pending = await store.pending()
     latest: dict[str, store.Deferred] = {}
     for item in pending:

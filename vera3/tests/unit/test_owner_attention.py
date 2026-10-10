@@ -196,3 +196,36 @@ async def test_dashboard_answer_in_quiet_flushes_digest_on_next_tick():
     await gate.tick(send, vn(3, 1))
     await gate.tick(send, vn(3, 2))
     assert len(send.sent) == 1 and "held" in send.sent[0]
+
+
+class Failing(Recorder):
+    async def __call__(self, _html: str, plain: str) -> int:
+        raise ConnectionError("telegram down")
+
+
+async def test_failed_flush_does_not_lose_owner_message_and_tick_retries():
+    await _go_quiet(Recorder())
+    await gate.deliver(Recorder(), "held", "held", kind="alert", key="h", task_id="T1", now=vn(2, 0))
+    await gate.on_owner_message(vn(3, 0), send=Failing())  # не должно бросить
+    assert (await store.load_state()).state == store.ACTIVE
+    send = Recorder()
+    await gate.tick(send, vn(3, 1))
+    await gate.tick(send, vn(3, 2))
+    assert len(send.sent) == 1 and "held" in send.sent[0]
+
+
+async def test_concurrent_ticks_send_one_digest():
+    import asyncio
+
+    await _go_quiet(Recorder())
+    await gate.deliver(Recorder(), "held", "held", kind="alert", key="h", task_id="T1", now=vn(2, 0))
+    await gate.on_owner_message(vn(3, 0))  # active с отложенным
+
+    class Slow(Recorder):
+        async def __call__(self, html: str, plain: str) -> int:
+            await asyncio.sleep(0.05)
+            return await super().__call__(html, plain)
+
+    send = Slow()
+    await asyncio.gather(gate.tick(send, vn(3, 1)), gate.tick(send, vn(3, 1)))
+    assert len(send.sent) == 1
