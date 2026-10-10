@@ -5,12 +5,15 @@ import logging
 
 import httpx
 import pytest
+import pytest_asyncio
 from vera_mcp.auth import OFFICE_PRINCIPAL_KEY, OFFICE_REALM, REALM_SCOPE_KEY
 from vera_mcp.office_routes import office_app
 from vera_mcp.server import _RealmDispatch, build_app
 from vera_shared.office import intake
 from vera_shared.office.acl import OfficePrincipal
 from vera_shared.room import questions, tasks
+
+pytestmark = pytest.mark.asyncio
 
 OFFICE = "office-vbot-0123456789-0123456789ab"
 OFFICE2 = "office-vbot2-0123456789-0123456789a"
@@ -36,7 +39,7 @@ def env(monkeypatch, sqlite_db):
     monkeypatch.setenv("ROOM_TOKENS", f"claude:{ROOM_TOKEN}")
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def client(env):
     # без lifespan: офисным маршрутам менеджеры сессий MCP не нужны
     transport = httpx.ASGITransport(app=build_app())

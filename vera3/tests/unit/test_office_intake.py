@@ -10,6 +10,8 @@ from vera_shared.office.acl import OfficeForbidden, OfficePrincipal
 from vera_shared.office.intake_input import InvalidInput
 from vera_shared.room import questions, tasks
 
+pytestmark = pytest.mark.asyncio
+
 ROOM = "office-test"
 BOT = OfficePrincipal(name="vbot", project="Veranda")
 BOT2 = OfficePrincipal(name="vbot2", project="Veranda")
