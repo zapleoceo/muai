@@ -62,6 +62,26 @@ SDK: `mcp==2.3.x` (`MCPServer` вместо `FastMCP`), `streamable_http_app(sta
 - `event_id` = `event_id_for(room, task_id, revision, kind)` (uuid5), `revision` = id записи журнала,
   растёт по задаче. Конверт собирает `build_body`: в `data` лежат `task_id`, `room`, `revision`, `kind`,
   `correlation_id` (`room/task_id`), `causation_id`, `actor`; `parse_body` читает его обратно.
+- Приёмник: `events_catalog.is_stale_event(event_revision, current_revision)` — перечитать задачу и
+  проигнорировать событие с `revision` ниже текущей (порядок доставки не гарантирован).
 - Самопетля: если актор события и есть подписчик, а этой подписке по задаче уже ставилось событие
   (оно становится `causation_id`), новое событие того же имени не ставится. Результат (`result`) и
   блокер (`blocker`) от того же принципала идут в свои подписки и доставляются.
+
+## Доставка (`events_deliver.py`)
+
+`deliver_due(now=None, limit=50)` — одна итерация для существующего poll-цикла (в работающий сервис
+пока не подключена). Берёт `pending` строки с `next_attempt_at <= now`, по одной попытке на строку
+(`_attempt` фиксирует результат в своей транзакции, поэтому после рестарта продолжаются только
+`pending`).
+
+- Запрос: `httpx` без редиректов, тело — те же байты, что в outbox. Заголовки на КАЖДУЮ попытку
+  подписываются заново (`signed_headers`): `webhook-id` = `event_id`, свежие `webhook-timestamp` и
+  `webhook-signature`, плюс `X-MCP-Subscription-Id`. Перед отправкой адрес проверяется заново.
+- `2xx` — `delivered`; `410` — подписка и все её `pending` отзываются, без повторов; `413` — событие
+  `dropped`, без повторов; остальное (5xx, 4xx, сеть, таймаут) — повтор через `backoff_delay`
+  (экспонента от 5 с до 900 с, джиттер 50..100%), после `MAX_ATTEMPTS` (6) — `failed`.
+- Просроченная или отозванная подписка гасит строки в `revoked`; тело больше `MAX_BODY_BYTES`
+  (256 КиБ) — `dropped`.
+- В логи идут только id события и подписки, номер попытки и исход; секрет, URL и тело не пишутся
+  (`last_error` — короткий код: `http_500`, `timeout`, `address_not_public`).

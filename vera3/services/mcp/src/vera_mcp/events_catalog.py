@@ -46,6 +46,11 @@ _DESCRIPTIONS = {
 }
 
 
+def is_stale_event(event_revision: int, current_revision: int) -> bool:
+    """Приёмник: порядок доставки не гарантирован — событие с revision ниже текущей игнорируется."""
+    return event_revision < current_revision
+
+
 def event_definitions() -> list[dict[str, Any]]:
     return [{"name": name, "description": _DESCRIPTIONS[name], "delivery": ["webhook"],
              "inputSchema": _INPUT_SCHEMA, "payloadSchema": _PAYLOAD_SCHEMA}

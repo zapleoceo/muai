@@ -81,9 +81,10 @@ def validate_secret(secret: str) -> None:
         raise CallbackRejected("bad_secret")
 
 
-def signed_headers(secret: str, event_id: str, body: str, subscription_id: str) -> dict[str, str]:
+def signed_headers(secret: str, event_id: str, body: str, subscription_id: str,
+                   now: datetime | None = None) -> dict[str, str]:
     """Свежие timestamp и подпись на каждую попытку; webhook-id остаётся event_id."""
-    now = datetime.now(UTC)
+    now = now or datetime.now(UTC)
     return {"Content-Type": "application/json", "webhook-id": event_id,
             "webhook-timestamp": str(int(now.timestamp())),
             "webhook-signature": Webhook(secret).sign(event_id, now, body),
