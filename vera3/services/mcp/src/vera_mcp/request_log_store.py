@@ -10,13 +10,17 @@ from vera_mcp import request_log_repo
 
 log = logging.getLogger("vera_mcp.request")
 
-MAX_PENDING = 1000
+MAX_PENDING = 100
+MAX_CONCURRENT_WRITES = 2
+WRITE_TIMEOUT_S = 3.0
 WARN_EVERY_S = 60.0
 
 # Задача на строку, а не очередь с фоновым писателем: у очереди своя привязка к
 # event loop и жизненный цикл запуска/остановки; здесь достаточно удержать ссылку,
-# чтобы задачу не собрал GC, и ограничить число живых задач.
+# чтобы задачу не собрал GC, и ограничить число живых задач. Пул БД общий с
+# room-инструментами: семафор и таймаут не дают журналу занять соединения при медленной БД.
 _pending: set[asyncio.Task[None]] = set()
+_gate: tuple[asyncio.AbstractEventLoop, asyncio.Semaphore] | None = None
 _state: dict[str, float] = {"dropped": 0, "failed": 0, "last_warn": float("-inf")}
 
 
@@ -30,12 +34,25 @@ def _warn_rate_limited(reason: str, exc: BaseException | None = None) -> None:
                 reason, lost, type(exc).__name__ if exc else "-")
 
 
+def _semaphore() -> asyncio.Semaphore:
+    global _gate
+    loop = asyncio.get_running_loop()
+    if _gate is None or _gate[0] is not loop:
+        _gate = (loop, asyncio.Semaphore(MAX_CONCURRENT_WRITES))
+    return _gate[1]
+
+
+async def _guarded_insert(row: dict[str, Any]) -> None:
+    async with _semaphore():
+        await request_log_repo.insert_request(row)
+
+
 async def _write(row: dict[str, Any]) -> None:
     try:
-        await request_log_repo.insert_request(row)
+        await asyncio.wait_for(_guarded_insert(row), WRITE_TIMEOUT_S)
     except Exception as exc:  # noqa: BLE001 — журнал не должен влиять на ответ
         _state["failed"] += 1
-        _warn_rate_limited("failed", exc)
+        _warn_rate_limited("timeout" if isinstance(exc, TimeoutError) else "failed", exc)
 
 
 def schedule_insert(row: dict[str, Any]) -> None:

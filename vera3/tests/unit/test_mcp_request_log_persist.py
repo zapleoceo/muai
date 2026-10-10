@@ -17,6 +17,7 @@ CANARY = "sk-live-CANARY-9f8e7d"
 def _reset_store(monkeypatch):
     monkeypatch.setattr(store, "_state", {"dropped": 0, "failed": 0, "last_warn": float("-inf")})
     monkeypatch.setattr(store, "_pending", set())
+    monkeypatch.setattr(store, "_gate", None)
 
 
 async def _app(scope, receive, send) -> None:
@@ -138,3 +139,46 @@ async def test_overflow_drops_without_blocking(monkeypatch) -> None:
 def test_schedule_without_running_loop_drops_silently() -> None:
     store.schedule_insert({"cid": "x"})
     assert store._state["dropped"] == 1
+
+
+@pytest.mark.asyncio
+async def test_hanging_insert_limits_concurrency_and_never_blocks_request(monkeypatch) -> None:
+    gate = asyncio.Event()
+    active = peak = 0
+
+    async def slow(row: dict) -> None:
+        nonlocal active, peak
+        active += 1
+        peak = max(peak, active)
+        try:
+            await gate.wait()
+        finally:
+            active -= 1
+
+    monkeypatch.setattr(store.request_log_repo, "insert_request", slow)
+    monkeypatch.setattr(store, "MAX_PENDING", 5)
+    for _ in range(12):
+        await asyncio.wait_for(_call(), timeout=1)
+    await asyncio.sleep(0)
+    assert peak == store.MAX_CONCURRENT_WRITES == 2
+    assert len(store._pending) == 5
+    assert store._state["dropped"] == 7
+    gate.set()
+    await _drain()
+    assert peak == 2
+
+
+@pytest.mark.asyncio
+async def test_write_timeout_drops_row_and_warns(
+        monkeypatch, caplog: pytest.LogCaptureFixture) -> None:
+    async def hang(row: dict) -> None:
+        await asyncio.Event().wait()
+
+    monkeypatch.setattr(store.request_log_repo, "insert_request", hang)
+    monkeypatch.setattr(store, "WRITE_TIMEOUT_S", 0.05)
+    caplog.set_level(logging.WARNING, logger="vera_mcp.request")
+    await _call()
+    await _drain()
+    assert store._state["failed"] == 1
+    assert not store._pending
+    assert "timeout" in caplog.records[-1].getMessage()
