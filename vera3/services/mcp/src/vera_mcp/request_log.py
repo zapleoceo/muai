@@ -127,7 +127,10 @@ class RequestLogMiddleware:
             elif state["status"] >= 400:
                 outcome = "http_error"
         finally:
-            rpc_method, tool, rid = rpc_summary(peeked)
+            try:
+                rpc_method, tool, rid = rpc_summary(peeked)
+            except Exception:  # noqa: BLE001 — журнал не должен маскировать ответ или исходную ошибку
+                rpc_method, tool, rid = "", "", ""
             ua = next((v.decode("latin-1") for k, v in headers if k.lower() == b"user-agent"), "")
             log.info(
                 "mcp_request cid=%s method=%s path=%s actor=%s ua=%s rpc=%s tool=%s "

@@ -282,3 +282,33 @@ async def test_non_mcp_and_non_http_scopes_untouched(caplog: pytest.LogCaptureFi
         assert f.sent == [{"type": "http.response.start", "status": 200, "headers": []}]
         assert f.messages  # тело не тронуто
     assert _records(caplog) == []
+
+
+@pytest.mark.asyncio
+async def test_summary_failure_of_any_kind_does_not_mask_response(monkeypatch, caplog):
+    import vera_mcp.request_log as rl
+
+    def boom(_body: bytes) -> tuple[str, str, str]:
+        raise MemoryError("synthetic")
+
+    monkeypatch.setattr(rl, "rpc_summary", boom)
+    sent: list[dict] = []
+
+    async def app(scope, receive, send):
+        await receive()
+        await send({"type": "http.response.start", "status": 200, "headers": []})
+        await send({"type": "http.response.body", "body": b"ok"})
+
+    msgs = [{"type": "http.request", "body": b"{}", "more_body": False}]
+
+    async def receive():
+        return msgs.pop(0) if msgs else {"type": "http.disconnect"}
+
+    async def send(m):
+        sent.append(m)
+
+    scope = {"type": "http", "path": "/mcp", "method": "POST", "headers": []}
+    with caplog.at_level("INFO", logger="vera_mcp.request"):
+        await rl.RequestLogMiddleware(app)(scope, receive, send)
+    assert sent[-1]["body"] == b"ok"
+    assert "outcome=ok" in caplog.text and "rpc=-" in caplog.text
