@@ -81,6 +81,7 @@ class VoiceSessionResult(BaseModel):
     deduped: bool = False
     # Свёртка не уложилась в ожидание — сессия принята, событие появится позже.
     accepted: bool = False
+    inflight: bool = False
     summary: str | None = None
 
 
@@ -158,9 +159,13 @@ async def ingest_voice_session(
     # Дедуп ДО свёртки: она идёт дольше таймаута слушателя, и проверка после
     # неё превращала каждый ретрай в новую обработку той же сессии.
     src_id = voice_source_id(body.started_at, body.app, body.window_title)
-    if await find_voice_event(src_id) is not None or is_inflight(src_id):
-        log.info("voice: сессия уже была или обрабатывается (%s)", src_id)
+    if await find_voice_event(src_id) is not None:
+        log.info("voice: сессия уже была (%s)", src_id)
         return VoiceSessionResult(ok=True, event_id=None, deduped=True)
+    # Не deduped: событие ещё не записано, и слушатель должен держать файл,
+    # пока не получит окончательный ответ — фон может и упасть.
+    if is_inflight(src_id):
+        return VoiceSessionResult(ok=True, event_id=None, accepted=True, inflight=True)
 
     result = await run_once(src_id, lambda: _process(body, src_id))
     if result is None:

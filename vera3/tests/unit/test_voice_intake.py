@@ -60,9 +60,37 @@ async def test_slow_fold_answers_fast_and_retry_is_not_reprocessed():
         await asyncio.sleep(0)
 
     assert first.ok and first.accepted and first.event_id is None
-    assert retry.ok and retry.deduped
+    assert retry.ok and retry.accepted and retry.inflight and not retry.deduped
     assert calls == 1
     assert not vi.is_inflight(vi.voice_source_id(_T0, "zoom.exe", "Созвон"))
+
+
+@pytest.mark.asyncio
+async def test_background_fold_error_clears_inflight_and_logs(caplog):
+    release = asyncio.Event()
+    calls = 0
+
+    async def failing_process(body, src_id):
+        nonlocal calls
+        calls += 1
+        await release.wait()
+        raise RuntimeError("broker down")
+
+    with patch("gateway.voice.find_voice_event", AsyncMock(return_value=None)),          patch("gateway.voice._process", failing_process),          patch.object(vi, "REPLY_WITHIN_S", 0.05):
+        first = await v.ingest_voice_session(_session(), x_internal_secret="ok")
+        release.set()
+        for _ in range(3):
+            await asyncio.sleep(0)
+        assert not vi.is_inflight(vi.voice_source_id(_T0, "zoom.exe", "Созвон"))
+        assert "фоновая обработка" in caplog.text
+        release.clear()
+        again = await v.ingest_voice_session(_session(), x_internal_secret="ok")
+        release.set()
+        for _ in range(3):
+            await asyncio.sleep(0)
+
+    assert first.accepted and again.accepted and not again.inflight
+    assert calls == 2
 
 
 @pytest.mark.asyncio
