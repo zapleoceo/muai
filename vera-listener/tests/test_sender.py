@@ -52,3 +52,34 @@ def test_backoff_resets_once_the_queue_drains(tmp_path):
     sender.post = lambda payload: (True, True, "HTTP 200")  # noqa: ARG005
     sender.flush()
     assert sender.backoff_s == 0.0
+
+
+def _sender_body(tmp_path, monkeypatch, body: str) -> tuple[Sender, Outbox]:
+    import vera_listener.sender as snd
+    monkeypatch.setattr(snd, "post_json_body",
+                        lambda url, secret, payload: (True, True, "HTTP 200", body))
+    box = Outbox(tmp_path / "queue")
+    return Sender(Config(root=tmp_path, internal_secret="s"), box), box
+
+
+def test_accepted_keeps_the_file_for_retry(tmp_path, monkeypatch):
+    sender, box = _sender_body(
+        tmp_path, monkeypatch,
+        '{"ok": true, "event_id": null, "accepted": true, "deduped": false}')
+    _ready(box, "a")
+    assert sender.flush() == (0, 1)
+    assert sender.backoff_s > 0
+
+
+def test_deduped_and_event_are_final(tmp_path, monkeypatch):
+    for body in ('{"ok": true, "event_id": null, "deduped": true}',
+                 '{"ok": true, "event_id": 7, "accepted": false}'):
+        sender, box = _sender_body(tmp_path, monkeypatch, body)
+        _ready(box, "a")
+        assert sender.flush() == (1, 0)
+
+
+def test_non_json_success_is_final(tmp_path, monkeypatch):
+    sender, box = _sender_body(tmp_path, monkeypatch, "OK")
+    _ready(box, "a")
+    assert sender.flush() == (1, 0)

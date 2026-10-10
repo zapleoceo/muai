@@ -2,7 +2,8 @@
 
 Ответ 4xx (кроме 429) — это не «сеть моргнула», а негодное тело: такой файл
 уезжает в failed/, иначе он бесконечно держал бы очередь и заслонял живые
-сессии. Всё остальное — ретрай с нарастающей паузой.
+сессии. Всё остальное — ретрай с нарастающей паузой; 2xx с `accepted` без
+`event_id`/`deduped` тоже (сессия ещё обрабатывается).
 """
 from __future__ import annotations
 
@@ -28,6 +29,27 @@ USER_AGENT = "vera-listener/1.0 (+https://dima.veranda.my)"
 
 def post_json(url: str, secret: str, payload: dict) -> tuple[bool, bool, str]:
     """→ (успех, годное ли тело, пояснение). Общая для сессий и поручений."""
+    ok, retryable, info, _body = post_json_body(url, secret, payload)
+    return ok, retryable, info
+
+
+def still_pending(body: str) -> bool:
+    """Шлюз принял сессию, но события ещё нет (`accepted`) — файл держим.
+
+    Не-JSON ответ — старый шлюз: считаем окончательным, как раньше.
+    """
+    try:
+        reply = json.loads(body)
+    except ValueError:
+        return False
+    if not isinstance(reply, dict):
+        return False
+    return bool(reply.get("accepted")) and not reply.get("event_id")         and not reply.get("deduped")
+
+
+def post_json_body(url: str, secret: str,
+                   payload: dict) -> tuple[bool, bool, str, str]:
+    """Как `post_json`, плюс тело успешного ответа."""
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     request = urllib.request.Request(
         url, data=data, method="POST",
@@ -37,13 +59,14 @@ def post_json(url: str, secret: str, payload: dict) -> tuple[bool, bool, str]:
     )
     try:
         with urllib.request.urlopen(request, timeout=TIMEOUT_S) as response:
-            return (200 <= response.status < 300, True, f"HTTP {response.status}")
+            body = response.read().decode("utf-8", errors="ignore")
+            return (200 <= response.status < 300, True, f"HTTP {response.status}", body)
     except urllib.error.HTTPError as e:
         body = e.read().decode("utf-8", errors="ignore")[:200]
         poison = 400 <= e.code < 500 and e.code not in (408, 429)
-        return (False, not poison, f"HTTP {e.code}: {body}")
+        return (False, not poison, f"HTTP {e.code}: {body}", body)
     except OSError as e:
-        return (False, True, f"{type(e).__name__}: {e}")
+        return (False, True, f"{type(e).__name__}: {e}", "")
 
 
 class Sender:
@@ -57,8 +80,17 @@ class Sender:
         return f"{self.config.gateway_url}/v1/voice/session"
 
     def post(self, payload: dict) -> tuple[bool, bool, str]:
-        """→ (успех, годное ли тело, пояснение)."""
-        return post_json(self.endpoint, self.config.internal_secret, payload)
+        """→ (успех, годное ли тело, пояснение).
+
+        «Принято, свёртка идёт» — не успех: файл остаётся в очереди и уходит
+        повторно с обычной паузой, пока шлюз не ответит event_id или deduped.
+        Иначе падение фоновой свёртки на сервере теряло бы сессию.
+        """
+        ok, retryable, info, body = post_json_body(
+            self.endpoint, self.config.internal_secret, payload)
+        if ok and still_pending(body):
+            return (False, True, f"{info} accepted — шлюз ещё обрабатывает")
+        return (ok, retryable, info)
 
     def flush(self) -> tuple[int, int]:
         """Отправить всё готовое. → (отправлено, осталось)."""
