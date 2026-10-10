@@ -41,6 +41,12 @@ def _session(**over):
     return VoiceSession(**base)
 
 
+@pytest.fixture(autouse=True)
+def _no_prior_event():
+    with patch("gateway.voice.find_voice_event", AsyncMock(return_value=None)):
+        yield
+
+
 class _Sess:
     """Сессия-заглушка: запоминает параметры INSERT и отдаёт заданный id."""
 

@@ -20,7 +20,6 @@
 """
 from __future__ import annotations
 
-import hashlib
 import logging
 from datetime import datetime, timezone
 from typing import Any, Literal
@@ -34,6 +33,12 @@ from vera_shared.text_chunks import clip_content, clip_transcript
 
 from gateway.auth import check_internal_secret
 from gateway.voice_distill import distill
+from gateway.voice_intake import (
+    find_voice_event,
+    is_inflight,
+    run_once,
+    voice_source_id,
+)
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -74,6 +79,8 @@ class VoiceSessionResult(BaseModel):
     ok: bool
     event_id: int | None
     deduped: bool = False
+    # Свёртка не уложилась в ожидание — сессия принята, событие появится позже.
+    accepted: bool = False
     summary: str | None = None
 
 
@@ -148,6 +155,20 @@ async def ingest_voice_session(
 ) -> VoiceSessionResult:
     check_internal_secret(x_internal_secret)
 
+    # Дедуп ДО свёртки: она идёт дольше таймаута слушателя, и проверка после
+    # неё превращала каждый ретрай в новую обработку той же сессии.
+    src_id = voice_source_id(body.started_at, body.app, body.window_title)
+    if await find_voice_event(src_id) is not None or is_inflight(src_id):
+        log.info("voice: сессия уже была или обрабатывается (%s)", src_id)
+        return VoiceSessionResult(ok=True, event_id=None, deduped=True)
+
+    result = await run_once(src_id, lambda: _process(body, src_id))
+    if result is None:
+        return VoiceSessionResult(ok=True, event_id=None, accepted=True)
+    return result
+
+
+async def _process(body: VoiceSession, src_id: str) -> VoiceSessionResult:
     # Осмысление получает разговор БЕЗ эха: задвоенные реплики и сбивают
     # выжимку, и приписывают слова собеседника владельцу. Стенограмма ниже
     # берёт полный список — что выброшено здесь, там сохранено.
@@ -161,10 +182,6 @@ async def ingest_voice_session(
     if not report["transcript_chars"]:
         return VoiceSessionResult(ok=False, event_id=None)
 
-    # Идентичность сессии — время начала + контекст: повторная отправка той же
-    # сессии (ретрай из офлайн-очереди) не задвоит событие.
-    sig = f"{body.started_at.isoformat()}|{body.app}|{body.window_title}"
-    src_id = "voice:" + hashlib.sha1(sig.encode()).hexdigest()[:16]
     dur = max(0, int((body.ended_at - body.started_at).total_seconds()))
 
     async with get_session() as s:

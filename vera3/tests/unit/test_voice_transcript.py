@@ -42,6 +42,12 @@ def _session(**over):
     return VoiceSession(**base)
 
 
+@pytest.fixture(autouse=True)
+def _no_prior_event():
+    with patch("gateway.voice.find_voice_event", AsyncMock(return_value=None)):
+        yield
+
+
 class _Sess:
     def __init__(self, event_id=777):
         self._event_id = event_id
