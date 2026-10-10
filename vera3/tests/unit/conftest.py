@@ -27,6 +27,8 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
 os.environ.setdefault("TOKEN_SECRET", "0" * 44)
 os.environ.setdefault("TELEGRAM_BOT_TOKEN", "1:test")
 os.environ.setdefault("OWNER_TELEGRAM_ID", "169510539")
+# фоновая доставка MCP Events в тестах выключена: они вызывают deliver_due сами
+os.environ.setdefault("MCP_EVENTS_DELIVERY", "0")
 
 import pytest  # noqa: E402
 import pytest_asyncio  # noqa: E402

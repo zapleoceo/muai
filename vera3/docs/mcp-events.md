@@ -75,8 +75,8 @@ IP (`events_net.post_pinned`, общий для challenge и доставки): 
 
 ## Доставка (`events_deliver.py`)
 
-`deliver_due(now=None, limit=50)` — одна итерация для существующего poll-цикла (в работающий сервис
-пока не подключена). Берёт `pending` строки с `next_attempt_at <= now`, по одной попытке на строку
+`deliver_due(now=None, limit=50)` — одна итерация; её крутит `events_loop.run_delivery_loop` (см. ниже). Берёт `pending` строки
+с `next_attempt_at <= now`, по одной попытке на строку
 (`_attempt` фиксирует результат в своей транзакции, поэтому после рестарта продолжаются только
 `pending`).
 
@@ -94,10 +94,18 @@ IP (`events_net.post_pinned`, общий для challenge и доставки): 
   ограничена `ATTEMPT_DEADLINE_S` (20 с); строки одной подписки идут по очереди (410 гасит остальные до попытки); просроченная откатывается и остаётся `pending` до следующей итерации.
 - Хранение: `vera_shared.room.event_outbox.prune_outbox(db, older_than_days=30)` удаляет завершённые
   (`delivered`, `dropped`, `failed`, `revoked`) строки старше N суток, `pending` не трогает.
-  В работающий цикл не подключена; вызывающий коммитит транзакцию.
+  Её вызывает `events_loop._prune` раз в 6 ч (`PRUNE_EVERY_S`); транзакцию коммитит `get_session`.
 - Просроченная или отозванная подписка гасит строки в `revoked`; тело больше `MAX_BODY_BYTES`
   (256 КиБ) — `dropped`.
 - В логи идут только id события и подписки, номер попытки и исход; секрет, URL и тело не пишутся
   (`last_error` — короткий код: `http_500`, `timeout`, `address_not_public`).
 
 Таблицы MCP Events (`models_room_events`) регистрируются в общей metadata комнаты импортом из `models_room.py`.
+
+## Цикл доставки (`events_loop.py`)
+
+`delivery_running()` — асинхронный контекст в lifespan `server.build_app` (сервис владеет кодом и
+`ROOM_OAUTH_KEY`). Внутри `run_delivery_loop(poll_s=POLL_S=5.0)`: каждые 5 с `deliver_due()`; при пустом
+outbox это один `SELECT` без HTTP и без LLM. Раз в `PRUNE_EVERY_S` (6 ч) — `prune_outbox`. Сбой витка
+логируется (`log.exception`) и не роняет сервис. Флаг `MCP_EVENTS_DELIVERY` (`delivery_enabled()`):
+по умолчанию `1`, `0` — цикл не запускается. Тесты: `tests/unit/test_mcp_events_loop.py`.

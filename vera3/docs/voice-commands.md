@@ -177,6 +177,20 @@ Postgres (`tests/integration/test_voice_help_pg.py`): на SQLite `FOR UPDATE`
 и снимает кнопки, чужому — пустой ответ; ничего не меняет. Каждый шаг —
 сначала сообщение, потом отметка: at-least-once, как у ответа.
 
+**Диспетчер** (`bot_telegram/dispatcher.py`, `dispatch_one()`; зовётся в том же
+`run_forever` после `process_one`, без LLM): `task_queue.next_task(project="Vera",
+skip_ref_prefix=DISPATCHED_PREFIX)` берёт от имени `AGENT` (`vera`) первую
+`auto_pickup`-задачу без ref `dispatched:` и без открытого вопроса → `room_post`
+получателю (`recipient_of`: ref `result_recipient: X`, иначе `dot`) с
+`message_id=dispatch-<task_id>`, `task_id`, `origin` и очищенным заголовком
+(`dispatch_body`) → ref `dispatched: dispatch-<task_id>` → release в `open`, чтобы
+настоящий исполнитель взял задачу следующим. Повтор и рестарт дают тот же пост
+(дедуп по id и телу). Сбой поста: ref `dispatch_attempts: N`, release `open`; на
+`MAX_ATTEMPTS` (3) — release `blocked` с `BLOCKED_NOTE` («получатель не подтвердил
+получение»). Потерянная аренда (`StaleLease`) — пропуск. `task_holder` игнорирует
+claim от `AGENT`, поэтому `track_help` не шлёт владельцу «Взял: vera»: «Взял»
+приходит только про настоящего исполнителя. Тесты: `tests/unit/test_office_dispatch.py`.
+
 **Тесты** — комната `voice-test` (фикстура ставит `VOICE_HELP_ROOM`), боевая
 `main` не появляется: `tests/unit/test_voice_help_intake.py`,
 `test_voice_help_tracking.py`, `test_voice_help_hold.py`, `test_redact.py`.
