@@ -18,6 +18,7 @@ import time
 from vera_listener.app import Listener
 from vera_listener.capture import MIC, SYSTEM, Capture, Frame
 from vera_listener.config import ENV_FILE, load_config
+from vera_listener.crashlog import CrashLog
 from vera_listener.status import Status
 from vera_listener.transcriber import Transcriber
 from vera_listener.vad import FRAME_S, SpeechDetector
@@ -110,6 +111,10 @@ def _setup_logging(verbose: bool) -> None:
         format="%(asctime)s %(levelname)s %(name)s: %(message)s",
         handlers=handlers,
     )
+    try:
+        CrashLog(config.crash_dir).install()
+    except OSError:
+        logging.getLogger("listener").exception("дампы падений не включились")
 
 
 def main() -> int:
