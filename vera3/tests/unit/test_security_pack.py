@@ -31,6 +31,39 @@ def test_owner_only_matches_owner_id(monkeypatch):
     assert bot_mod._owner_only(_msg(None)) is False
 
 
+def _callback(from_id: int | None):
+    return SimpleNamespace(
+        from_user=None if from_id is None else SimpleNamespace(id=from_id),
+        data="vh:y:vc-0123456789abcdef", message=None, answer=AsyncMock())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("owner", "presser"), [
+    (169510539, 12345), (169510539, None), (0, 169510539), (0, 0),
+])
+async def test_help_confirmation_ignores_anyone_but_owner(monkeypatch, owner, presser):
+    import bot_telegram.bot as bot_mod
+    handle = AsyncMock(return_value="ok")
+    monkeypatch.setattr(bot_mod, "OWNER_ID", owner)
+    monkeypatch.setattr(bot_mod, "handle_confirmation", handle)
+    callback = _callback(presser)
+    await bot_mod.on_help_confirmation(callback)
+    handle.assert_not_awaited()
+    callback.answer.assert_awaited_once_with()
+
+
+@pytest.mark.asyncio
+async def test_help_confirmation_from_owner_is_handled(monkeypatch):
+    import bot_telegram.bot as bot_mod
+    handle = AsyncMock(return_value="Задача заведена")
+    monkeypatch.setattr(bot_mod, "OWNER_ID", 169510539)
+    monkeypatch.setattr(bot_mod, "handle_confirmation", handle)
+    callback = _callback(169510539)
+    await bot_mod.on_help_confirmation(callback)
+    handle.assert_awaited_once_with("vc-0123456789abcdef", True)
+    callback.answer.assert_awaited_once_with("Задача заведена")
+
+
 # ─── gateway: MaxBodySizeMiddleware ─────────────────────────────────────────
 
 
