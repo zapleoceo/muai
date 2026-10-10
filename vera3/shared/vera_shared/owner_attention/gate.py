@@ -22,12 +22,22 @@ QUESTION = "question"
 DIGEST_HEADER = "Пока было тихо, накопилось:"
 
 
-async def on_owner_message(now: datetime | None = None) -> None:
-    """Сообщение или ответ владельца (Telegram, голос, дашборд) - сразу active."""
+async def on_owner_message(now: datetime | None = None, send: Send | None = None) -> None:
+    """Сообщение или ответ владельца (Telegram, голос, дашборд) - сразу active.
+
+    Из тишины с `send` (бот) тут же уходит одна сводка; без `send` (дашборд) отложенное
+    остаётся в очереди до ближайшей сводки.
+    """
     if not quiet_enabled():
         return
-    if (await store.load_state()).state != store.ACTIVE:
-        await store.save_state(store.Attention(), now or utc_naive_now())
+    now = now or utc_naive_now()
+    state = await store.load_state()
+    if state.state == store.ACTIVE:
+        return
+    if state.state == store.QUIET and send is not None:
+        await _flush(send, now)
+    else:
+        await store.save_state(store.Attention(), now)
 
 
 async def _settle(state: store.Attention, now: datetime) -> store.Attention:

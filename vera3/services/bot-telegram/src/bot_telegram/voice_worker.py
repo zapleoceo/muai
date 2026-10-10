@@ -119,7 +119,7 @@ async def process_one(send: Send, owner_id: int) -> bool:
     if row is None:
         return False
     try:
-        await gate.on_owner_message()  # голосовое поручение - слово владельца
+        await gate.on_owner_message(send=send)  # голосовое поручение - слово владельца
         now = utc_naive_now()
         held = row.help_state in WATCHED
         age = now - row.spoken_at

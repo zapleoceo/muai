@@ -73,11 +73,23 @@ async def test_timeout_after_midnight_goes_quiet_for_8h():
     assert (st.state, st.quiet_until) == (store.QUIET, vn(8, 20))
 
 
-async def test_timeout_before_midnight_stays_active():
+async def test_default_window_daytime_timeout_goes_quiet():
     send = Recorder()
-    await _ask(send, vn(22, 0, day=10))
-    await gate.tick(send, vn(22, 11, day=10))
+    await _ask(send, vn(13, 50))
+    await gate.tick(send, vn(14, 1))
+    st = await store.load_state()
+    assert (st.state, st.quiet_until) == (store.QUIET, vn(22, 0))
+
+
+async def test_window_end_keeps_daytime_timeout_active(monkeypatch):
+    monkeypatch.setenv("OWNER_QUIET_WINDOW_END", "08:00")
+    send = Recorder()
+    await _ask(send, vn(13, 50))
+    await gate.tick(send, vn(14, 1))
     assert (await store.load_state()).state == store.ACTIVE
+    await _ask(send, vn(0, 10), key="n")
+    await gate.tick(send, vn(0, 21))
+    assert (await store.load_state()).state == store.QUIET
 
 
 async def test_cross_midnight_rule_is_off_by_default():
@@ -88,11 +100,16 @@ async def test_cross_midnight_rule_is_off_by_default():
 
 async def test_late_answer_during_quiet_is_active_at_once():
     await _go_quiet(Recorder())
-    await gate.on_owner_message(vn(3, 0))
-    assert (await store.load_state()).state == store.ACTIVE
+    await gate.deliver(Recorder(), "held", "held", kind="alert", key="h", task_id="T1", now=vn(2, 0))
     send = Recorder()
+    await gate.on_owner_message(vn(3, 0), send=send)
+    assert (await store.load_state()).state == store.ACTIVE
+    assert len(send.sent) == 1 and "held" in send.sent[0]
+    await gate.tick(send, vn(8, 21))
+    await gate.on_owner_message(vn(9, 0), send=send)
+    assert len(send.sent) == 1
     await gate.deliver(send, "x", "x", kind="status", key="x", now=vn(3, 1))
-    assert send.sent == ["x"]
+    assert send.sent[-1] == "x"
 
 
 async def test_new_question_later_starts_new_wait10():

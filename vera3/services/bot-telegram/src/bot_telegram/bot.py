@@ -92,7 +92,7 @@ async def on_message(message: Message):
     query = message.text or ""
     if not query.strip():
         return
-    await on_owner_message()
+    await on_owner_message(send=send_to_owner)
 
     chat_id = message.chat.id
     user_id = message.from_user.id
