@@ -1,6 +1,6 @@
 """Срочная просьба голосом: от шлюза до задачи в комнате и уведомления владельцу.
 
-Закрепляем: задача открывается всегда и сразу (priority 0, без автоподбора,
+Закрепляем: задача открывается всегда и сразу (priority 0, auto_pickup,
 ответственный Claude) и пост-request; подтверждения кнопкой нет. Владелец
 подтверждён — задача «Срочно: …» и ответ мозга. Сомнение или низкая
 уверенность — задача с пометкой «источник не подтверждён» и
@@ -71,7 +71,7 @@ async def test_owner_verified_opens_urgent_task_without_mark():
     [task] = await tasks_in(ROOM)
     assert task.task_id == "help-vc-help1"
     assert task.title == f"Срочно: {INSTRUCTION}"
-    assert (task.priority, task.auto_pickup, task.responsible) == (0, False, "Claude")
+    assert (task.priority, task.auto_pickup, task.responsible) == (0, True, "Claude")
     assert task.project == "Vera"
     assert task.next_action == f"{INSTRUCTION}\n\n{SAFETY_NOTE}"
     assert _uncertain_refs(task) == []
@@ -82,7 +82,8 @@ async def test_owner_verified_opens_urgent_task_without_mark():
     assert (post.status, post.task_id) == ("request", "help-vc-help1")
     assert rec.sent[0] == f"Открыл задачу help-vc-help1: {INSTRUCTION}"
     assert rec.sent[1].startswith("Смотрю логи.")
-    assert (await queue_row("vc-help1")).help_state == "opened"
+    row = await queue_row("vc-help1")
+    assert (row.status, row.help_state) == ("opened", "opened")
     assert await tasks_in("main") == [] and await messages_in("main") == []
 
 
@@ -108,11 +109,12 @@ async def test_uncertain_source_is_marked_and_nothing_is_executed(why):
     for doubt in why.get("doubts", []):
         assert doubt in task.next_action
     assert len(_uncertain_refs(task)) == 1
-    [post] = await messages_in(ROOM)
+    post, question = await messages_in(ROOM)
     assert post.body.splitlines()[0] == UNCERTAIN_NOTE
+    assert question.status == "question"
     assert rec.sent == [f"Источник не подтверждён. Открыл задачу help-vc-u: {INSTRUCTION}"]
     row = await queue_row("vc-u")
-    assert (row.status, row.help_state) == ("done", "opened")
+    assert (row.status, row.help_state) == ("opened", "opened")
 
 
 @uses_db
@@ -127,7 +129,8 @@ async def test_repeat_and_bot_restart_give_one_task_and_one_notice():
     async with get_session() as s:
         await s.execute(update(VoiceCommandRow).values(next_attempt_at=None))
     assert await _run(rec, 2) == [True, False]
-    assert len(await tasks_in(ROOM)) == 1 and len(await messages_in(ROOM)) == 1
+    # пост-request и один вопрос владельцу — повтор не задаёт второй
+    assert len(await tasks_in(ROOM)) == 1 and len(await messages_in(ROOM)) == 2
     assert rec.sent == [f"Источник не подтверждён. Открыл задачу help-vc-help1: {INSTRUCTION}"]
 
 

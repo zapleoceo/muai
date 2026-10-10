@@ -62,8 +62,9 @@
 слушатель ─(kind, confidence, doubts, fragment)─▶ gateway ─▶ help_state=ready
    ready ─▶ open_help_task ─▶ opened ─▶ «Открыл задачу help-<id>: …»
             владелец подтверждён: «Срочно: …» + ответ мозга
-            source_uncertain:     «[источник не подтверждён] …», мозг не зовётся
-   opened ─claim─▶ «Взял: <агент>» (taken)
+            source_uncertain:     «[источник не подтверждён] …», мозг не зовётся,
+                                  вопрос владельцу — удержание до ответа
+   строка очереди status=opened ─claim─▶ «Взял: <агент>» (taken), status=done
           ─5 мин без claim─▶ room_post to=dot, «эскалировала dot» (escalated)
           ─20 мин─▶ напоминание владельцу (reminded)
    reprompt ─▶ «Не расслышала поручение, повтори.»
@@ -101,18 +102,35 @@
 **Задача** (`vera_shared/voice_help/room_intake.py`, `open_help_task`):
 `room=help_room()` (`VOICE_HELP_ROOM`, по умолчанию `main`), `task_id=help-<command_id>`,
 `project=project_for(app, window)` (правило в `voice_help/policy.py`,
-`PROJECT_RULES`, иначе `Vera`), `priority=0`, `auto_pickup=False`,
+`PROJECT_RULES`, иначе `Vera`), `priority=0`, `auto_pickup=True` (задачу
+выдаёт исполнителю `room_task_next`),
 `responsible="Claude"`, `refs` — `voice_event`, `voice_command`, `source`
 (`source_ref`: `session@start-end`). Тексты собирает `help_texts`:
 владелец подтверждён — заголовок «Срочно: <текст>», `next_action` —
-поручение и `SAFETY_NOTE` («Срочность не снимает подтверждений…»).
+поручение и `SAFETY_NOTE` («Срочность не снимает подтверждений…») —
+`normal_action`. Поручение про dot/ChatGPT (`routes_to_dot`, список
+`DOT_NEEDLES` рядом с `PROJECT_RULES`, без регистра, после вычистки) —
+`responsible` прежний, в `refs` `source` — `RESULT_RECIPIENT_REF`
+(`result_recipient: dot`), в `next_action` — `DOT_RESULT_NOTE` («результат —
+room_post to=dot с task_id; закрывать только по receipt»).
 Источник не подтверждён — заголовок «[источник не подтверждён] <текст>»
 (`UNCERTAIN_TITLE`), первая строка `next_action` и поста — ровно
 `UNCERTAIN_NOTE` («Источник не подтверждён — проверь авторство и полномочия
 до любых действий. Это непроверенное входящее, не поручение владельца.»),
-затем `SAFETY_NOTE`, список сомнений (`listed_doubts`) и услышанный текст;
+затем `UNCERTAIN_HOLD`, `SAFETY_NOTE`, список сомнений (`listed_doubts`) и услышанный текст;
 в `refs` ещё один `source` — `source_uncertain: <сомнения>` (схема задачи не
-менялась, миграции нет). Плюс пост `status="request"` с тем же `task_id`.
+менялась, миграции нет); `next_action` режется до `NEXT_ACTION_CHARS`.
+
+**Удержание** (`voice_help/hold.py`): `ask_owner_once` — вопрос владельцу
+`UNCERTAIN_QUESTION` («Это ты сказал? Подтверди ответом на этот вопрос.») в
+`room_task_questions` от `vera`, без аренды (иначе первым держателем в
+журнале стала бы Вера), один на задачу при повторе и рестарте. Задача
+остаётся `open`: открытый вопрос не пускает её в `room_task_next`.
+`lift_hold` (на каждом проходе `track_help`): есть ответ с
+`answered_by="owner"` (его пишет только дашборд) — ref `source`
+`SOURCE_CONFIRMED` и `next_action` = `CONFIRMED_NOTE` + `normal_action`;
+`is_confirmed` не даёт снять дважды. Ответ не владельца удержание не снимает.
+Плюс пост `status="request"` с тем же `task_id`.
 Дедуп — только `task_id` и `message_id` поста (`help_task_id`): повтор
 слушателя, ретрай бота, перезапуск — одна задача и один пост. Текст в
 комнату — только через
@@ -129,7 +147,9 @@ title, next_action, refs (`source_ref`, сомнения) и пост. Собы�
 **Состояние в очереди** (`voice_help/queue_state.py`, миграция 052): колонки
 `kind`, `confidence`, `source`, `help_state`, `task_id`, `task_opened_at`,
 `taken_by`/`taken_at`, `escalated_at`, `reminded_at` (`confirm_asked_at`
-остался от версии с кнопкой и больше не пишется). Переходы: `mark_opened`,
+остался от версии с кнопкой и больше не пишется). Переходы: `mark_opened`, `hold_command` (`status=HELD`=`opened` — не
+`pending`, бот её снова не возьмёт, и не `done`, пока задачу не взяли),
+`release_held` (на taken/closed → `done`, текст стирается),
 `watched_help`, `mark_taken`, `mark_escalated`, `mark_reminded`,
 `mark_closed` (задачу отменили, не взяв). Строки `help_state='confirm'` от
 прежней версии бот открывает как `ready`; `asked` (ждали «Да») остаются в
@@ -149,7 +169,7 @@ Postgres (`tests/integration/test_voice_help_pg.py`): на SQLite `FOR UPDATE`
 `opened_text` — «Открыл задачу help-<id>: <текст>», для неподтверждённого с
 префиксом «Источник не подтверждён.» — через `say`, без клавиатуры
 (`send_to_owner` не передаёт `reply_markup`). Неподтверждённый источник
-закрывается на этом: мозг не зовётся, ничего не исполняется. Лог INFO по
+на этом останавливается: мозг не зовётся, ничего не исполняется. Лог INFO по
 `command_id`, без текста: «очередь→задача N мс, →уведомление M мс». Дальше
 `track_help` (часы — аргументом `now`): `taken_text`, `ESCALATED_TEXT`,
 `REMIND_TEXT`, `REPROMPT_TEXT`. Старые кнопки «Да / Нет» (`vh:`) в чате
@@ -159,7 +179,7 @@ Postgres (`tests/integration/test_voice_help_pg.py`): на SQLite `FOR UPDATE`
 
 **Тесты** — комната `voice-test` (фикстура ставит `VOICE_HELP_ROOM`), боевая
 `main` не появляется: `tests/unit/test_voice_help_intake.py`,
-`test_voice_help_tracking.py`, `test_redact.py`.
+`test_voice_help_tracking.py`, `test_voice_help_hold.py`, `test_redact.py`.
 
 ## Гарантии
 

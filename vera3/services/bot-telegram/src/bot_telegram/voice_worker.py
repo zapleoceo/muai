@@ -36,7 +36,7 @@ from vera_shared.voice_commands import (
     revive_stale,
 )
 from vera_shared.voice_help.policy import source_uncertain
-from vera_shared.voice_help.queue_state import mark_opened
+from vera_shared.voice_help.queue_state import WATCHED, hold_command, mark_opened
 from vera_shared.voice_help.room_intake import open_help_task
 
 from bot_telegram.brain import BrainError, ask_brain, save_event
@@ -118,6 +118,7 @@ async def process_one(send: Send, owner_id: int) -> bool:
         return False
     try:
         now = utc_naive_now()
+        held = row.help_state in WATCHED
         age = now - row.spoken_at
         if row.answered_at is None and row.acked_at is None and age > MAX_AGE:
             text = stale_text(row.instruction, age)
@@ -129,8 +130,9 @@ async def process_one(send: Send, owner_id: int) -> bool:
                 await mark_answered(row.command_id)
         elif row.answered_at is None:
             if row.help_state in HELP_TO_OPEN:
+                held = True
                 if await open_and_notify(send, row, now):
-                    await finish_command(row.command_id)
+                    await hold_command(row.command_id, now)
                     return True
             elif row.acked_at is None:
                 await say(send, ack_text(row.instruction))
@@ -142,7 +144,11 @@ async def process_one(send: Send, owner_id: int) -> bool:
                 plain_fallback(answer.raw, answer.provider))
             await mark_answered(row.command_id)
             await save_event(owner_id, msg_id, "vera", answer.raw)
-        await finish_command(row.command_id)
+        if held:
+            # Строку закроет help_worker, когда задачу возьмут.
+            await hold_command(row.command_id, now)
+        else:
+            await finish_command(row.command_id)
         log.info("voice-worker: поручение %s выполнено", row.command_id)
     except Exception as e:
         status = await fail_command(row.command_id, _reason(e), row.attempts)
