@@ -7,7 +7,7 @@ from __future__ import annotations
 import logging
 from typing import Annotated, Any, Literal
 
-from mcp.server.fastmcp import Context
+from mcp.server.mcpserver import Context
 from pydantic import Field
 from sqlalchemy.ext.asyncio import AsyncSession
 from vera_shared.db.engine import get_session

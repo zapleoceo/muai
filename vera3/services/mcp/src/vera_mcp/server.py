@@ -11,7 +11,7 @@ import contextlib
 import os
 from collections.abc import AsyncIterator
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from mcp.server.transport_security import TransportSecuritySettings
 from starlette.applications import Starlette
 from starlette.requests import Request
@@ -50,19 +50,21 @@ ROOM_INSTRUCTIONS = (
 )
 
 
-def _fastmcp(name: str, instructions: str, **kwargs) -> FastMCP:
+def _server(name: str, instructions: str, **kwargs) -> MCPServer:
     # Аутентификация — bearer-токен (BearerAuthMiddleware). Защита от DNS-rebinding
     # включена по умолчанию только для localhost и отвергла бы Host: dima.veranda.my.
-    return FastMCP(
-        name, instructions=instructions, stateless_http=True, json_response=True,
-        host="0.0.0.0",
+    return MCPServer(name, instructions=instructions, **kwargs)
+
+
+def _http_app(server: MCPServer) -> Starlette:
+    return server.streamable_http_app(
+        stateless_http=True, json_response=True, host="0.0.0.0",
         transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
-        **kwargs,
     )
 
 
-def build_mcp() -> FastMCP:
-    mcp = _fastmcp("vera", INSTRUCTIONS)
+def build_mcp() -> MCPServer:
+    mcp = _server("vera", INSTRUCTIONS)
     for tool in (*READ_TOOLS, *WRITE_TOOLS):
         mcp.tool()(tool)
 
@@ -73,10 +75,10 @@ def build_mcp() -> FastMCP:
     return mcp
 
 
-def build_room_mcp(oauth: RoomOAuthProvider | None = None) -> FastMCP:
+def build_room_mcp(oauth: RoomOAuthProvider | None = None) -> MCPServer:
     auth_kwargs = ({"auth": room_oauth_settings(), "auth_server_provider": oauth}
                    if oauth else {})
-    mcp = _fastmcp("vera-room", ROOM_INSTRUCTIONS, **auth_kwargs)
+    mcp = _server("vera-room", ROOM_INSTRUCTIONS, **auth_kwargs)
     for tool in (*ROOM_TOOLS, *QUESTION_TOOLS, *HANDOFF_TOOLS):
         mcp.tool()(tool)
     if oauth:
@@ -114,7 +116,7 @@ class _RealmDispatch:
 def build_app() -> Starlette:
     oauth = RoomOAuthProvider() if room_oauth_enabled() else None
     vera, room = build_mcp(), build_room_mcp(oauth)
-    vera_app, room_app = vera.streamable_http_app(), room.streamable_http_app()
+    vera_app, room_app = _http_app(vera), _http_app(room)
 
     # Mount не пробрасывает lifespan внутрь: менеджеры сессий обоих серверов
     # запускаются здесь, иначе первый же запрос упадёт на «task group not initialized».

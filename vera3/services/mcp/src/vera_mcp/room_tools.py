@@ -4,7 +4,7 @@ from __future__ import annotations
 import uuid
 from typing import Annotated, Any, Literal
 
-from mcp.server.fastmcp import Context
+from mcp.server.mcpserver import Context
 from pydantic import Field
 from vera_shared.room import messages, task_progress, task_queue, task_wait, tasks
 
