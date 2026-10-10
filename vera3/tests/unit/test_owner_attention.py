@@ -229,3 +229,47 @@ async def test_concurrent_ticks_send_one_digest():
     send = Slow()
     await asyncio.gather(gate.tick(send, vn(3, 1)), gate.tick(send, vn(3, 1)))
     assert len(send.sent) == 1
+
+
+async def _new_question(task: str = "T1", text: str = "Берём вариант А?") -> int:
+    async with get_session() as s:
+        q = RoomTaskQuestionRow(room="r", task_id=task, asked_by="claude", question=text, status="open")
+        s.add(q)
+        await s.commit()
+        return q.qid
+
+
+async def test_created_question_is_pending_delivery_without_timer():
+    qid = await _new_question()
+    assert [q.qid for q in await store.undelivered_questions()] == [qid]
+    assert (await store.load_state()).state == store.ACTIVE
+
+
+async def test_forward_starts_wait10_at_send_time_and_sends_once():
+    qid = await _new_question()
+    send = Recorder()
+    assert await gate.forward_questions(send, vn(10, 0)) == 1
+    st = await store.load_state()
+    assert (st.state, st.wait_deadline, st.wait_question_ref) == (store.WAIT10, vn(10, 10), f"q:{qid}")
+    assert len(send.sent) == 1 and "Берём вариант А?" in send.sent[0]
+    assert await gate.forward_questions(send, vn(10, 1)) == 0
+    assert len(send.sent) == 1 and await store.undelivered_questions() == []
+
+
+async def test_forward_in_quiet_defers_and_starts_no_timer():
+    await _go_quiet(Recorder())
+    qid = await _new_question()
+    send = Recorder()
+    await gate.forward_questions(send, vn(3, 0))
+    st = await store.load_state()
+    assert send.sent == [] and st.state == store.QUIET and st.wait_deadline is None
+    assert [i.question_id for i in await store.pending()] == [qid]
+    assert await store.undelivered_questions() == []
+
+
+async def test_forward_does_nothing_when_flag_off(monkeypatch):
+    monkeypatch.setenv("OWNER_QUIET_ENABLED", "0")
+    await _new_question()
+    send = Recorder()
+    assert await gate.forward_questions(send, vn(10, 0)) == 0
+    assert send.sent == [] and len(await store.undelivered_questions()) == 1

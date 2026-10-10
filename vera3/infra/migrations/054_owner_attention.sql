@@ -31,4 +31,15 @@ CREATE TABLE IF NOT EXISTS owner_deferred (
 
 CREATE INDEX IF NOT EXISTS ix_owner_deferred_pending ON owner_deferred (sent_at, id);
 
+-- Доставка вопросов владельцу в Telegram: уже существующие вопросы считаем доставленными,
+-- иначе после включения флага на владельца свалится вся история.
+DO $$
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM information_schema.columns
+                   WHERE table_name = 'room_task_questions' AND column_name = 'delivered_at') THEN
+        ALTER TABLE room_task_questions ADD COLUMN delivered_at timestamp;
+        UPDATE room_task_questions SET delivered_at = NOW();
+    END IF;
+END $$;
+
 COMMIT;

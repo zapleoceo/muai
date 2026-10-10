@@ -2,15 +2,19 @@
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime, timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from dashboard.attention_view import attention_panel
+from dashboard.render import _render
 from dashboard.tasks_service import TaskItem, split_tabs
 from dashboard.tasks_table import HEAD, tasks_table
 from dashboard.tasks_view import tasks_body
+from dashboard.ui.js_core import UI_JS
+from dashboard.ui.theme import VERA_CSS
 from vera_shared.owner_attention import store
 from vera_shared.room.attention import attention
 
@@ -61,11 +65,26 @@ def test_table_columns_and_escaping():
 
 def test_render_static_page():
     panel = attention_panel(store.Attention(store.QUIET, quiet_until=NOW + timedelta(hours=8)),
-                            [store.Deferred("k", "alert", "T-2 ждёт ответа", NOW)], enabled=True)
+                            [store.Deferred("k", "alert", "T-2 ждёт ответа", NOW)], enabled=True,
+                            undelivered=[store.QuestionOut(7, "r", "T-3", "Берём вариант А?")])
     body = tasks_body("work", split_tabs(_items()), NOW, attention=panel)
     assert "Внимание владельца" in body and "tk-table" in body
+    page = _render("tasks", body)  # настоящая оболочка и CSS живого /tasks
+    assert "/ui/vera.css" in page and "Внимание владельца" in page
+    # статичный файл не достанет /ui/vera.css: подставляем тот же самый настоящий CSS и JS
+    page = re.sub(r'<link rel="stylesheet" href="/ui/vera\.css[^>]*>',
+                  lambda _m: f"<style>{VERA_CSS}</style>", page)
+    page = re.sub(r'<script src="/ui/vera\.js[^>]*></script>', lambda _m: f"<script>{UI_JS}</script>", page)
     OUT.parent.mkdir(parents=True, exist_ok=True)
-    OUT.write_text(f'<!doctype html><meta charset="utf-8"><body>{body}</body>', encoding="utf-8")
+    OUT.write_text(page, encoding="utf-8")
+
+
+def test_panel_pending_delivery_and_unapproved_labels():
+    qs = [store.QuestionOut(7, "r", "T-3", "Берём <A>?")]
+    html = attention_panel(store.Attention(), [], enabled=True, undelivered=qs)
+    assert "ожидает доставки" in html and "Ожидают доставки (1)" in html and "Берём &lt;A&gt;?" in html
+    assert html.count("не утверждено") == 2
+    assert "OWNER_QUIET_COUNT_CROSS_MIDNIGHT" in html and "OWNER_QUIET_WINDOW_END" in html
 
 
 @pytest.mark.asyncio

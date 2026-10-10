@@ -203,6 +203,7 @@ async def run_forever(send: Send, owner_id: int) -> None:
         try:
             await revive_stale()
             await gate.tick(send)
+            await gate.forward_questions(send)
             await notify_failed(send)
             await track_help(send, utc_naive_now())
             busy = await process_one(send, owner_id)

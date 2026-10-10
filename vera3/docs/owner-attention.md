@@ -44,12 +44,12 @@
 сообщений бота: `help_worker.say` (статусы/эскалации/напоминания), `voice_worker.notify_failed` (тревога),
 переспрос (вопрос). Цикл `voice_worker.run_forever` вызывает `gate.tick` каждый проход (нового планировщика нет).
 `gate.QUESTION` - вид «вопрос». Ответ на собственное слово владельца (ответ мозга) идёт напрямую: владелец только что был активен.
-Вопросы `room_task_ask` бот сейчас владельцу в Telegram не пересылает; при появлении такой пересылки она должна идти через `deliver(kind=gate.QUESTION, question_id=qid)`.
+Вопросы владельцу из комнаты (`room_task_ask`, вопрос удержания `voice_help.hold.ask_owner_once`) пересылает `gate.forward_questions` из цикла `voice_worker.run_forever`: берёт открытые вопросы с `room_task_questions.delivered_at IS NULL` (колонка из миграции 054; существующие вопросы миграция помечает доставленными) и отправляет через `deliver(kind=QUESTION, key="q:<qid>")`, затем ставит `delivered_at` (повтор не шлёт). Таймер wait10 стартует только при реальной отправке; в тишине вопрос уходит в очередь отложенного без таймера. Пока вопрос не передан, `/tasks` показывает «ожидает доставки». При `OWNER_QUIET_ENABLED=0` вопросы в Telegram не пересылаются (поведение прежнее).
 
 ## Хранилище (`vera_shared.owner_attention.store`)
 
 `Attention` (состояние), `Deferred` (отложенная запись), `load_state`, `save_state`, `defer`, `pending`,
-`mark_sent`, `still_relevant`. Политика - `vera_shared.owner_attention.policy`: `quiet_enabled`,
+`mark_sent`, `still_relevant`, `QuestionOut`, `undelivered_questions`, `mark_delivered`. Политика - `vera_shared.owner_attention.policy`: `quiet_enabled`,
 `count_cross_midnight`, `window_end`, `to_local`, `hhmm`, `timeout_goes_quiet`, `WAIT_FOR`, `QUIET_FOR`, `LOCAL_TZ`.
 
 ## Дашборд `/tasks`
@@ -58,3 +58,8 @@
 - Таблица `dashboard.tasks_table.tasks_table`: ответственный, статус, последний реальный прогресс (`last_progress_at`, не heartbeat аренды),
   следующий результат (`next_action`), блокер (`waiting_reason` у `blocked`/`waiting`), контрольная точка (`next_checkpoint_at`).
 - Доступ только владельцу (общий `owner_or_redirect`). Ответ на вопрос в дашборде вызывает `on_owner_message`.
+
+
+## Не утверждено владельцем
+
+`OWNER_QUIET_COUNT_CROSS_MIDNIGHT` и `OWNER_QUIET_WINDOW_END` - предложения, не утверждены; по умолчанию не действуют (выкл / не задано). В панели `/tasks` помечены «не утверждено». `gate.forward_questions` описан выше.

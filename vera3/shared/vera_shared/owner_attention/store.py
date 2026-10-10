@@ -86,6 +86,31 @@ async def mark_sent(keys: list[str], now: datetime) -> None:
         await s.commit()
 
 
+@dataclass(frozen=True)
+class QuestionOut:
+    qid: int
+    room: str
+    task_id: str
+    question: str
+
+
+async def undelivered_questions() -> list[QuestionOut]:
+    """Открытые вопросы владельцу, ещё не переданные в шлюз (ожидают доставки)."""
+    q = RoomTaskQuestionRow
+    async with get_session() as s:
+        rows = (await s.execute(select(q).where(
+            q.status == "open", q.delivered_at.is_(None)).order_by(q.qid))).scalars()
+        return [QuestionOut(r.qid, r.room, r.task_id, r.question) for r in rows]
+
+
+async def mark_delivered(qid: int, now: datetime) -> None:
+    async with get_session() as s:
+        row = await s.get(RoomTaskQuestionRow, qid)
+        if row is not None:
+            row.delivered_at = now
+            await s.commit()
+
+
 async def still_relevant(item: Deferred) -> bool:
     """Ответ получен или задача закрыта - пункт в сводку не идёт."""
     async with get_session() as s:

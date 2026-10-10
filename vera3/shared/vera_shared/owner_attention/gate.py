@@ -96,6 +96,25 @@ async def tick(send: Send, now: datetime | None = None) -> store.Attention:
     return state
 
 
+async def forward_questions(send: Send, now: datetime | None = None) -> int:
+    """Передать владельцу открытые вопросы комнаты. -> сколько обработано.
+
+    Таймер wait10 стартует внутри `deliver` только после реальной отправки; в тишине вопрос
+    откладывается, таймера нет. Пока флаг выключен, вопросы в Telegram не пересылаются.
+    """
+    if not quiet_enabled():
+        return 0
+    now = now or utc_naive_now()
+    done = 0
+    for q in await store.undelivered_questions():
+        text = f"Вопрос по {q.task_id}: {q.question}"
+        await deliver(send, escape(text, quote=False), text, kind=QUESTION, key=f"q:{q.qid}",
+                      task_id=q.task_id, room=q.room, question_id=q.qid, now=now)
+        await store.mark_delivered(q.qid, now)
+        done += 1
+    return done
+
+
 async def deliver(send: Send, html: str, plain: str, *, kind: str = "status",
                   key: str | None = None, task_id: str | None = None,
                   room: str | None = None, question_id: int | None = None,

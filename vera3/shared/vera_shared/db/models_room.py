@@ -148,6 +148,8 @@ class RoomTaskQuestionRow(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="open")
     acked_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     ack_by: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    # Когда вопрос передан в шлюз уведомлений владельца (миграция 054); NULL - ожидает доставки.
+    delivered_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
 
 class RoomTaskAnswerRow(Base):
