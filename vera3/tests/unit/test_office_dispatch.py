@@ -1,4 +1,4 @@
-"""Диспетчер офиса: одно сообщение получателю на задачу, ref, release в open, без «Взял: vera»."""
+"""Диспетчер офиса: пост, ожидание квитанции доставки, повтор, блок, без «Взял: vera»."""
 from __future__ import annotations
 
 from datetime import timedelta
@@ -8,7 +8,10 @@ import pytest
 from bot_telegram import dispatcher, help_worker, voice_worker
 from bot_telegram.dispatcher import dispatch_one
 from gateway.voice_command import accept_voice_command
+from vera_shared.db.engine import get_session
+from vera_shared.db.models_room import RoomTaskRow
 from vera_shared.room import tasks
+from vera_shared.room.messages import post_message
 from vera_shared.room.task_queue import next_task
 from vera_shared.timeutil import utc_naive_now
 from vera_shared.voice_help.hold import ask_owner_once
@@ -49,8 +52,34 @@ async def test_empty_queue_makes_no_writes():
     assert await messages_in(ROOM) == [] and await tasks_in(ROOM) == []
 
 
+async def _ack(task_id: str = "T1", *, who: str = "dot", status: str = "ack",
+               reply_to: str | None = None) -> None:
+    await post_message(room=ROOM, message_id=f"r-{who}-{status}-{task_id}", from_agent=who,
+                       to_agent="vera", task_id=task_id, status=status, body="ок",
+                       in_reply_to=reply_to or f"dispatch-{task_id}")
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.now = utc_naive_now()
+
+    def __call__(self):
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += timedelta(seconds=seconds)
+
+
+@pytest.fixture
+def clock(monkeypatch):
+    c = Clock()
+    monkeypatch.setattr(dispatcher, "utc_naive_now", c)
+    monkeypatch.setattr(dispatcher.random, "uniform", lambda a, b: 1.0)
+    return c
+
+
 @uses_db
-async def test_one_task_one_post_ref_released_open():
+async def test_post_success_is_not_receipt_task_stays_claimed_waiting():
     await _open(refs=[{"kind": "source", "ref": "result_recipient: dot"}])
     assert await dispatch_one() is True
     msgs = _dispatch_msgs(await messages_in(ROOM))
@@ -60,8 +89,91 @@ async def test_one_task_one_post_ref_released_open():
         "dispatch-T1", "dot", "T1", "vera", "request")
     assert "origin: vera" in m.body and "починить бота" in m.body
     (row,) = await tasks_in(ROOM)
-    assert row.status == "open" and row.lease_holder is None
+    assert row.status == "in_progress" and row.lease_holder == "vera"
+    assert row.waiting_until is not None
     assert any(r["ref"] == "dispatched: dispatch-T1" for r in row.refs)
+    assert await dispatch_one() is False  # срок не пришёл, квитанции нет
+
+
+@uses_db
+async def test_receipt_releases_open_and_no_more_posts():
+    await _open()
+    await dispatch_one()
+    await _ack()
+    assert await dispatch_one() is True
+    (row,) = await tasks_in(ROOM)
+    assert row.status == "open" and row.lease_holder is None
+    assert await dispatch_one() is False
+    assert len(_dispatch_msgs(await messages_in(ROOM))) == 1
+
+
+@uses_db
+async def test_result_receipt_and_foreign_acks_are_not_delivery_receipt():
+    await _open()
+    await dispatch_one()
+    await _ack(status="done")  # результат исполнения, не доставка
+    await _ack(who="codex")  # не получатель
+    await _ack(reply_to="dispatch-OTHER")  # ответ на другое сообщение
+    assert await dispatch_one() is False
+    (row,) = await tasks_in(ROOM)
+    assert row.status == "in_progress" and row.lease_holder == "vera"
+
+
+@uses_db
+async def test_no_receipt_retries_after_backoff_same_message_id(clock):
+    await _open()
+    await dispatch_one()
+    clock.advance(dispatcher.RECEIPT_WAIT_S - 1)
+    assert await dispatch_one() is False
+    clock.advance(2)
+    assert await dispatch_one() is True  # повтор
+    (row,) = await tasks_in(ROOM)
+    assert any(r["ref"] == "dispatch_attempts: 2" for r in row.refs)
+    assert row.status == "in_progress"
+    assert len(_dispatch_msgs(await messages_in(ROOM))) == 1  # тот же id — дедуп
+    clock.advance(dispatcher.RECEIPT_WAIT_S * 2 + 1)
+    await _ack()
+    assert await dispatch_one() is True
+    (row,) = await tasks_in(ROOM)
+    assert row.status == "open" and row.lease_holder is None
+
+
+@uses_db
+async def test_three_misses_block_task_visibly(clock):
+    await _open()
+    await dispatch_one()
+    for attempt in (1, 2):
+        clock.advance(dispatcher.RECEIPT_WAIT_S * 2 ** attempt)
+        assert await dispatch_one() is True
+    clock.advance(dispatcher.RECEIPT_WAIT_S * 8)
+    assert await dispatch_one() is True
+    (row,) = await tasks_in(ROOM)
+    assert row.status == "blocked" and row.note == dispatcher.BLOCKED_NOTE
+    assert row.lease_holder is None
+    assert await dispatch_one() is False
+    assert len(_dispatch_msgs(await messages_in(ROOM))) == 1
+
+
+@uses_db
+async def test_restart_with_expired_lease_continues_without_duplicate():
+    await _open()
+    await dispatch_one()
+    await _ack()
+    async with get_session() as s:  # «процесс лежал»: аренда истекла
+        row = await s.get(RoomTaskRow, (ROOM, "T1"))
+        row.lease_until = utc_naive_now() - timedelta(seconds=5)
+    assert await dispatch_one() is True
+    (row,) = await tasks_in(ROOM)
+    assert row.status == "open" and len(_dispatch_msgs(await messages_in(ROOM))) == 1
+
+
+@uses_db
+async def test_many_dispatched_tasks_do_not_starve_new_one():
+    for i in range(55):
+        await _open(f"D{i:02d}", refs=[{"kind": "source", "ref": "dispatched: dispatch-x"}])
+    await _open("NEW")
+    assert await dispatch_one() is True
+    assert [m.task_id for m in _dispatch_msgs(await messages_in(ROOM))] == ["NEW"]
 
 
 @uses_db
@@ -74,10 +186,10 @@ async def test_default_recipient_is_dot_and_custom_recipient_honoured():
 
 
 @uses_db
-async def test_idempotent_on_repeat_and_restart():
+async def test_idempotent_on_repeat():
     await _open()
     assert await dispatch_one() is True
-    assert await dispatch_one() is False  # уже с ref dispatched — не берётся
+    assert await dispatch_one() is False
     assert len(_dispatch_msgs(await messages_in(ROOM))) == 1
 
 
@@ -93,6 +205,7 @@ async def test_restart_after_post_before_ref_does_not_duplicate_post():
     assert len(_dispatch_msgs(await messages_in(ROOM))) == 1
     (row,) = await tasks_in(ROOM)
     assert any(r["ref"].startswith("dispatched:") for r in row.refs)
+    assert row.status == "in_progress"
 
 
 @uses_db
@@ -130,14 +243,20 @@ async def test_fencing_respected_when_lease_lost():
 
 
 @uses_db
-async def test_post_failures_count_then_block():
+async def test_post_failures_count_with_backoff_then_block(clock):
     await _open()
     with patch.object(dispatcher, "_post", AsyncMock(side_effect=RuntimeError("down"))):
-        for attempt in (1, 2):
+        assert await dispatch_one() is True
+        (row,) = await tasks_in(ROOM)
+        assert row.status == "in_progress" and not any(
+            r["ref"].startswith("dispatched:") for r in row.refs)
+        assert await dispatch_one() is False  # не горячий цикл: ждёт паузу
+        for attempt in (2, 3):
+            clock.advance(dispatcher.RECEIPT_WAIT_S * 2 ** attempt)
             assert await dispatch_one() is True
             (row,) = await tasks_in(ROOM)
-            assert row.status == "open"
             assert any(r["ref"] == f"dispatch_attempts: {attempt}" for r in row.refs)
+        clock.advance(dispatcher.RECEIPT_WAIT_S * 8)
         assert await dispatch_one() is True
     (row,) = await tasks_in(ROOM)
     assert row.status == "blocked" and row.note == dispatcher.BLOCKED_NOTE
@@ -162,6 +281,8 @@ async def test_vera_claim_sends_no_taken_to_owner():
     rec.sent.clear()
     assert await dispatch_one() is True
     assert any(m.message_id.startswith("dispatch-help-") for m in await messages_in(ROOM))
+    await _ack("help-vc-help1")
+    assert await dispatch_one() is True
 
     assert await task_holder(ROOM, "help-vc-help1") == (None, "open")
     assert await help_worker.track_help(rec, utc_naive_now()) == 0

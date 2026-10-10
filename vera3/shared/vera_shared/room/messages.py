@@ -143,3 +143,13 @@ async def history(*, room: str, limit: int, before_id: int | None = None,
         rows = (await s.execute(q.order_by(RoomMessageRow.id.desc()).limit(limit))
                 ).scalars().all()
     return [message_dict(r) for r in reversed(rows)]
+
+
+async def has_reply(*, room: str, in_reply_to: str, from_agent: str, status: str) -> bool:
+    """Есть ли ответ `from_agent` со статусом `status` именно на сообщение `in_reply_to`."""
+    async with get_session() as s:
+        found = (await s.execute(select(RoomMessageRow.id).where(
+            RoomMessageRow.room == room, RoomMessageRow.in_reply_to == in_reply_to,
+            RoomMessageRow.from_agent == from_agent, RoomMessageRow.status == status,
+        ).limit(1))).first()
+    return found is not None
