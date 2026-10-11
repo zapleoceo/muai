@@ -12,6 +12,12 @@
   `acl.check_disjoint`, поиск по токену — `acl.resolve`. При старте `auth.validate_office_tokens`
   отвергает битую запись, короткий токен и токен, совпавший с MCP/комнатой; на лету
   `auth.load_office_registry` при битом env отдаёт пустой реестр (все запросы 401).
+- Проект сервисного принципала бота Veranda — ровно `Veranda` (с заглавной, конвенция комнаты),
+  т.е. запись реестра `имя:Veranda:токен`. Доказательство: prod `room_tasks.project` (read-only
+  SELECT) содержит `Vera`, `Orchestra`, `Lamas`, `Sintegrum`, `SinHRM` и т.д. — все с заглавной,
+  значения `Veranda` пока нет. Регистр значим (проект задачи берётся из принципала), `veranda`
+  создал бы отдельный проект. Замечание: `PROJECT_RULES` в `vera_shared/voice_help/policy.py`
+  использует нижний регистр (`veranda`, `itstep`) — расхождение с конвенцией комнаты, здесь не правится.
 - Принципал `OfficePrincipal(name, project, type="service", own_tasks=True)` определяется только
   аутентификацией; поля тела запроса его не задают. Проект задачи берётся из принципала.
 - `acl.authorize` — deny-by-default: разрешены лишь действия `create`, `answer`, `list`, `delivered`.
