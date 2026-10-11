@@ -229,3 +229,25 @@ def test_tree_keeps_pagination_keys():
     out = redact_tree(src)
     assert {k: out[k] for k in src if k != "access_token"} == {k: v for k, v in src.items() if k != "access_token"}
     assert out["access_token"] == MASK
+
+
+@pytest.mark.parametrize("text", ["DB_PASSWORD: CANARYpw99", "API_KEY: CANARYkey123456", "DB_PASSWORD=CANARYpw99"])
+def test_env_names_with_colon_masked(text):
+    out = redact_view(text)
+    assert "CANARY" not in out and MASK in out
+
+
+def test_env_colon_numeric_intact():
+    assert redact_view("MAX_TOKEN: 4096") == "MAX_TOKEN: 4096"
+
+
+@pytest.mark.parametrize("text", [
+    "password: CANARY-pw-1", "Пароль = CANARY-pw-1", '{"api_key": "CANARY-key-123"}',
+    "https://api.x.test/cb?token=CANARYtok123456&lang=ru", "https://x.test/auth?code=Q9canary&state=s1",
+    "https://x.test/cb#code=Q9canary", "ftp://user:CANARYpw@h.test/p",
+    "https://x.test/y#access_token=eyJcanary&type=bearer", "git token " + CANARIES["ghp"],
+    *[f"до {CANARIES[k]} после" for k in ("ghp", "pat", "slack", "aws", "sk", "jwt", "pem")],
+])
+def test_pr24_masked_cases_still_masked(text):
+    out = redact_view(text)
+    assert MASK in out and "CANARY" not in out and "Q9canary" not in out and "eyJcanary" not in out

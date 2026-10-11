@@ -48,7 +48,7 @@ _AUTH = re.compile(
 _BEARER = re.compile(r"(?i)(\bbearer[ \t]+)[A-Za-z0-9._~+/=-]{16,2000}")
 _ENV = re.compile(
     r"((?<![A-Za-z0-9_])(?:(?:[A-Z][A-Z0-9]*_)*(?:SECRET(?:_KEY)?|TOKEN|PASSWORD|PASSWD|API_KEY)"
-    r"|aws_secret_access_key|passwd)[\"']?[ \t]*=[ \t]*[\"']?)"
+    r"|aws_secret_access_key|passwd)[\"']?[ \t]*[:=][ \t]*[\"']?)"
     r"(?![0-9]+(?![^\s\"',;&]))[^\s\"',;&]{4,500}")
 _NAMES = (r"access[-_]?token|refresh[-_]?token|id[-_]?token|token|api[-_]?key|sig|signature"
           r"|secret|password|pwd|auth|client[-_]?secret|session|session[-_]?id"
