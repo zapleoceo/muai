@@ -502,6 +502,15 @@ processing is paused/paced.
 
 - `POST /search` — entry point for the Telegram bot and dashboard.
 - Hybrid retrieval: FTS (`russian` OR `indonesian`, ts_rank — see below) AND vector similarity (косинус) over Voyage embeddings.
+- With a date window and an explicitly labelled quoted email subject (for
+  example `тема «...»`), retrieval also compares the whole stored Gmail
+  subject, including the legacy `Subject:` header when metadata is absent.
+  The date, project and source scope comes from outside the quoted title.
+  That exact candidate ranks above noisy OR text matches. A directly named
+  `event:ID` is read independently of dates and projects inferred from the
+  question. Both paths preserve visibility, source and structured link filters;
+  the stored timestamp is the evidence for any date claim. A missing search
+  result does not prove absence from the original source.
 - `source_url` in search results uses only an existing Slack
   `events.metadata.permalink` whose HTTPS host and channel/timestamp match
   the stored source ID. Missing or mismatched permalinks return `null`: the

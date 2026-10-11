@@ -37,6 +37,7 @@ from brain_search.retrieval_filters import (
     source_clause,
 )
 from brain_search.rows import META_COLUMNS, Candidate
+from brain_search.title_rows import fetch_title_rows, merge_title_rows
 
 __all__ = ["CANDIDATE_POOL", "RECENT_FALLBACK", "Candidates", "LinkScope", "account_clause",
            "fetch_candidates", "project_clause", "semantic_filter"]
@@ -59,6 +60,7 @@ class Candidates:
     rows: list[Any]
     mode: str
     acc_words: list[str] = field(default_factory=list)
+    title_found: bool = False
 
 
 def _select(*, extra_cols: str, join: str, where: str, order: str,
@@ -100,6 +102,7 @@ async def fetch_candidates(
     links: LinkScope | None = None,
     exact_event_ids: list[int] | None = None,
     tickets: list[str] | None = None,
+    title: str | None = None,
 ) -> Candidates:
     """Кандидаты для скоринга: основной режим + смысловые из ANN."""
     async with get_session() as s:
@@ -122,6 +125,13 @@ async def fetch_candidates(
                 time_range=time_range, project=project)
             found.rows = merge_identifier_rows(found.rows, exact)
             found.mode += "+ticket"
+        if title and time_range:
+            exact_titles = await fetch_title_rows(
+                s, title, source=source, links=links,
+                time_range=time_range, project=project)
+            found.rows = merge_title_rows(found.rows, exact_titles)
+            found.title_found = bool(exact_titles)
+            found.mode += "+title"
     found.rows = [Candidate.of(r) for r in found.rows]
     return found
 

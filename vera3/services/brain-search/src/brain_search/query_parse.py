@@ -36,6 +36,7 @@ class ProjectScope:
 def resolve_project(q: str) -> ProjectScope | None:
     """Определить упомянутый проект. None — если не упомянут."""
     _focus, scope = split_quoted_query(q)
+    scope = _EXPLICIT_TITLE.sub("", scope)
     name = project_from_query(scope)
     if name is None:
         return None
@@ -53,6 +54,7 @@ _SUMMARY_TRIGGERS = (
 
 def is_summary_query(q: str) -> bool:
     _focus, scope = split_quoted_query(q)
+    scope = _EXPLICIT_TITLE.sub("", scope)
     ql = scope.lower()
     return any(t in ql for t in _SUMMARY_TRIGGERS)
 
@@ -89,6 +91,21 @@ def source_weight(source: str) -> float:
 
 
 _LATIN_RE = re.compile(r"[A-Za-z]+")
+_EXPLICIT_TITLE = re.compile(
+    r"\b(?:тем(?:а|ой|у)|заголов(?:ок|ком|ку)|subject|title)\s*"
+    r"(?:письма\s*)?:?\s*"
+    r"(?:«(?P<angle>[^»\r\n]{3,200})»|\"(?P<plain>[^\"\r\n]{3,200})\"|“(?P<curly>[^”\r\n]{3,200})”)",
+    re.IGNORECASE,
+)
+
+
+def explicit_title(question: str) -> str | None:
+    """Only an explicitly labelled, quoted title is an exact title lookup."""
+    match = _EXPLICIT_TITLE.search(question)
+    if match is None:
+        return None
+    title = next(value for value in match.groupdict().values() if value is not None).strip()
+    return title if len(title) >= 3 else None
 
 
 def extract_account_terms(words: list[str], *, limit: int = 5) -> list[str]:
@@ -168,6 +185,7 @@ def parse_time_range(q: str, *, now_utc: datetime | None = None) -> tuple[dateti
     """
     now_utc = now_utc or utc_naive_now()
     _focus, scope = split_quoted_query(q)
+    scope = _EXPLICIT_TITLE.sub("", scope)
     ql = scope.lower()
 
     for pattern, days_ago in _RELATIVE_DAY:
