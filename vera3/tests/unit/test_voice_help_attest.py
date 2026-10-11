@@ -11,7 +11,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskAnswerRow, RoomTaskEventRow, RoomTaskRow
 from vera_shared.db.models_voice import VoiceCommandRow
 from vera_shared.office.repository import revision_of
-from vera_shared.room import questions, tasks
+from vera_shared.room import handoff, messages, questions, task_progress, task_wait, tasks
 from vera_shared.room.task_queue import next_task
 from vera_shared.voice_help import attest as svc
 from vera_shared.voice_help.hold import lift_hold
@@ -156,7 +156,9 @@ async def test_happy_path_one_answer_event_refs_and_unblocks():
     picked = await next_task(room=ROOM, agent="codex", project=None, lease_seconds=60,
                              session=None, account=None)
     assert picked is None
-    explicit = await tasks.claim(room=ROOM, task_id=TID, agent="codex", lease_seconds=60)
+    with pytest.raises(tasks.TaskBusy):
+        await tasks.claim(room=ROOM, task_id=TID, agent="codex", lease_seconds=60)
+    explicit = await tasks.claim(room=ROOM, task_id=TID, agent="dot", lease_seconds=60)
     assert explicit["task_id"] == TID
 
 
@@ -183,6 +185,55 @@ async def test_repeat_replays_and_never_two_answers():
         await _call(qid, idempotency_key="k2", expected_revision=rev)
     ans, evs = await _rows()
     assert len(ans) == 1 and len(evs) == 1
+
+
+async def test_attested_completion_requires_exact_receipt_and_is_idempotent():
+    qid = await _open()
+    attested = await _call(qid)
+    lease = await tasks.claim(room=ROOM, task_id=TID, agent="dot", lease_seconds=60)
+    token = lease["fencing_token"]
+    with pytest.raises(tasks.TaskBusy):
+        await tasks.update(room=ROOM, task_id=TID, agent="dot", fencing_token=token,
+                           next_action="send elsewhere")
+    with pytest.raises(tasks.TaskBusy):
+        await tasks.release(room=ROOM, task_id=TID, agent="dot",
+                            fencing_token=token, status="done", note="sent")
+    with pytest.raises(handoff.HandoffError):
+        await handoff.offer(room=ROOM, task_id=TID, agent="dot", fencing_token=token,
+                            to_agent="vera")
+    with pytest.raises(ValueError):
+        await task_progress.progress(room=ROOM, task_id=TID, agent="dot",
+                                     fencing_token=token, result="sent something")
+    with pytest.raises(ValueError):
+        await task_wait.wait(room=ROOM, task_id=TID, agent="dot", fencing_token=token,
+                             until_seconds=60, reason="later")
+    with pytest.raises(messages.MessageConflict):
+        await messages.post_message(room=ROOM, message_id="arbitrary", from_agent="dot",
+                                    body="other", to_agent="someone", task_id=TID)
+    with pytest.raises(tasks.TaskBusy):
+        await tasks.complete_attested(room=ROOM, task_id=TID, agent="dot",
+                                     fencing_token=token, reply_text="wrong",
+                                     receipt_id="receipt-1")
+    word = attest_reply_text(SAFE)
+    done = await tasks.complete_attested(room=ROOM, task_id=TID, agent="dot",
+                                         fencing_token=token, reply_text=word,
+                                         receipt_id="receipt-1")
+    assert done["task"]["status"] == "done" and not done["replayed"]
+    again = await tasks.complete_attested(room=ROOM, task_id=TID, agent="dot",
+                                          fencing_token=token, reply_text=word,
+                                          receipt_id="receipt-1")
+    assert again["replayed"]
+    with pytest.raises(tasks.TaskBusy):
+        await tasks.complete_attested(room=ROOM, task_id=TID, agent="dot",
+                                      fencing_token=token, reply_text=word,
+                                      receipt_id="receipt-2")
+    assert (await _call(qid, expected_revision=attested["revision"]))["replayed"]
+    async with get_session() as s:
+        done_events = (await s.execute(select(RoomTaskEventRow).where(
+            RoomTaskEventRow.room == ROOM, RoomTaskEventRow.task_id == TID,
+            RoomTaskEventRow.kind == "done"))).scalars().all()
+    assert len(done_events) == 1
+    assert done_events[0].data["receipt_id"] == "receipt-1"
 
 
 async def test_attested_answer_is_not_owner_and_owner_still_lifts():
@@ -251,9 +302,8 @@ async def test_removed_refs_cannot_bypass_audit_scope():
         row.refs = [r for r in row.refs if r["ref"] not in
                     {SOURCE_ATTESTED, ATTEST_SCOPE_REF}]
     posted = AsyncMock()
-    claimed = await tasks.claim(room=ROOM, task_id=TID, agent="vera", lease_seconds=60)
-    with patch.object(dispatcher, "post_message", posted):
-        await dispatcher._attempt(claimed)
+    with pytest.raises(tasks.TaskBusy):
+        await tasks.claim(room=ROOM, task_id=TID, agent="vera", lease_seconds=60)
     posted.assert_not_called()
     async with get_session() as s:
         task = await s.get(RoomTaskRow, (ROOM, TID))

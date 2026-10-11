@@ -148,8 +148,6 @@ async def attest(*, principal: str, room: str, task_id: str, qid: int,
         if not task.task_id.startswith("help-vc-") or not any(
                 r.get("kind") == "voice_command" for r in task.refs or []):
             raise InvalidScope("not a voice help task")
-        if task.status in ("done", "cancelled"):
-            raise InvalidScope(f"task is {task.status}")
         prior = await _prior(s, room, task_id, qid)
         if prior is not None:
             data = prior.data or {}
@@ -159,6 +157,8 @@ async def attest(*, principal: str, room: str, task_id: str, qid: int,
                 return {"ok": True, "replayed": True, "qid": qid,
                         "revision": data.get("revision")}
             raise AttestConflict(f"question {qid} is already attested")
+        if task.status != "open" or task.lease_holder is not None:
+            raise InvalidScope("task must be open and unclaimed before attestation")
         q = await s.get(RoomTaskQuestionRow, qid, with_for_update=True)
         if (q is None or (q.room, q.task_id) != (room, task_id) or q.asked_by != AGENT
                 or q.question != UNCERTAIN_QUESTION):

@@ -10,6 +10,7 @@ from typing import Annotated, Any
 from mcp.server.mcpserver import Context
 from pydantic import Field
 from vera_shared.voice_help import attest as svc
+from vera_shared.room import tasks
 
 from vera_mcp.auth import client_of
 from vera_mcp.room_tools import Ident, Room, _room
@@ -35,4 +36,16 @@ async def room_task_attest(
         raise ValueError(f"{e.code}: {e}") from e
 
 
-ATTEST_TOOLS = (room_task_attest,)
+async def room_task_attested_complete(
+    task_id: Ident, fencing_token: Annotated[int, Field(ge=1)],
+    reply_text: Annotated[str, Field(min_length=1, max_length=100)],
+    receipt_id: Ident, ctx: Context, room: Room = "main",
+) -> dict[str, Any]:
+    """Close a dot-attested task using an existing send receipt. Never sends a reply."""
+    result = await tasks.complete_attested(
+        room=_room(room), task_id=task_id, agent=client_of(ctx),
+        fencing_token=fencing_token, reply_text=reply_text, receipt_id=receipt_id)
+    return {"ok": True, **result}
+
+
+ATTEST_TOOLS = (room_task_attest, room_task_attested_complete)

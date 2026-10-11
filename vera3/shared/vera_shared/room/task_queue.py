@@ -13,6 +13,7 @@ from vera_shared.room.task_events import record_event
 from vera_shared.room.task_view import task_dict
 from vera_shared.room.tasks import apply_claim
 from vera_shared.timeutil import utc_naive_now
+from vera_shared.voice_help.attest_state import attestation_for
 
 Queue = Literal["open", "unclaimed"]
 CANDIDATES = 50
@@ -75,6 +76,8 @@ async def _deps_done(s: AsyncSession, row: RoomTaskRow) -> bool:
 
 
 async def _still_eligible(s: AsyncSession, row: RoomTaskRow, now: Any) -> bool:
+    if await attestation_for(s, row.room, row.task_id):
+        return False
     if (row.status != "open" or not row.auto_pickup
             or (row.lease_holder and row.lease_until and row.lease_until > now)):
         return False

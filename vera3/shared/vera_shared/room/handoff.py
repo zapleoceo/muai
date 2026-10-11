@@ -19,6 +19,7 @@ from vera_shared.room.messages import add_message
 from vera_shared.room.task_events import record_event
 from vera_shared.room.tasks import _locked, _require_lease, task_dict
 from vera_shared.timeutil import utc_naive_now
+from vera_shared.voice_help.attest_state import attestation_for
 
 DEFAULT_HANDOFF_LEASE_S = 900
 
@@ -40,6 +41,8 @@ async def offer(*, room: str, task_id: str, agent: str, fencing_token: int, to_a
     async with get_session() as s:
         row = _require_lease(await _locked(s, room, task_id), room, task_id, agent,
                              fencing_token)
+        if await attestation_for(s, room, task_id):
+            raise HandoffError("attested task cannot be handed off")
         if row.pending_handoff_to:
             raise HandoffError(f"task {task_id!r} already offered to "
                                f"{row.pending_handoff_to}; cancel first")
@@ -62,6 +65,8 @@ async def accept(*, room: str, task_id: str, agent: str, session: str | None = N
                  lease_seconds: int = DEFAULT_HANDOFF_LEASE_S) -> dict[str, Any]:
     async with get_session() as s:
         row = await _locked(s, room, task_id)
+        if await attestation_for(s, room, task_id):
+            raise HandoffError("attested task cannot be handed off")
         if _pending(row, task_id) != agent:
             raise HandoffError(f"handoff of {task_id!r} is not offered to {agent}")
         if row.status in ("done", "cancelled"):

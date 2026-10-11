@@ -10,10 +10,11 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from vera_shared.db.engine import get_session
-from vera_shared.db.models_room import RoomTaskRow
+from vera_shared.db.models_room import RoomTaskEventRow, RoomTaskRow
 from vera_shared.room.task_events import record_event
 from vera_shared.room.task_fields import (
     clean_responsible,
@@ -24,6 +25,7 @@ from vera_shared.room.task_fields import (
 from vera_shared.room.task_refs import validate_refs
 from vera_shared.room.task_view import task_dict
 from vera_shared.timeutil import utc_naive_now
+from vera_shared.voice_help.attest_state import attestation_for
 
 RELEASE_STATUSES = ("open", "done", "blocked")
 HELD_STATUSES = ("in_progress", "blocked")
@@ -116,6 +118,9 @@ async def claim(*, room: str, task_id: str, agent: str, lease_seconds: int,
                                    agent=agent, text=title)
             elif row.status == "done":
                 raise TaskBusy(f"task {task_id!r} is done; open a new task_id")
+            if row is not None and await attestation_for(s, room, task_id):
+                if agent != "dot" or title is not None or paths is not None:
+                    raise TaskBusy("attested task may only be claimed by dot without edits")
             live = apply_claim(row, agent=agent, now=now, lease_seconds=lease_seconds,
                                session=session, account=account)
             if title is not None:
@@ -164,6 +169,12 @@ async def update(*, room: str, task_id: str, agent: str, fencing_token: int,
     async with get_session() as s:
         row = _require_lease(await _locked(s, room, task_id), room, task_id, agent,
                              fencing_token)
+        if await attestation_for(s, room, task_id):
+            if (agent != "dot" or status is not None or note is not None
+                    or next_action is not None or priority is not None or refs is not None
+                    or project is not None or depends_on is not None
+                    or auto_pickup is not None or responsible is not None):
+                raise TaskBusy("attested task permits only dot lease renewal")
         now = utc_naive_now()
         prev_status = row.status
         if status is not None:
@@ -218,6 +229,8 @@ async def release(*, room: str, task_id: str, agent: str, fencing_token: int,
     async with get_session() as s:
         row = _require_lease(await _locked(s, room, task_id), room, task_id, agent,
                              fencing_token)
+        if await attestation_for(s, room, task_id) and status != "open":
+            raise TaskBusy("attested task needs receipt completion or open release")
         row.status = status
         row.lease_holder = None
         row.lease_until = None
@@ -232,3 +245,43 @@ async def release(*, room: str, task_id: str, agent: str, fencing_token: int,
                            fencing_token=fencing_token, text=note, data={"status": status})
         await s.refresh(row)
         return task_dict(row)
+
+
+async def complete_attested(*, room: str, task_id: str, agent: str, fencing_token: int,
+                            reply_text: str, receipt_id: str) -> dict[str, Any]:
+    """Record dot's assertion of a pre-existing reply; this never sends a message."""
+    if agent != "dot" or not receipt_id or len(receipt_id) > 128:
+        raise TaskBusy("only dot may record a bounded reply receipt")
+    async with get_session() as s:
+        row = await _locked(s, room, task_id)
+        if row is None:
+            raise TaskNotFound(room, task_id)
+        attestation = await attestation_for(s, room, task_id)
+        if attestation is None:
+            raise TaskBusy("task has no delegated attestation")
+        allowed = (attestation.data or {}).get("allowed_reply")
+        if not allowed or reply_text != allowed:
+            raise TaskBusy("reply text differs from attested literal word")
+        if row.status == "done":
+            prior = (await s.execute(select(RoomTaskEventRow).where(
+                RoomTaskEventRow.room == room, RoomTaskEventRow.task_id == task_id,
+                RoomTaskEventRow.kind == "done").order_by(RoomTaskEventRow.id.desc()).limit(1)
+            )).scalar_one_or_none()
+            data = prior.data or {} if prior else {}
+            if data.get("receipt_id") == receipt_id and data.get("reply_text") == reply_text:
+                return {"task": task_dict(row), "replayed": True}
+            raise TaskBusy("task already completed with another receipt")
+        _require_lease(row, room, task_id, agent, fencing_token)
+        row.status = "done"
+        row.lease_holder = None
+        row.lease_until = None
+        row.waiting_until, row.waiting_reason = None, None
+        row.pending_handoff_to = None
+        row.note = f"Existing reply receipt: {receipt_id}"
+        row.updated_at = utc_naive_now()
+        await record_event(s, room=room, task_id=task_id, kind="done", agent=agent,
+                           fencing_token=fencing_token, text=row.note,
+                           data={"status": "done", "receipt_id": receipt_id,
+                                 "reply_text": reply_text, "attestation_event_id": attestation.id})
+        await s.refresh(row)
+        return {"task": task_dict(row), "replayed": False}

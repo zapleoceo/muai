@@ -453,7 +453,8 @@ watchdog.py`): кандидаты — задачи `in_progress`/`blocked` с д
 Это не ответ владельца и не обход дашборда: ответ пишется как `dot-attested`.
 
 - **Доступ.** Только принципал из `ROOM_ATTEST_ACTORS` (по умолчанию `dot`), только при
-  `ROOM_ATTEST_ENABLED=1` (по умолчанию `0`). Остальные — `forbidden`, при выключенном — `disabled`.
+  `ROOM_ATTEST_ENABLED=1` (по умолчанию `0`). Оба параметра передаются только контейнеру
+  `vera3-mcp` через compose. Остальные — `forbidden`, при выключенном — `disabled`.
 - **Транспорт.** Только MCP. HTTP-маршрута `/office/v1/tasks/{id}/questions/{qid}/attest` нет
   намеренно: он потребовал бы сервисного токена office, у dot его нет, а новый секрет ради этого
   заводить нельзя (dot подключён через Room MCP OAuth).
@@ -492,3 +493,9 @@ watchdog.py`): кандидаты — задачи `in_progress`/`blocked` с д
 `attested_action` (текст допустимого действия), `attest_state.is_attested` (audit).
 MCP-обёртка переводит исключение в
 ошибку вида `код: сообщение`.
+
+### Completion and trust boundary
+
+For an attested task, only dot can explicitly claim the lease. Generic task updates cannot change the action, references, pickup policy, or progress note; generic `room_task_release` cannot mark it done. Generic `room_post` with that task ID is rejected. After checking that the owner already received the literal one-word reply, dot calls `room_task_attested_complete(task_id, fencing_token, reply_text, receipt_id)`. The service compares `reply_text` with the append-only attestation event and atomically records a `done` event with the receipt. Repeating the same receipt returns `replayed=true`; a different receipt is rejected. This tool records a receipt and never sends a reply.
+
+The existing `room_post` without a task ID remains a general room capability. This boundary depends on dot using the dedicated task workflow and on the existing OAuth trust in dot. Both the owner-message evidence and the external reply receipt are dot assertions: the room database cannot independently inspect the dot chat or external send service. Neither is recorded as an OWNER answer.
