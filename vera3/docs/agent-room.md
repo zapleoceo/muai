@@ -445,3 +445,36 @@ watchdog.py`): кандидаты — задачи `in_progress`/`blocked` с д
 больше `STALE_AFTER_S` (180 с, три интервала) или есть `last_error`.
 
 Тесты: `tests/unit/test_room_watchdog.py`, `tests/integration/test_room_pg.py`.
+
+## Делегированное подтверждение авторства (dot)
+
+`room_task_attest` — MCP-инструмент комнаты: dot заверяет, что владелец сам, в чате dot,
+признал авторство ОДНОЙ голосовой просьбы (`help-vc-*`, вопрос «Это ты сказал?» от `vera`).
+Это не ответ владельца и не обход дашборда: ответ пишется как `dot-attested`.
+
+- **Доступ.** Только принципал из `ROOM_ATTEST_ACTORS` (по умолчанию `dot`), только при
+  `ROOM_ATTEST_ENABLED=1` (по умолчанию `0`). Остальные — `forbidden`, при выключенном — `disabled`.
+- **Транспорт.** Только MCP. HTTP-маршрута `/office/v1/tasks/{id}/questions/{qid}/attest` нет
+  намеренно: он потребовал бы сервисного токена office, у dot его нет, а новый секрет ради этого
+  заводить нельзя (dot подключён через Room MCP OAuth).
+- **Вход.** `expected_revision` (id последнего события задачи), `evidence_message_id`,
+  `evidence_at` (ISO), `quoted_text` (≤500, секреты скрываются), `classification` строго
+  `owner_direct_in_dot_chat`, `idempotency_key`.
+- **Границы (`invalid_scope`).** Задача — голосовая просьба, не закрыта; вопрос — вопрос
+  авторства от `vera` и открыт; исходная просьба прошла `attest_unsafe_reason` из
+  `voice_help/policy.py`: простая просьба ответить владельцу текстом (не длиннее 200 символов,
+  без третьих лиц, запросов данных, внешних действий и денег).
+- **Запись.** Одна транзакция под блокировкой задачи: ответ `dot-attested`, событие
+  `delegated_attestation` (вид добавлен миграцией `056_delegated_attestation_event.sql`),
+  refs `source_attested_by_dot` и `attest_scope: text_reply_owner` (`hold.lift_attested`),
+  `next_action` с ограничением. `source_confirmed` НЕ ставится; `lift_hold` по-прежнему ждёт
+  только `owner`, так что позднее слово владельца поднимет задачу до обычной.
+- **Идемпотентность.** Тот же ключ и тот же запрос — повтор результата; тот же ключ с другим
+  запросом или второе подтверждение того же вопроса — `conflict`; устаревшая ревизия — `conflict`.
+- **Результат только владельцу.** При обоих refs диспетчер (`bot_telegram/dispatcher.py`,
+  `_attempt`) блокирует задачу, если `result_recipient` не `owner`/`voice`, а office intake
+  (`office/intake.py`, `_item`) не отдаёт `result` (`result_withheld`).
+- **Откат на проде** — `ROOM_ATTEST_ENABLED=0`; вид события, CHECK и события остаются как аудит.
+  Деструктивный откат есть только в тесте `tests/integration/test_attest_migration_pg.py`
+  (только тестовая БД). Миграция: DROP/ADD CHECK `NOT VALID` берёт ACCESS EXCLUSIVE на
+  `room_task_events` (короткая транзакция, `lock_timeout 5s`), VALIDATE — отдельной транзакцией.

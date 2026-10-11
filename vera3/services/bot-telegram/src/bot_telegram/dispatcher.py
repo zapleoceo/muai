@@ -32,6 +32,7 @@ from vera_shared.voice_help.policy import (
     DEFAULT_PROJECT,
     ESCALATE_TO,
     RESULT_RECIPIENT_REF,
+    attest_recipient_blocked,
     help_room,
 )
 
@@ -47,6 +48,8 @@ RECEIPT_WAIT_S = 600  # срок первой квитанции; дальше �
 JITTER = 0.2
 TITLE_CHARS = 120
 BLOCKED_NOTE = "получатель не подтвердил получение"
+ATTEST_BLOCKED_NOTE = ("подтверждение через dot разрешает результат только владельцу; "
+                       "получатель результата другой")
 _NAME = re.compile(r"^[a-z0-9_-]{1,32}$")
 
 
@@ -95,6 +98,12 @@ async def _delivered(task: dict[str, Any]) -> bool:
 async def _attempt(task: dict[str, Any]) -> None:
     """Одна попытка доставки под живой арендой: пост, refs, ожидание квитанции."""
     refs = task["refs"]
+    if attest_recipient_blocked(refs, _ref_value(refs, RECIPIENT_PREFIX)):
+        await tasks.release(room=task["room"], task_id=task["task_id"], agent=AGENT,
+                            fencing_token=task["fencing_token"], status="blocked",
+                            note=ATTEST_BLOCKED_NOTE)
+        log.warning("dispatcher: %s — %s", task["task_id"], ATTEST_BLOCKED_NOTE)
+        return
     attempts = int(_ref_value(refs, ATTEMPTS_PREFIX) or 0) + 1
     try:
         message_id = await _post(task)

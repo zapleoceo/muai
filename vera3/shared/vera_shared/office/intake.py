@@ -36,6 +36,7 @@ from vera_shared.office.intake_input import (
     text_hash,
 )
 from vera_shared.redact import redact_secrets
+from vera_shared.voice_help.policy import attest_recipient_blocked
 from vera_shared.room import questions
 from vera_shared.room.messages import post_message
 from vera_shared.room.tasks import _locked, open_task
@@ -235,10 +236,14 @@ async def _item(o: Any, t: RoomTaskRow) -> dict[str, Any]:
     async with get_session() as s:
         revision = await repo.revision_of(s, t.room, t.task_id)
         result = await repo.result_text_of(s, t.room, t.task_id) if t.status == "done" else None
+    withheld = attest_recipient_blocked(t.refs, (o.result_recipient or {}).get("channel"))
+    if withheld:
+        result = None
     open_q = [{"question_id": q["qid"], "text": q["question"]}
               for q in await questions.questions_of(t.room, t.task_id) if q["status"] == "open"]
     return {"task_id": t.task_id, "client_task_id": o.client_task_id, "status": t.status,
-            "questions": open_q, "result": result, "revision": revision, "lease_live": _lease_live(t),
+            "questions": open_q, "result": result, "result_withheld": withheld,
+            "revision": revision, "lease_live": _lease_live(t),
             "delivered_revision": o.delivered_revision, "updated_at": t.updated_at.isoformat()}
 
 

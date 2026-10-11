@@ -37,6 +37,7 @@ from vera_mcp.room_handoff_tools import HANDOFF_TOOLS
 from vera_mcp.room_oauth import RoomOAuthProvider
 from vera_mcp.room_oauth import enabled as room_oauth_enabled
 from vera_mcp.room_oauth import settings as room_oauth_settings
+from vera_mcp.room_attest_tools import ATTEST_TOOLS
 from vera_mcp.room_question_tools import QUESTION_TOOLS
 from vera_mcp.room_tools import ROOM_TOOLS
 from vera_mcp.write_tools import WRITE_TOOLS
@@ -89,7 +90,7 @@ def build_room_mcp(oauth: RoomOAuthProvider | None = None) -> MCPServer:
     auth_kwargs = ({"auth": room_oauth_settings(), "auth_server_provider": oauth}
                    if oauth else {})
     mcp = _server("vera-room", ROOM_INSTRUCTIONS, **auth_kwargs)
-    for tool in (*ROOM_TOOLS, *QUESTION_TOOLS, *HANDOFF_TOOLS):
+    for tool in (*ROOM_TOOLS, *QUESTION_TOOLS, *HANDOFF_TOOLS, *ATTEST_TOOLS):
         mcp.tool()(tool)
     register_events(mcp)
     if oauth:

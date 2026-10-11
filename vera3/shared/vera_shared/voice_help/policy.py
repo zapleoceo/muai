@@ -53,6 +53,9 @@ UNCERTAIN_HOLD = ("Удержание: ничего не делать, пока 
                   "по этой задаче.")
 CONFIRMED_NOTE = "Источник подтверждён владельцем — исполняй как обычную срочную просьбу."
 SOURCE_CONFIRMED = "source_confirmed"
+SOURCE_ATTESTED = "source_attested_by_dot"
+ATTESTED_ACTION = ("авторство подтверждено через dot; только безопасный текстовый ответ "
+                   "владельцу, без данных, внешних действий и расходов")
 
 
 def help_room() -> str:
@@ -82,3 +85,35 @@ def source_uncertain(confidence: float | None, doubts: list[str]) -> bool:
 
 def help_task_id(command_id: str) -> str:
     return f"help-{command_id}"
+
+#: Делегированное подтверждение (dot) разрешает ТОЛЬКО простой текстовый ответ владельцу.
+ATTEST_SCOPE_REF = "attest_scope: text_reply_owner"
+OWNER_RECIPIENTS = frozenset({"owner", "voice"})
+ATTEST_MAX_INSTRUCTION = 200
+ATTEST_UNSAFE: tuple[tuple[str, str], ...] = (
+    ("third_party", r"отправ|перешл|напиши\s+(?!мне\b)\w+|@|скинь|пошли|forward|\bsend\b"),
+    ("data_request", r"найди|покажи|вспомни|сколько|список|recall|search|баланс|данные"),
+    ("external_action", r"https?://|www\.|открой|запусти|создай|удали|задеплой|закажи"
+                        r"|оплати|переведи"),
+    ("money", r"\$|₴|грн|руб|usd|оплат|купи|перевод"),
+)
+_ATTEST_UNSAFE_RE = tuple((n, re.compile(p, re.IGNORECASE)) for n, p in ATTEST_UNSAFE)
+
+
+def attest_unsafe_reason(instruction: str) -> str | None:
+    """Детерминированный отбор: годится только простая просьба ответить владельцу текстом."""
+    if len(instruction) > ATTEST_MAX_INSTRUCTION:
+        return "too_long"
+    return next((n for n, rx in _ATTEST_UNSAFE_RE if rx.search(instruction)), None)
+
+
+def attest_limited(refs: list[dict[str, str]] | None) -> bool:
+    marks = {r.get("ref") for r in refs or []}
+    return SOURCE_ATTESTED in marks and ATTEST_SCOPE_REF in marks
+
+
+def attest_recipient_blocked(refs: list[dict[str, str]] | None,
+                             recipient: str | None) -> bool:
+    """Задача под делегированным подтверждением: результат — только в канал владельца."""
+    return attest_limited(refs) and bool(recipient) and (
+        recipient or "").lower() not in OWNER_RECIPIENTS
