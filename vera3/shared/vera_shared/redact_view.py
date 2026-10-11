@@ -46,10 +46,17 @@ _AUTH = re.compile(
     r"(?i)((?<![^\W_])authorization[\"']?\s*[:=]\s*[\"']?(?:(?:bearer|basic|token)[ \t]+)?)"
     r"[^\s\"',;]{4,2000}")
 _BEARER = re.compile(r"(?i)(\bbearer[ \t]+)[A-Za-z0-9._~+/=-]{16,2000}")
+_ENV_TAIL = r"""[\"']?[ \t]*[:=][ \t]*[\"']?)"""
+_ENV_VALUE = r"""[^\s\"',;&]{4,500}"""
+_ENV_PREFIX = r"(?:[A-Z][A-Z0-9]*_)*"
+# Числовое значение *_TOKEN (`MAX_TOKEN=4096`) - лимит, не секрет; числовой пароль
+# или ключ (`DB_PASSWORD=12345678`) маскируется всегда.
 _ENV = re.compile(
-    r"((?<![A-Za-z0-9_])(?:(?:[A-Z][A-Z0-9]*_)*(?:SECRET(?:_KEY)?|TOKEN|PASSWORD|PASSWD|API_KEY)"
-    r"|aws_secret_access_key|passwd)[\"']?[ \t]*[:=][ \t]*[\"']?)"
-    r"(?![0-9]+(?![^\s\"',;&]))[^\s\"',;&]{4,500}")
+    rf"((?<![A-Za-z0-9_])(?:{_ENV_PREFIX}(?:SECRET(?:_KEY)?|PASSWORD|PASSWD|API_KEY)"
+    rf"|aws_secret_access_key|passwd){_ENV_TAIL}{_ENV_VALUE}")
+_ENV_TOKEN = re.compile(
+    rf"((?<![A-Za-z0-9_]){_ENV_PREFIX}TOKEN{_ENV_TAIL}"
+    rf"(?![0-9]+(?![^\s\"',;&])){_ENV_VALUE}")
 _NAMES = (r"access[-_]?token|refresh[-_]?token|id[-_]?token|token|api[-_]?key|sig|signature"
           r"|secret|password|pwd|auth|client[-_]?secret|session|session[-_]?id"
           r"|x-amz-(?:signature|credential|security-token)")
@@ -98,7 +105,7 @@ def redact_view(text: str) -> str:
     out = _PEM.sub(MASK, text)
     out = _KEYS.sub(MASK, out)
     out = _TG.sub(MASK, out)
-    for rx in (_AUTH, _BEARER, _ENV, _LABEL, _LABEL_GAP, _PARAM, _KEY_PARAM):
+    for rx in (_AUTH, _BEARER, _ENV, _ENV_TOKEN, _LABEL, _LABEL_GAP, _PARAM, _KEY_PARAM):
         out = rx.sub(rf"\g<1>{MASK}", out)
     out = _CHUNK.sub(_mask_code, out)
     return _USERINFO.sub(rf"\g<1>{MASK}", out)

@@ -251,3 +251,16 @@ def test_env_colon_numeric_intact():
 def test_pr24_masked_cases_still_masked(text):
     out = redact_view(text)
     assert MASK in out and "CANARY" not in out and "Q9canary" not in out and "eyJcanary" not in out
+
+
+@pytest.mark.parametrize("text", [
+    "DB_PASSWORD=12345678", "DB_PASSWORD: 12345678", "old: DB_PASSWORD=12345678",
+    "SECRET_KEY=99999999", "API_KEY: 123456789",
+])
+def test_numeric_env_passwords_masked(text):
+    out = redact_view(text)
+    assert "12345678" not in out and "99999999" not in out and "123456789" not in out and MASK in out
+
+
+def test_numeric_token_limit_intact():
+    assert redact_view("MAX_TOKEN=4096") == "MAX_TOKEN=4096"
