@@ -18,6 +18,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
+from vera_shared.redact_view import redact_view
 from vera_shared.timeutil import utc_naive_now
 
 from brain_search.evidence import PRIMARY_CHARS, SECONDARY_CHARS, evidence_excerpt
@@ -199,8 +200,8 @@ async def _exec_search_events(args: SearchEventsArgs) -> dict[str, Any]:
              "author_label": c.author_label,
             "direction": c.direction,
              "chat_title": c.chat_title,
-             "preview": evidence_excerpt(
-                 c.content_text, PRIMARY_CHARS if i < 3 else SECONDARY_CHARS)}
+             "preview": redact_view(evidence_excerpt(
+                 c.content_text, PRIMARY_CHARS if i < 3 else SECONDARY_CHARS))}
             for i, (_score, c) in enumerate(ranked)
         ],
     }

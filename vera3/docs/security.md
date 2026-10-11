@@ -66,3 +66,24 @@ Procedure:
 
 There's no automated migration for this. If you ever need to do it, write
 the script and commit it.
+
+## Redaction of search output (`redact_view`)
+
+`vera_shared/redact_view.py` hides secret *values* in what Vera hands to a
+client or an LLM; stored events are never modified. `redact_view(text)`
+replaces only the value span with `[скрыто]` (anchored patterns: `gh[pousr]_`,
+`github_pat_`, `xox[abprs]-`, `sk-`, `AKIA`/`ASIA`, JWT, PEM private keys,
+`token|secret|password|пароль|api_key: value`, secret URL query/fragment
+params incl. `X-Amz-*`, OAuth `code` only next to `state=`/`redirect_uri=` or
+in a fragment, `user:PASS@` userinfo). UUIDs, bare hex, long digits, base64
+without a label and ordinary URLs with ids stay intact. `redact_tree(obj)`
+does the same for JSON-like values and masks the keys `authorization`,
+`cookie`, `password`, `secret`, `token`, `api_key` entirely.
+
+Presentation only, hooked at: MCP `search` (`content_preview`), `get_event`,
+`recent_events`; gateway `/v1/search` (`answer`, `results[].content_preview`,
+`agent_trace`) and `/v1/events/recent`; brain-search `build_context` (before
+the LLM), the final `answer`, `agent_trace`, `content_preview` and the agent
+`search_events` excerpt. `identifier_hits` still runs on the raw text, so exact
+identifier search keeps working. Not yet covered: timeline, entity_events,
+link tools, entity_context, audit_log, `sql_query`.

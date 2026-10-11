@@ -23,6 +23,7 @@ from vera_shared.links.context import owner_entity_id
 from vera_shared.links.filters import to_dict
 from vera_shared.links.model import ROLES
 from vera_shared.links.read import entity_events, filtered_events
+from vera_shared.redact_view import redact_tree, redact_view
 from vera_shared.search_client import SearchUnavailable, search_brain
 from vera_shared.timeutil import parse_iso_naive, utc_naive_now
 
@@ -55,7 +56,9 @@ async def search(
                                   **({"filters": to_dict(flt)} if not flt.empty else {}))
     except SearchUnavailable as e:
         raise RuntimeError(e.detail) from e
-    results = list(data.get("results") or [])
+    results = [{**r, "content_preview": redact_view(r["content_preview"])}
+               if isinstance(r.get("content_preview"), str) else r
+               for r in data.get("results") or []]
     return {"results": results[:limit], "count": min(len(results), limit),
             "truncated": len(results) > limit}
 
@@ -73,10 +76,10 @@ async def recent_events(
     if flt.uses_links or kind:
         flt = replace(flt, account=account, project=project)
         events, truncated = await filtered_events(flt, limit)
-        return {"count": len(events), "truncated": truncated, "events": events}
+        return {"count": len(events), "truncated": truncated, "events": redact_tree(events)}
     events, truncated = await queries.recent_events(
         hours=hours, limit=limit, source=source, account=account, project=project)
-    return {"count": len(events), "truncated": truncated, "events": events}
+    return {"count": len(events), "truncated": truncated, "events": redact_tree(events)}
 
 
 async def get_event(
@@ -94,14 +97,14 @@ async def get_event(
         "account": row.account, "category": row.category,
         "occurred_at": row.occurred_at.isoformat(),
         "received_at": row.received_at.isoformat() if row.received_at else None,
-        "content_text": text[:max_chars], "content_truncated": len(text) > max_chars,
-        "transcript_text": transcript[:max_chars],
+        "content_text": redact_view(text[:max_chars]), "content_truncated": len(text) > max_chars,
+        "transcript_text": redact_view(transcript[:max_chars]),
         "transcript_truncated": len(transcript) > max_chars,
-        "metadata": row.metadata_, "content_extra": row.content_extra,
+        "metadata": redact_tree(row.metadata_), "content_extra": redact_tree(row.content_extra),
         "hidden": row.triage_status == HIDDEN_STATUS,
         "triage": {"status": row.triage_status, "error": row.triage_error,
                    "importance": row.importance, "nature": row.nature,
-                   "project": row.project, "metadata": row.triage_metadata},
+                   "project": row.project, "metadata": redact_tree(row.triage_metadata)},
         "entities": await event_links.linked_entities(event_id),
     }
 

@@ -8,6 +8,7 @@ from sqlalchemy import text
 from vera_shared.db.engine import get_session
 from vera_shared.events.visibility import NOT_HIDDEN_SQL
 from vera_shared.llm.client import LLMCallFailed, chat_async
+from vera_shared.redact_view import redact_tree, redact_view
 
 from brain_search.agent import run_agent
 from brain_search.authorship import AUTHORSHIP_RULES, author_tag
@@ -110,8 +111,12 @@ def build_context(results: list[SearchResult], by_id: dict[int, Candidate]) -> s
             f"[event:{r.event_id} | {r.occurred_at[:16]} UTC | {r.source} | "
             f"{r.source_url or 'original link unavailable'}"
             f"{' | ' + tag if tag else ''}] "
-            f"{evidence_excerpt(c.content_text, limit)}")
+            f"{redact_view(evidence_excerpt(c.content_text, limit))}")
     return "\n\n".join(blocks) if blocks else "(нет данных)"
+
+
+def _redacted(r: SearchResult) -> SearchResult:
+    return r.model_copy(update={"content_preview": redact_view(r.content_preview)})
 
 
 async def answer(
@@ -124,7 +129,7 @@ async def answer(
     """Скоринг → промпт → ответ. Общий хвост всех retrieval-веток."""
     candidates = score_rows(rows, q_vec, acc_words or [])
     top = candidates[:(eff_limit or query.limit)]
-    results = [SearchResult(score=score, **info) for score, info in top]
+    results = [_redacted(SearchResult(score=score, **info)) for score, info in top]
     full_text_by_id = {c.id: c.content_text for c in (Candidate.of(row) for row in rows)}
 
     self_ctx = await self_context()
@@ -158,13 +163,13 @@ async def answer(
             max_steps=query.max_steps,
         )
         return AnswerResponse(
-            answer=trace.answer or "(пусто)",
+            answer=redact_view(trace.answer or "(пусто)"),
             results=results,
             provider=trace.provider_last,
             cost_usd=trace.cost_usd,
             history_used=len(history),
             agent_steps=trace.final_step or len(trace.steps),
-            agent_trace=trace.steps,
+            agent_trace=redact_tree(trace.steps),
         )
 
     prompt = build_prompt(question=query.q, self_ctx=self_ctx, context=context,
@@ -183,6 +188,6 @@ async def answer(
                        f"таймаут). Нашёл {len(results)} событий.")
         provider, cost = None, 0.0
 
-    return AnswerResponse(answer=answer_text, results=results,
+    return AnswerResponse(answer=redact_view(answer_text), results=results,
                           provider=provider, cost_usd=cost,
                           history_used=len(history))
