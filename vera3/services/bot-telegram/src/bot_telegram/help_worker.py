@@ -61,9 +61,9 @@ ESCALATED_TEXT = "Пока никто не взял, эскалировала do
 REMIND_TEXT = "Срочную просьбу всё ещё никто не взял (20 мин). Посмотри комнату."
 
 
-async def say(send: Send, text: str) -> None:
-    """Распознанная речь в тексте: «<» в ней сломал бы HTML."""
-    await send(escape(text, quote=False), text)
+async def say(send: Send, text: str) -> int:
+    """Распознанная речь в тексте: «<» в ней сломал бы HTML. → id сообщения."""
+    return await send(escape(text, quote=False), text)
 
 
 async def track_help(send: Send, now: datetime) -> int:

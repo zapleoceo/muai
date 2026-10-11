@@ -21,6 +21,7 @@ from vera_shared.room.task_events import record_event
 from vera_shared.room.task_refs import validate_refs
 from vera_shared.room.tasks import TaskNotFound, _locked
 from vera_shared.timeutil import utc_naive_now
+from vera_shared.voice_help.owner_reply import is_denial
 from vera_shared.voice_help.policy import (
     AGENT,
     CONFIRMED_NOTE,
@@ -64,10 +65,11 @@ async def lift_hold(room: str, task_id: str, action: str) -> bool:
         task = await _locked(s, room, task_id)
         if task is None or is_confirmed(task.refs):
             return False
-        answered = (await s.execute(
-            select(a.id).where(a.qid.in_(_our_question(room, task_id)),
-                               a.answered_by == OWNER).limit(1))).first()
-        if answered is None:
+        texts = (await s.execute(
+            select(a.text).where(a.qid.in_(_our_question(room, task_id)),
+                                 a.answered_by == OWNER))).scalars().all()
+        # «нет» владельца — отказ от авторства: удержание остаётся.
+        if not any(not is_denial(t) for t in texts):
             return False
         task.refs = validate_refs([*(task.refs or []),
                                    {"kind": "source", "ref": SOURCE_CONFIRMED}])

@@ -35,7 +35,12 @@ from vera_shared.voice_commands import (
     pending_notifications,
     revive_stale,
 )
-from vera_shared.voice_help.policy import source_uncertain
+from vera_shared.voice_help.owner_reply import (
+    current_revision,
+    link_message,
+    open_question_qid,
+)
+from vera_shared.voice_help.policy import help_room, source_uncertain
 from vera_shared.voice_help.queue_state import WATCHED, hold_command, mark_opened
 from vera_shared.voice_help.room_intake import open_help_task
 
@@ -82,7 +87,17 @@ def _ms(since: datetime | None, now: datetime) -> str:
     return "?" if since is None else f"{(now - since).total_seconds() * 1000:.0f}"
 
 
-async def open_and_notify(send: Send, row: VoiceCommandRow, now: datetime) -> bool:
+async def link_owner_reply(msg_id: int, owner_id: int, task_id: str, revision: int) -> None:
+    """Реплай на это сообщение подтвердит авторство (`vera_shared.voice_help.owner_reply`)."""
+    qid = await open_question_qid(help_room(), task_id)
+    if qid is None:
+        return
+    await link_message(message_id=msg_id, chat_id=owner_id, room=help_room(),
+                       task_id=task_id, qid=qid, revision=revision)
+
+
+async def open_and_notify(send: Send, row: VoiceCommandRow, now: datetime,
+                          owner_id: int) -> bool:
     """Открыть задачу и сообщить владельцу. → неподтверждён ли источник.
 
     Неподтверждённый источник — только задача с пометкой и уведомление:
@@ -96,7 +111,10 @@ async def open_and_notify(send: Send, row: VoiceCommandRow, now: datetime) -> bo
         await mark_opened(row.command_id, task_id, now)
     opened = utc_naive_now()
     if row.acked_at is None:
-        await say(send, opened_text(task_id, row.instruction, uncertain=uncertain))
+        revision = await current_revision(help_room(), task_id) if uncertain else 0
+        msg_id = await say(send, opened_text(task_id, row.instruction, uncertain=uncertain))
+        if uncertain:
+            await link_owner_reply(msg_id, owner_id, task_id, revision)
         await mark_acked(row.command_id)
     log.info("voice-worker: %s очередь→задача %s мс, →уведомление %s мс%s",
              row.command_id, _ms(row.created_at, opened),
@@ -132,7 +150,7 @@ async def process_one(send: Send, owner_id: int) -> bool:
         elif row.answered_at is None:
             if row.help_state in HELP_TO_OPEN:
                 held = True
-                if await open_and_notify(send, row, now):
+                if await open_and_notify(send, row, now, owner_id):
                     await hold_command(row.command_id, now)
                     return True
             elif row.acked_at is None:

@@ -51,3 +51,20 @@ class VoiceCommandRow(Base):
     updated_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now(),
     )
+
+
+class OwnerReplyLinkRow(Base):
+    """Сообщение «Открыл задачу …» → вопрос об авторстве; ответом на него владелец подтверждает."""
+
+    __tablename__ = "owner_reply_links"
+
+    message_id: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    chat_id: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    room: Mapped[str] = mapped_column(String(64), nullable=False)
+    task_id: Mapped[str] = mapped_column(String(128), nullable=False)
+    qid: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    # Последнее событие задачи на момент отправки: сдвинулось — задача ушла вперёд.
+    revision: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now())
+    used_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

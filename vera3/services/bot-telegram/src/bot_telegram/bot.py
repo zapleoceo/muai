@@ -12,7 +12,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
-from bot_telegram import voice_worker
+from bot_telegram import owner_reply, voice_worker
 from bot_telegram.brain import BrainError, ask_brain, save_event
 from bot_telegram.formatting import format_error, format_reply, plain_fallback
 
@@ -82,6 +82,11 @@ async def cmd_stats(message: Message):
         f"Embeddings: <b>{with_emb}</b> ({pct_emb}%)\n"
         f"LLM: через брокер (aib.zapleo.com)"
     )
+
+
+@dp.message(F.reply_to_message, owner_reply.is_linked_reply)
+async def on_owner_reply(message: Message):
+    await owner_reply.handle_owner_reply(message, OWNER_ID)
 
 
 @dp.message(F.text)

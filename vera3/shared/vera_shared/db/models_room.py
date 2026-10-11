@@ -103,6 +103,7 @@ EVENT_KINDS = (
     "created", "claimed", "progress", "heartbeat", "paused", "resumed", "review", "blocked",
     "unblocked", "question", "answered", "ack_answer", "handoff_offer", "handoff_accept",
     "released", "done", "lease_expired", "watchdog_action", "waiting",
+    "owner_confirmed",
 )
 _KINDS_SQL = ", ".join(f"'{k}'" for k in EVENT_KINDS)
 
