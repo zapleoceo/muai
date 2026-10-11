@@ -57,7 +57,7 @@ async def search(
     except SearchUnavailable as e:
         raise RuntimeError(e.detail) from e
     results = [{**r, "content_preview": redact_view(r["content_preview"])}
-               if isinstance(r.get("content_preview"), str) else r
+               if isinstance(r, dict) and isinstance(r.get("content_preview"), str) else r
                for r in data.get("results") or []]
     return {"results": results[:limit], "count": min(len(results), limit),
             "truncated": len(results) > limit}

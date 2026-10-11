@@ -15,28 +15,61 @@ MASK = "[скрыто]"
 _B = r"(?<![A-Za-z0-9_-])"
 _KEYS = re.compile(
     rf"{_B}(?:gh[pousr]_[A-Za-z0-9]{{20,255}}|github_pat_[A-Za-z0-9_]{{20,255}}"
-    rf"|xox[abprs]-[A-Za-z0-9-]{{10,255}}|sk-[A-Za-z0-9_-]{{16,255}}"
+    rf"|xox[abprs]-[A-Za-z0-9-]{{10,255}}|xapp-[A-Za-z0-9-]{{10,255}}|sk-[A-Za-z0-9_-]{{16,255}}"
+    rf"|glpat-[A-Za-z0-9_-]{{20,255}}|[sr]k_(?:live|test)_[A-Za-z0-9]{{16,255}}"
+    rf"|AIza[0-9A-Za-z_-]{{35}}"
     rf"|(?:AKIA|ASIA)[0-9A-Z]{{16}}(?![A-Za-z0-9])"
     rf"|eyJ[A-Za-z0-9_-]{{5,2000}}\.eyJ[A-Za-z0-9_-]{{5,2000}}\.[A-Za-z0-9_-]{{5,2000}})")
-# Без END (обрезанный превью) маскируются только строки чисто из base64.
+# Бот-токен Telegram: допустим префикс `bot` в URL, поэтому якорь только по цифрам.
+_TG = re.compile(r"(?<![0-9])[0-9]{6,12}:AA[A-Za-z0-9_-]{30,255}")
+# NL: настоящий перевод строки или литерал "\n" (JSON). Без END (обрезанный превью)
+# маскируются только заголовки и строки чисто из base64: проза после не съедается.
+_NL = r"(?:\r?\n|\\n)"
 _PEM = re.compile(
-    r"-----BEGIN [A-Z ]{0,20}PRIVATE KEY-----[ \t]*\r?\n?"
-    r"(?:[A-Za-z0-9+/=]{1,200}[ \t]*(?:\r?\n|$)){0,400}"
+    r"-----BEGIN [A-Z ]{0,20}PRIVATE KEY-----[ \t]*" + _NL + r"?"
+    r"(?:[A-Za-z][A-Za-z0-9-]{0,30}:[^\r\n\\]{0,200}" + _NL + r"){0,6}"
+    + _NL + r"?"
+    r"(?:[A-Za-z0-9+/=]{1,4000}[ \t]*(?:" + _NL + r"|$)){0,400}"
     r"(?:-----END [A-Z ]{0,20}PRIVATE KEY-----)?")
+_LABELS = r"token|secret|password|passwd|пароль|токен|секрет|api[_-]?key"
 _LABEL = re.compile(
-    r"(?i)((?<![^\W_])(?:token|secret|password|пароль|api[_-]?key)[\"']?\s*[:=]\s*[\"']?)"
-    r"[^\s\"',;&]{8,500}")
-_NAMES = (r"access[-_]?token|refresh[-_]?token|id[-_]?token|token|api[-_]?key|key|sig|signature"
+    rf"(?i)((?<![^\W_])(?:{_LABELS})(?:[ \t]+[\w.@-]{{1,40}}){{0,3}}[\"']?\s*[:=]\s*[\"']?)"
+    r"(?!(?:null|none|true|false)(?![\w]))[^\s\"',;&]{4,500}")
+_AUTH = re.compile(
+    r"(?i)((?<![^\W_])authorization[\"']?\s*[:=]\s*[\"']?(?:(?:bearer|basic|token)[ \t]+)?)"
+    r"[^\s\"',;]{4,2000}")
+_BEARER = re.compile(r"(?i)(\bbearer[ \t]+)[A-Za-z0-9._~+/=-]{16,2000}")
+_ENV = re.compile(
+    r"((?<![A-Za-z0-9_])(?:(?:[A-Z][A-Z0-9]*_)*(?:SECRET(?:_KEY)?|TOKEN|PASSWORD|PASSWD|API_KEY)"
+    r"|aws_secret_access_key|passwd)[\"']?[ \t]*=[ \t]*[\"']?)[^\s\"',;&]{4,500}")
+_NAMES = (r"access[-_]?token|refresh[-_]?token|id[-_]?token|token|api[-_]?key|sig|signature"
           r"|secret|password|pwd|auth|client[-_]?secret|session|session[-_]?id"
           r"|x-amz-(?:signature|credential|security-token)")
 _PARAM = re.compile(rf"(?i)((?<=[?&#;])(?:{_NAMES})=)[^&#\s\"'<>]+")
+# `key=` в URL — и просто id страницы (`?key=page2`); маскируется лишь похожее на ключ.
+_KEY_PARAM = re.compile(
+    r"(?i)((?<=[?&#;])key=)(?:AIza[0-9A-Za-z_-]{35}|[A-Za-z0-9_-]{20,500})(?=[&#\s\"'<>]|$)")
 _CHUNK = re.compile(r"[?#][^\s\"'<>]{1,4000}")
 _CODE = re.compile(r"(?i)((?<=[?&#;])code=)[^&#\s\"'<>]+")
 _OAUTH_CTX = re.compile(r"(?i)(?:^|[?&])(?:state|redirect_uri)=")
 _USERINFO = re.compile(
-    r"((?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]{0,20}://[^\s:/@]{1,200}:)[^\s/@]{1,500}(?=@)")
+    r"((?<![A-Za-z0-9+.-])[A-Za-z][A-Za-z0-9+.-]{0,20}://[^\s:/@]{0,200}:)[^\s/@]{1,500}(?=@)")
 
-_SECRET_KEYS = frozenset({"authorization", "cookie", "password", "secret", "token", "api_key"})
+# Ключ секретный, если после нормализации (camelCase -> snake, `-` -> `_`, нижний
+# регистр) равен имени или кончается на `_<имя>` (граница сегмента): `x-api-key`,
+# `accessToken`, `Set-Cookie` да; `token_count`, `max_tokens`, `secret_santa` нет.
+_SECRET_NAMES = ("secret", "client_secret", "token", "access_token", "refresh_token",
+                 "id_token", "api_key", "x_api_key", "apikey", "password", "passwd",
+                 "private_key", "authorization", "cookie", "credentials")
+_SECRET_SUFFIXES = tuple("_" + n for n in _SECRET_NAMES)
+_CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
+
+
+def _is_secret_key(key: object) -> bool:
+    if not isinstance(key, str):
+        return False
+    norm = _CAMEL.sub("_", key).lower().replace("-", "_")
+    return norm in _SECRET_NAMES or norm.endswith(_SECRET_SUFFIXES)
 
 
 def _mask_code(m: re.Match[str]) -> str:
@@ -51,8 +84,9 @@ def redact_view(text: str) -> str:
         return text
     out = _PEM.sub(MASK, text)
     out = _KEYS.sub(MASK, out)
-    out = _LABEL.sub(rf"\g<1>{MASK}", out)
-    out = _PARAM.sub(rf"\g<1>{MASK}", out)
+    out = _TG.sub(MASK, out)
+    for rx in (_AUTH, _BEARER, _ENV, _LABEL, _PARAM, _KEY_PARAM):
+        out = rx.sub(rf"\g<1>{MASK}", out)
     out = _CHUNK.sub(_mask_code, out)
     return _USERINFO.sub(rf"\g<1>{MASK}", out)
 
@@ -71,7 +105,7 @@ def redact_tree(obj: Any) -> Any:
     if isinstance(obj, str):
         return redact_view(obj)
     if isinstance(obj, dict):
-        return {k: (_mask_leaves(v) if isinstance(k, str) and k.lower() in _SECRET_KEYS
+        return {k: (_mask_leaves(v) if _is_secret_key(k)
                     else redact_tree(v)) for k, v in obj.items()}
     if isinstance(obj, list | tuple):
         return [redact_tree(v) for v in obj]
