@@ -5,14 +5,13 @@ import os
 from datetime import datetime
 
 import pytest
+from brain_search.query_parse import ProjectScope
+from brain_search.retrieval import _exact_rows, _primary
+from brain_search.rows import Candidate
+from brain_search.title_rows import fetch_title_rows
 from sqlalchemy import text
 from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import create_async_engine
-
-from brain_search.retrieval import _exact_rows, _primary
-from brain_search.rows import Candidate
-from brain_search.query_parse import ProjectScope
-from brain_search.title_rows import fetch_title_rows
 
 pytestmark = pytest.mark.skipif(not os.environ.get("RUN_INTEGRATION_TESTS"),
                                reason="Requires a local PostgreSQL test database")

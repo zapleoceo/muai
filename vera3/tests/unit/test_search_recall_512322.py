@@ -6,7 +6,6 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
-
 from brain_search import pipeline, retrieval, synthesis
 from brain_search.models import AnswerResponse, SearchQuery
 from brain_search.query_parse import explicit_title, parse_time_range, resolve_project

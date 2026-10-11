@@ -511,6 +511,9 @@ processing is paused/paced.
   question. Both paths preserve visibility, source and structured link filters;
   the stored timestamp is the evidence for any date claim. A missing search
   result does not prove absence from the original source.
+  Parser `query_parse.explicit_title` enables the scoped lookup;
+  `title_rows.fetch_title_rows` and `title_rows.merge_title_rows` insert its
+  candidate before synthesis.
 - `source_url` in search results uses only an existing Slack
   `events.metadata.permalink` whose HTTPS host and channel/timestamp match
   the stored source ID. Missing or mismatched permalinks return `null`: the
