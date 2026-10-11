@@ -1,8 +1,4 @@
-"""Миграция 056 на живом Postgres: вид события, режимы блокировок, откат по lock_timeout.
-
-Деструктивный откат (удаление событий + возврат CHECK к 19 видам) живёт ТОЛЬКО здесь и
-годится только для тестовой БД: на проде откат — ROOM_ATTEST_ENABLED=0, журнал остаётся.
-"""
+"""Миграция 056 на Postgres: сохранение audit, блокировки и lock_timeout."""
 from __future__ import annotations
 
 import os
@@ -52,20 +48,17 @@ async def engine(pg_schema_reset):
         await conn.execute(sa_text(
             "CREATE TABLE IF NOT EXISTS schema_migrations ("
             "version text PRIMARY KEY, note text, applied_at timestamp DEFAULT now())"))
-        await _test_db_only_rollback(conn)
+        await _establish_previous_constraint(conn)
     yield eng
     await eng.dispose()
 
 
-async def _test_db_only_rollback(conn) -> None:
-    """TEST DB ONLY — не применять на проде: стирает события нового вида."""
-    await conn.execute(sa_text(f"DELETE FROM room_task_events WHERE kind = '{NEW_KIND}'"))
+async def _establish_previous_constraint(conn) -> None:
+    """Пустая тестовая схема начинает с прежних 19 значений CHECK."""
     await conn.execute(sa_text(f"ALTER TABLE room_task_events DROP CONSTRAINT IF EXISTS {CONSTRAINT}"))
     kinds = ", ".join(f"'{k}'" for k in OLD_KINDS)
     await conn.execute(sa_text(
         f"ALTER TABLE room_task_events ADD CONSTRAINT {CONSTRAINT} CHECK (kind IN ({kinds}))"))
-    await conn.execute(sa_text("DELETE FROM schema_migrations "
-                               "WHERE version = '056_delegated_attestation_event'"))
 
 
 async def _kinds_in_constraint(conn) -> set[str]:
@@ -92,7 +85,7 @@ async def _run(conn, stmts: list[str]) -> None:
         await conn.exec_driver_sql(stmt)
 
 
-async def test_up_adds_kind_and_test_only_rollback_restores_19(engine):
+async def test_up_and_reapply_preserve_audit_and_expanded_check(engine):
     assert len(OLD_KINDS) == 19
     async with engine.connect() as c:
         trans = await c.begin()
@@ -109,12 +102,14 @@ async def test_up_adds_kind_and_test_only_rollback_restores_19(engine):
             "SELECT 1 FROM schema_migrations "
             "WHERE version = '056_delegated_attestation_event'"))).first()
         assert row is not None
+    for step in _steps():
+        async with engine.begin() as c:
+            await _run(c, step)
     async with engine.begin() as c:
-        await _test_db_only_rollback(c)
-        assert await _kinds_in_constraint(c) == set(OLD_KINDS)
+        assert await _kinds_in_constraint(c) == {*OLD_KINDS, NEW_KIND}
         left = (await c.execute(sa_text(
             f"SELECT count(*) FROM room_task_events WHERE kind = '{NEW_KIND}'"))).scalar_one()
-        assert left == 0
+        assert left == 1
 
 
 async def test_lock_modes_observed(engine, capsys):

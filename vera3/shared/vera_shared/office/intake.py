@@ -40,6 +40,7 @@ from vera_shared.room import questions
 from vera_shared.room.messages import post_message
 from vera_shared.room.tasks import _locked, open_task
 from vera_shared.timeutil import utc_naive_now
+from vera_shared.voice_help.attest_state import is_attested
 from vera_shared.voice_help.policy import attest_recipient_blocked
 
 TASK_PREFIX = "vb-"
@@ -236,7 +237,9 @@ async def _item(o: Any, t: RoomTaskRow) -> dict[str, Any]:
     async with get_session() as s:
         revision = await repo.revision_of(s, t.room, t.task_id)
         result = await repo.result_text_of(s, t.room, t.task_id) if t.status == "done" else None
-    withheld = attest_recipient_blocked(t.refs, (o.result_recipient or {}).get("channel"))
+    withheld = attest_recipient_blocked(
+        t.refs, (o.result_recipient or {}).get("channel"),
+        attested=await is_attested(t.room, t.task_id))
     if withheld:
         result = None
     open_q = [{"question_id": q["qid"], "text": q["question"]}

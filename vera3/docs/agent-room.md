@@ -460,10 +460,13 @@ watchdog.py`): кандидаты — задачи `in_progress`/`blocked` с д
 - **Вход.** `expected_revision` (id последнего события задачи), `evidence_message_id`,
   `evidence_at` (ISO), `quoted_text` (≤500, секреты скрываются), `classification` строго
   `owner_direct_in_dot_chat`, `idempotency_key`.
-- **Границы (`invalid_scope`).** Задача — голосовая просьба, не закрыта; вопрос — вопрос
-  авторства от `vera` и открыт; исходная просьба прошла `attest_unsafe_reason` из
-  `voice_help/policy.py`: простая просьба ответить владельцу текстом (не длиннее 200 символов,
-  без третьих лиц, запросов данных, внешних действий и денег).
+- **Границы (`invalid_scope`).** Задача точно связана с одной исходной voice command, не
+  закрыта; вопрос авторства от `vera` открыт. Сервер принимает только буквальную просьбу
+  `ответь [мне] [словом] <одно слово>` (включая вступление «Вера, мне нужна помощь»).
+  Любой другой синтаксис отклоняется, в том числе запросы данных и составные действия.
+  Разрешённое слово записывается в audit и `next_action`; сам `next_action` не является
+  источником политики. Исходный текст читается из события `voice_command` с точным
+  `source_event_id`; очередь может очистить свой экземпляр текста после первого захвата.
 - **Запись.** Одна транзакция под блокировкой задачи: ответ `dot-attested`, событие
   `delegated_attestation` (вид добавлен миграцией `056_delegated_attestation_event.sql`),
   refs `source_attested_by_dot` и `attest_scope: text_reply_owner` (`hold.lift_attested`),
@@ -472,15 +475,18 @@ watchdog.py`): кандидаты — задачи `in_progress`/`blocked` с д
 - **Идемпотентность.** Тот же ключ и тот же запрос — повтор результата; тот же ключ с другим
   запросом или второе подтверждение того же вопроса — `conflict`; устаревшая ревизия — `conflict`.
 - **Результат только владельцу.** При обоих refs диспетчер (`bot_telegram/dispatcher.py`,
-  `_attempt`) блокирует задачу, если `result_recipient` не `owner`/`voice`, а office intake
-  (`office/intake.py`, `_item`) не отдаёт `result` (`result_withheld`).
+  `_attempt`) блокирует задачу, если `result_recipient` отсутствует либо не `owner`/`voice`, а office intake
+  (`office/intake.py`, `_item`) не отдаёт `result` (`result_withheld`). Оба пути дополнительно
+  читают неизменяемое событие `delegated_attestation`: удаление refs не снимает ограничение.
 - **Откат на проде** — `ROOM_ATTEST_ENABLED=0`; вид события, CHECK и события остаются как аудит.
-  Деструктивный откат есть только в тесте `tests/integration/test_attest_migration_pg.py`
-  (только тестовая БД). Миграция: DROP/ADD CHECK `NOT VALID` берёт ACCESS EXCLUSIVE на
-  `room_task_events` (короткая транзакция, `lock_timeout 5s`), VALIDATE — отдельной транзакцией.
+  Тест повторного применения миграции сохраняет audit events и расширенный CHECK.
+  Миграция: DROP/ADD CHECK `NOT VALID` берёт ACCESS EXCLUSIVE на `room_task_events`
+  (короткая транзакция, `lock_timeout 5s`), VALIDATE — отдельной транзакцией с тем же timeout.
 
 Имена кода: исключения сервиса `vera_shared.voice_help.attest` — `AttestError` (база, поле
 `code`), `AttestForbidden`, `AttestDisabled`, `InvalidScope`, `InvalidAttestation`,
 `AttestConflict`; функции политики `attest_limited` (обе пометки на месте) и
-`attest_recipient_blocked` (результат не владельцу). MCP-обёртка переводит исключение в
+`attest_recipient_blocked` (результат не владельцу), `attest_reply_text` (точный шаблон),
+`attested_action` (текст допустимого действия), `attest_state.is_attested` (audit).
+MCP-обёртка переводит исключение в
 ошибку вида `код: сообщение`.

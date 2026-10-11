@@ -30,6 +30,7 @@ from vera_shared.voice_help.policy import (
     SOURCE_ATTESTED,
     SOURCE_CONFIRMED,
     UNCERTAIN_QUESTION,
+    attested_action,
 )
 
 
@@ -82,7 +83,7 @@ async def lift_hold(room: str, task_id: str, action: str) -> bool:
         return True
 
 
-async def lift_attested(s: AsyncSession, task: RoomTaskRow) -> None:
+async def lift_attested(s: AsyncSession, task: RoomTaskRow, reply: str) -> None:
     """Подтверждение через dot: ref `source_attested_by_dot` и ограниченный next_action.
 
     `source_confirmed` не ставится: исполнитель должен видеть, что это не слово владельца.
@@ -93,7 +94,7 @@ async def lift_attested(s: AsyncSession, task: RoomTaskRow) -> None:
            if r not in have]
     if add:
         task.refs = validate_refs([*(task.refs or []), *add])
-    task.next_action = ATTESTED_ACTION
+    task.next_action = attested_action(reply)
     task.updated_at = utc_naive_now()
     await record_event(s, room=task.room, task_id=task.task_id, kind="progress", agent=AGENT,
                        text=ATTESTED_ACTION, data={"ref": SOURCE_ATTESTED})

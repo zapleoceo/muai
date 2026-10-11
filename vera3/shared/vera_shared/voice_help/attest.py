@@ -17,6 +17,7 @@ from typing import Any
 from sqlalchemy import select
 
 from vera_shared.db.engine import get_session
+from vera_shared.db.models import EventRow
 from vera_shared.db.models_room import RoomTaskEventRow, RoomTaskQuestionRow
 from vera_shared.db.models_voice import VoiceCommandRow
 from vera_shared.office.repository import revision_of
@@ -25,7 +26,12 @@ from vera_shared.room import questions
 from vera_shared.room.task_events import record_event
 from vera_shared.room.tasks import TaskNotFound, _locked
 from vera_shared.voice_help.hold import lift_attested
-from vera_shared.voice_help.policy import AGENT, UNCERTAIN_QUESTION, attest_unsafe_reason
+from vera_shared.voice_help.policy import (
+    AGENT,
+    UNCERTAIN_QUESTION,
+    attest_reply_text,
+    help_task_id,
+)
 
 ATTESTED_BY = "dot-attested"
 CLASSIFICATION = "owner_direct_in_dot_chat"
@@ -75,9 +81,11 @@ def _clean_quote(evidence_message_id: str, evidence_at: str, quoted_text: str,
         if not v or len(v) > MAX_ID:
             raise InvalidAttestation(f"{name} must be 1..{MAX_ID} characters")
     try:
-        datetime.fromisoformat(evidence_at)
+        when = datetime.fromisoformat(evidence_at)
     except ValueError:
         raise InvalidAttestation("evidence_at must be an ISO timestamp") from None
+    if when.tzinfo is None or when.utcoffset() is None:
+        raise InvalidAttestation("evidence_at must include a timezone")
     quote = redact_secrets(quoted_text.strip())
     if not quote or len(quote) > MAX_QUOTE:
         raise InvalidAttestation(f"quoted_text must be 1..{MAX_QUOTE} characters")
@@ -96,14 +104,28 @@ async def _prior(s: Any, room: str, task_id: str, qid: int) -> RoomTaskEventRow 
     return next((r for r in rows if (r.data or {}).get("qid") == qid), None)
 
 
-async def _check_instruction(s: Any, refs: list[dict[str, str]]) -> None:
-    command_id = next((r["ref"] for r in refs if r.get("kind") == "voice_command"), None)
+async def _check_instruction(s: Any, task_id: str,
+                             refs: list[dict[str, str]]) -> str:
+    command_ids = [r["ref"] for r in refs if r.get("kind") == "voice_command"]
+    if len(command_ids) != 1 or help_task_id(command_ids[0]) != task_id:
+        raise InvalidScope("voice command does not match this task")
+    command_id = command_ids[0]
     row = await s.get(VoiceCommandRow, command_id) if command_id else None
-    if row is None or not row.instruction:
+    if row is None or row.task_id != task_id or row.event_id is None:
         raise InvalidScope("original voice instruction not found")
-    reason = attest_unsafe_reason(redact_secrets(row.instruction or ""))
-    if reason:
-        raise InvalidScope(f"instruction is not a plain text reply to the owner ({reason})")
+    event = await s.get(EventRow, row.event_id)
+    prefix = "Голосовое поручение Вере: "
+    if (event is None or event.source != "voice_command"
+            or event.source_event_id != command_id or event.category != "command"
+            or not event.content_text.startswith(prefix)):
+        raise InvalidScope("original voice event does not match this command")
+    instruction = event.content_text[len(prefix):]
+    if row.instruction and row.instruction != instruction:
+        raise InvalidScope("voice queue and source event disagree")
+    reply = attest_reply_text(redact_secrets(instruction))
+    if reply is None:
+        raise InvalidScope("instruction is not a literal one-word reply to the owner")
+    return reply
 
 
 async def attest(*, principal: str, room: str, task_id: str, qid: int,
@@ -143,19 +165,20 @@ async def attest(*, principal: str, room: str, task_id: str, qid: int,
             raise InvalidScope("not the authorship question of this task")
         if q.status != "open":
             raise InvalidScope(f"question is {q.status}")
-        await _check_instruction(s, task.refs or [])
+        reply = await _check_instruction(s, task_id, task.refs or [])
         current = await revision_of(s, room, task_id)
         if current != expected_revision:
             raise AttestConflict(f"revision is {current}, expected {expected_revision}")
         await questions.answer(room=room, task_id=task_id, qid=qid, by=ATTESTED_BY, s=s,
                                text=f"Подтверждено через dot: {quote}")
-        await lift_attested(s, task)
+        await lift_attested(s, task, reply)
         await record_event(
             s, room=room, task_id=task_id, kind="delegated_attestation", agent=principal,
             text=quote, data={
                 "qid": qid, "evidence_message_id": evidence_message_id,
                 "evidence_at": evidence_at, "quoted_text": quote,
                 "classification": classification, "attested_by": principal,
+                "allowed_reply": reply,
                 "revision": current, "idempotency_key": idempotency_key,
                 "payload_hash": digest})
         return {"ok": True, "replayed": False, "qid": qid, "revision": current}

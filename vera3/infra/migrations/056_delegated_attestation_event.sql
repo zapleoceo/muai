@@ -25,6 +25,8 @@ COMMIT;
 
 BEGIN;
 
+SET LOCAL lock_timeout = '5s';
+
 ALTER TABLE room_task_events VALIDATE CONSTRAINT ck_room_task_events_kind;
 
 INSERT INTO schema_migrations (version, note)

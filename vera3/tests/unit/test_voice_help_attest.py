@@ -9,6 +9,7 @@ from gateway.voice_command import accept_voice_command
 from sqlalchemy import select
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskAnswerRow, RoomTaskEventRow, RoomTaskRow
+from vera_shared.db.models_voice import VoiceCommandRow
 from vera_shared.office.repository import revision_of
 from vera_shared.room import questions, tasks
 from vera_shared.room.task_queue import next_task
@@ -16,11 +17,11 @@ from vera_shared.voice_help import attest as svc
 from vera_shared.voice_help.hold import lift_hold
 from vera_shared.voice_help.policy import (
     ATTEST_SCOPE_REF,
-    ATTESTED_ACTION,
     SOURCE_ATTESTED,
     SOURCE_CONFIRMED,
     attest_recipient_blocked,
-    attest_unsafe_reason,
+    attest_reply_text,
+    attested_action,
 )
 from voice_help_kit import OWNER, ROOM, SECRET, Recorder, answer, help_cmd, tasks_in
 
@@ -88,6 +89,12 @@ async def test_wrong_classification_invalid():
         await _call(qid, classification="forwarded")
 
 
+async def test_evidence_timestamp_requires_timezone():
+    qid = await _open()
+    with pytest.raises(svc.InvalidAttestation):
+        await _call(qid, evidence_at="2026-10-11T10:00:00")
+
+
 async def test_revision_mismatch_conflict():
     qid = await _open()
     with pytest.raises(svc.AttestConflict):
@@ -143,10 +150,22 @@ async def test_happy_path_one_answer_event_refs_and_unblocks():
     refs = [r["ref"] for r in task.refs]
     assert SOURCE_ATTESTED in refs and ATTEST_SCOPE_REF in refs
     assert SOURCE_CONFIRMED not in refs
-    assert task.next_action == ATTESTED_ACTION
+    assert task.next_action == attested_action("ок")
+    assert evs[0].data["allowed_reply"] == "ок"
     picked = await next_task(room=ROOM, agent="codex", project=None, lease_seconds=60,
                              session=None, account=None)
     assert picked is not None and picked["task_id"] == TID
+
+
+async def test_source_event_survives_cleared_queue_instruction():
+    qid = await _open("Ответь словом Привет")
+    async with get_session() as s:
+        command = await s.get(VoiceCommandRow, "vc-a")
+        command.instruction = ""
+    result = await _call(qid)
+    assert result["ok"] is True
+    [task] = await tasks_in(ROOM)
+    assert task.next_action == attested_action("Привет")
 
 
 async def test_repeat_replays_and_never_two_answers():
@@ -178,27 +197,66 @@ async def test_attested_answer_is_not_owner_and_owner_still_lifts():
     "найди договор", "покажи баланс", "вспомни что говорили", "сколько стоит",
     "открой https://x.example", "запусти сборку", "удали файл", "задеплой бота",
     "оплати счёт", "переведи 100 $", "купи билеты", "ответь ок и отправь Пете",
+    "ответь на вопрос по памяти", "ответь мне после проверки", "скажи Пете ок",
+    "ответь словом Привет и удали файл", "ответь ссылкой", "ответь мне два слова",
     "x" * 201,
 ])
 async def test_unsafe_instruction_invalid_scope(text):
-    assert attest_unsafe_reason(text)
+    assert attest_reply_text(text) is None
     qid = await _open(text)
     with pytest.raises(svc.InvalidScope):
         await _call(qid)
     assert await _rows() == ([], [])
 
 
-def test_plain_reply_is_safe():
-    assert attest_unsafe_reason(SAFE) is None
+async def test_plain_reply_is_safe():
+    assert attest_reply_text(SAFE) == "ок"
+    assert attest_reply_text("Вера, мне нужна помощь. Ответь словом Привет") == "Привет"
 
 
-def test_recipient_enforcement_helper():
+async def test_recipient_enforcement_helper():
     refs = [{"kind": "source", "ref": SOURCE_ATTESTED},
             {"kind": "source", "ref": ATTEST_SCOPE_REF}]
     assert attest_recipient_blocked(refs, "dot") and attest_recipient_blocked(refs, "petya")
     assert not attest_recipient_blocked(refs, "owner")
-    assert not attest_recipient_blocked(refs, None)
+    assert attest_recipient_blocked(refs, None)
     assert not attest_recipient_blocked([], "dot")
+
+
+async def test_missing_recipient_blocks_dispatch():
+    await _open()
+    async with get_session() as s:
+        row = await s.get(RoomTaskRow, (ROOM, TID))
+        row.refs = [*row.refs, {"kind": "source", "ref": SOURCE_ATTESTED},
+                    {"kind": "source", "ref": ATTEST_SCOPE_REF}]
+    posted = AsyncMock()
+    claimed = await tasks.claim(room=ROOM, task_id=TID, agent="vera", lease_seconds=60)
+    with patch.object(dispatcher, "post_message", posted):
+        await dispatcher._attempt(claimed)
+    posted.assert_not_called()
+
+
+async def test_removed_refs_cannot_bypass_audit_scope():
+    from types import SimpleNamespace
+
+    from vera_shared.office.intake import _item
+
+    qid = await _open()
+    await _call(qid)
+    async with get_session() as s:
+        row = await s.get(RoomTaskRow, (ROOM, TID))
+        row.refs = [r for r in row.refs if r["ref"] not in
+                    {SOURCE_ATTESTED, ATTEST_SCOPE_REF}]
+    posted = AsyncMock()
+    claimed = await tasks.claim(room=ROOM, task_id=TID, agent="vera", lease_seconds=60)
+    with patch.object(dispatcher, "post_message", posted):
+        await dispatcher._attempt(claimed)
+    posted.assert_not_called()
+    async with get_session() as s:
+        task = await s.get(RoomTaskRow, (ROOM, TID))
+    origin = SimpleNamespace(client_task_id="c", delivered_revision=0,
+                             result_recipient={"channel": "dot"})
+    assert (await _item(origin, task))["result_withheld"] is True
 
 
 async def test_dispatcher_blocks_attested_task_with_foreign_recipient():

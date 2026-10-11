@@ -27,6 +27,7 @@ from vera_shared.redact import redact_secrets
 from vera_shared.room import task_queue, task_wait, tasks
 from vera_shared.room.messages import has_reply, post_message
 from vera_shared.timeutil import parse_iso_naive, utc_naive_now
+from vera_shared.voice_help.attest_state import is_attested
 from vera_shared.voice_help.policy import (
     AGENT,
     DEFAULT_PROJECT,
@@ -98,7 +99,9 @@ async def _delivered(task: dict[str, Any]) -> bool:
 async def _attempt(task: dict[str, Any]) -> None:
     """Одна попытка доставки под живой арендой: пост, refs, ожидание квитанции."""
     refs = task["refs"]
-    if attest_recipient_blocked(refs, _ref_value(refs, RECIPIENT_PREFIX)):
+    if attest_recipient_blocked(
+            refs, _ref_value(refs, RECIPIENT_PREFIX),
+            attested=await is_attested(task["room"], task["task_id"])):
         await tasks.release(room=task["room"], task_id=task["task_id"], agent=AGENT,
                             fencing_token=task["fencing_token"], status="blocked",
                             note=ATTEST_BLOCKED_NOTE)
