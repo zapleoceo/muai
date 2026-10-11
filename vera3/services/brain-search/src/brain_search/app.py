@@ -38,6 +38,7 @@ from brain_search.identifiers import (
 from brain_search.models import AnswerResponse, SearchQuery
 from brain_search.pipeline import embed_query, explicit_event_ids, query_terms
 from brain_search.query_parse import (
+    explicit_title,
     is_summary_query,
     parse_time_range,
     resolve_project,
@@ -153,10 +154,14 @@ async def search(
     eff_limit = max(query.limit, SUMMARY_MIN_LIMIT) if summary else query.limit
 
     identifiers = exact_identifiers(query.q)
+    title = explicit_title(query.q)
     found = await fetch_candidates(
-        ts_query=ts, acc_words=acc_words, time_range=time_range,
-        project=project, q_vec=q_vec, limit=eff_limit, links=await _link_scope(query),
+        ts_query=ts, acc_words=acc_words,
+        time_range=None if exact_ids else time_range,
+        project=None if exact_ids else project,
+        q_vec=q_vec, limit=eff_limit, links=await _link_scope(query),
         exact_event_ids=exact_ids, tickets=identifiers,
+        title=title,
     )
 
     if is_identifier_only(query.q, identifiers) and not has_exact_rows(found.rows):
@@ -165,6 +170,12 @@ async def search(
     if exact_ids and not found.rows:
         return AnswerResponse(
             answer="Указанное событие не найдено среди доступных записей. Это не доказывает, что события не существует в источнике или что поиск охватывает все данные.",
+            results=[], provider=None, cost_usd=0,
+        )
+
+    if title and time_range and not exact_ids and not found.title_found:
+        return AnswerResponse(
+            answer="Письмо с указанной точной темой не найдено среди доступных записей за этот период. Это не доказывает, что письма нет в исходном ящике или вне выбранного периода.",
             results=[], provider=None, cost_usd=0,
         )
 
@@ -178,5 +189,5 @@ async def search(
     return await synthesize(
         query, found.rows, q_vec,
         acc_words=found.acc_words, summary=summary, eff_limit=eff_limit,
-        project=project.name if project else None,
+        project=project.name if project and not exact_ids else None,
     )
