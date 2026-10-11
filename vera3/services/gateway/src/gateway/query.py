@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field
 from vera_shared.events.queries import recent_events as query_recent_events
 from vera_shared.graph.context import RELATIONSHIPS_LIMIT, entity_context_payload
 from vera_shared.graph.repo import find_entity_by_name
+from vera_shared.redact_view import redact_tree, redact_view
 from vera_shared.search_client import SearchUnavailable, search_brain
 
 from gateway.auth import check_internal_secret
@@ -31,6 +32,19 @@ class SearchProxyRequest(BaseModel):
     use_agent: bool = False
 
 
+def _redact_search(data: dict[str, Any]) -> dict[str, Any]:
+    out = dict(data)
+    if isinstance(out.get("answer"), str):
+        out["answer"] = redact_view(out["answer"])
+    if isinstance(out.get("agent_trace"), list):
+        out["agent_trace"] = redact_tree(out["agent_trace"])
+    if isinstance(out.get("results"), list):
+        out["results"] = [{**r, "content_preview": redact_view(r["content_preview"])}
+                          if isinstance(r, dict) and isinstance(r.get("content_preview"), str)
+                          else r for r in out["results"]]
+    return out
+
+
 @router.post("/v1/search")
 async def search_proxy(
     body: SearchProxyRequest,
@@ -39,10 +53,11 @@ async def search_proxy(
     check_internal_secret(x_internal_secret)
     settings = get_settings()
     try:
-        return await search_brain(settings.search_url, settings.internal_secret,
+        data = await search_brain(settings.search_url, settings.internal_secret,
                                   body.q, body.limit, body.use_agent)
     except SearchUnavailable as e:
         raise HTTPException(e.status, e.detail) from e
+    return _redact_search(data)
 
 
 @router.get("/v1/events/recent")
@@ -54,7 +69,7 @@ async def recent_events(
     check_internal_secret(x_internal_secret)
     events, truncated = await query_recent_events(
         hours=hours, limit=RECENT_EVENTS_LIMIT, source=source)
-    return {"count": len(events), "truncated": truncated, "events": events}
+    return {"count": len(events), "truncated": truncated, "events": redact_tree(events)}
 
 
 @router.get("/v1/entity/context")
