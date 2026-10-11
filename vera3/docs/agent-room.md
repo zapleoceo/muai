@@ -470,7 +470,9 @@ watchdog.py`): кандидаты — задачи `in_progress`/`blocked` с д
 - **Запись.** Одна транзакция под блокировкой задачи: ответ `dot-attested`, событие
   `delegated_attestation` (вид добавлен миграцией `056_delegated_attestation_event.sql`),
   refs `source_attested_by_dot` и `attest_scope: text_reply_owner` (`hold.lift_attested`),
-  `next_action` с ограничением. `source_confirmed` НЕ ставится; `lift_hold` по-прежнему ждёт
+  `next_action` с ограничением, `auto_pickup=false` только для этой карточки. Исполнитель
+  берёт её явно после сверки квитанции; автодиспетчер не повторяет уже отправленный ответ.
+  `source_confirmed` НЕ ставится; `lift_hold` по-прежнему ждёт
   только `owner`, так что позднее слово владельца поднимет задачу до обычной.
 - **Идемпотентность.** Тот же ключ и тот же запрос — повтор результата; тот же ключ с другим
   запросом или второе подтверждение того же вопроса — `conflict`; устаревшая ревизия — `conflict`.

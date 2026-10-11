@@ -151,10 +151,13 @@ async def test_happy_path_one_answer_event_refs_and_unblocks():
     assert SOURCE_ATTESTED in refs and ATTEST_SCOPE_REF in refs
     assert SOURCE_CONFIRMED not in refs
     assert task.next_action == attested_action("ок")
+    assert task.auto_pickup is False
     assert evs[0].data["allowed_reply"] == "ок"
     picked = await next_task(room=ROOM, agent="codex", project=None, lease_seconds=60,
                              session=None, account=None)
-    assert picked is not None and picked["task_id"] == TID
+    assert picked is None
+    explicit = await tasks.claim(room=ROOM, task_id=TID, agent="codex", lease_seconds=60)
+    assert explicit["task_id"] == TID
 
 
 async def test_source_event_survives_cleared_queue_instruction():

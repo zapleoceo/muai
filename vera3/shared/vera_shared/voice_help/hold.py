@@ -94,6 +94,7 @@ async def lift_attested(s: AsyncSession, task: RoomTaskRow, reply: str) -> None:
            if r not in have]
     if add:
         task.refs = validate_refs([*(task.refs or []), *add])
+    task.auto_pickup = False
     task.next_action = attested_action(reply)
     task.updated_at = utc_naive_now()
     await record_event(s, room=task.room, task_id=task.task_id, kind="progress", agent=AGENT,
