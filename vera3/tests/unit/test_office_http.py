@@ -237,3 +237,16 @@ async def test_token_and_task_text_never_reach_logs(client, caplog, monkeypatch)
 
 async def test_principal_key_is_set_only_by_auth():
     assert OFFICE_PRINCIPAL_KEY == "office_principal" and OfficePrincipal("a", "P").type == "service"
+
+
+@pytest.mark.parametrize("value", [None, ""])
+async def test_startup_without_office_tokens_returns_401(monkeypatch, sqlite_db, value):
+    monkeypatch.setenv("MCP_TOKENS", f"claude:{OWNER}")
+    if value is None:
+        monkeypatch.delenv("OFFICE_SERVICE_TOKENS", raising=False)
+    else:
+        monkeypatch.setenv("OFFICE_SERVICE_TOKENS", value)
+    transport = httpx.ASGITransport(app=build_app())
+    async with httpx.AsyncClient(transport=transport, base_url="http://t") as c:
+        r = await c.get("/office/v1/tasks", headers=_h(OFFICE))
+    assert r.status_code == 401

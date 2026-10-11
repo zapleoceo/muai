@@ -120,6 +120,10 @@ services:
       ROOM_OAUTH_ACTORS: ${ROOM_OAUTH_ACTORS:-dot}
       ROOM_OAUTH_REDIRECT_HOSTS: ${ROOM_OAUTH_REDIRECT_HOSTS:-chatgpt.com}
       ROOM_OAUTH_KEY: ${ROOM_OAUTH_KEY:-}
+      # office intake (docs/office-intake.md): "имя:проект:токен,…"; пусто = реестр пуст, /office/v1 отвечает 401
+      OFFICE_SERVICE_TOKENS: ${OFFICE_SERVICE_TOKENS:-}
+      OFFICE_ROOM: ${OFFICE_ROOM:-main}
+      OFFICE_AUTO_PICKUP: ${OFFICE_AUTO_PICKUP:-0}
       # sql_query: роль vera_ro (миграция 037), НЕ суперпользователь vera.
       # Пусто = sql_query отказывает (остальные инструменты работают).
       MCP_RO_DATABASE_URL: ${MCP_RO_DATABASE_URL:-}
