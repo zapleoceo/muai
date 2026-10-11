@@ -478,3 +478,9 @@ watchdog.py`): кандидаты — задачи `in_progress`/`blocked` с д
   Деструктивный откат есть только в тесте `tests/integration/test_attest_migration_pg.py`
   (только тестовая БД). Миграция: DROP/ADD CHECK `NOT VALID` берёт ACCESS EXCLUSIVE на
   `room_task_events` (короткая транзакция, `lock_timeout 5s`), VALIDATE — отдельной транзакцией.
+
+Имена кода: исключения сервиса `vera_shared.voice_help.attest` — `AttestError` (база, поле
+`code`), `AttestForbidden`, `AttestDisabled`, `InvalidScope`, `InvalidAttestation`,
+`AttestConflict`; функции политики `attest_limited` (обе пометки на месте) и
+`attest_recipient_blocked` (результат не владельцу). MCP-обёртка переводит исключение в
+ошибку вида `код: сообщение`.

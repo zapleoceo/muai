@@ -36,11 +36,11 @@ from vera_shared.office.intake_input import (
     text_hash,
 )
 from vera_shared.redact import redact_secrets
-from vera_shared.voice_help.policy import attest_recipient_blocked
 from vera_shared.room import questions
 from vera_shared.room.messages import post_message
 from vera_shared.room.tasks import _locked, open_task
 from vera_shared.timeutil import utc_naive_now
+from vera_shared.voice_help.policy import attest_recipient_blocked
 
 TASK_PREFIX = "vb-"
 CLOSED = ("done", "cancelled")

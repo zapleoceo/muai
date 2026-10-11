@@ -52,10 +52,10 @@ async def _rev(task_id: str = TID) -> int:
 
 
 async def _call(qid: int, **over):
-    args = dict(principal="dot", room=ROOM, task_id=TID, qid=qid,
-                expected_revision=await _rev(), evidence_message_id="m-1",
-                evidence_at="2026-10-11T10:00:00+00:00", quoted_text="да, это я сказал",
-                classification=svc.CLASSIFICATION, idempotency_key="k1")
+    args = {"principal": "dot", "room": ROOM, "task_id": TID, "qid": qid,
+            "expected_revision": await _rev(), "evidence_message_id": "m-1",
+            "evidence_at": "2026-10-11T10:00:00+00:00", "quoted_text": "да, это я сказал",
+            "classification": svc.CLASSIFICATION, "idempotency_key": "k1"}
     args.update(over)
     return await svc.attest(**args)
 
@@ -215,3 +215,22 @@ async def test_dispatcher_blocks_attested_task_with_foreign_recipient():
     posted.assert_not_called()
     [task] = await tasks_in(ROOM)
     assert task.status == "blocked"
+
+
+async def test_office_result_withheld_for_foreign_recipient():
+    from types import SimpleNamespace
+
+    from vera_shared.office.intake import _item
+    await _open()
+    async with get_session() as s:
+        task = await s.get(RoomTaskRow, (ROOM, TID))
+        task.refs = [*task.refs, {"kind": "source", "ref": SOURCE_ATTESTED},
+                     {"kind": "source", "ref": ATTEST_SCOPE_REF}]
+        task.status = "done"
+    async with get_session() as s:
+        task = await s.get(RoomTaskRow, (ROOM, TID))
+    for channel, withheld in (("telegram", True), ("owner", False)):
+        origin = SimpleNamespace(client_task_id="c", delivered_revision=0,
+                                 result_recipient={"channel": channel})
+        item = await _item(origin, task)
+        assert item["result_withheld"] is withheld

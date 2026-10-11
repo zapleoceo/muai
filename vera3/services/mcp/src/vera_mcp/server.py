@@ -33,11 +33,11 @@ from vera_mcp.events_register import register_events
 from vera_mcp.office_routes import office_app
 from vera_mcp.read_tools import READ_TOOLS
 from vera_mcp.request_log import RequestLogMiddleware
+from vera_mcp.room_attest_tools import ATTEST_TOOLS
 from vera_mcp.room_handoff_tools import HANDOFF_TOOLS
 from vera_mcp.room_oauth import RoomOAuthProvider
 from vera_mcp.room_oauth import enabled as room_oauth_enabled
 from vera_mcp.room_oauth import settings as room_oauth_settings
-from vera_mcp.room_attest_tools import ATTEST_TOOLS
 from vera_mcp.room_question_tools import QUESTION_TOOLS
 from vera_mcp.room_tools import ROOM_TOOLS
 from vera_mcp.write_tools import WRITE_TOOLS
