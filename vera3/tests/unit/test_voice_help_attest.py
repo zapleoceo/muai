@@ -11,7 +11,14 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskAnswerRow, RoomTaskEventRow, RoomTaskRow
 from vera_shared.db.models_voice import VoiceCommandRow
 from vera_shared.office.repository import revision_of
-from vera_shared.room import handoff, messages, questions, task_progress, task_wait, tasks
+from vera_shared.room import (
+    handoff,
+    messages,
+    questions,
+    task_progress,
+    task_wait,
+    tasks,
+)
 from vera_shared.room.task_queue import next_task
 from vera_shared.voice_help import attest as svc
 from vera_shared.voice_help.hold import lift_hold
@@ -207,6 +214,9 @@ async def test_attested_completion_requires_exact_receipt_and_is_idempotent():
     with pytest.raises(ValueError):
         await task_wait.wait(room=ROOM, task_id=TID, agent="dot", fencing_token=token,
                              until_seconds=60, reason="later")
+    with pytest.raises(questions.QuestionState):
+        await questions.ask(room=ROOM, task_id=TID, agent="dot",
+                            fencing_token=token, question="something else")
     with pytest.raises(messages.MessageConflict):
         await messages.post_message(room=ROOM, message_id="arbitrary", from_agent="dot",
                                     body="other", to_agent="someone", task_id=TID)
@@ -234,6 +244,26 @@ async def test_attested_completion_requires_exact_receipt_and_is_idempotent():
             RoomTaskEventRow.kind == "done"))).scalars().all()
     assert len(done_events) == 1
     assert done_events[0].data["receipt_id"] == "receipt-1"
+
+
+async def test_receipt_cannot_complete_two_voice_tasks():
+    first_qid = await _open()
+    await _call(first_qid)
+    first = await tasks.claim(room=ROOM, task_id=TID, agent="dot", lease_seconds=60)
+    word = attest_reply_text(SAFE)
+    await tasks.complete_attested(room=ROOM, task_id=TID, agent="dot",
+                                  fencing_token=first["fencing_token"],
+                                  reply_text=word, receipt_id="shared-receipt")
+    second_qid = await _open(cid="vc-b")
+    second_id = "help-vc-b"
+    await _call(second_qid, task_id=second_id, expected_revision=await _rev(second_id),
+                idempotency_key="k2")
+    second = await tasks.claim(room=ROOM, task_id=second_id, agent="dot",
+                               lease_seconds=60)
+    with pytest.raises(tasks.TaskBusy, match="receipt is already bound"):
+        await tasks.complete_attested(room=ROOM, task_id=second_id, agent="dot",
+                                      fencing_token=second["fencing_token"],
+                                      reply_text=word, receipt_id="shared-receipt")
 
 
 async def test_attested_answer_is_not_owner_and_owner_still_lifts():

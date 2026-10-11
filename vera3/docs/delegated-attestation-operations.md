@@ -6,7 +6,7 @@ Status: draft PR only. Migration 056 and policy activation require separate appr
 
 Only one-word literal text replies from `help-vc-*` voice commands with the matching Vera authorship question can be attested. The OAuth principal is `dot`; the resulting answer is `dot-attested`, never `OWNER`. An evidence message ID, timestamp, quote, exact task ID, qid and Office revision are required. The code phrase alone is not evidence of identity. The system records dot's assertion about an owner message; it cannot independently inspect that chat. No permission, table, microphone or Listener configuration change is included.
 
-The task is left with `auto_pickup=false`. Dot explicitly claims it and records an existing send receipt with `room_task_attested_complete`; the tool does not send text. The same receipt replays without a second done event. Generic task completion, mutation and task-scoped room posting are rejected after attestation. Unscoped `room_post` remains a general OAuth capability and is outside this task workflow.
+The task is left with `auto_pickup=false`. Dot explicitly claims it and records an existing send receipt with `room_task_attested_complete`; the tool does not send text. The same receipt replays without a second done event and cannot be bound to another task through this tool. Generic task completion, mutation and task-scoped room posting are rejected after attestation. Unscoped `room_post` remains a general OAuth capability and is outside this task workflow.
 
 ## Migration 056, separate approval
 

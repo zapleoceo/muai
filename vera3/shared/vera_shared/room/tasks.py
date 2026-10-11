@@ -10,7 +10,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta
 from typing import Any
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 
 from vera_shared.db.engine import get_session
@@ -118,9 +118,9 @@ async def claim(*, room: str, task_id: str, agent: str, lease_seconds: int,
                                    agent=agent, text=title)
             elif row.status == "done":
                 raise TaskBusy(f"task {task_id!r} is done; open a new task_id")
-            if row is not None and await attestation_for(s, room, task_id):
-                if agent != "dot" or title is not None or paths is not None:
-                    raise TaskBusy("attested task may only be claimed by dot without edits")
+            if (row is not None and await attestation_for(s, room, task_id)
+                    and (agent != "dot" or title is not None or paths is not None)):
+                raise TaskBusy("attested task may only be claimed by dot without edits")
             live = apply_claim(row, agent=agent, now=now, lease_seconds=lease_seconds,
                                session=session, account=account)
             if title is not None:
@@ -169,12 +169,12 @@ async def update(*, room: str, task_id: str, agent: str, fencing_token: int,
     async with get_session() as s:
         row = _require_lease(await _locked(s, room, task_id), room, task_id, agent,
                              fencing_token)
-        if await attestation_for(s, room, task_id):
-            if (agent != "dot" or status is not None or note is not None
-                    or next_action is not None or priority is not None or refs is not None
-                    or project is not None or depends_on is not None
-                    or auto_pickup is not None or responsible is not None):
-                raise TaskBusy("attested task permits only dot lease renewal")
+        if (await attestation_for(s, room, task_id)
+                and (agent != "dot" or status is not None or note is not None
+                     or next_action is not None or priority is not None or refs is not None
+                     or project is not None or depends_on is not None
+                     or auto_pickup is not None or responsible is not None)):
+            raise TaskBusy("attested task permits only dot lease renewal")
         now = utc_naive_now()
         prev_status = row.status
         if status is not None:
@@ -272,6 +272,15 @@ async def complete_attested(*, room: str, task_id: str, agent: str, fencing_toke
                 return {"task": task_dict(row), "replayed": True}
             raise TaskBusy("task already completed with another receipt")
         _require_lease(row, room, task_id, agent, fencing_token)
+        # Serialize receipt reuse checks across different task rows without a new table.
+        if s.bind.dialect.name == "postgresql":
+            await s.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
+                            {"key": f"attested-receipt:{receipt_id}"})
+        done_events = (await s.execute(select(RoomTaskEventRow).where(
+            RoomTaskEventRow.kind == "done",
+            RoomTaskEventRow.data.is_not(None)))).scalars().all()
+        if any((event.data or {}).get("receipt_id") == receipt_id for event in done_events):
+            raise TaskBusy("receipt is already bound to another completed task")
         row.status = "done"
         row.lease_holder = None
         row.lease_until = None

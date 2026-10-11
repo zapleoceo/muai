@@ -9,8 +9,8 @@ from typing import Annotated, Any
 
 from mcp.server.mcpserver import Context
 from pydantic import Field
-from vera_shared.voice_help import attest as svc
 from vera_shared.room import tasks
+from vera_shared.voice_help import attest as svc
 
 from vera_mcp.auth import client_of
 from vera_mcp.room_tools import Ident, Room, _room
