@@ -276,10 +276,11 @@ async def complete_attested(*, room: str, task_id: str, agent: str, fencing_toke
         if s.bind.dialect.name == "postgresql":
             await s.execute(text("SELECT pg_advisory_xact_lock(hashtextextended(:key, 0))"),
                             {"key": f"attested-receipt:{receipt_id}"})
-        done_events = (await s.execute(select(RoomTaskEventRow).where(
+        prior_receipt = (await s.execute(select(RoomTaskEventRow.id).where(
             RoomTaskEventRow.kind == "done",
-            RoomTaskEventRow.data.is_not(None)))).scalars().all()
-        if any((event.data or {}).get("receipt_id") == receipt_id for event in done_events):
+            RoomTaskEventRow.data["receipt_id"].as_string() == receipt_id
+        ).limit(1))).first()
+        if prior_receipt is not None:
             raise TaskBusy("receipt is already bound to another completed task")
         row.status = "done"
         row.lease_holder = None

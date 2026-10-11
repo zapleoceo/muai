@@ -496,6 +496,9 @@ MCP-обёртка переводит исключение в
 
 ### Completion and trust boundary
 
+Internal helpers: `attestation_for` reads the append-only event inside a transaction;
+`complete_attested` binds the existing receipt and closes the task.
+
 For an attested task, only dot can explicitly claim the lease. Generic task updates cannot change the action, references, pickup policy, or progress note; generic `room_task_release` cannot mark it done. Generic `room_post` with that task ID is rejected. After checking that the owner already received the literal one-word reply, dot calls `room_task_attested_complete(task_id, fencing_token, reply_text, receipt_id)`. The service compares `reply_text` with the append-only attestation event and atomically records a `done` event with the receipt. Repeating the same receipt returns `replayed=true`; a different receipt is rejected. This tool records a receipt and never sends a reply.
 
 The existing `room_post` without a task ID remains a general room capability. This boundary depends on dot using the dedicated task workflow and on the existing OAuth trust in dot. Both the owner-message evidence and the external reply receipt are dot assertions: the room database cannot independently inspect the dot chat or external send service. Neither is recorded as an OWNER answer.
