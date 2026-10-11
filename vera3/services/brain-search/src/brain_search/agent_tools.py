@@ -18,7 +18,7 @@ import httpx
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
-from vera_shared.redact_view import redact_view
+from vera_shared.redact_view import redact_tree, redact_view
 from vera_shared.timeutil import utc_naive_now
 
 from brain_search.evidence import PRIMARY_CHARS, SECONDARY_CHARS, evidence_excerpt
@@ -241,11 +241,11 @@ async def execute_tool(tool: ToolDescriptor, params: Any) -> dict[str, Any]:
     if not isinstance(params, dict):
         return {"error": "params must be a JSON object"}
     try:
-        return await _dispatch(tool, params)
+        return redact_tree(await _dispatch(tool, params))
     except ValidationError as e:
         return {"error": "invalid params",
                 "details": e.errors(include_url=False, include_input=False,
                                     include_context=False)[:5]}
     except Exception as e:  # граница: падение инструмента не должно ронять /search
         log.exception("agent tool %s failed", tool.name)
-        return {"error": f"{type(e).__name__}: {e}"[:300]}
+        return {"error": redact_view(f"{type(e).__name__}: {e}"[:300])}

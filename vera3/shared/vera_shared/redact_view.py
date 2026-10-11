@@ -18,9 +18,10 @@ _KEYS = re.compile(
     rf"|xox[abprs]-[A-Za-z0-9-]{{10,255}}|sk-[A-Za-z0-9_-]{{16,255}}"
     rf"|(?:AKIA|ASIA)[0-9A-Z]{{16}}(?![A-Za-z0-9])"
     rf"|eyJ[A-Za-z0-9_-]{{5,2000}}\.eyJ[A-Za-z0-9_-]{{5,2000}}\.[A-Za-z0-9_-]{{5,2000}})")
-# Без END (обрезанный превью) маскируется до конца base64-тела.
+# Без END (обрезанный превью) маскируются только строки чисто из base64.
 _PEM = re.compile(
-    r"-----BEGIN [A-Z ]{0,20}PRIVATE KEY-----[A-Za-z0-9+/=\s]{0,20000}"
+    r"-----BEGIN [A-Z ]{0,20}PRIVATE KEY-----[ \t]*\r?\n?"
+    r"(?:[A-Za-z0-9+/=]{1,200}[ \t]*(?:\r?\n|$)){0,400}"
     r"(?:-----END [A-Z ]{0,20}PRIVATE KEY-----)?")
 _LABEL = re.compile(
     r"(?i)((?<![^\W_])(?:token|secret|password|пароль|api[_-]?key)[\"']?\s*[:=]\s*[\"']?)"

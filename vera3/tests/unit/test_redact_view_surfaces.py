@@ -163,3 +163,14 @@ async def test_agent_tool_excerpt_redacted(monkeypatch):
                         AsyncMock(return_value=(None, [(1.0, cand())])))
     res = await agent_tools._exec_search_events(SearchEventsArgs(q="SIN-4905"))
     assert_clean(res["events"][0]["preview"])
+
+
+@pytest.mark.asyncio
+async def test_agent_tool_results_redacted_at_boundary(monkeypatch):
+    tool = SimpleNamespace(name="tg", invoker="http_telegram")
+    monkeypatch.setattr(agent_tools, "_dispatch",
+                        AsyncMock(return_value={"messages": [{"text": LEAKY}], "body": GH}))
+    res = await agent_tools.execute_tool(tool, {})
+    assert "CANARY" not in str(res) and UUID in str(res)
+    monkeypatch.setattr(agent_tools, "_dispatch", AsyncMock(side_effect=RuntimeError(f"boom {GH}")))
+    assert "CANARY" not in str(await agent_tools.execute_tool(tool, {}))

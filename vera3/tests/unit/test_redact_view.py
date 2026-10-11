@@ -118,3 +118,18 @@ def test_tree_masks_secret_keys_and_leaves_structure():
     assert out["none"] is None and out["api_key"] is None
     assert out["items"][1] == "plain" and src["items"][0] == {"token": "t"}
     assert out.keys() == src.keys()
+
+
+def test_truncated_pem_keeps_trailing_prose():
+    head = "-----BEGIN " + "PRIVATE KEY-----\nCANARYBODYAAAA+/=\nCANARYMORE==\n"
+    out = redact_view(head + "\nHello world, дальше обычный текст")
+    assert "CANARY" not in out and out.endswith("Hello world, дальше обычный текст")
+
+
+@pytest.mark.parametrize("text", [
+    "git token: " + CANARIES["ghp"],
+    "git token " + CANARIES["ghp"],
+])
+def test_incident_shape_with_and_without_colon(text):
+    out = redact_view(text)
+    assert "CANARY" not in out and out.startswith("git token")
