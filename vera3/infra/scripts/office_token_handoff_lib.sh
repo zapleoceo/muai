@@ -28,9 +28,11 @@ hv_atomic_replace() {
   [ -f "$f" ] || { hv_die "no such file: $f"; return 1; }
   ts=$(date -u +%Y%m%dT%H%M%SZ)
   cp -p "$f" "$f.bak-$ts" || { hv_die "backup failed: $f"; return 1; }
-  tmp=$(mktemp "$(dirname "$f")/.hv.XXXXXX") || { hv_die "mktemp"; return 1; }
-  if ! { cat > "$tmp" && chmod --reference="$f" "$tmp" && chown --reference="$f" "$tmp" && mv -f "$tmp" "$f"; }; then
-    rm -f "$tmp"
+  tmp=$(mktemp "$(dirname "$f")/.hv.XXXXXX") || { rm -f "$f.bak-$ts"; hv_die "mktemp"; return 1; }
+  # HV_FAIL_BEFORE_MV=1 — тестовая инъекция сбоя после записи temp, до mv
+  if ! { cat > "$tmp" && chmod --reference="$f" "$tmp" && chown --reference="$f" "$tmp" \
+         && [ "${HV_FAIL_BEFORE_MV:-0}" != 1 ] && mv -f "$tmp" "$f"; }; then
+    rm -f "$tmp" "$f.bak-$ts"
     hv_die "atomic replace failed: $f (original untouched)"
     return 1
   fi
@@ -46,19 +48,59 @@ hv_get_kv() {
   printf '%s' "$val"
 }
 
-# hv_set_kv FILE KEY — значение со stdin; заменить строку KEY=... или дописать в конец.
-hv_set_kv() {
-  local f=$1 key=$2 val line out="" seen=0
-  IFS= read -r val || [ -n "$val" ] || { hv_die "empty value for $key"; return 1; }
+# hv_set_kvs FILE — строки KEY=VALUE со stdin; все замены одним atomic replace.
+hv_set_kvs() {
+  local f=$1 pair line out="" k i matched
+  local -a keys=() pairs=() seen=()
   [ -f "$f" ] || { hv_die "no such file: $f"; return 1; }
+  while IFS= read -r pair || [ -n "$pair" ]; do
+    [ -n "$pair" ] || continue
+    keys+=("${pair%%=*}"); pairs+=("$pair"); seen+=(0)
+  done
+  [ "${#keys[@]}" -gt 0 ] || { hv_die "nothing to set"; return 1; }
   while IFS= read -r line || [ -n "$line" ]; do
-    case $line in
-      "$key="*) if [ "$seen" -eq 0 ]; then out+="$key=$val"$'\n'; fi; seen=1 ;;
-      *) out+="$line"$'\n' ;;
-    esac
+    matched=0
+    for i in "${!keys[@]}"; do
+      k=${keys[$i]}
+      case $line in
+        "$k="*)
+          matched=1
+          if [ "${seen[$i]}" -eq 0 ]; then out+="${pairs[$i]}"$'\n'; seen[$i]=1; fi ;;
+      esac
+    done
+    if [ "$matched" -eq 0 ]; then out+="$line"$'\n'; fi
   done < "$f"
-  if [ "$seen" -eq 0 ]; then out+="$key=$val"$'\n'; fi
+  for i in "${!keys[@]}"; do
+    if [ "${seen[$i]}" -eq 0 ]; then out+="${pairs[$i]}"$'\n'; fi
+  done
   printf '%s' "$out" | hv_atomic_replace "$f"
+}
+
+# hv_set_kv FILE KEY — значение со stdin.
+hv_set_kv() {
+  local val
+  IFS= read -r val || [ -n "$val" ] || { hv_die "empty value for $2"; return 1; }
+  printf '%s=%s\n' "$2" "$val" | hv_set_kvs "$1"
+}
+
+# hv_upsert_site ENVFILE URL — токен со stdin. rc 0 = записано, 10 = no-op, иначе ошибка (файл не меняется).
+# Обе пары пишутся одним atomic replace; отличающееся существующее значение = отказ.
+hv_upsert_site() {
+  local f=$1 url=$2 tok cur_url cur_tok
+  IFS= read -r tok || { hv_die "no token on stdin"; return 1; }
+  [ "${#tok}" -ge "$HV_MIN_LEN" ] || { hv_die "token shorter than $HV_MIN_LEN"; return 1; }
+  [ -f "$f" ] || { hv_die "no such file: $f"; return 1; }
+  cur_url=$(hv_get_kv "$f" OFFICE_API_URL)
+  cur_tok=$(hv_get_kv "$f" OFFICE_SERVICE_TOKEN)
+  if [ -n "$cur_url" ] && [ "$cur_url" != "$url" ]; then
+    hv_die "OFFICE_API_URL already set to a different value; refusing to overwrite"; return 1
+  fi
+  if [ -n "$cur_tok" ] && [ "$cur_tok" != "$tok" ]; then
+    hv_die "OFFICE_SERVICE_TOKEN already set to a different value; refusing to overwrite"; return 1
+  fi
+  if [ -n "$cur_url" ] && [ -n "$cur_tok" ]; then echo "site env: already set (no-op)"; return 10; fi
+  printf 'OFFICE_API_URL=%s\nOFFICE_SERVICE_TOKEN=%s\n' "$url" "$tok" | hv_set_kvs "$f" || return 1
+  echo "site env: written"
 }
 
 # hv_token_collides FILE NAME… — yes/no: токен (переменная HV_TOK) равен полю значения NAME.
@@ -128,8 +170,9 @@ hv_remote_vera() {
 hv_remote_site() {
   local tok code
   IFS= read -r tok || { hv_die "no token on stdin"; return 1; }
-  printf '%s\n' "$HV_API_URL" | hv_set_kv "$HV_SITE_ENV" OFFICE_API_URL || return 1
-  printf '%s\n' "$tok" | hv_set_kv "$HV_SITE_ENV" OFFICE_SERVICE_TOKEN || return 1
+  local rc=0
+  printf '%s\n' "$tok" | hv_upsert_site "$HV_SITE_ENV" "$HV_API_URL" || rc=$?
+  if [ "$rc" -ne 0 ] && [ "$rc" -ne 10 ]; then return 1; fi
   code=$(printf 'Authorization: Bearer %s\n' "$tok" | curl -s -o /dev/null -w '%{http_code}' -H @- "$HV_API_URL/office/v1/tasks") \
     || { hv_die "curl failed"; return 1; }
   echo "GET /office/v1/tasks -> HTTP $code"

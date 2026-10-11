@@ -18,11 +18,17 @@ OTHER = "AnotherTokenForTestsOnlyZyxwvutsrqponm98765"
 pytestmark = pytest.mark.skipif(BASH is None, reason="bash unavailable")
 
 
-def _run(call: str, stdin: str = "") -> subprocess.CompletedProcess[str]:
+def _run(
+    call: str, stdin: str = "", env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
     assert BASH is not None
     script = f'. "{LIB.as_posix()}"\n{call}\n'
     raw = subprocess.run(
-        [BASH, "-c", script], input=stdin.encode(), capture_output=True, check=False
+        [BASH, "-c", script],
+        input=stdin.encode(),
+        capture_output=True,
+        check=False,
+        env={**os.environ, **(env or {})},
     )
     return subprocess.CompletedProcess(
         raw.args, raw.returncode, raw.stdout.decode(), raw.stderr.decode()
@@ -147,3 +153,70 @@ def test_set_kv_replaces_and_preserves(tmp_path: Path) -> None:
     assert r.returncode == 0, r.stderr
     assert p.read_text() == "X=1\nOFFICE_API_URL=https://dima.veranda.my\nY=2\n"
     assert os.access(p, os.R_OK)
+
+
+URL = "https://dima.veranda.my"
+
+
+def _site(
+    p: Path, token: str = TOKEN, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess[str]:
+    return _run(f'hv_upsert_site "{p.as_posix()}" {URL}', token + "\n", env)
+
+
+def _leftovers(tmp_path: Path) -> list[Path]:
+    return list(tmp_path.glob(".hv.*")) + list(tmp_path.glob(".env.bak-*"))
+
+
+def test_site_both_absent_added_in_one_replace(tmp_path: Path) -> None:
+    p = _env(tmp_path, "A=1\nB=2\n")
+    r = _site(p)
+    assert r.returncode == 0, r.stderr
+    assert p.read_text() == f"A=1\nB=2\nOFFICE_API_URL={URL}\nOFFICE_SERVICE_TOKEN={TOKEN}\n"
+    assert len(list(tmp_path.glob(".env.bak-*"))) == 1
+    _no_secret(r)
+
+
+def test_site_equal_values_noop(tmp_path: Path) -> None:
+    body = f"OFFICE_API_URL={URL}\nOFFICE_SERVICE_TOKEN={TOKEN}\n"
+    p = _env(tmp_path, body)
+    r = _site(p)
+    assert r.returncode == 10
+    assert p.read_bytes() == body.encode()
+    assert _leftovers(tmp_path) == []
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        f"OFFICE_API_URL=https://old.example\nOFFICE_SERVICE_TOKEN={OTHER}\n",
+        f"OFFICE_API_URL=https://old.example\nOFFICE_SERVICE_TOKEN={TOKEN}\n",
+        f"OFFICE_API_URL={URL}\nOFFICE_SERVICE_TOKEN={OTHER}\n",
+    ],
+)
+def test_site_different_value_fails_closed(tmp_path: Path, body: str) -> None:
+    p = _env(tmp_path, body)
+    r = _site(p)
+    assert r.returncode == 1
+    assert "refusing to overwrite" in r.stderr
+    assert p.read_bytes() == body.encode()
+    assert _leftovers(tmp_path) == []
+    _no_secret(r)
+
+
+def test_site_failure_before_mv_leaves_original_then_retry_succeeds(tmp_path: Path) -> None:
+    body = "A=1\nOFFICE_API_URL=\n"
+    p = _env(tmp_path, body)
+    bad = _site(p, env={"HV_FAIL_BEFORE_MV": "1"})
+    assert bad.returncode == 1
+    assert p.read_bytes() == body.encode()
+    assert _leftovers(tmp_path) == []
+    _no_secret(bad)
+    ok = _site(p)
+    assert ok.returncode == 0, ok.stderr
+    lines = p.read_text().splitlines()
+    assert lines.count(f"OFFICE_API_URL={URL}") == 1
+    assert lines.count(f"OFFICE_SERVICE_TOKEN={TOKEN}") == 1
+    assert sum(ln.startswith("OFFICE_API_URL=") for ln in lines) == 1
+    if sys.platform != "win32":
+        assert stat.S_IMODE(p.stat().st_mode) == 0o600
