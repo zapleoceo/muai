@@ -8,6 +8,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.room.task_events import list_events, record_event
 from vera_shared.room.tasks import _locked, _require_lease, task_dict
 from vera_shared.timeutil import utc_naive_now
+from vera_shared.voice_help.attest_state import attestation_for
 
 STATE_KINDS = ("paused", "review", "resumed", "blocked", "unblocked")
 # paused/review живут только в журнале: статус задачи остаётся прежним
@@ -24,6 +25,8 @@ async def progress(*, room: str, task_id: str, agent: str, fencing_token: int, r
     async with get_session() as s:
         row = _require_lease(await _locked(s, room, task_id), room, task_id, agent,
                              fencing_token)
+        if await attestation_for(s, room, task_id):
+            raise ValueError("attested task permits only receipt completion")
         now = utc_naive_now()
         row.last_progress_at, row.last_progress_text, row.updated_at = now, result, now
         row.waiting_until, row.waiting_reason = None, None  # результат закрывает ожидание
@@ -44,6 +47,8 @@ async def set_state(*, room: str, task_id: str, agent: str, fencing_token: int, 
     async with get_session() as s:
         row = _require_lease(await _locked(s, room, task_id), room, task_id, agent,
                              fencing_token)
+        if await attestation_for(s, room, task_id):
+            raise ValueError("attested task permits only receipt completion")
         if state in STATE_TO_STATUS:
             row.status = STATE_TO_STATUS[state]
         row.updated_at = utc_naive_now()

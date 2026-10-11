@@ -19,6 +19,7 @@ from vera_shared.room.task_events import record_event
 from vera_shared.room.task_refs import validate_refs
 from vera_shared.room.tasks import _locked, _require_lease
 from vera_shared.timeutil import utc_naive_now
+from vera_shared.voice_help.attest_state import attestation_for
 
 OWNER = "owner"
 MAX_ANSWER_CHARS = 8000
@@ -64,6 +65,8 @@ async def ask(*, room: str, task_id: str, agent: str, fencing_token: int, questi
     async with get_session() as s:
         row = _require_lease(await _locked(s, room, task_id), room, task_id, agent,
                              fencing_token)
+        if await attestation_for(s, room, task_id):
+            raise QuestionState("attested task permits only receipt completion")
         q = RoomTaskQuestionRow(room=room, task_id=task_id, asked_by=agent,
                                 question=question, status="open")
         s.add(q)
@@ -138,6 +141,8 @@ async def ack(*, room: str, task_id: str, qid: int, agent: str, fencing_token: i
     async with get_session() as s:
         task = _require_lease(await _locked(s, room, task_id), room, task_id, agent,
                               fencing_token)
+        if await attestation_for(s, room, task_id):
+            raise QuestionState("attested task permits only receipt completion")
         q = await _question(s, room, task_id, qid)
         if q.status != "answered":
             raise QuestionState(f"question {qid} is {q.status}; only an answered one is acked")
@@ -151,6 +156,8 @@ async def withdraw(*, room: str, task_id: str, qid: int, agent: str, fencing_tok
     async with get_session() as s:
         task = _require_lease(await _locked(s, room, task_id), room, task_id, agent,
                               fencing_token)
+        if await attestation_for(s, room, task_id):
+            raise QuestionState("attested task permits only receipt completion")
         q = await _question(s, room, task_id, qid)
         if q.asked_by != agent:
             raise QuestionState("only the agent who asked can withdraw a question")

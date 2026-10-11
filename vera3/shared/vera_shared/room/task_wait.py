@@ -8,6 +8,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.room.task_events import record_event
 from vera_shared.room.tasks import _locked, _require_lease, task_dict
 from vera_shared.timeutil import utc_naive_now
+from vera_shared.voice_help.attest_state import attestation_for
 
 MIN_WAIT_S, MAX_WAIT_S = 60, 7 * 86_400
 
@@ -19,6 +20,8 @@ async def wait(*, room: str, task_id: str, agent: str, fencing_token: int,
     async with get_session() as s:
         row = _require_lease(await _locked(s, room, task_id), room, task_id, agent,
                              fencing_token)
+        if await attestation_for(s, room, task_id):
+            raise ValueError("attested task permits only receipt completion")
         now = utc_naive_now()
         row.waiting_until, row.waiting_reason = now + timedelta(seconds=until_seconds), reason
         row.updated_at = now

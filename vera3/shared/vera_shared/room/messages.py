@@ -15,8 +15,9 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.engine import get_session
-from vera_shared.db.models_room import RoomCursorRow, RoomMessageRow
+from vera_shared.db.models_room import RoomCursorRow, RoomMessageRow, RoomTaskRow
 from vera_shared.timeutil import utc_naive_now
+from vera_shared.voice_help.attest_state import attestation_for
 
 MESSAGE_STATUSES = ("info", "request", "ack", "question", "in_progress", "done", "blocked")
 DEFAULT_CONSUMER = "default"
@@ -76,6 +77,10 @@ async def post_message(*, room: str, message_id: str, from_agent: str, body: str
                "task_id": task_id, "in_reply_to": in_reply_to, "status": status}
     try:
         async with get_session() as s:
+            if task_id is not None:
+                await s.get(RoomTaskRow, (room, task_id), with_for_update=True)
+                if await attestation_for(s, room, task_id):
+                    raise MessageConflict("attested task cannot post through generic room_post")
             await _lock_room(s, room)
             row = RoomMessageRow(room=room, message_id=message_id,
                                  from_session=from_session, **payload)

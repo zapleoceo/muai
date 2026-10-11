@@ -12,9 +12,10 @@
 from __future__ import annotations
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.engine import get_session
-from vera_shared.db.models_room import RoomTaskAnswerRow, RoomTaskQuestionRow
+from vera_shared.db.models_room import RoomTaskAnswerRow, RoomTaskQuestionRow, RoomTaskRow
 from vera_shared.room.messages import add_message
 from vera_shared.room.questions import OWNER, question_message_id
 from vera_shared.room.task_events import record_event
@@ -23,9 +24,13 @@ from vera_shared.room.tasks import TaskNotFound, _locked
 from vera_shared.timeutil import utc_naive_now
 from vera_shared.voice_help.policy import (
     AGENT,
+    ATTEST_SCOPE_REF,
+    ATTESTED_ACTION,
     CONFIRMED_NOTE,
+    SOURCE_ATTESTED,
     SOURCE_CONFIRMED,
     UNCERTAIN_QUESTION,
+    attested_action,
 )
 
 
@@ -76,3 +81,21 @@ async def lift_hold(room: str, task_id: str, action: str) -> bool:
         await record_event(s, room=room, task_id=task_id, kind="progress", agent=AGENT,
                            text=CONFIRMED_NOTE, data={"ref": SOURCE_CONFIRMED})
         return True
+
+
+async def lift_attested(s: AsyncSession, task: RoomTaskRow, reply: str) -> None:
+    """Подтверждение через dot: ref `source_attested_by_dot` и ограниченный next_action.
+
+    `source_confirmed` не ставится: исполнитель должен видеть, что это не слово владельца.
+    Пишет в транзакции вызывающего (задача уже под блокировкой).
+    """
+    have = {r.get("ref") for r in task.refs or []}
+    add = [{"kind": "source", "ref": r} for r in (SOURCE_ATTESTED, ATTEST_SCOPE_REF)
+           if r not in have]
+    if add:
+        task.refs = validate_refs([*(task.refs or []), *add])
+    task.auto_pickup = False
+    task.next_action = attested_action(reply)
+    task.updated_at = utc_naive_now()
+    await record_event(s, room=task.room, task_id=task.task_id, kind="progress", agent=AGENT,
+                       text=ATTESTED_ACTION, data={"ref": SOURCE_ATTESTED})

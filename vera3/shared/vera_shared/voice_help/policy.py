@@ -53,6 +53,14 @@ UNCERTAIN_HOLD = ("Удержание: ничего не делать, пока 
                   "по этой задаче.")
 CONFIRMED_NOTE = "Источник подтверждён владельцем — исполняй как обычную срочную просьбу."
 SOURCE_CONFIRMED = "source_confirmed"
+SOURCE_ATTESTED = "source_attested_by_dot"
+ATTESTED_ACTION = ("авторство подтверждено через dot; только буквальный текстовый ответ "
+                   "владельцу. Проверь существующую квитанцию: уже отправленное не повторяй. "
+                   "Без поиска данных, инструментов, внешних действий и расходов.")
+
+
+def attested_action(reply: str) -> str:
+    return f"{ATTESTED_ACTION} Точный ответ: {reply}"
 
 
 def help_room() -> str:
@@ -82,3 +90,39 @@ def source_uncertain(confidence: float | None, doubts: list[str]) -> bool:
 
 def help_task_id(command_id: str) -> str:
     return f"help-{command_id}"
+
+#: Делегированное подтверждение (dot) разрешает ТОЛЬКО простой текстовый ответ владельцу.
+ATTEST_SCOPE_REF = "attest_scope: text_reply_owner"
+OWNER_RECIPIENTS = frozenset({"owner", "voice"})
+ATTEST_MAX_INSTRUCTION = 200
+_LITERAL_REPLY = re.compile(
+    r"^(?:вера[,!.?]?\s+)?(?:мне нужна помощь[.!?]?\s+)?"
+    r"ответь(?: мне)?(?: словом)?\s+([а-яёa-z]{1,40})[.!?]?\s*$",
+    re.IGNORECASE,
+)
+_NON_LITERAL_REPLIES = frozenset({
+    "ссылкой", "файлом", "документом", "данными", "кодом", "отчётом",
+    "адресом", "паролем", "токеном", "картинкой", "фотографией", "видео",
+})
+
+
+def attest_reply_text(instruction: str) -> str | None:
+    """Разрешена только команда с одним буквальным словом для ответа владельцу."""
+    if len(instruction) > ATTEST_MAX_INSTRUCTION:
+        return None
+    match = _LITERAL_REPLY.fullmatch(instruction.strip())
+    if match is None or match.group(1).casefold() in _NON_LITERAL_REPLIES:
+        return None
+    return match.group(1)
+
+
+def attest_limited(refs: list[dict[str, str]] | None) -> bool:
+    marks = {r.get("ref") for r in refs or []}
+    return SOURCE_ATTESTED in marks and ATTEST_SCOPE_REF in marks
+
+
+def attest_recipient_blocked(refs: list[dict[str, str]] | None,
+                             recipient: str | None, *, attested: bool = False) -> bool:
+    """Задача под делегированным подтверждением: результат — только в канал владельца."""
+    return (attested or attest_limited(refs)) and (
+        recipient or "").lower() not in OWNER_RECIPIENTS

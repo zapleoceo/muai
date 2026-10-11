@@ -445,3 +445,60 @@ watchdog.py`): кандидаты — задачи `in_progress`/`blocked` с д
 больше `STALE_AFTER_S` (180 с, три интервала) или есть `last_error`.
 
 Тесты: `tests/unit/test_room_watchdog.py`, `tests/integration/test_room_pg.py`.
+
+## Делегированное подтверждение авторства (dot)
+
+`room_task_attest` — MCP-инструмент комнаты: dot заверяет, что владелец сам, в чате dot,
+признал авторство ОДНОЙ голосовой просьбы (`help-vc-*`, вопрос «Это ты сказал?» от `vera`).
+Это не ответ владельца и не обход дашборда: ответ пишется как `dot-attested`.
+
+- **Доступ.** Только принципал из `ROOM_ATTEST_ACTORS` (по умолчанию `dot`), только при
+  `ROOM_ATTEST_ENABLED=1` (по умолчанию `0`). Оба параметра передаются только контейнеру
+  `vera3-mcp` через compose. Остальные — `forbidden`, при выключенном — `disabled`.
+- **Транспорт.** Только MCP. HTTP-маршрута `/office/v1/tasks/{id}/questions/{qid}/attest` нет
+  намеренно: он потребовал бы сервисного токена office, у dot его нет, а новый секрет ради этого
+  заводить нельзя (dot подключён через Room MCP OAuth).
+- **Вход.** `expected_revision` (id последнего события задачи), `evidence_message_id`,
+  `evidence_at` (ISO), `quoted_text` (≤500, секреты скрываются), `classification` строго
+  `owner_direct_in_dot_chat`, `idempotency_key`.
+- **Границы (`invalid_scope`).** Задача точно связана с одной исходной voice command, не
+  закрыта; вопрос авторства от `vera` открыт. Сервер принимает только буквальную просьбу
+  `ответь [мне] [словом] <одно слово>` (включая вступление «Вера, мне нужна помощь»).
+  Любой другой синтаксис отклоняется, в том числе запросы данных и составные действия.
+  Разрешённое слово записывается в audit и `next_action`; сам `next_action` не является
+  источником политики. Исходный текст читается из события `voice_command` с точным
+  `source_event_id`; очередь может очистить свой экземпляр текста после первого захвата.
+- **Запись.** Одна транзакция под блокировкой задачи: ответ `dot-attested`, событие
+  `delegated_attestation` (вид добавлен миграцией `056_delegated_attestation_event.sql`),
+  refs `source_attested_by_dot` и `attest_scope: text_reply_owner` (`hold.lift_attested`),
+  `next_action` с ограничением, `auto_pickup=false` только для этой карточки. Исполнитель
+  берёт её явно после сверки квитанции; автодиспетчер не повторяет уже отправленный ответ.
+  `source_confirmed` НЕ ставится; `lift_hold` по-прежнему ждёт
+  только `owner`, так что позднее слово владельца поднимет задачу до обычной.
+- **Идемпотентность.** Тот же ключ и тот же запрос — повтор результата; тот же ключ с другим
+  запросом или второе подтверждение того же вопроса — `conflict`; устаревшая ревизия — `conflict`.
+- **Результат только владельцу.** При обоих refs диспетчер (`bot_telegram/dispatcher.py`,
+  `_attempt`) блокирует задачу, если `result_recipient` отсутствует либо не `owner`/`voice`, а office intake
+  (`office/intake.py`, `_item`) не отдаёт `result` (`result_withheld`). Оба пути дополнительно
+  читают неизменяемое событие `delegated_attestation`: удаление refs не снимает ограничение.
+- **Откат на проде** — `ROOM_ATTEST_ENABLED=0`; вид события, CHECK и события остаются как аудит.
+  Тест повторного применения миграции сохраняет audit events и расширенный CHECK.
+  Миграция: DROP/ADD CHECK `NOT VALID` берёт ACCESS EXCLUSIVE на `room_task_events`
+  (короткая транзакция, `lock_timeout 5s`), VALIDATE — отдельной транзакцией с тем же timeout.
+
+Имена кода: исключения сервиса `vera_shared.voice_help.attest` — `AttestError` (база, поле
+`code`), `AttestForbidden`, `AttestDisabled`, `InvalidScope`, `InvalidAttestation`,
+`AttestConflict`; функции политики `attest_limited` (обе пометки на месте) и
+`attest_recipient_blocked` (результат не владельцу), `attest_reply_text` (точный шаблон),
+`attested_action` (текст допустимого действия), `attest_state.is_attested` (audit).
+MCP-обёртка переводит исключение в
+ошибку вида `код: сообщение`.
+
+### Completion and trust boundary
+
+Internal helpers: `attestation_for` reads the append-only event inside a transaction;
+`complete_attested` binds the existing receipt and closes the task.
+
+For an attested task, only dot can explicitly claim the lease. Generic task updates cannot change the action, references, pickup policy, or progress note; generic `room_task_release` cannot mark it done. Generic `room_post` with that task ID is rejected. After checking that the owner already received the literal one-word reply, dot calls `room_task_attested_complete(task_id, fencing_token, reply_text, receipt_id)`. The service compares `reply_text` with the append-only attestation event and atomically records a `done` event with the receipt. Repeating the same receipt returns `replayed=true`; a different receipt is rejected. This tool records a receipt and never sends a reply.
+
+The existing `room_post` without a task ID remains a general room capability. This boundary depends on dot using the dedicated task workflow and on the existing OAuth trust in dot. Both the owner-message evidence and the external reply receipt are dot assertions: the room database cannot independently inspect the dot chat or external send service. Neither is recorded as an OWNER answer.
