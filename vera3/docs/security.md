@@ -72,13 +72,26 @@ the script and commit it.
 `vera_shared/redact_view.py` hides secret *values* in what Vera hands to a
 client or an LLM; stored events are never modified. `redact_view(text)`
 replaces only the value span with `[скрыто]` (anchored patterns: `gh[pousr]_`,
-`github_pat_`, `xox[abprs]-`, `sk-`, `AKIA`/`ASIA`, JWT, PEM private keys,
-`token|secret|password|пароль|api_key: value`, secret URL query/fragment
-params incl. `X-Amz-*`, OAuth `code` only next to `state=`/`redirect_uri=` or
-in a fragment, `user:PASS@` userinfo). UUIDs, bare hex, long digits, base64
-without a label and ordinary URLs with ids stay intact. `redact_tree(obj)`
-does the same for JSON-like values and masks the keys `authorization`,
-`cookie`, `password`, `secret`, `token`, `api_key` entirely.
+`github_pat_`, `glpat-`, `xox[abprs]-`, `xapp-`, `sk-`, Stripe `sk_/rk_ live|test_`,
+`AIza…` (Google), Telegram bot tokens `<id>:AA…` (also in `bot<id>:AA…` URLs),
+`AKIA`/`ASIA`, JWT, PEM private keys (real or literal `
+` newlines, `Proc-Type:`/
+`DEK-Info:` headers, long base64 lines; without END only headers and base64 lines
+are masked), `Authorization:` values, `Bearer <opaque>=16+`, env-style
+`SECRET_KEY=`/`passwd=` (pure-digit values kept)/`aws_secret_access_key=`/`*_SECRET|TOKEN|PASSWORD|API_KEY=`,
+label phrases `token|secret|password|пароль|токен|секрет|api_key` with up to 3
+words before the colon (value 4+ chars; `null/none/true/false`, and with extra words also pure digits, URLs and lowercase words up to 6 letters, are kept), secret URL
+query/fragment params incl. `X-Amz-*`, `key=` only when the value is `AIza…` or
+20+ chars of `[A-Za-z0-9_-]` (`?key=page2` stays), OAuth `code` only next to
+`state=`/`redirect_uri=` or in a fragment, `scheme://[user]:PASS@` userinfo incl.
+empty user). UUIDs, bare hex, long digits, base64 without a label and ordinary URLs
+with ids stay intact. `redact_tree(obj)` does the same for JSON-like values and masks
+the whole value of a key that, normalized (camelCase to snake, `-` to `_`, lowercase),
+equals or ends on a `_` boundary with: `secret`, `client_secret`, `token`,
+`access_token`, `refresh_token`, `id_token`, `api_key`, `x_api_key`, `apikey`,
+`password`, `passwd`, `private_key`, `authorization`, `cookie`, `credentials`
+(`x-api-key`, `accessToken`, `Set-Cookie` yes; `token_count`, `max_tokens`,
+`secret_santa` no; pagination keys `page_token`, `next_page_token`, `prev_page_token`, `continuation_token`, `cursor` are kept).
 
 Presentation only, hooked at: MCP `search` (`content_preview`), `get_event`,
 `recent_events`; gateway `/v1/search` (`answer`, `results[].content_preview`,
