@@ -96,3 +96,23 @@ size, duration, w, h, url, url_expires_at), `causation_id`. Значение `nu
 `IntakeConflict`, `IntakeBusy`.
 
 HTTP-фасад собирается в `office_app` (`vera_mcp/office_routes.py`) и монтируется рядом с `/mcp`.
+
+## Передача токена бота Veranda (owner-run)
+
+`infra/scripts/office_token_handoff.sh` запускает сам владелец из Git Bash на ноутбуке; агенты токен
+и его хэш не читают и скрипт не запускают. Функции (для тестов) лежат в
+`infra/scripts/office_token_handoff_lib.sh`, тесты — `tests/unit/test_office_token_handoff.py`.
+
+- Токен создаётся один раз в `~/.vera_handoff/veranda_bot.token` (каталог 700, файл 600, >= 32 символов);
+  повторный запуск переиспользует тот же файл.
+- Шаг 1, Vera (`ssh hetzner-root`): в `/var/www/vera3/infra/.env` в `OFFICE_SERVICE_TOKENS` добавляется
+  `veranda_bot:Veranda:<токен>`; остальные записи сохраняются; тот же токен — no-op; другой токен у
+  `veranda_bot` — ошибка без перезаписи; токен не должен совпадать с `MCP_TOKENS`/`ROOM_TOKENS`
+  (сравнение на сервере, печатается только yes/no). Затем `docker compose up -d --no-deps mcp` и проверка
+  в контейнере (печатает `set`/`unset`).
+- Шаг 2, сайт (`veranda_my_usr@5.101.179.132`): `OFFICE_API_URL` и `OFFICE_SERVICE_TOKEN` в
+  `/var/www/veranda_my_usr/data/www/veranda.my/.env`, затем `GET /office/v1/tasks` с хоста сайта;
+  печатается только HTTP-код, ожидается 200. Cron и `aibot_office` не затрагиваются.
+- Каждая правка `.env` атомарна: бэкап `.env.bak-<UTC>`, temp-файл в том же каталоге, права и владелец
+  как у оригинала, `mv`. Секрет идёт только через stdin и нигде не печатается. Сбой любого шага — выход с
+  понятным сообщением (fail closed); повтор безопасен.
