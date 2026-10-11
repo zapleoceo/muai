@@ -262,6 +262,7 @@ Docker (82% всех) никем не востребованы** плюс **3.74
   `PG integration: not run — CI authoritative`. **`--fast`** (pytest только по
   затронутым тестам, без порогов покрытия и diff-cover) подразумевает
   `--partial`. `--base REF` — своя база диффа.
+- Editable-установки venv (`vera_shared`, `services/*`) должны указывать на проверяемый worktree, иначе тесты идут по чужому коду; перепривязка: `<python> -m pip install --no-deps -e vera3/shared -e vera3/services/<имя> …` из корня этого worktree.
 - База — `git merge-base origin/master HEAD` после `git fetch`.
 - Гейты исполняют те же `scripts/ci_gate_*.sh`, что и `deploy.yml` — разойтись
   им нечему. Режимы скрипта покрыты `tests/unit/test_preflight_script.py`.
