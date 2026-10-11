@@ -32,16 +32,24 @@ _PEM = re.compile(
     r"(?:[A-Za-z0-9+/=]{1,4000}[ \t]*(?:" + _NL + r"|$)){0,400}"
     r"(?:-----END [A-Z ]{0,20}PRIVATE KEY-----)?")
 _LABELS = r"token|secret|password|passwd|пароль|токен|секрет|api[_-]?key"
+_VALUE_END = r"(?![^\s\"',;&])"
 _LABEL = re.compile(
-    rf"(?i)((?<![^\W_])(?:{_LABELS})(?:[ \t]+[\w.@-]{{1,40}}){{0,3}}[\"']?\s*[:=]\s*[\"']?)"
+    rf"(?i)((?<![^\W_])(?<!(?-i:[A-Z0-9]_))(?:{_LABELS})[\"']?\s*[:=]\s*[\"']?)"
     r"(?!(?:null|none|true|false)(?![\w]))[^\s\"',;&]{4,500}")
+# С лишними словами между меткой и «:» («token limit: 4096») фраза часто обычная
+# речь: числа, URL и короткие строчные слова не маскируются.
+_LABEL_GAP = re.compile(
+    rf"(?i)((?<![^\W_])(?:{_LABELS})(?:[ \t]+[\w.@-]{{1,40}}){{1,3}}[\"']?\s*[:=]\s*[\"']?)"
+    rf"(?!(?:null|none|true|false){_VALUE_END}|[0-9]+{_VALUE_END}|https?://"
+    rf"|(?-i:[a-zа-яё]{{1,6}}){_VALUE_END})[^\s\"',;&]{{4,500}}")
 _AUTH = re.compile(
     r"(?i)((?<![^\W_])authorization[\"']?\s*[:=]\s*[\"']?(?:(?:bearer|basic|token)[ \t]+)?)"
     r"[^\s\"',;]{4,2000}")
 _BEARER = re.compile(r"(?i)(\bbearer[ \t]+)[A-Za-z0-9._~+/=-]{16,2000}")
 _ENV = re.compile(
     r"((?<![A-Za-z0-9_])(?:(?:[A-Z][A-Z0-9]*_)*(?:SECRET(?:_KEY)?|TOKEN|PASSWORD|PASSWD|API_KEY)"
-    r"|aws_secret_access_key|passwd)[\"']?[ \t]*=[ \t]*[\"']?)[^\s\"',;&]{4,500}")
+    r"|aws_secret_access_key|passwd)[\"']?[ \t]*=[ \t]*[\"']?)"
+    r"(?![0-9]+(?![^\s\"',;&]))[^\s\"',;&]{4,500}")
 _NAMES = (r"access[-_]?token|refresh[-_]?token|id[-_]?token|token|api[-_]?key|sig|signature"
           r"|secret|password|pwd|auth|client[-_]?secret|session|session[-_]?id"
           r"|x-amz-(?:signature|credential|security-token)")
@@ -62,6 +70,9 @@ _SECRET_NAMES = ("secret", "client_secret", "token", "access_token", "refresh_to
                  "id_token", "api_key", "x_api_key", "apikey", "password", "passwd",
                  "private_key", "authorization", "cookie", "credentials")
 _SECRET_SUFFIXES = tuple("_" + n for n in _SECRET_NAMES)
+# Курсоры пагинации не секрет, хотя кончаются на `_token`.
+_PAGING_KEYS = frozenset({"page_token", "next_page_token", "prev_page_token",
+                          "continuation_token", "cursor"})
 _CAMEL = re.compile(r"(?<=[a-z0-9])(?=[A-Z])")
 
 
@@ -69,6 +80,8 @@ def _is_secret_key(key: object) -> bool:
     if not isinstance(key, str):
         return False
     norm = _CAMEL.sub("_", key).lower().replace("-", "_")
+    if norm in _PAGING_KEYS:
+        return False
     return norm in _SECRET_NAMES or norm.endswith(_SECRET_SUFFIXES)
 
 
@@ -85,7 +98,7 @@ def redact_view(text: str) -> str:
     out = _PEM.sub(MASK, text)
     out = _KEYS.sub(MASK, out)
     out = _TG.sub(MASK, out)
-    for rx in (_AUTH, _BEARER, _ENV, _LABEL, _PARAM, _KEY_PARAM):
+    for rx in (_AUTH, _BEARER, _ENV, _LABEL, _LABEL_GAP, _PARAM, _KEY_PARAM):
         out = rx.sub(rf"\g<1>{MASK}", out)
     out = _CHUNK.sub(_mask_code, out)
     return _USERINFO.sub(rf"\g<1>{MASK}", out)

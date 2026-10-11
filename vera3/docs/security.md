@@ -78,9 +78,9 @@ replaces only the value span with `[скрыто]` (anchored patterns: `gh[pousr
 ` newlines, `Proc-Type:`/
 `DEK-Info:` headers, long base64 lines; without END only headers and base64 lines
 are masked), `Authorization:` values, `Bearer <opaque>=16+`, env-style
-`SECRET_KEY=`/`passwd=`/`aws_secret_access_key=`/`*_SECRET|TOKEN|PASSWORD|API_KEY=`,
+`SECRET_KEY=`/`passwd=` (pure-digit values kept)/`aws_secret_access_key=`/`*_SECRET|TOKEN|PASSWORD|API_KEY=`,
 label phrases `token|secret|password|пароль|токен|секрет|api_key` with up to 3
-words before the colon (value 4+ chars, `null/none/true/false` kept), secret URL
+words before the colon (value 4+ chars; `null/none/true/false`, and with extra words also pure digits, URLs and lowercase words up to 6 letters, are kept), secret URL
 query/fragment params incl. `X-Amz-*`, `key=` only when the value is `AIza…` or
 20+ chars of `[A-Za-z0-9_-]` (`?key=page2` stays), OAuth `code` only next to
 `state=`/`redirect_uri=` or in a fragment, `scheme://[user]:PASS@` userinfo incl.
@@ -91,7 +91,7 @@ equals or ends on a `_` boundary with: `secret`, `client_secret`, `token`,
 `access_token`, `refresh_token`, `id_token`, `api_key`, `x_api_key`, `apikey`,
 `password`, `passwd`, `private_key`, `authorization`, `cookie`, `credentials`
 (`x-api-key`, `accessToken`, `Set-Cookie` yes; `token_count`, `max_tokens`,
-`secret_santa` no; a pagination key like `next_page_token` is masked).
+`secret_santa` no; pagination keys `page_token`, `next_page_token`, `prev_page_token`, `continuation_token`, `cursor` are kept).
 
 Presentation only, hooked at: MCP `search` (`content_preview`), `get_event`,
 `recent_events`; gateway `/v1/search` (`answer`, `results[].content_preview`,

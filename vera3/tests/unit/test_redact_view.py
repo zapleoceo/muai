@@ -208,3 +208,24 @@ def test_followup_linear_time_on_100kb(chunk):
     t0 = time.perf_counter()
     redact_view(text)
     assert time.perf_counter() - t0 < 2.0
+
+
+@pytest.mark.parametrize("text", [
+    "token limit: 4096", "Your token count: 12345", "password reset link: https://a.b/c",
+    "password reset required: please", "MAX_TOKEN=4096",
+])
+def test_false_positive_look_alikes_intact(text):
+    assert redact_view(text) == text
+
+
+def test_gap_label_still_masks_non_word_values():
+    assert "CANARY" not in redact_view("токен бота: CANARY99")
+    assert "CANARY" not in redact_view("password for x: CANARYlongvalue")
+
+
+def test_tree_keeps_pagination_keys():
+    src = {"page_token": "p1", "next_page_token": "n2", "prev_page_token": "x", "continuationToken": "c",
+           "cursor": "cur", "access_token": "CANARY"}
+    out = redact_tree(src)
+    assert {k: out[k] for k in src if k != "access_token"} == {k: v for k, v in src.items() if k != "access_token"}
+    assert out["access_token"] == MASK
