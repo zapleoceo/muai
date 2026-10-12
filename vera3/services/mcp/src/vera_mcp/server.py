@@ -39,7 +39,7 @@ from vera_mcp.room_oauth import RoomOAuthProvider
 from vera_mcp.room_oauth import enabled as room_oauth_enabled
 from vera_mcp.room_oauth import settings as room_oauth_settings
 from vera_mcp.room_question_tools import QUESTION_TOOLS
-from vera_mcp.room_tools import ROOM_TOOLS
+from vera_mcp.room_tools import ROOM_TOOLS, room_task_metadata_correct
 from vera_mcp.write_tools import WRITE_TOOLS
 
 INSTRUCTIONS = (
@@ -92,6 +92,8 @@ def build_room_mcp(oauth: RoomOAuthProvider | None = None) -> MCPServer:
     mcp = _server("vera-room", ROOM_INSTRUCTIONS, **auth_kwargs)
     for tool in (*ROOM_TOOLS, *QUESTION_TOOLS, *HANDOFF_TOOLS, *ATTEST_TOOLS):
         mcp.tool()(tool)
+    if os.environ.get("ROOM_METADATA_ENABLED", "").strip() == "1":
+        mcp.tool()(room_task_metadata_correct)
     register_events(mcp)
     if oauth:
         @mcp.custom_route("/oauth/internal/consent", methods=["GET", "POST"])

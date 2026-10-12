@@ -1,4 +1,4 @@
-"""Комната агентов: сообщения, задачи с арендой и курсоры чтения (миграции 047, 049)."""
+"""Agent room: messages, leased tasks, and read cursors (migrations 047, 049)."""
 from __future__ import annotations
 
 from datetime import datetime
@@ -103,13 +103,13 @@ EVENT_KINDS = (
     "created", "claimed", "progress", "heartbeat", "paused", "resumed", "review", "blocked",
     "unblocked", "question", "answered", "ack_answer", "handoff_offer", "handoff_accept",
     "released", "done", "lease_expired", "watchdog_action", "waiting",
-    "delegated_attestation",
+    "delegated_attestation", "metadata_updated",
 )
 _KINDS_SQL = ", ".join(f"'{k}'" for k in EVENT_KINDS)
 
 
 class RoomTaskEventRow(Base):
-    """Только дописывается: журнал того, что происходило с задачей."""
+    """Append-only audit trail for a task."""
     __tablename__ = "room_task_events"
     __table_args__ = (
         CheckConstraint(f"kind IN ({_KINDS_SQL})", name="ck_room_task_events_kind"),
