@@ -56,9 +56,7 @@ async def search(
                                   **({"filters": to_dict(flt)} if not flt.empty else {}))
     except SearchUnavailable as e:
         raise RuntimeError(e.detail) from e
-    results = [{**r, "content_preview": redact_view(r["content_preview"])}
-               if isinstance(r, dict) and isinstance(r.get("content_preview"), str) else r
-               for r in data.get("results") or []]
+    results = redact_tree(data.get("results") or [])
     return {"results": results[:limit], "count": min(len(results), limit),
             "truncated": len(results) > limit}
 
@@ -144,7 +142,7 @@ async def entity_context(
     members = payload["members"]
     payload["members"] = members[:MAX_MEMBERS]
     payload["members_truncated"] = len(members) > MAX_MEMBERS
-    return payload
+    return redact_tree(payload)
 
 
 async def graph_neighbours(
@@ -179,7 +177,7 @@ async def timeline(
         legacy = await event_links.timeline_events(entity_id, t_start, t_end, limit + 1)
         events = sorted(events + [e for e in legacy if e["id"] not in known],
                         key=lambda e: e["occurred_at"], reverse=True)
-    return {"events": events[:limit], "truncated": len(events) > limit,
+    return {"events": redact_tree(events[:limit]), "truncated": len(events) > limit,
             "start": t_start.isoformat(), "end": t_end.isoformat()}
 
 
@@ -188,14 +186,22 @@ async def sql_query(
     max_rows: Annotated[int, Field(ge=1, le=MAX_ROWS)] = 100,
 ) -> dict[str, Any]:
     """Произвольный READ-ONLY запрос к базе (один SELECT/WITH; таймаут 10 с; не больше 500 строк). Escape hatch for ad-hoc analysis; writes are rejected."""
-    return await run_readonly(sql, max_rows)
+    result = await run_readonly(sql, max_rows)
+    # SQL rows are positional. Reattach column names while redacting so an
+    # otherwise opaque value in SELECT access_token is still masked.
+    columns = result["columns"]
+    result["rows"] = [
+        [redact_tree({column: value})[column] for column, value in zip(columns, row)]
+        for row in result["rows"]
+    ]
+    return result
 
 
 async def audit_log(
     limit: Annotated[int, Field(ge=1, le=100)] = 20, client: str | None = None,
 ) -> dict[str, Any]:
     """Журнал правок агентов (для undo): кто, что, над чем. Recent write operations with audit ids."""
-    return {"entries": await audit.list_entries(limit, client)}
+    return {"entries": redact_tree(await audit.list_entries(limit, client))}
 
 
 READ_TOOLS = (search, recent_events, get_event, list_sources, entity_find,

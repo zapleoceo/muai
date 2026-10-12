@@ -93,10 +93,13 @@ equals or ends on a `_` boundary with: `secret`, `client_secret`, `token`,
 (`x-api-key`, `accessToken`, `Set-Cookie` yes; `token_count`, `max_tokens`,
 `secret_santa` no; pagination keys `page_token`, `next_page_token`, `prev_page_token`, `continuation_token`, `cursor` are kept).
 
-Presentation only, hooked at: MCP `search` (`content_preview`), `get_event`,
-`recent_events`; gateway `/v1/search` (`answer`, `results[].content_preview`,
+Presentation only, hooked at: MCP `search` (result tree), `get_event`,
+`recent_events`, `timeline`, `entity_context`, `event_participants`,
+`co_occurrence`, `audit_log`, and `sql_query` (each cell redacted using its
+column name); gateway `/v1/search` (`answer`, `results[].content_preview`,
 `agent_trace`) and `/v1/events/recent`; brain-search `build_context` (before
 the LLM), the final `answer`, `agent_trace`, `content_preview` and the agent
 `search_events` excerpt. `identifier_hits` still runs on the raw text, so exact
-identifier search keeps working. Not yet covered: timeline, entity_events,
-link tools, entity_context, audit_log, `sql_query`.
+identifier search keeps working. These views do not change stored events or
+audit records. SQL redaction applies only to the returned rows; aliases that
+hide a secret column name require the value to match a text pattern.
