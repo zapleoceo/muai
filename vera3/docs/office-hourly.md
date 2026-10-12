@@ -38,3 +38,12 @@ data. Общий `room_task_update` тоже пишет `progress`, но мож�
 
 URL: `https://dima.veranda.my/office/hourly`. Для отката достаточно вернуть
 предыдущий код dashboard; данные Room не меняются.
+
+## Реализация
+
+`office_hourly` — owner-only HTTP route; `load_report` выбирает ограниченный
+набор событий из PostgreSQL, `build_report` группирует их в `HourlyReport` и
+`HourlyCard`, `report_body` создаёт HTML. `status_of` задаёт отображение шести
+статусов, `evidence_of` отделяет давнее или отсутствующее сообщение о
+результате, `next_question_reminder` вычисляет следующий шестичасовой
+контроль открытого вопроса для подписи на странице.
