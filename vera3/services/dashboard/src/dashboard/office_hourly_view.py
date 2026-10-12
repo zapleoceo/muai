@@ -71,16 +71,28 @@ def _projects(report: HourlyReport) -> str:
     groups: dict[str, list[HourlyCard]] = defaultdict(list)
     for card in report.cards:
         groups[card.row.project or "Без проекта"].append(card)
+    external: dict[str, Counter[str]] = {}
+    if report.runtime and report.runtime.is_fresh(report.as_of):
+        for entry in report.runtime.entries:
+            key = entry.project.casefold()
+            external.setdefault(key, Counter())[entry.state] += 1
     parts = []
     for project, cards in sorted(groups.items(), key=lambda x: x[0].casefold()):
         counts = Counter(c.status for c in cards)
         active = [c for c in cards if c.status == "В работе"]
         active_text = ", ".join(esc(c.row.title or c.row.task_id) for c in active[:2]) or "нет подтверждённой живой аренды"
         overflow = f' · ещё {len(active) - 2} в работе — проверьте лимит' if len(active) > 2 else ""
-        parts.append(f'<article><h3>{esc(project)}</h3><p>В работе: {len(active)} · '
+        observed = external.get(project.casefold())
+        external_text = (f'{observed["active"]} подтверждено'
+                         + (f', {observed["unknown"]} неизвестно' if observed["unknown"] else "")
+                         if observed is not None else "не проверено")
+        external_warning = (" · проверьте лимит 1–2" if observed and observed["active"] > 2
+                            else "")
+        parts.append(f'<article><h3>{esc(project)}</h3><p>Room lease: {len(active)} · '
+                     f'проверенные runtime в работе: {external_text}{external_warning} · '
                      f'очередь: {counts["Новая / в очереди"]} · блокер: {counts["Блокер"]} · '
                      f'проверка: {counts["На проверке"]} · отменена: {counts["Отменена"]}</p>'
-                     f'<p class="oh-meta">Фокус: {active_text}{overflow}</p></article>')
+                     f'<p class="oh-meta">Фокус Room: {active_text}{overflow}</p></article>')
     return "".join(parts) or '<p class="oh-note">Открытых карточек нет.</p>'
 
 
@@ -91,7 +103,7 @@ def _runtime(report: HourlyReport) -> str:
                 'Число фактически работающих задач неизвестно; Room lease учитываются отдельно.</p>')
     fresh = snapshot.is_fresh(report.as_of)
     active = sum(entry.state == "active" for entry in snapshot.entries)
-    count = (f'{active} подтверждённых активных потоков' if fresh else
+    count = (f'Подтверждённые активные потоки: {active}' if fresh else
              f'последняя проверка: {active} активных; текущий счёт неизвестен')
     labels = {"active": "В работе", "completed": "Этап завершён",
               "waiting": "Ожидание", "unknown": "Неизвестно"}
