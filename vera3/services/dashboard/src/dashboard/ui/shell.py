@@ -17,6 +17,7 @@ NAV_ITEMS: tuple[tuple[str, str, str], ...] = (
     ("graph", "/graph", "Люди"),
     ("sources", "/sources", "Источники"),
     ("tasks", "/tasks", "Задачи"),
+    ("office", "/office/hourly", "Офис"),
 )
 # Страница дублей — часть раздела «Люди».
 _NAV_ALIASES = {"entities": "graph"}
