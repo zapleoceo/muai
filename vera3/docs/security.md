@@ -93,10 +93,11 @@ equals or ends on a `_` boundary with: `secret`, `client_secret`, `token`,
 (`x-api-key`, `accessToken`, `Set-Cookie` yes; `token_count`, `max_tokens`,
 `secret_santa` no; pagination keys `page_token`, `next_page_token`, `prev_page_token`, `continuation_token`, `cursor` are kept).
 
-Presentation only, hooked at: MCP `search` (result tree), `get_event`,
-`recent_events`, `timeline`, `entity_context`, `event_participants`,
-`co_occurrence`, `audit_log`, and `sql_query` (each cell redacted using its
-column name); gateway `/v1/search` (`answer`, `results[].content_preview`,
+Presentation only, hooked at every MCP read tool (`search`, `recent_events`,
+`get_event`, `list_sources`, `entity_find`, `entity_context`, `graph_neighbours`,
+`timeline`, `event_participants`, `co_occurrence`, `audit_log`, and `sql_query`;
+each SQL cell is redacted using its column name); gateway `/v1/search`
+(`answer`, `results[].content_preview`,
 `agent_trace`) and `/v1/events/recent`; brain-search `build_context` (before
 the LLM), the final `answer`, `agent_trace`, `content_preview` and the agent
 `search_events` excerpt. `identifier_hits` still runs on the raw text, so exact

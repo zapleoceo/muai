@@ -90,7 +90,7 @@ async def get_event(
         raise LookupError(f"event {event_id} not found")
     text = row.content_text or ""
     transcript = row.transcript_text or ""
-    return {
+    return redact_tree({
         "id": row.id, "source": row.source, "source_event_id": row.source_event_id,
         "account": row.account, "category": row.category,
         "occurred_at": row.occurred_at.isoformat(),
@@ -104,13 +104,13 @@ async def get_event(
                    "importance": row.importance, "nature": row.nature,
                    "project": row.project, "metadata": redact_tree(row.triage_metadata)},
         "entities": await event_links.linked_entities(event_id),
-    }
+    })
 
 
 async def list_sources() -> dict[str, Any]:
     """Сводка по источникам: число событий, последнее событие и последний приём. Per-source counts and freshness."""
     sources = await queries.source_stats()
-    return {"sources": sources, "total_events": sum(s["events"] for s in sources)}
+    return {"sources": redact_tree(sources), "total_events": sum(s["events"] for s in sources)}
 
 
 async def entity_find(
@@ -120,7 +120,7 @@ async def entity_find(
 ) -> dict[str, Any]:
     """Найти сущности по имени, алиасу, username или email. Fuzzy entity lookup."""
     found = await search_entities(query, limit=limit + 1, type=type)
-    return {"entities": found[:limit], "truncated": len(found) > limit}
+    return {"entities": redact_tree(found[:limit]), "truncated": len(found) > limit}
 
 
 async def entity_context(
@@ -154,7 +154,7 @@ async def graph_neighbours(
     snap = await graph_snapshot(focus_id=entity_id, limit=limit, predicate=predicate,
                                 raw_edges=raw_edges)
     edges = snap["edges"]
-    return {"nodes": snap["nodes"], "edges": edges[:MAX_EDGES],
+    return {"nodes": redact_tree(snap["nodes"]), "edges": redact_tree(edges[:MAX_EDGES]),
             "truncated": len(edges) > MAX_EDGES or len(snap["nodes"]) >= limit}
 
 

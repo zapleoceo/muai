@@ -64,7 +64,8 @@ async def test_mcp_recent_and_get_event_redact_only_secret_leaves(sqlite_db):
     async with get_session() as s:
         s.add(EventRow(id=1, source="telegram", source_event_id="tg:1:2", account="a",
                        content_text=LEAKY, transcript_text=f"say {GH}", occurred_at=utc_naive_now(),
-                       triage_status="done", metadata_=meta, content_extra={"password": "CANARY-pw-9"},
+                       triage_status="done", triage_error=f"failure {GH}",
+                       metadata_=meta, content_extra={"password": "CANARY-pw-9"},
                        triage_metadata={"why": f"found {AWS}"}))
     got = await r.get_event(1)
     assert got["source_event_id"] == "tg:1:2" and got["id"] == 1
@@ -78,6 +79,26 @@ async def test_mcp_recent_and_get_event_redact_only_secret_leaves(sqlite_db):
 
 @pytest.mark.asyncio
 async def test_mcp_remaining_read_views_redact_at_return_boundary(monkeypatch):
+    monkeypatch.setattr(r.queries, "source_stats", AsyncMock(return_value=[
+        {"source": "telegram", "events": 2, "note": LEAKY}]))
+    sources = await r.list_sources()
+    assert sources["total_events"] == 2
+    assert_clean(sources["sources"][0]["note"])
+
+    monkeypatch.setattr(r, "search_entities", AsyncMock(return_value=[
+        {"id": 7, "name": "Example", "attributes": {"api_key": "CANARYopaque"}}]))
+    found = await r.entity_find("Example")
+    assert found["entities"][0]["id"] == 7
+    assert found["entities"][0]["attributes"]["api_key"] == MASK
+
+    monkeypatch.setattr(r, "graph_snapshot", AsyncMock(return_value={
+        "nodes": [{"id": 7, "attributes": {"password": "CANARYopaque"}}],
+        "edges": [{"id": 9, "note": LEAKY}]}))
+    graph = await r.graph_neighbours(7)
+    assert graph["nodes"][0]["attributes"]["password"] == MASK
+    assert graph["edges"][0]["id"] == 9
+    assert_clean(graph["edges"][0]["note"])
+
     payload = {"entity_id": 7, "name": "Example", "attributes": {"api_key": "CANARYopaque"},
                "members": [{"id": 8, "note": LEAKY}], "mentions": []}
     monkeypatch.setattr(r, "entity_context_payload", AsyncMock(return_value=payload))
