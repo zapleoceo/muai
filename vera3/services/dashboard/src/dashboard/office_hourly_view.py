@@ -84,6 +84,30 @@ def _projects(report: HourlyReport) -> str:
     return "".join(parts) or '<p class="oh-note">Открытых карточек нет.</p>'
 
 
+def _runtime(report: HourlyReport) -> str:
+    snapshot = report.runtime
+    if snapshot is None:
+        return ('<h2>Внешние исполнения</h2><p class="oh-note">Проверенной сводки runtime нет. '
+                'Число фактически работающих задач неизвестно; Room lease учитываются отдельно.</p>')
+    fresh = snapshot.is_fresh(report.as_of)
+    active = sum(entry.state == "active" for entry in snapshot.entries)
+    count = (f'{active} подтверждённых активных потоков' if fresh else
+             f'последняя проверка: {active} активных; текущий счёт неизвестен')
+    labels = {"active": "В работе", "completed": "Этап завершён",
+              "waiting": "Ожидание", "unknown": "Неизвестно"}
+    items = "".join(
+        f'<article class="oh-card"><span class="oh-pill">{labels[entry.state]}</span>'
+        f'<h3>{esc(entry.project)}</h3><p>{esc(entry.detail)}</p>'
+        f'<p class="oh-meta">Источник: Codex thread {esc(entry.thread_id)}; '
+        'связь с карточкой Room не подтверждена</p></article>'
+        for entry in snapshot.entries)
+    return (f'<h2>Внешние исполнения</h2><p class="oh-note">{count}. '
+            f'Проверено dot: {local_dt(snapshot.checked_at)}; запись Room '
+            f'{esc(snapshot.message_id)}. Room «В работе» = {report.counts["В работе"]} '
+            'живых lease. Общую сумму без подтверждённой связи не выводим.</p>'
+            f'<div class="oh-projects">{items}</div>')
+
+
 def report_body(report: HourlyReport) -> str:
     counts = report.counts
     tiles = "".join(f'<article class="oh-tile"><strong>{counts[label]}</strong><span>{label}</span></article>'
@@ -100,8 +124,9 @@ def report_body(report: HourlyReport) -> str:
             f'<div class="oh-meta">Проверено: {local_dt(report.as_of)}</div></div>'
             '<p class="oh-note">Один Room ID — одна карточка. Статус исполнения не выводится из количества open/blocked. '
             'Для Broker, Orchestra и других внешних runtime без точной связи с Room ID сопоставление неизвестно; '
-            'их не прибавляем к карточкам или активным задачам. Свежесть результата указана отдельно от статуса.</p>'
-            f'<div class="oh-grid">{tiles}</div>'
+            'их не прибавляем к карточному счётчику. Свежесть результата указана отдельно от статуса.</p>'
+            f'{_runtime(report)}'
+            f'<h2>Статусы карточек Room</h2><div class="oh-grid">{tiles}</div>'
             f'<p class="oh-meta">Незакрытых карточек: {len(report.cards) - counts["Отменена"]}. '
             f'Внешняя связь не подтверждена: {sum(c.runtime_mapping == "Не установлена" for c in report.cards)}. '
             'Готовые скрыты из списка и показателей; отменённые исключены из WIP. Данные сохранены в Room.</p>'
