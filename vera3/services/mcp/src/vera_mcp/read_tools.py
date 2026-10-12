@@ -56,9 +56,7 @@ async def search(
                                   **({"filters": to_dict(flt)} if not flt.empty else {}))
     except SearchUnavailable as e:
         raise RuntimeError(e.detail) from e
-    results = [{**r, "content_preview": redact_view(r["content_preview"])}
-               if isinstance(r, dict) and isinstance(r.get("content_preview"), str) else r
-               for r in data.get("results") or []]
+    results = redact_tree(data.get("results") or [])
     return {"results": results[:limit], "count": min(len(results), limit),
             "truncated": len(results) > limit}
 
@@ -92,7 +90,7 @@ async def get_event(
         raise LookupError(f"event {event_id} not found")
     text = row.content_text or ""
     transcript = row.transcript_text or ""
-    return {
+    return redact_tree({
         "id": row.id, "source": row.source, "source_event_id": row.source_event_id,
         "account": row.account, "category": row.category,
         "occurred_at": row.occurred_at.isoformat(),
@@ -106,13 +104,13 @@ async def get_event(
                    "importance": row.importance, "nature": row.nature,
                    "project": row.project, "metadata": redact_tree(row.triage_metadata)},
         "entities": await event_links.linked_entities(event_id),
-    }
+    })
 
 
 async def list_sources() -> dict[str, Any]:
     """Сводка по источникам: число событий, последнее событие и последний приём. Per-source counts and freshness."""
     sources = await queries.source_stats()
-    return {"sources": sources, "total_events": sum(s["events"] for s in sources)}
+    return {"sources": redact_tree(sources), "total_events": sum(s["events"] for s in sources)}
 
 
 async def entity_find(
@@ -122,7 +120,7 @@ async def entity_find(
 ) -> dict[str, Any]:
     """Найти сущности по имени, алиасу, username или email. Fuzzy entity lookup."""
     found = await search_entities(query, limit=limit + 1, type=type)
-    return {"entities": found[:limit], "truncated": len(found) > limit}
+    return {"entities": redact_tree(found[:limit]), "truncated": len(found) > limit}
 
 
 async def entity_context(
@@ -144,7 +142,7 @@ async def entity_context(
     members = payload["members"]
     payload["members"] = members[:MAX_MEMBERS]
     payload["members_truncated"] = len(members) > MAX_MEMBERS
-    return payload
+    return redact_tree(payload)
 
 
 async def graph_neighbours(
@@ -156,7 +154,7 @@ async def graph_neighbours(
     snap = await graph_snapshot(focus_id=entity_id, limit=limit, predicate=predicate,
                                 raw_edges=raw_edges)
     edges = snap["edges"]
-    return {"nodes": snap["nodes"], "edges": edges[:MAX_EDGES],
+    return {"nodes": redact_tree(snap["nodes"]), "edges": redact_tree(edges[:MAX_EDGES]),
             "truncated": len(edges) > MAX_EDGES or len(snap["nodes"]) >= limit}
 
 
@@ -179,7 +177,7 @@ async def timeline(
         legacy = await event_links.timeline_events(entity_id, t_start, t_end, limit + 1)
         events = sorted(events + [e for e in legacy if e["id"] not in known],
                         key=lambda e: e["occurred_at"], reverse=True)
-    return {"events": events[:limit], "truncated": len(events) > limit,
+    return {"events": redact_tree(events[:limit]), "truncated": len(events) > limit,
             "start": t_start.isoformat(), "end": t_end.isoformat()}
 
 
@@ -188,14 +186,22 @@ async def sql_query(
     max_rows: Annotated[int, Field(ge=1, le=MAX_ROWS)] = 100,
 ) -> dict[str, Any]:
     """Произвольный READ-ONLY запрос к базе (один SELECT/WITH; таймаут 10 с; не больше 500 строк). Escape hatch for ad-hoc analysis; writes are rejected."""
-    return await run_readonly(sql, max_rows)
+    result = await run_readonly(sql, max_rows)
+    # SQL rows are positional. Reattach column names while redacting so an
+    # otherwise opaque value in SELECT access_token is still masked.
+    columns = result["columns"]
+    result["rows"] = [
+        [redact_tree({column: value})[column] for column, value in zip(columns, row)]
+        for row in result["rows"]
+    ]
+    return result
 
 
 async def audit_log(
     limit: Annotated[int, Field(ge=1, le=100)] = 20, client: str | None = None,
 ) -> dict[str, Any]:
     """Журнал правок агентов (для undo): кто, что, над чем. Recent write operations with audit ids."""
-    return {"entries": await audit.list_entries(limit, client)}
+    return {"entries": redact_tree(await audit.list_entries(limit, client))}
 
 
 READ_TOOLS = (search, recent_events, get_event, list_sources, entity_find,

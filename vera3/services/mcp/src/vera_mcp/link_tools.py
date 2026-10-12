@@ -14,6 +14,7 @@ from pydantic import Field
 from vera_shared.links import read as links_read
 from vera_shared.links.filters import EventFilter, FilterError, build_where
 from vera_shared.links.read import MAX_EVENTS
+from vera_shared.redact_view import redact_tree
 from vera_shared.timeutil import parse_iso_naive
 
 IdList = Annotated[list[int] | None, Field(max_length=10)]
@@ -44,7 +45,7 @@ async def event_participants(event_id: int) -> dict[str, Any]:
     found = await links_read.event_participants(event_id)
     if found is None:
         raise LookupError(f"event {event_id} not found")
-    return found
+    return redact_tree(found)
 
 
 async def co_occurrence(
@@ -52,9 +53,10 @@ async def co_occurrence(
     limit: Annotated[int, Field(ge=1, le=MAX_EVENTS)] = 50,
 ) -> dict[str, Any]:
     """События, где были ОБА человека (автор / получатель / участник созвона), за период: счёт по видам (звонки, переписка, письма) и список новых первыми. Events where both entities took part, by kind."""
-    return await links_read.co_occurrence(
+    result = await links_read.co_occurrence(
         entity_a, entity_b, parse_iso_naive(start) if start else None,
         parse_iso_naive(end) if end else None, limit)
+    return redact_tree(result)
 
 
 LINK_TOOLS = (event_participants, co_occurrence)

@@ -11,6 +11,7 @@ from brain_search.agent_tools import SearchEventsArgs
 from brain_search.models import SearchQuery, SearchResult
 from brain_search.rows import Candidate
 from gateway import query as gw
+from vera_mcp import link_tools
 from vera_mcp import read_tools as r
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
@@ -46,10 +47,13 @@ def cand(event_id: int = 7, text: str = LEAKY) -> Candidate:
 
 @pytest.mark.asyncio
 async def test_mcp_search_redacts_preview():
-    data = {"results": [{"event_id": 1, "content_preview": LEAKY}, {"event_id": 2}]}
+    data = {"results": [{"event_id": 1, "content_preview": LEAKY,
+                         "metadata": {"accessToken": "CANARYopaque123", "id": UUID}},
+                        {"event_id": 2}]}
     with patch.object(r, "search_brain", AsyncMock(return_value=data)):
         out = await r.search("q")
     assert_clean(out["results"][0]["content_preview"])
+    assert out["results"][0]["metadata"] == {"accessToken": MASK, "id": UUID}
     assert out["results"][1] == {"event_id": 2}
 
 
@@ -60,7 +64,8 @@ async def test_mcp_recent_and_get_event_redact_only_secret_leaves(sqlite_db):
     async with get_session() as s:
         s.add(EventRow(id=1, source="telegram", source_event_id="tg:1:2", account="a",
                        content_text=LEAKY, transcript_text=f"say {GH}", occurred_at=utc_naive_now(),
-                       triage_status="done", metadata_=meta, content_extra={"password": "CANARY-pw-9"},
+                       triage_status="done", triage_error=f"failure {GH}",
+                       metadata_=meta, content_extra={"password": "CANARY-pw-9"},
                        triage_metadata={"why": f"found {AWS}"}))
     got = await r.get_event(1)
     assert got["source_event_id"] == "tg:1:2" and got["id"] == 1
@@ -70,6 +75,85 @@ async def test_mcp_recent_and_get_event_redact_only_secret_leaves(sqlite_db):
     assert got["metadata"] == {**meta, "headers": {"Authorization": MASK}, "note": f"k {MASK}"}
     recent = await r.recent_events(hours=1)
     assert recent["count"] == 1 and "CANARY" not in str(recent["events"])
+
+
+@pytest.mark.asyncio
+async def test_mcp_remaining_read_views_redact_at_return_boundary(monkeypatch):
+    monkeypatch.setattr(r.queries, "source_stats", AsyncMock(return_value=[
+        {"source": "telegram", "events": 2, "note": LEAKY}]))
+    sources = await r.list_sources()
+    assert sources["total_events"] == 2
+    assert_clean(sources["sources"][0]["note"])
+
+    monkeypatch.setattr(r, "search_entities", AsyncMock(return_value=[
+        {"id": 7, "name": "Example", "attributes": {"api_key": "CANARYopaque"}}]))
+    found = await r.entity_find("Example")
+    assert found["entities"][0]["id"] == 7
+    assert found["entities"][0]["attributes"]["api_key"] == MASK
+
+    monkeypatch.setattr(r, "graph_snapshot", AsyncMock(return_value={
+        "nodes": [{"id": 7, "attributes": {"password": "CANARYopaque"}}],
+        "edges": [{"id": 9, "note": LEAKY}]}))
+    graph = await r.graph_neighbours(7)
+    assert graph["nodes"][0]["attributes"]["password"] == MASK
+    assert graph["edges"][0]["id"] == 9
+    assert_clean(graph["edges"][0]["note"])
+
+    payload = {"entity_id": 7, "name": "Example", "attributes": {"api_key": "CANARYopaque"},
+               "members": [{"id": 8, "note": LEAKY}], "mentions": []}
+    monkeypatch.setattr(r, "entity_context_payload", AsyncMock(return_value=payload))
+    context = await r.entity_context(entity_id=7)
+    assert context["attributes"]["api_key"] == MASK
+    assert context["members"][0]["id"] == 8
+    assert_clean(context["members"][0]["note"])
+    assert payload["attributes"]["api_key"] == "CANARYopaque"  # source is untouched
+
+    events = [{"id": 9, "content_preview": LEAKY, "metadata": {"password": "CANARYpw"}}]
+    monkeypatch.setattr(r, "entity_events", AsyncMock(return_value=events))
+    out = await r.timeline(7, start="2026-01-01", roles=["author"])
+    assert out["events"][0]["id"] == 9
+    assert out["events"][0]["metadata"]["password"] == MASK
+    assert_clean(out["events"][0]["content_preview"])
+
+    monkeypatch.setattr(r.audit, "list_entries", AsyncMock(return_value=[
+        {"id": 10, "tool": "hide_event", "args": {"client_secret": "CANARYopaque"},
+         "reason": LEAKY}]))
+    audit = await r.audit_log()
+    assert audit["entries"][0]["id"] == 10
+    assert audit["entries"][0]["args"]["client_secret"] == MASK
+    assert_clean(audit["entries"][0]["reason"])
+
+
+@pytest.mark.asyncio
+async def test_mcp_link_views_redact_without_mutating_source(monkeypatch):
+    people = {"event_id": 9, "participants": [{"entity_id": 7, "token": GH}],
+              "unresolved_speakers": [{"label": UUID}]}
+    monkeypatch.setattr(link_tools.links_read, "event_participants",
+                        AsyncMock(return_value=people))
+    out = await link_tools.event_participants(9)
+    assert out["participants"][0]["token"] == MASK
+    assert out["unresolved_speakers"][0]["label"] == UUID
+    assert people["participants"][0]["token"] == GH
+
+    grouped = {"count": 1, "events": [{"id": 9, "content_preview": LEAKY}],
+               "by_kind": {"message": 1}}
+    monkeypatch.setattr(link_tools.links_read, "co_occurrence", AsyncMock(return_value=grouped))
+    out = await link_tools.co_occurrence(7, 8)
+    assert out["by_kind"] == {"message": 1}
+    assert_clean(out["events"][0]["content_preview"])
+
+
+@pytest.mark.asyncio
+async def test_sql_query_redacts_values_by_column_even_with_duplicate_names(monkeypatch):
+    raw = {"columns": ["access_token", "access_token", "note", "id"],
+           "rows": [["CANARYone", "CANARYtwo", LEAKY, 9]],
+           "row_count": 1, "truncated": False}
+    monkeypatch.setattr(r, "run_readonly", AsyncMock(return_value=raw))
+    out = await r.sql_query("SELECT 1")
+    assert out["columns"] == raw["columns"]
+    assert out["rows"][0][:2] == [MASK, MASK]
+    assert_clean(out["rows"][0][2])
+    assert out["rows"][0][3] == 9
 
 
 # ─── gateway ────────────────────────────────────────────────────────────────
