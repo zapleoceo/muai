@@ -11,8 +11,8 @@ from brain_search.agent_tools import SearchEventsArgs
 from brain_search.models import SearchQuery, SearchResult
 from brain_search.rows import Candidate
 from gateway import query as gw
-from vera_mcp import read_tools as r
 from vera_mcp import link_tools
+from vera_mcp import read_tools as r
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
 from vera_shared.redact_view import MASK
