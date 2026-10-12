@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from sqlalchemy import and_, func, or_, select
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import (
+    RoomMessageRow,
     RoomTaskEventRow,
     RoomTaskQuestionRow,
     RoomTaskRow,
@@ -19,6 +20,8 @@ from vera_shared.room.attention import (
     attention,
 )
 from vera_shared.timeutil import utc_naive_now
+
+from dashboard.office_runtime_service import RuntimeSnapshot, latest_runtime_snapshot
 
 WINDOW = timedelta(hours=1)
 REMINDER = timedelta(hours=6)
@@ -47,6 +50,7 @@ class HourlyReport:
     results: list[RoomTaskEventRow]
     counts: dict[str, int]
     done_hidden: int
+    runtime: RuntimeSnapshot | None = None
 
 
 def status_of(row: RoomTaskRow, att: Attention, question: RoomTaskQuestionRow | None,
@@ -149,10 +153,18 @@ async def load_report(now: datetime | None = None) -> HourlyReport:
         ))
         controls_result = await s.execute(select(ev).where(
             ev.id.in_(select(control_ranked.c.id).where(control_ranked.c.rank == 1))))
+        runtime_result = await s.execute(select(RoomMessageRow).where(
+            RoomMessageRow.room == "main", RoomMessageRow.from_agent == "dot",
+            RoomMessageRow.to_agent == "office-dashboard",
+            RoomMessageRow.task_id.is_(None), RoomMessageRow.status == "info",
+            RoomMessageRow.body.startswith("OFFICE_RUNTIME_V1\n"),
+            RoomMessageRow.created_at <= now,
+        ).order_by(RoomMessageRow.id.desc()).limit(20))
         rows = list(rows_result.scalars().all())
         questions = list(questions_result.scalars().all())
         events = list(events_result.scalars().all())
         controls = list(controls_result.scalars().all())
+        runtime_rows = list(runtime_result.scalars().all())
     controls_by_task = {(e.room, e.task_id): e.kind for e in controls}
     open_by_task = {(q.room, q.task_id): q for q in questions if q.status == "open"}
     answered = {(q.room, q.task_id) for q in questions if q.status == "answered"}
@@ -163,4 +175,7 @@ async def load_report(now: datetime | None = None) -> HourlyReport:
         attentions[key] = (Attention(ANSWERED, "", None, None, None) if key in answered and not q
                            else attention(row, now, open_question_at=q.asked_at if q else None,
                                           paused=controls_by_task.get(key) == "paused"))
-    return build_report(rows, attentions, questions, events, now, controls)
+    report = build_report(rows, attentions, questions, events, now, controls)
+    runtime = latest_runtime_snapshot(runtime_rows, now)
+    return HourlyReport(report.as_of, report.window_start, report.cards, report.results,
+                        report.counts, report.done_hidden, runtime)

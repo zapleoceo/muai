@@ -1,11 +1,18 @@
 """Evidence and counting rules for the owner hourly report."""
 from __future__ import annotations
 
+import json
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
 from dashboard.office_hourly_service import build_report, next_question_reminder
 from dashboard.office_hourly_view import report_body
+from dashboard.office_runtime_service import (
+    PREFIX,
+    latest_runtime_snapshot,
+    parse_runtime_snapshot,
+)
 from vera_shared.room.attention import Attention
 
 NOW = datetime(2026, 10, 12, 18, 0, tzinfo=UTC)
@@ -110,3 +117,69 @@ def test_acknowledged_question_or_new_claim_ends_old_review_control() -> None:
     assert report.counts["На проверке"] == 0
     assert report.counts["В работе"] == 1
     assert report.counts["Новая / в очереди"] == 1
+
+
+def runtime_message(*, actor: str = "dot", checked: datetime = NOW) -> SimpleNamespace:
+    body = PREFIX + json.dumps({"checked_at": checked.isoformat(), "entries": [
+        {"project": "Orchestra", "thread_id": "01a12abb-b3b4-74dc-aeeb-3432e9fd509f",
+         "state": "active", "detail": "Исправление для superadmin выполняется"},
+        {"project": "Vera", "thread_id": "01a12abc-f65c-72f9-a5ed-255fb375e0b8",
+         "state": "active", "detail": "Office dashboard выполняется"},
+        {"project": "Broker", "thread_id": "01a12aba-d455-71b0-a2be-adb2edb4b0b0",
+         "state": "completed", "detail": "PR62 завершён"},
+    ]})
+    return SimpleNamespace(room="main", from_agent=actor, to_agent="office-dashboard",
+                           task_id=None, status="info", body=body, created_at=NOW,
+                           message_id="office-runtime-test")
+
+
+def test_external_runtime_is_separate_from_room_statuses() -> None:
+    row = task("queued")
+    report = build_report([row], {(row.room, row.task_id): attention("unassigned")},
+                          [], [], NOW)
+    snapshot = parse_runtime_snapshot(runtime_message(), NOW)
+    assert snapshot is not None
+    html = report_body(replace(report, runtime=snapshot))
+    assert "2 подтверждённых активных потоков" in html
+    assert "Room «В работе» = 0 живых lease" in html
+    assert "Этап завершён" in html
+    assert report.counts["В работе"] == 0
+
+
+def test_runtime_snapshot_rejects_wrong_actor_and_expires_without_current_count() -> None:
+    assert parse_runtime_snapshot(runtime_message(actor="claude"), NOW) is None
+    old = NOW - timedelta(minutes=61)
+    row = runtime_message(checked=old)
+    row.created_at = old
+    snapshot = parse_runtime_snapshot(row, NOW)
+    assert snapshot is not None and not snapshot.is_fresh(NOW)
+    report = build_report([], {}, [], [], NOW)
+    html = report_body(replace(report, runtime=snapshot))
+    assert "текущий счёт неизвестен" in html
+    assert "2 подтверждённых активных потоков" not in html
+
+
+def test_runtime_snapshot_rejects_duplicate_thread_and_escapes_details() -> None:
+    row = runtime_message()
+    payload = json.loads(row.body[len(PREFIX):])
+    payload["entries"].append(payload["entries"][0])
+    row.body = PREFIX + json.dumps(payload)
+    assert parse_runtime_snapshot(row, NOW) is None
+    payload["entries"].pop()
+    payload["entries"][0]["detail"] = "<script>alert(1)</script>"
+    row.body = PREFIX + json.dumps(payload)
+    snapshot = parse_runtime_snapshot(row, NOW)
+    assert snapshot is not None
+    html = report_body(replace(build_report([], {}, [], [], NOW), runtime=snapshot))
+    assert "<script>alert(1)</script>" not in html
+
+
+def test_newer_check_wins_when_older_observation_arrives_later() -> None:
+    recent = runtime_message(checked=NOW - timedelta(minutes=5))
+    recent.created_at = NOW - timedelta(minutes=4)
+    recent.message_id = "recent-check"
+    late_old = runtime_message(checked=NOW - timedelta(minutes=40))
+    late_old.created_at = NOW
+    late_old.message_id = "late-old-check"
+    snapshot = latest_runtime_snapshot([late_old, recent], NOW)
+    assert snapshot is not None and snapshot.message_id == "recent-check"
