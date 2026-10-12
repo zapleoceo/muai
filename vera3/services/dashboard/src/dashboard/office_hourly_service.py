@@ -129,21 +129,26 @@ async def load_report(now: datetime | None = None) -> HourlyReport:
     valid_result = or_(ev.kind == "done", and_(ev.kind == "progress", ev.text.is_not(None),
                                                 ev.text != "",
                                                 ev.data.has_key("next_checkpoint_seconds")))  # noqa: W601
-    latest_ids = (select(func.max(ev.id).label("id")).where(valid_result, ev.at <= now)
-                  .group_by(ev.room, ev.task_id).subquery())
-    control_ids = (select(func.max(ev.id).label("id")).where(
-        ev.kind.in_(("paused", "review", "resumed")), ev.at <= now)
-                   .group_by(ev.room, ev.task_id).subquery())
+    latest_ranked = select(ev.id.label("id"), func.row_number().over(
+        partition_by=(ev.room, ev.task_id), order_by=(ev.at.desc(), ev.id.desc())
+    ).label("rank")).where(valid_result, ev.at <= now).subquery()
+    control_ranked = select(ev.id.label("id"), func.row_number().over(
+        partition_by=(ev.room, ev.task_id), order_by=(ev.at.desc(), ev.id.desc())
+    ).label("rank")).where(ev.kind.in_(("paused", "review", "resumed", "claimed",
+                                        "handoff_accept", "unblocked", "released",
+                                        "blocked", "ack_answer")),
+                           ev.at <= now).subquery()
     async with get_session() as s:
         rows_result = await s.execute(select(RoomTaskRow))
         questions_result = await s.execute(select(RoomTaskQuestionRow).where(
             RoomTaskQuestionRow.status.in_(("open", "answered"))))
         events_result = await s.execute(select(ev).where(
             valid_result, ev.at <= now,
-            or_(ev.id.in_(select(latest_ids.c.id)), ev.at >= now - WINDOW)
+            or_(ev.id.in_(select(latest_ranked.c.id).where(latest_ranked.c.rank == 1)),
+                ev.at >= now - WINDOW)
         ))
         controls_result = await s.execute(select(ev).where(
-            ev.id.in_(select(control_ids.c.id))))
+            ev.id.in_(select(control_ranked.c.id).where(control_ranked.c.rank == 1))))
         rows = list(rows_result.scalars().all())
         questions = list(questions_result.scalars().all())
         events = list(events_result.scalars().all())

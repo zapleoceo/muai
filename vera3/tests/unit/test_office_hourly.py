@@ -100,3 +100,13 @@ def test_review_event_and_pause_are_distinct() -> None:
     report = build_report(rows, amap, [], [], NOW, controls)
     assert [c.status for c in report.cards] == ["Новая / в очереди", "На проверке"]
     assert "Пауза зафиксирована" in report_body(report)
+
+
+def test_acknowledged_question_or_new_claim_ends_old_review_control() -> None:
+    rows = [task("answered", "in_progress", holder="dot"), task("pause")]
+    amap = {(r.room, r.task_id): attention("in_progress") for r in rows}
+    controls = [event("answered", "ack_answer", 1), event("pause", "claimed", 1)]
+    report = build_report(rows, amap, [], [], NOW, controls)
+    assert report.counts["На проверке"] == 0
+    assert report.counts["В работе"] == 1
+    assert report.counts["Новая / в очереди"] == 1
