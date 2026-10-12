@@ -1,9 +1,9 @@
 """Evidence and counting rules for the owner hourly report."""
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
-import json
 from types import SimpleNamespace
 
 from dashboard.office_hourly_service import build_report, next_question_reminder
