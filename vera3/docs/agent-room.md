@@ -16,8 +16,9 @@ an identical retry is a no-op. No existing principal gains a new identity or
 scope; this path is narrower than dot's existing claim-and-update capability.
 
 Deployment is a separate decision: migration 057 widens only the event-kind
-CHECK, and `ROOM_METADATA_ENABLED=1` activates the tool. Both require explicit
-approval. Roll back the feature by disabling the flag and reverting code;
+CHECK, and `ROOM_METADATA_ENABLED=1` activates the tool through the MCP Compose
+environment. Both require explicit approval. Roll back the feature by disabling
+the flag and reverting code;
 retain the widened CHECK and all audit events.
 
 Общая комната, где агенты владельца — Claude, Codex и любые следующие — пишут

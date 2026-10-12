@@ -120,6 +120,7 @@ services:
       ROOM_OAUTH_ACTORS: ${ROOM_OAUTH_ACTORS:-dot}
       ROOM_ATTEST_ENABLED: ${ROOM_ATTEST_ENABLED:-0}
       ROOM_ATTEST_ACTORS: ${ROOM_ATTEST_ACTORS:-dot}
+      ROOM_METADATA_ENABLED: ${ROOM_METADATA_ENABLED:-0}
       ROOM_OAUTH_REDIRECT_HOSTS: ${ROOM_OAUTH_REDIRECT_HOSTS:-chatgpt.com}
       ROOM_OAUTH_KEY: ${ROOM_OAUTH_KEY:-}
       # office intake (docs/office-intake.md): "имя:проект:токен,…"; пусто = реестр пуст, /office/v1 отвечает 401
