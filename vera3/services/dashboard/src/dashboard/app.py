@@ -23,6 +23,7 @@ from dashboard.home_routes import router as home_router
 from dashboard.instagram_login import router as instagram_login_router
 from dashboard.journal_routes import router as journal_router
 from dashboard.merge_routes import router as merge_router
+from dashboard.office_hourly_routes import router as office_hourly_router
 from dashboard.progress_routes import router as progress_router
 from dashboard.render import FAVICON_SVG
 from dashboard.room_oauth_routes import router as room_oauth_router
@@ -55,7 +56,7 @@ for router in (
     graph_router, gmail_oauth_router, instagram_login_router,
     telegram_login_router, slack_connect_router, source_actions_router,
     assets_router, connection_router, journal_router, merge_router,
-    room_oauth_router, tasks_router,
+    room_oauth_router, tasks_router, office_hourly_router,
 ):
     app.include_router(router)
 
