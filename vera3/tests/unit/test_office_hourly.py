@@ -140,10 +140,21 @@ def test_external_runtime_is_separate_from_room_statuses() -> None:
     snapshot = parse_runtime_snapshot(runtime_message(), NOW)
     assert snapshot is not None
     html = report_body(replace(report, runtime=snapshot))
-    assert "2 подтверждённых активных потоков" in html
+    assert "Подтверждённые активные потоки: 2" in html
     assert "Room «В работе» = 0 живых lease" in html
+    assert "Room lease: 0 · проверенные runtime в работе: 1 подтверждено" in html
     assert "Этап завершён" in html
     assert report.counts["В работе"] == 0
+
+
+def test_completed_runtime_project_is_checked_with_zero_active() -> None:
+    row = task("broker-queued", project="Broker")
+    report = build_report([row], {(row.room, row.task_id): attention("unassigned")},
+                          [], [], NOW)
+    snapshot = parse_runtime_snapshot(runtime_message(), NOW)
+    assert snapshot is not None
+    html = report_body(replace(report, runtime=snapshot))
+    assert "Room lease: 0 · проверенные runtime в работе: 0 подтверждено" in html
 
 
 def test_runtime_snapshot_rejects_wrong_actor_and_expires_without_current_count() -> None:
@@ -156,7 +167,7 @@ def test_runtime_snapshot_rejects_wrong_actor_and_expires_without_current_count(
     report = build_report([], {}, [], [], NOW)
     html = report_body(replace(report, runtime=snapshot))
     assert "текущий счёт неизвестен" in html
-    assert "2 подтверждённых активных потоков" not in html
+    assert "Подтверждённые активные потоки: 2" not in html
 
 
 def test_runtime_snapshot_rejects_duplicate_thread_and_escapes_details() -> None:
