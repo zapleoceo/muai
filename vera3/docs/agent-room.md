@@ -4,6 +4,7 @@
 
 `room_task_metadata_correct` is a proposed, default-off coordination tool.
 Its repository operation is `correct_metadata`.
+The MCP server does not register the tool while the flag is off.
 It accepts only `responsible` and `next_action`, a reason, and the exact
 `updated_at` observed by the caller. The actor comes from the existing Room
 OAuth principal and must be `dot`. It takes a row lock and rejects done tasks,

@@ -90,6 +90,16 @@ async def test_room_token_sees_only_room_tools(room_client):
 
 
 @pytest.mark.asyncio
+async def test_metadata_tool_registered_only_with_activation_flag(room_client, monkeypatch):
+    monkeypatch.setenv("ROOM_METADATA_ENABLED", "1")
+    async with room_client() as c:
+        room_names = await _tool_names(c, ROOM_CODEX)
+        office_names = await _tool_names(c, OWNER_TOKEN)
+    assert "room_task_metadata_correct" in room_names
+    assert "room_task_metadata_correct" not in office_names
+
+
+@pytest.mark.asyncio
 async def test_owner_token_does_not_get_room_tools(room_client):
     async with room_client() as c:
         names = await _tool_names(c, OWNER_TOKEN)

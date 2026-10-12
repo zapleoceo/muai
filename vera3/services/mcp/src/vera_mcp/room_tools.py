@@ -239,7 +239,6 @@ async def room_tasks(
 
 
 ROOM_TOOLS = (room_post, room_inbox, room_ack, room_history, room_task_open,
-              room_task_claim, room_task_update, room_task_metadata_correct,
-              room_task_progress, room_task_state,
+              room_task_claim, room_task_update, room_task_progress, room_task_state,
               room_task_history, room_task_wait, room_task_next, room_task_release,
               room_tasks)
