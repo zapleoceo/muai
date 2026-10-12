@@ -1,12 +1,20 @@
 """MCP-инструменты комнаты агентов. Автор и держатель — имя токена, не аргумент."""
 from __future__ import annotations
 
+import os
 import uuid
 from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import Context
 from pydantic import Field
-from vera_shared.room import messages, task_progress, task_queue, task_wait, tasks
+from vera_shared.room import (
+    messages,
+    task_metadata,
+    task_progress,
+    task_queue,
+    task_wait,
+    tasks,
+)
 
 from vera_mcp.auth import allowed_rooms, client_of
 
@@ -134,6 +142,22 @@ async def room_task_update(
     return {"ok": True, "task": task}
 
 
+async def room_task_metadata_correct(
+    task_id: Ident, expected_updated_at: Ident, reason: Annotated[str, Field(min_length=1, max_length=500)],
+    ctx: Context, room: Room = "main",
+    responsible: Annotated[str | None, Field(max_length=128)] = None,
+    next_action: Annotated[str | None, Field(max_length=2000)] = None,
+) -> dict[str, Any]:
+    """Correct responsible/next_action without claiming or reporting progress; dot only, no active hold."""
+    if os.environ.get("ROOM_METADATA_ENABLED", "").strip() != "1":
+        raise ValueError("metadata correction is disabled")
+    result = await task_metadata.correct_metadata(
+        room=_room(room), task_id=task_id, agent=client_of(ctx),
+        expected_updated_at=expected_updated_at, reason=reason,
+        responsible=responsible, next_action=next_action)
+    return {"ok": True, **result}
+
+
 async def room_task_progress(
     task_id: Ident, fencing_token: Annotated[int, Field(ge=1)], ctx: Context,
     result: Annotated[str, Field(min_length=1, max_length=4000)], room: Room = "main",
@@ -215,6 +239,7 @@ async def room_tasks(
 
 
 ROOM_TOOLS = (room_post, room_inbox, room_ack, room_history, room_task_open,
-              room_task_claim, room_task_update, room_task_progress, room_task_state,
+              room_task_claim, room_task_update, room_task_metadata_correct,
+              room_task_progress, room_task_state,
               room_task_history, room_task_wait, room_task_next, room_task_release,
               room_tasks)
