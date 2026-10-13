@@ -134,7 +134,10 @@ hide a secret column name require the value to match a text pattern.
   ask/answer_ack). В `event.data` маскируются `before`/`after`, `next_action`, `title`, `note`,
   `reason`, `result`, `question`, `text` и `refs[].excerpt`. Задачные инструменты живут в
   `room_task_tools.py`, общие типы в `room_common.py`; имена инструментов и порядок
-  `ROOM_TOOLS` не менялись.
+  `ROOM_TOOLS` не менялись, `room_task_cancel` добавлен в конец. Ответ `room_task_cancel`
+  идёт через `task_view`, причина (`note`, `event.text`, `event.data.reason`) маскируется как
+  свободный текст. Отменить может только держатель живой аренды либо создатель задачи без
+  живой аренды, с текущим `fencing_token`; права owner и dot не расширены.
 
 ## Граница LLM (`redact_input`)
 

@@ -79,6 +79,7 @@ retain the widened CHECK and all audit events.
 | `room_task_state` | `paused`/`review`/`resumed`/`blocked`/`unblocked` с `reason` |
 | `room_task_history` | Журнал событий задачи по возрастанию id (`since_id`, `limit` ≤ 200), только чтение |
 | `room_task_release` | done / blocked / open (вернуть в пул) — тоже с `fencing_token` |
+| `room_task_cancel` | Штатная отмена без захвата: `task_id`, `fencing_token`, `reason` (1..4000). Вызывать может держатель живой аренды (как `room_task_update`) либо создатель задачи (`created_by` = вызывающий), пока у неё нет живой аренды; создатель при чужой живой аренде получает `StaleLease`. `fencing_token` — текущий сохранённый (у ни разу не захваченной задачи 0), сверяется с хранимым, устаревший — `StaleLease`. Допустимы статусы open, blocked, in_progress (только держатель); `done`/`cancelled` и задача с делегированной аттестацией — `TaskBusy`. Меняет только `status=cancelled`, `note=reason`, снимает аренду и ожидающую передачу; `last_progress_*`, `refs`, `project` и прочие поля не трогаются, через `in_progress` задача не проходит. Событие `cancelled`: `text`/`data.reason` — причина, `data.prior_status` — прежний статус. Права owner/dot не расширяются. Отменённые задачи не попадают в `room_tasks` с `queue=open|unclaimed` и в `my_tasks` инбокса; в `room_tasks` их видно по `status=cancelled`. Задача, зависящая (`depends_on`) от отменённой, остаётся неподходящей для `room_task_next`: зависимость считается выполненной только при `done` (`_deps_done`), отмена её не удовлетворяет. Отменённую задачу нельзя захватить: нужен новый `task_id`. Ответ — `task_view`, история — `events_view` (причина маскируется) |
 | `room_tasks` | Задачи комнаты с живым держателем аренды |
 
 Комнаты (`room`, по умолчанию `main`) — отдельные потоки сообщений, курсоров и
@@ -523,3 +524,12 @@ Internal helpers: `attestation_for` reads the append-only event inside a transac
 For an attested task, only dot can explicitly claim the lease. Generic task updates cannot change the action, references, pickup policy, or progress note; generic `room_task_release` cannot mark it done. Generic `room_post` with that task ID is rejected. After checking that the owner already received the literal one-word reply, dot calls `room_task_attested_complete(task_id, fencing_token, reply_text, receipt_id)`. The service compares `reply_text` with the append-only attestation event and atomically records a `done` event with the receipt. Repeating the same receipt returns `replayed=true`; a different receipt is rejected. This tool records a receipt and never sends a reply.
 
 The existing `room_post` without a task ID remains a general room capability. This boundary depends on dot using the dedicated task workflow and on the existing OAuth trust in dot. Both the owner-message evidence and the external reply receipt are dot assertions: the room database cannot independently inspect the dot chat or external send service. Neither is recorded as an OWNER answer.
+
+### Отмена задачи (`room_task_cancel`)
+
+Модуль `vera_shared/room/task_cancel.py`. Новый вид события `cancelled` требует
+миграции `058_room_task_cancelled_event.sql` (расширяет только CHECK
+`ck_room_task_events_kind`, данных не меняет; идемпотентна). Она поставляется только
+стандартным путём выкатки; решение по праву отмены создателем и по миграции за
+владельцем/Codex. У `room_tasks.status` CHECK нет (`models_room.py:53-54`), значение
+`cancelled` допустимо без правки схемы.

@@ -23,6 +23,7 @@ from vera_mcp.room_common import (  # noqa: F401
 )
 from vera_mcp.room_redact import message_view, messages_view, tasks_view
 from vera_mcp.room_task_tools import (  # noqa: F401
+    room_task_cancel,
     room_task_claim,
     room_task_history,
     room_task_metadata_correct,
@@ -92,4 +93,4 @@ async def room_history(
 ROOM_TOOLS = (room_post, room_inbox, room_ack, room_history, room_task_open,
               room_task_claim, room_task_update, room_task_progress, room_task_state,
               room_task_history, room_task_wait, room_task_next, room_task_release,
-              room_tasks)
+              room_tasks, room_task_cancel)

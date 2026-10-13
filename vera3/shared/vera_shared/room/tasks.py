@@ -116,8 +116,8 @@ async def claim(*, room: str, task_id: str, agent: str, lease_seconds: int,
                 s.add(row)
                 await record_event(s, room=room, task_id=task_id, kind="created",
                                    agent=agent, text=title)
-            elif row.status == "done":
-                raise TaskBusy(f"task {task_id!r} is done; open a new task_id")
+            elif row.status in ("done", "cancelled"):
+                raise TaskBusy(f"task {task_id!r} is {row.status}; open a new task_id")
             if (row is not None and await attestation_for(s, room, task_id)
                     and (agent != "dot" or title is not None or paths is not None)):
                 raise TaskBusy("attested task may only be claimed by dot without edits")
