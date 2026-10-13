@@ -23,6 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from vera_shared.db.engine import get_session
 from vera_shared.events.queries import PREVIEW_CHARS
 from vera_shared.events.visibility import NOT_HIDDEN_SQL
+from vera_shared.redact_view import redact_view
 
 _BY_SENDER_ID = ("telegram", "slack", "instagram")
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
@@ -122,5 +123,5 @@ async def timeline_events(entity_id: int, start: datetime, end: datetime,
         rows = (await s.execute(stmt, params)).mappings().all()
     return [{"id": r["id"], "source": r["source"], "account": r["account"],
              "occurred_at": str(r["occurred_at"]),
-             "content_preview": (r["content_text"] or "")[:PREVIEW_CHARS],
+             "content_preview": redact_view(r["content_text"] or "")[:PREVIEW_CHARS],
              "importance": r["importance"], "project": r["project"]} for r in rows]

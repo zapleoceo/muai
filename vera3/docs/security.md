@@ -105,6 +105,37 @@ identifier search keeps working. These views do not change stored events or
 audit records. SQL redaction applies only to the returned rows; aliases that
 hide a secret column name require the value to match a text pattern.
 
+### Выдача: дашборд, комната, gateway
+
+Та же `redact_view`/`redact_tree`, только на выходе; хранилище и аудит не меняются.
+
+- **gateway** `GET /api/events/{id}`: `content_text` и `triage_metadata` (`redact_tree`);
+  id, время, источник, статус не трогаются.
+- **Дашборд**: карточка события (`event_card`: тело, заголовки, стенограмма
+  `content_extra`, `metadata`, `triage_error`) и список/поиск «Входящее» (`event_row`)
+  маскируют строку через `redact_event_row` до разбора и до `esc`. Панель графа
+  (`panel_events.recent_events_status`: `snippet`, `subject`) и `event_links.timeline_events`
+  (`content_preview`) маскируют текст до обрезки, чтобы обрезка не оставила половину ключа.
+- **«Показать как есть»**: `?raw=1` на `/events/{id}` учитывает `owner_wants_raw` только при
+  действующей сессии владельца (проверка `require_owner` повторяется внутри, а не
+  берётся из маршрута); без сессии или с чужой cookie, а также при любом другом значении
+  параметра отдаётся маска. Ответ карточки идёт с `Cache-Control: no-store`; сырой текст
+  не логируется.
+- **Комната агентов** (`room_inbox`, `room_history`, `room_tasks`, `room_task_history`,
+  `room_task_questions`; модуль `vera_mcp/room_redact.py`: `messages_view`, `tasks_view`,
+  `events_view`, `questions_view`) маскируют только свободный текст: `body`; `title`, `note`,
+  `next_action`, `last_progress_text`, `waiting_reason` и `refs[].excerpt`; `text` события
+  журнала; `question` и `answers[].text`. `message_id`, `task_id`, `id`, `from`/`to`,
+  `status`, `fencing_token`, поля аренды, время, `refs.kind/ref` остаются байт в байт:
+  хранится и сверяется сырое, поэтому повтор `message_id` по-прежнему схлопывается, а
+  `room_post` возвращает сообщение через `message_view`. Так же через `task_view`/`question_view`
+  маскируют ответ все инструменты, возвращающие задачу или вопрос (open, claim, update,
+  progress, state, wait, next, release, metadata_correct, handoff*, attested_complete,
+  ask/answer_ack). В `event.data` маскируются `before`/`after`, `next_action`, `title`, `note`,
+  `reason`, `result`, `question`, `text` и `refs[].excerpt`. Задачные инструменты живут в
+  `room_task_tools.py`, общие типы в `room_common.py`; имена инструментов и порядок
+  `ROOM_TOOLS` не менялись.
+
 ## Граница LLM (`redact_input`)
 
 Всё, что Vera отправляет внешнему провайдеру, маскируется `redact_view` на

@@ -13,6 +13,7 @@ from vera_shared.room import tasks
 from vera_shared.voice_help import attest as svc
 
 from vera_mcp.auth import client_of
+from vera_mcp.room_redact import task_view
 from vera_mcp.room_tools import Ident, Room, _room
 
 
@@ -45,7 +46,7 @@ async def room_task_attested_complete(
     result = await tasks.complete_attested(
         room=_room(room), task_id=task_id, agent=client_of(ctx),
         fencing_token=fencing_token, reply_text=reply_text, receipt_id=receipt_id)
-    return {"ok": True, **result}
+    return {"ok": True, **{**result, "task": task_view(result["task"])}}
 
 
 ATTEST_TOOLS = (room_task_attest, room_task_attested_complete)

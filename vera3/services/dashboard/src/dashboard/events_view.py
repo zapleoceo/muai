@@ -9,6 +9,7 @@ from urllib.parse import urlencode
 
 from dashboard.event_text import describe, one_line, parse_content, snippet_of
 from dashboard.events_filters import source_options, status_options
+from dashboard.redaction import redact_event_row
 from dashboard.render import data_table, esc, local_dt
 from dashboard.source_registry import resolve_source
 from dashboard.ui.components import status_dot
@@ -81,6 +82,7 @@ def _tech_cells(e: Mapping[str, Any]) -> str:
 
 
 def event_row(e: Mapping[str, Any], tech: bool) -> str:
+    e = redact_event_row(e)
     src = resolve_source(e["source"] or "")
     line = describe(parse_content(e["content_text"]), e.get("metadata"))
     who = esc(line.who or src.title)

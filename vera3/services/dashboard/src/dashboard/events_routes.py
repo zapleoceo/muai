@@ -30,6 +30,7 @@ from dashboard.events_view import (  # noqa: F401
     more_link,
     parse_cursor,
 )
+from dashboard.redaction import owner_wants_raw
 from dashboard.render import _render, owner_or_redirect
 from dashboard.stats import get_stats
 
@@ -158,7 +159,9 @@ async def event_page(request: Request, event_id: int):
 
     if isinstance(row["metadata"], str):      # SQLite отдаёт JSON строкой, Postgres — словарём
         row = {**row, "metadata": json.loads(row["metadata"])}
-    return HTMLResponse(_render("events", event_card(row, await _people_links(row))))
+    raw = owner_wants_raw(request)
+    return HTMLResponse(_render("events", event_card(row, await _people_links(row), raw)),
+                        headers={"Cache-Control": "no-store"})
 
 
 async def _people_links(row) -> dict[str, int]:
