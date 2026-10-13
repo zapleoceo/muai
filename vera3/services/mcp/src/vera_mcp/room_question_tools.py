@@ -8,7 +8,7 @@ from pydantic import Field
 from vera_shared.room import questions
 
 from vera_mcp.auth import client_of
-from vera_mcp.room_redact import questions_view
+from vera_mcp.room_redact import question_view, questions_view
 from vera_mcp.room_tools import Ident, Room, _room
 
 Token = Annotated[int, Field(ge=1)]
@@ -23,7 +23,7 @@ async def room_task_ask(
     """Задать вопрос владельцу: задача станет blocked (owner=owner), в комнату уйдёт сообщение со статусом question. Ответит владелец в дашборде; смотри room_task_questions, подтверди room_task_answer_ack. Ask the owner a blocking question."""
     q = await questions.ask(room=_room(room), task_id=task_id, agent=client_of(ctx),
                             fencing_token=fencing_token, question=question, refs=refs)
-    return {"ok": True, "question": q}
+    return {"ok": True, "question": question_view(q)}
 
 
 async def room_task_answer_ack(
@@ -34,7 +34,7 @@ async def room_task_answer_ack(
     act = questions.withdraw if withdraw else questions.ack
     q = await act(room=_room(room), task_id=task_id, qid=qid, agent=client_of(ctx),
                   fencing_token=fencing_token)
-    return {"ok": True, "question": q}
+    return {"ok": True, "question": question_view(q)}
 
 
 async def room_task_questions(task_id: Ident, room: Room = "main") -> dict[str, Any]:

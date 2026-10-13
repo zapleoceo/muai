@@ -103,7 +103,7 @@ async def get_event(
             "source_event_id": row.source_event_id,
             "account": row.account,
             "category": row.category,
-            "content_text": redact_view(row.content_text),
+            "content_text": redact_view(row.content_text) if row.content_text else row.content_text,
             "occurred_at": row.occurred_at.isoformat(),
             "received_at": row.received_at.isoformat() if row.received_at else None,
             "triage_status": row.triage_status,

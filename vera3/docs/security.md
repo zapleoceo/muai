@@ -128,4 +128,10 @@ hide a secret column name require the value to match a text pattern.
   журнала; `question` и `answers[].text`. `message_id`, `task_id`, `id`, `from`/`to`,
   `status`, `fencing_token`, поля аренды, время, `refs.kind/ref` остаются байт в байт:
   хранится и сверяется сырое, поэтому повтор `message_id` по-прежнему схлопывается, а
-  `room_post` отвечает сообщением автора как есть. `event.data` не маскируется.
+  `room_post` возвращает сообщение через `message_view`. Так же через `task_view`/`question_view`
+  маскируют ответ все инструменты, возвращающие задачу или вопрос (open, claim, update,
+  progress, state, wait, next, release, metadata_correct, handoff*, attested_complete,
+  ask/answer_ack). В `event.data` маскируются `before`/`after`, `next_action`, `title`, `note`,
+  `reason`, `result`, `question`, `text` и `refs[].excerpt`. Задачные инструменты живут в
+  `room_task_tools.py`, общие типы в `room_common.py`; имена инструментов и порядок
+  `ROOM_TOOLS` не менялись.

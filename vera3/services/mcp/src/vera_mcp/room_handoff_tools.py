@@ -8,6 +8,7 @@ from pydantic import Field
 from vera_shared.room import handoff
 
 from vera_mcp.auth import client_of
+from vera_mcp.room_redact import task_view
 from vera_mcp.room_tools import MAX_LEASE_S, Agent, Ident, Room, _room
 
 Token = Annotated[int, Field(ge=1)]
@@ -20,7 +21,7 @@ async def room_task_handoff(
     """Предложить задачу агенту to. Аренда остаётся у тебя, пока он не примет (room_task_handoff_accept); ему уйдёт сообщение в комнате. Отозвать — room_task_handoff_decline с cancel=true. Offer a task to another agent; the lease stays yours until accepted."""
     task = await handoff.offer(room=_room(room), task_id=task_id, agent=client_of(ctx),
                                fencing_token=fencing_token, to_agent=to, note=note)
-    return {"ok": True, "task": task}
+    return {"ok": True, "task": task_view(task)}
 
 
 async def room_task_handoff_accept(
@@ -32,7 +33,7 @@ async def room_task_handoff_accept(
     """Принять переданную тебе задачу: аренда переходит к тебе, fencing_token растёт на 1 (токен отправителя устаревает). Верни новый токен во все правки. Accept a handoff offered to you."""
     task = await handoff.accept(room=_room(room), task_id=task_id, agent=client_of(ctx),
                                 session=session, account=account, lease_seconds=lease_seconds)
-    return {"ok": True, "task": task}
+    return {"ok": True, "task": task_view(task)}
 
 
 async def room_task_handoff_decline(
@@ -50,7 +51,7 @@ async def room_task_handoff_decline(
     else:
         task = await handoff.decline(room=_room(room), task_id=task_id, agent=me,
                                      reason=reason)
-    return {"ok": True, "task": task}
+    return {"ok": True, "task": task_view(task)}
 
 
 HANDOFF_TOOLS = (room_task_handoff, room_task_handoff_accept, room_task_handoff_decline)
