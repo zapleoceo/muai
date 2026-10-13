@@ -210,3 +210,8 @@ control-событие `waiting`, raw `waiting`) само по себе не д�
 сообщение OFFICE_RUNTIME_V1 целиком: страница не показывает свежей сводки
 (безопасный отказ). `observed_at` источника не может быть позже `checked_at` или
 позже текущего времени отчёта.
+
+`details_by_task` группирует переходы и результаты по задачам один раз и собирает
+`CardDetails` для всех видимых карточек; чистые помощники часового отчёта
+(`status_info_of`, `evidence_of`, `next_question_reminder`) живут в
+`office_hourly_status.py`, а `office_hourly_service.py` реэкспортирует их.
