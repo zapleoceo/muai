@@ -33,7 +33,7 @@ def attention(state: str) -> Attention:
 
 
 def event(task_id: str, kind: str, minutes_ago: int, text: str = "Результат") -> SimpleNamespace:
-    return SimpleNamespace(room="main", task_id=task_id, kind=kind,
+    return SimpleNamespace(room="main", task_id=task_id, kind=kind, agent="dot",
                            at=NOW - timedelta(minutes=minutes_ago), id=minutes_ago,
                            text=text, data={"next_checkpoint_seconds": None}
                            if kind == "progress" else None)
@@ -46,10 +46,9 @@ def test_statuses_sum_once_and_done_is_hidden() -> None:
     amap = {(r.room, r.task_id): attention(s) for r, s in zip(rows, states, strict=True)}
     report = build_report(rows, amap, [], [event("done", "done", 10)], NOW,
                           [event("review", "review", 5)])
-    assert sum(report.counts.values()) == len(rows)
+    assert sum(report.counts.values()) == len(rows) - 1
     assert len(report.cards) == 4
-    assert report.counts == {"Новая / в очереди": 1, "В работе": 1, "Ждёт / зависимость": 1,
-                             "Ревью": 1, "Готово": 1, "Отменена": 0}
+    assert report.counts == {"Новая / в очереди": 1, "В работе": 1, "Блокер": 1, "Ревью": 1}
     assert report.results == []
     html = report_body(report)
     assert "Готово</span>" not in html
@@ -77,7 +76,7 @@ def test_open_question_and_six_hour_checkpoint() -> None:
     q = SimpleNamespace(room="main", task_id="q", status="open",
                         question="Какой вариант выбрать?", asked_at=NOW - timedelta(hours=7))
     report = build_report([row], amap, [q], [], NOW)
-    assert report.cards[0].status == "Ждёт / зависимость"
+    assert report.cards[0].status == "Блокер"
     assert next_question_reminder(q, NOW) == NOW + timedelta(hours=5)
     assert "Какой вариант выбрать?" in report_body(report)
 
@@ -90,14 +89,19 @@ def test_answered_hold_is_review_without_reasking() -> None:
     assert "Следующий шестичасовой контроль" not in report_body(report)
 
 
-def test_cancelled_is_separate_from_done_and_active_wip() -> None:
-    row = task("cancelled", "cancelled")
-    amap = {(row.room, row.task_id): attention("cancelled")}
-    report = build_report([row], amap, [], [event("cancelled", "progress", 4)], NOW)
-    assert report.counts["Отменена"] == 1
-    assert report.counts["В работе"] == 0
+def test_cancelled_and_done_are_absent_from_the_report() -> None:
+    rows = [task("cancelled", "cancelled"), task("finished", "done")]
+    amap = {(r.room, r.task_id): attention(r.status) for r in rows}
+    events = [event("cancelled", "progress", 4), event("finished", "done", 4)]
+    report = build_report(rows, amap, [], events, NOW)
+    assert report.cards == []
     assert report.results == []
-    assert "Отменено владельцем" in report_body(report)
+    assert sum(report.counts.values()) == 0
+    html = report_body(report)
+    assert "Отменена" not in html
+    assert "Отменено владельцем" not in html
+    assert "cancelled</a>" not in html
+    assert "finished</a>" not in html
 
 
 def test_review_event_and_pause_are_distinct() -> None:
@@ -106,7 +110,7 @@ def test_review_event_and_pause_are_distinct() -> None:
     amap = {(r.room, r.task_id): attention("unassigned") for r in rows}
     controls = [event("review", "review", 2), event("pause", "paused", 2)]
     report = build_report(rows, amap, [], [], NOW, controls)
-    assert [c.status for c in report.cards] == ["Ждёт / зависимость", "Ревью"]
+    assert [c.status for c in report.cards] == ["Блокер", "Ревью"]
     assert "Пауза зафиксирована" in report_body(report)
 
 
@@ -195,3 +199,15 @@ def test_newer_check_wins_when_older_observation_arrives_later() -> None:
     late_old.message_id = "late-old-check"
     snapshot = latest_runtime_snapshot([late_old, recent], NOW)
     assert snapshot is not None and snapshot.message_id == "recent-check"
+
+
+def test_blocker_label_shows_confidence() -> None:
+    blocked, asked = task("blocked", "blocked"), task("asked", holder="dot")
+    amap = {(r.room, r.task_id): attention("in_progress") for r in (blocked, asked)}
+    q = SimpleNamespace(room="main", task_id="asked", status="open", question="Вопрос?",
+                        asked_at=NOW - timedelta(hours=1))
+    report = build_report([blocked, asked], amap, [q], [], NOW)
+    assert report.counts["Блокер"] == 2
+    html = report_body(report)
+    assert "Блокер · не подтверждён" in html
+    assert "Блокер · подтверждён" in html

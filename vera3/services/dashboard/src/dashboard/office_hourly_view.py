@@ -51,18 +51,19 @@ def _blocker(card: HourlyCard, now) -> str:
 
 def _card(card: HourlyCard, now) -> str:
     row = card.row
-    extra = _blocker(card, now) if card.info.confirmed_blocker else ""
-    reason = (f'<p>Причина ожидания: {esc(card.info.reason)}</p>'
-              if card.info.reason and not extra else "")
-    cancel = (f'<p>Причина отмены: {esc(row.note or "Не зафиксирована")}</p>'
-              if card.status == "Отменена" else "")
+    extra = _blocker(card, now) if card.info.open_question else ""
+    label = (f'{card.status} · {card.info.blocker_confidence}'
+             if card.info.blocker_confidence else card.status)
+    reason = "".join(f'<p>{title}: {esc(value)}</p>' for title, value in (
+        ("Причина ожидания", card.info.wait_reason), ("Зависимость", card.info.dependency))
+        if value)
     return (f'<article class="oh-card{" oh-blocker" if extra else ""}">'
-            f'<span class="oh-pill">{esc(card.status)}</span>'
+            f'<span class="oh-pill">{esc(label)}</span>'
             f'<span class="oh-meta">{esc(row.project or "Без проекта")} · {esc(row.room)}/{esc(row.task_id)}</span>'
             f'<h3><a href="{_task_url(card)}">{esc(row.title or row.task_id)}</a></h3>'
             f'<p>Ответственный: {esc(row.responsible or row.lease_holder or "не указан")}</p>'
             f'<p>Следующее действие: {esc(row.next_action or "не указано")}</p>'
-            f'{cancel}{reason}'
+            f'{reason}'
             f'<p class="oh-meta">{esc(card.coordination_note)}</p>'
             f'<p class="oh-meta">Сопоставление с внешним runtime: {esc(card.runtime_mapping)}</p>'
             f'<p class="oh-meta">Последний зафиксированный результат: {_result_line(card)}</p>'
@@ -92,8 +93,8 @@ def _projects(report: HourlyReport) -> str:
                             else "")
         parts.append(f'<article><h3>{esc(project)}</h3><p>Room lease: {len(active)} · '
                      f'проверенные runtime в работе: {external_text}{external_warning} · '
-                     f'очередь: {counts["Новая / в очереди"]} · ждёт: {counts["Ждёт / зависимость"]} · '
-                     f'ревью: {counts["Ревью"]} · отменена: {counts["Отменена"]}</p>'
+                     f'очередь: {counts["Новая / в очереди"]} · блокер: {counts["Блокер"]} · '
+                     f'ревью: {counts["Ревью"]}</p>'
                      f'<p class="oh-meta">Фокус Room: {active_text}{overflow}</p></article>')
     return "".join(parts) or '<p class="oh-note">Открытых карточек нет.</p>'
 
@@ -125,8 +126,7 @@ def _runtime(report: HourlyReport) -> str:
 def report_body(report: HourlyReport) -> str:
     counts = report.counts
     tiles = "".join(f'<article class="oh-tile"><strong>{counts[label]}</strong><span>{label}</span></article>'
-                    for label in ("Новая / в очереди", "В работе", "Ждёт / зависимость", "Ревью",
-                                  "Отменена"))
+                    for label in ("Новая / в очереди", "В работе", "Блокер", "Ревью"))
     events = "".join(
         f'<li>{local_dt(e.at)} · <a href="/tasks/{quote(e.room, safe="")}/{quote(e.task_id, safe="")}">'
         f'{esc(e.task_id)}</a> · {esc(e.text or e.kind)}</li>' for e in report.results)
@@ -141,9 +141,9 @@ def report_body(report: HourlyReport) -> str:
             'их не прибавляем к карточному счётчику. Свежесть результата указана отдельно от статуса.</p>'
             f'{_runtime(report)}'
             f'<h2>Статусы карточек Room</h2><div class="oh-grid">{tiles}</div>'
-            f'<p class="oh-meta">Незакрытых карточек: {len(report.cards) - counts["Отменена"]}. '
+            f'<p class="oh-meta">Незакрытых карточек: {len(report.cards)}. '
             f'Внешняя связь не подтверждена: {sum(c.runtime_mapping == "Не установлена" for c in report.cards)}. '
-            'Готовые скрыты из списка и показателей; отменённые исключены из WIP. Данные сохранены в Room.</p>'
+            'Готовые и отменённые не входят в отчёт: ни в списки, ни в показатели. Данные сохранены в Room.</p>'
             f'<h2>Результаты за час по Room</h2><p class="oh-note">Это записи исполнителей с точным временем; '
             f'независимое подтверждение проверяйте по ссылке на карточку.</p>{results}'
             f'<h2>Проекты</h2><div class="oh-projects">{_projects(report)}</div>'
