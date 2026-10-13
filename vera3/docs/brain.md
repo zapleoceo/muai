@@ -909,3 +909,11 @@ ANALYZE на проде ~114 мс. `is_hash` отличает хэш от тик
 попадания не добавляет смысловых строк-«для заполнения». В остальных вопросах `identifier_miss_note` запрещает категоричное «нет».
 Тесты: `test_search_identifiers_authorship.py`, `test_gmail_diff_markup.py`,
 `test_search_commit_hash.py`.
+
+### Fresh events before embedding
+
+For an unscoped query with a query vector but no usable text terms, the
+primary candidate pool includes recent visible events even when their
+embedding is still pending. Rows with embeddings retain vector similarity;
+the ANN pass can still add older semantic matches. This is a read-path change:
+it does not alter stored events, triage, links, or embedding jobs.
