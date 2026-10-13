@@ -909,6 +909,17 @@ ANALYZE на проде ~114 мс. `is_hash` отличает хэш от тик
 попадания не добавляет смысловых строк-«для заполнения». В остальных вопросах `identifier_miss_note` запрещает категоричное «нет».
 Тесты: `test_search_identifiers_authorship.py`, `test_gmail_diff_markup.py`,
 `test_search_commit_hash.py`.
+**Отрицательные статусы — не реализация** (room #1751). `AUTHORSHIP_RULES` дополнены
+правилом: «лише опис / без змін / только описание / изменений нет / no code changes /
+description only / не реалізовано / не сделано / рішення не прийнято / варианты (а)/(б),
+решение за …» не попадают в «Что сделано», а идут в «Открыто / ждёт решения»; «сделано» —
+только при Done/Closed, merged MR или деплое; MR на staging или в ревью — «в работе / на
+staging». В `_TRIAGE_RULES` (brain-triage) одно предложение: `signals.summary` сохраняет
+отрицание и открытый статус. Обе константы статичны и стоят в стабильном префиксе промпта.
+Тест: `test_negation_recall_rules.py`. Ручной прогон на живом brain-search (не pytest):
+`scripts/eval_negation_recall.py --samples N`, окружение `SEARCH_URL`, `INTERNAL_SECRET`;
+`/search` с `use_agent=false`, фикстуры uk/ru/en, «варианты, решение за X», «MR on staging» и
+контрольный merged+deployed случай; проверка по разделам «Что сделано» / «Открыто».
 
 ### Fresh events before embedding
 
