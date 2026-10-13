@@ -124,3 +124,67 @@ def test_nonempty_dir_not_removed(tmp_path: Path) -> None:
     f = _make(tmp_path)
     _run(tmp_path)
     assert f.parent.exists()
+
+
+def _sums(f: Path, line: str) -> None:
+    (f.parent / "SHA256SUMS").write_text(line, encoding="utf-8", newline="")
+
+
+def _sha(f: Path) -> str:
+    return hashlib.sha256(f.read_bytes()).hexdigest()
+
+
+def test_name_with_spaces_matches_and_deletes(tmp_path: Path) -> None:
+    f = _make(tmp_path, "my dump.dump")
+    _confirm(f)
+    _run(tmp_path)
+    assert not f.exists()
+
+
+def test_name_with_spaces_not_confused_with_prefix(tmp_path: Path) -> None:
+    f = _make(tmp_path, "my.dump", listed=False)
+    _sums(f, f"{_sha(f)}  ./my dump.dump\n")
+    _confirm(f)
+    assert "not_listed=1" in _run(tmp_path)
+    assert f.exists()
+
+
+def test_binary_marker_star_in_sha256sums(tmp_path: Path) -> None:
+    f = _make(tmp_path, "b.dump", listed=False)
+    _sums(f, f"{_sha(f)} *b.dump\n")
+    _confirm(f)
+    _run(tmp_path)
+    assert not f.exists()
+
+
+def test_marker_crlf_and_uppercase_accepted(tmp_path: Path) -> None:
+    f = _make(tmp_path)
+    Path(str(f) + ".nas-confirmed").write_bytes(_sha(f).upper().encode() + b"\r\n")
+    _run(tmp_path)
+    assert not f.exists()
+
+
+def test_symlink_marker_rejected(tmp_path: Path) -> None:
+    f = _make(tmp_path)
+    real = tmp_path / "real-marker"
+    real.write_text(_sha(f) + "\n", encoding="utf-8")
+    try:
+        os.symlink(real, str(f) + ".nas-confirmed")
+    except OSError:
+        pytest.skip("симлинки недоступны")
+    assert "no_confirm=1" in _run(tmp_path)
+    assert f.exists()
+
+
+def test_content_changed_since_sums_is_kept(tmp_path: Path) -> None:
+    f = _make(tmp_path)
+    _confirm(f)
+    f.write_bytes(b"tampered after confirmation")
+    os.utime(f, (OLD + 600, OLD))
+    out = _run(tmp_path)
+    assert f.exists()
+    assert "changed=1" in out
+
+
+def test_summary_logged_when_nothing_found(tmp_path: Path) -> None:
+    assert "удалено 0 MB" in _run(tmp_path)

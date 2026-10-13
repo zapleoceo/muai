@@ -33,21 +33,28 @@ def _days(tmp_path: Path, hist: str, now: int, used_gb: float, total_gb: float) 
 
 
 def test_default_rate_without_history(tmp_path: Path) -> None:
-    # 72 ГБ, занято 57: до 92% = 9.24 ГБ, при 0.45 ГБ/сутки = 20 суток
-    assert _days(tmp_path, "", 1_000_000, 57, 72) == 20
+    # 72 ГБ, занято 57: до df-видимых 92% (сырая доля 91%) 8.52 ГБ / 0.45 = 18 суток
+    assert _days(tmp_path, "", 1_000_000, 57, 72) == 18
 
 
 def test_measured_rate_from_history(tmp_path: Path) -> None:
     now = 10 * 86400
     hist = f"{now - 2 * 86400} {int(55 * GB)}\n"  # +1 ГБ/сутки
-    assert _days(tmp_path, hist, now, 57, 72) == 9
+    assert _days(tmp_path, hist, now, 57, 72) == 8
 
 
 def test_short_history_falls_back_to_default(tmp_path: Path) -> None:
     now = 10 * 86400
     hist = f"{now - 3600} {int(50 * GB)}\n"
-    assert _days(tmp_path, hist, now, 57, 72) == 20
+    assert _days(tmp_path, hist, now, 57, 72) == 18
 
 
 def test_over_limit_is_zero(tmp_path: Path) -> None:
     assert _days(tmp_path, "", 1_000_000, 70, 72) == 0
+
+
+def test_boundary_targets_df_visible_92(tmp_path: Path) -> None:
+    # df округляет вверх: при 91.2% он уже показывает 92%, запаса нет.
+    # Сырая модель (0.92) дала бы здесь 0.8 ГБ запаса, т.е. 1 сутки.
+    assert _days(tmp_path, "", 1_000_000, 91.2, 100) == 0
+    assert _days(tmp_path, "", 1_000_000, 90.5, 100) == 1  # 0.5 ГБ / 0.45

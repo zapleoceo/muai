@@ -6,8 +6,10 @@
 #
 # Правило удаления файла F (*.dump, *.tar.gz):
 #   1. в SHA256SUMS его каталога есть строка "<sha256>  ./F" (пишет vera-backup.sh);
-#   2. рядом лежит F.nas-confirmed, первое слово которого равно этому sha256;
-#   3. mtime старше SETTLE_MIN минут и у файла нет открытых дескрипторов.
+#   2. рядом лежит F.nas-confirmed (обычный файл, не симлинк), первое слово которого
+#      (hex, регистр и CR игнорируются) равно этому sha256;
+#   3. mtime старше SETTLE_MIN минут и у файла нет открытых дескрипторов;
+#   4. непосредственно перед rm sha256 самого файла пересчитан и равен записанному.
 # Нет SHA256SUMS / нет строки / нет, пустое или чужое подтверждение — файл остаётся.
 # atime НЕ учитывается: он доказывает лишь, что чтение началось, а не что NAS
 # сохранил полную копию (13.10.2026 удалено 595 МБ после 70-секундной сессии NAS).
@@ -32,28 +34,31 @@ declare -A reasons=()
 keep() { # $1 причина, $2 размер
   kept=$((kept+1))
   reasons[$1]=$(( ${reasons[$1]:-0} + 1 ))
-  case "$1" in no_sums|not_listed|no_confirm|empty_confirm|mismatch) unconf_bytes=$((unconf_bytes+$2)) ;; esac
+  case "$1" in no_sums|not_listed|no_confirm|empty_confirm|mismatch|changed) unconf_bytes=$((unconf_bytes+$2)) ;; esac
 }
 
-while IFS= read -r f; do
-  sz=$(stat -c %s "$f")
+while IFS= read -r -d '' f; do
+  sz=$(stat -c %s "$f" 2>/dev/null) || continue
+  mt=$(stat -c %Y "$f" 2>/dev/null) || continue
   dir=$(dirname "$f"); name=$(basename "$f")
   sums="$dir/SHA256SUMS"
   [ -f "$sums" ] || { keep no_sums "$sz"; continue; }
-  want=$(awk -v n="$name" '{p=$2; sub(/^\*/,"",p); sub(/^\.\//,"",p); if (p==n) {print $1; exit}}' "$sums")
+  # имя — всё после разделителя "<sha>  " или "<sha> *", без "./"; пробелы в имени допустимы
+  want=$(NAME="$name" awk '{sub(/\r$/,""); h=$1; r=substr($0,length(h)+2); sub(/^[ *]/,"",r); sub(/^\.\//,"",r); if (r==ENVIRON["NAME"]) {print tolower(h); exit}}' "$sums")
   [ -n "$want" ] || { keep not_listed "$sz"; continue; }
   conf="$f.nas-confirmed"
-  [ -f "$conf" ] || { keep no_confirm "$sz"; continue; }
-  got=$(awk 'NR==1 {print $1; exit}' "$conf")
+  { [ -f "$conf" ] && [ ! -L "$conf" ]; } || { keep no_confirm "$sz"; continue; }
+  got=$(tr -d '\r' < "$conf" | awk 'NR==1 {print tolower($1); exit}')
   [ -n "$got" ] || { keep empty_confirm "$sz"; continue; }
   [ "$got" = "$want" ] || { keep mismatch "$sz"; continue; }
-  mt=$(stat -c %Y "$f")
   [ $(( (now - mt) / 60 )) -ge "$SETTLE_MIN" ] || { keep unsettled "$sz"; continue; }
   if command -v fuser >/dev/null 2>&1 && fuser -s "$f" 2>/dev/null; then
     keep open_fd "$sz"; continue
   fi
-  rm -f "$f" && freed=$((freed+sz))
-done < <(find "$ROOT" -type f \( -name '*.dump' -o -name '*.tar.gz' \))
+  cur=$(sha256sum < "$f" 2>/dev/null | awk '{print tolower($1)}') || cur=""
+  [ "$cur" = "$want" ] || { keep changed "$sz"; continue; }
+  if rm -f "$f"; then freed=$((freed+sz)); else keep rm_failed "$sz"; fi
+done < <(find "$ROOT" -type f \( -name '*.dump' -o -name '*.tar.gz' \) -print0)
 
 find "$ROOT" -mindepth 1 -type d -empty -delete 2>/dev/null || true
 
