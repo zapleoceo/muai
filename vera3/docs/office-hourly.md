@@ -132,3 +132,31 @@ URL: `https://dima.veranda.my/office/hourly`. Для отката достато
 `latest_runtime_snapshot` выбирает самое позднее время проверки даже при
 поздней доставке старого сообщения. `RuntimeSnapshot.is_fresh` ограничивает её актуальность; `RuntimeEntry`
 сохраняет каждый источник как отдельное наблюдение без склейки с Room.
+
+## Детали карточки (Ф2)
+
+Каждая карточка несёт `CardDetails` (`HourlyCard.details`), собранный только из уже
+читаемых таблиц Room: ни таблиц, ни токенов, ни записи. Готовые и отменённые
+по-прежнему исключены из отчёта; детали строятся лишь для видимых карточек.
+
+- Артефакт: `artifact_of` берёт последнее «событие результата» карточки (то же
+  определение, что в `load_report`: `done` либо `progress` с текстом и
+  `next_checkpoint_seconds`). Текст проходит `safe_text` (редакция секретов
+  `redact_view`, усечение до 280 символов; HTML-экранирует рендер). Ссылки
+  `ref_links`: только `kind`/`ref`, ссылкой (`<a>`) становится лишь `url` со схемой
+  http/https. События результата сами refs не несут, поэтому берутся refs задачи
+  (`RoomTaskRow.refs`); если в `data.refs` события они есть, приоритет у них.
+  Модель `Artifact`, `RefLink`.
+- Исполнитель: `executor_of` — живой `lease_holder`, иначе `responsible`, иначе
+  `owner`; подпись говорит, какое из трёх (`Executor.label`).
+- Следующий шаг: `next_action` через `safe_text`.
+- Очередь и зависимости: `dependencies_of` даёт для каждого id из `depends_on`
+  текущий пользовательский статус из `describe_status` (`DependencyState`);
+  неизвестный id — «не найдена». `waiting_until` и `waiting_reason` выводятся из
+  `StatusInfo.dependency` и `StatusInfo.wait_reason` без дублирования логики.
+- За час: `delta_of` собирает `HourlyDelta` — переходы статуса за `[as_of - 1h, as_of]`
+  по control-событиям (`TRANSITION_KINDS`, включая `cancelled`) и число новых
+  результатов окна; без того и другого рендер пишет «без изменений».
+  Единственный дополнительный запрос — `load_transitions` (один пакетный select
+  по `kind` и `at`, без N+1). `build_details` собирает всё вместе, `details_html`
+  (`office_card_view.py`) рисует блок.

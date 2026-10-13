@@ -20,6 +20,8 @@ from vera_shared.room.attention import (
 )
 from vera_shared.timeutil import utc_naive_now
 
+from dashboard.office_card_details import CardDetails, build_details
+from dashboard.office_card_queries import load_transitions
 from dashboard.office_runtime_service import RuntimeSnapshot, latest_runtime_snapshot
 from dashboard.office_status import (
     CANCELLED,
@@ -48,6 +50,7 @@ class HourlyCard:
     evidence: str
     runtime_mapping: str
     coordination_note: str
+    details: CardDetails | None = None
 
 
 @dataclass(frozen=True)
@@ -97,7 +100,8 @@ def next_question_reminder(question: RoomTaskQuestionRow, now: datetime) -> date
 def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Attention],
                  questions: list[RoomTaskQuestionRow], events: list[RoomTaskEventRow],
                  now: datetime, controls: list[RoomTaskEventRow] | None = None,
-                 control_next: list[RoomTaskEventRow] | None = None) -> HourlyReport:
+                 control_next: list[RoomTaskEventRow] | None = None,
+                 transitions: list[RoomTaskEventRow] | None = None) -> HourlyReport:
     open_questions = {(q.room, q.task_id): q for q in questions if q.status == "open"}
     control_events = {(e.room, e.task_id): e for e in (controls or [])}
     control_by_task = {k: e.kind for k, e in control_events.items()}
@@ -117,6 +121,8 @@ def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Atte
             results.append(event)
     cards: list[HourlyCard] = []
     counts = dict.fromkeys(VISIBLE_STATUSES, 0)
+    infos: dict[tuple[str, str], StatusInfo] = {}
+    pending = []
     for row in rows:
         key = (row.room, row.task_id)
         att = attentions[key]
@@ -126,11 +132,23 @@ def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Atte
         info = status_info_of(row, att, question, now, control, last.at if last else None,
                               control_events.get(key), next_events.get(key))
         status = info.status
+        infos[key] = info
         if status in counts:
             counts[status] += 1
-            cards.append(HourlyCard(row, status, info, att, question, last,
-                                    evidence_of(last, now), "Не установлена",
-                                    "Пауза зафиксирована" if control == "paused" else ""))
+            pending.append((row, status, info, att, question, last, control))
+    by_task: dict[tuple[str, str], list[RoomTaskEventRow]] = {}
+    for e in transitions or []:
+        by_task.setdefault((e.room, e.task_id), []).append(e)
+    result_by_task: dict[tuple[str, str], list[RoomTaskEventRow]] = {}
+    for e in results:
+        result_by_task.setdefault((e.room, e.task_id), []).append(e)
+    for row, status, info, att, question, last, control in pending:
+        key = (row.room, row.task_id)
+        details = build_details(row, last, now, infos, by_task.get(key, []),
+                                result_by_task.get(key, []))
+        cards.append(HourlyCard(row, status, info, att, question, last,
+                                evidence_of(last, now), "Не установлена",
+                                "Пауза зафиксирована" if control == "paused" else "", details))
     cards.sort(key=lambda c: (STATUS_LABELS.index(c.status), c.row.priority,
                               (c.row.project or "").casefold(), c.row.task_id))
     visible = {(c.row.room, c.row.task_id) for c in cards}
@@ -188,6 +206,7 @@ async def load_report(now: datetime | None = None) -> HourlyReport:
                 ev.id.in_(select(following.c.id).where(following.c.rank == 1))))
             control_next = list(next_result.scalars().all())
         runtime_rows = list(runtime_result.scalars().all())
+        transitions = await load_transitions(s, now, WINDOW)
     controls_by_task = {(e.room, e.task_id): e.kind for e in controls}
     open_by_task = {(q.room, q.task_id): q for q in questions if q.status == "open"}
     answered = {(q.room, q.task_id) for q in questions if q.status == "answered"}
@@ -198,7 +217,8 @@ async def load_report(now: datetime | None = None) -> HourlyReport:
         attentions[key] = (Attention(ANSWERED, "", None, None, None) if key in answered and not q
                            else attention(row, now, open_question_at=q.asked_at if q else None,
                                           paused=controls_by_task.get(key) == "paused"))
-    report = build_report(rows, attentions, questions, events, now, controls, control_next)
+    report = build_report(rows, attentions, questions, events, now, controls, control_next,
+                          transitions)
     runtime = latest_runtime_snapshot(runtime_rows, now)
     return HourlyReport(report.as_of, report.window_start, report.cards, report.results,
                         report.counts, runtime)

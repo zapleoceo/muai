@@ -110,3 +110,58 @@ async def test_done_and_cancelled_are_absent_from_cards_and_counters(pg_db):
     report = await load_report()
     assert set(cards_by_id(report)) == {"P6"}
     assert sum(report.counts.values()) == 1
+
+
+async def test_card_details_artifact_executor_and_refs_pg(pg_db):
+    from dashboard.office_hourly_service import load_report
+    from vera_shared.room import task_progress, tasks
+
+    await tasks.open_task(room="main", task_id="C1", agent="claude", title="t", paths=None,
+                          responsible="dot", next_action="ship it",
+                          refs=[{"kind": "url", "ref": "https://example.org/a"}])
+    card = cards_by_id(await load_report())["C1"]
+    assert card.details.executor.label == "ответственный"
+    assert card.details.artifact is None
+    assert card.details.next_action == "ship it"
+    token = await held("C1")
+    await task_progress.progress(room="main", task_id="C1", agent="claude",
+                                 fencing_token=token, result="shipped slice",
+                                 next_checkpoint_seconds=300)
+    card = cards_by_id(await load_report())["C1"]
+    assert card.details.executor.name == "claude"
+    assert card.details.executor.label == "держатель аренды"
+    assert card.details.artifact.text == "shipped slice"
+    assert card.details.artifact.refs[0].url == "https://example.org/a"
+    assert card.details.delta.new_artifacts == 1
+
+
+async def test_card_details_dependency_status_pg(pg_db):
+    from dashboard.office_hourly_service import load_report
+    from vera_shared.room import tasks
+
+    token = await held("D1")
+    await tasks.release(room="main", task_id="D1", agent="claude", fencing_token=token,
+                        status="done")
+    await tasks.open_task(room="main", task_id="D2", agent="claude", title="t", paths=None,
+                          depends_on=["D1", "missing"])
+    card = cards_by_id(await load_report())["D2"]
+    got = {d.task_id: d.status for d in card.details.dependencies}
+    assert got == {"D1": "Готово", "missing": "не найдена"}
+
+
+async def test_card_details_hourly_delta_pg(pg_db):
+    from datetime import timedelta
+
+    from dashboard.office_hourly_service import load_report
+    from vera_shared.room import tasks
+
+    token = await held("H1")
+    await held("H2")
+    await tasks.update(room="main", task_id="H1", agent="claude", fencing_token=token,
+                       status="blocked", note="stuck")
+    cards = cards_by_id(await load_report())
+    assert "блокер" in [label for _, label in cards["H1"].details.delta.transitions]
+    assert not cards["H1"].details.delta.unchanged
+    assert cards["H2"].details.delta.transitions[0][1] == "взята"
+    later = await load_report(now=cards["H1"].row.updated_at + timedelta(hours=2))
+    assert cards_by_id(later)["H1"].details.delta.unchanged
