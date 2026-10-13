@@ -205,3 +205,48 @@ async def test_waiting_decision_owner_only_from_explicit_event_data_pg(pg_db):
     card = cards_by_id(await load_report())["W2"]
     assert card.status == "В работе"
     assert card.info.decision_owner == "owner"
+
+
+async def test_wait_then_progress_clears_waiting_pg(pg_db):
+    from dashboard.office_hourly_service import load_report
+    from vera_shared.room import task_progress, task_wait
+
+    token = await held("X1")
+    await task_wait.wait(room="main", task_id="X1", agent="claude", fencing_token=token,
+                         until_seconds=600, reason="need review")
+    assert cards_by_id(await load_report())["X1"].info.waiting is True
+    await task_progress.progress(room="main", task_id="X1", agent="claude",
+                                 fencing_token=token, result="resolved",
+                                 next_checkpoint_seconds=300)
+    info = cards_by_id(await load_report())["X1"].info
+    assert info.waiting is False
+    assert info.wait_reason is None
+    assert info.wait_freshness is None
+
+
+async def test_wait_then_update_clears_waiting_pg(pg_db):
+    from dashboard.office_hourly_service import load_report
+    from vera_shared.room import task_wait, tasks
+
+    token = await held("X2")
+    await task_wait.wait(room="main", task_id="X2", agent="claude", fencing_token=token,
+                         until_seconds=600, reason="need input")
+    await tasks.update(room="main", task_id="X2", agent="claude", fencing_token=token,
+                       note="got it")
+    info = cards_by_id(await load_report())["X2"].info
+    assert info.waiting is False
+    assert info.wait_reason is None
+
+
+async def test_active_wait_shows_waiting_with_reason_pg(pg_db):
+    from dashboard.office_hourly_service import load_report
+    from vera_shared.room import task_wait
+
+    token = await held("X3")
+    await task_wait.wait(room="main", task_id="X3", agent="claude", fencing_token=token,
+                         until_seconds=600, reason="ждём CI")
+    card = cards_by_id(await load_report())["X3"]
+    assert card.status == "В работе"
+    assert card.info.waiting is True
+    assert card.info.wait_reason == "ждём CI"
+    assert card.info.wait_freshness == "fresh"

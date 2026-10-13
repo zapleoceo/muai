@@ -165,7 +165,7 @@ def describe_status(row: Any, now: datetime, *, has_open_question: bool = False,
     waiting_reason = getattr(row, "waiting_reason", None) if open_task else None
     event_reason = _event_reason(control, control_text, control_data, control_bound_reason)
     waiting = open_task and not blocked and (
-        bool(waiting_reason) or row.status == "waiting" or control == "waiting"
+        bool(waiting_reason) or row.status == "waiting"
         or (getattr(row, "waiting_until", None) is not None and row.waiting_until > now))
     wait_reason = waiting_reason or (event_reason or None if blocked or waiting else None)
     waiting_active = bool(waiting_reason) or (
