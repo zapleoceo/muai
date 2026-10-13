@@ -18,6 +18,7 @@ import httpx
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import UsageLogRow
+from vera_shared.redact_view import redact_view
 
 log = logging.getLogger(__name__)
 
@@ -238,7 +239,7 @@ _POLL_TRANSIENT = frozenset({429, 500, 502, 503, 504})
 def _short(body: str, limit: int = 200) -> str:
     """Тело ошибки для сообщения: одна строка. HTML-страница Cloudflare
     иначе растекалась многострочником по логам и triage_error."""
-    return " ".join(body.split())[:limit]
+    return redact_view(" ".join(body.split())[:limit])
 
 
 async def _poll_job(c: httpx.AsyncClient, job_id: int | str, *, ceiling: float,
