@@ -493,12 +493,13 @@ services:
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
     entrypoint: >
-      sh -c "while true; do
+      sh -c "n=0; while true; do
         docker image prune -f || true;
-        docker builder prune -f --filter until=72h || true;
-        sleep 86400;
+        if [ $$((n % 24)) -eq 0 ]; then docker builder prune -f --filter until=72h || true; fi;
+        n=$$((n + 1));
+        sleep 3600;
       done"
-    # docker:cli, дёргает демон раз в сутки
+    # docker:cli: висячие образы — раз в час, кэш сборки (until=72h) — каждый 24-й проход
     mem_limit: 64m
     restart: unless-stopped
     logging: *default-logging

@@ -487,6 +487,20 @@ lower key now clears quietly via `recover ... quiet`.
   `docker exec -i vera3-media-worker python -`, имя лога прежнее): `infra/logrotate/vera` →
   `/etc/logrotate.d/vera`, weekly ×4 + compress, `su root adm`
   (без него logrotate отказывается: `/var/log` принадлежит `root:syslog`).
+- **Уборка Docker (сервис `prune`)**: висячие образы (`docker image prune -f`,
+  без `-a`) — каждый час; кэш сборки (`builder prune -f --filter until=72h`) —
+  раз в сутки (каждый 24-й проход цикла). Раньше оба шли раз в сутки, и диск
+  успевал забиться между проходами. `system prune -a` по-прежнему запрещён:
+  демон общий с aibroker/stepan2.
+- **Кривая роста диска**: каждый запуск `vera3-monitor.sh` (раз в 5 минут)
+  дописывает в `/var/log/vera3-monitor.log` строку
+  `2026-10-13T12:00:00Z disk / used=61G avail=12G pct=85`. Раньше лог был пуст:
+  алерты идут в syslog через `logger`, stdout скрипт не писал. Скорость роста:
+  `grep ' disk / ' /var/log/vera3-monitor.log | awk 'NR==1||END'` — сравнить
+  `used` двух строк и поделить на разницу времени. Размер лога ~30 КБ/сутки,
+  ротация уже есть (`infra/logrotate/vera`, weekly ×4). Скрипт и compose
+  попадают на сервер обычным деплоем (`/var/www/vera3/scripts/`, cron зовёт их
+  оттуда); контейнер `prune` подхватит новую команду после `compose up -d`.
 - **`shm_size: 256mb`** у postgres — Docker даёт `/dev/shm` 64 МБ, из-за чего
   `VACUUM events` падал с «could not resize shared memory segment»
   (2026-07-24). Автовакуум этим НЕ затронут — он всегда однопоточный;

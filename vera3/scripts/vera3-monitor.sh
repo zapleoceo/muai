@@ -264,6 +264,10 @@ fi
 
 # ─── 3. Диск ─────────────────────────────────────────────────────────────────
 disk_pct=$(df / | awk 'NR==2 {gsub("%",""); print $5}')
+# Одна строка на запуск — кривая роста диска. Лог крона иначе пуст: алерты
+# уходят в syslog через logger, а stdout скрипт не трогал.
+df -P / | awk -v ts="$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+    'NR==2 {gsub("%","",$5); printf "%s disk / used=%.0fG avail=%.0fG pct=%s\n", ts, $3/1048576, $4/1048576, $5}'
 if [ "$disk_pct" -ge 92 ]; then
     alert "disk_critical" "Disk usage <b>${disk_pct}%</b> on /. Free space critical."
 elif [ "$disk_pct" -ge 85 ]; then
