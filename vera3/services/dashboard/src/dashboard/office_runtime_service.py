@@ -73,7 +73,7 @@ def parse_entry(item: dict) -> RuntimeEntry | None:
     return RuntimeEntry(project, "", state, detail, source, source_id)
 
 
-def parse_coverage(raw: object, checked: datetime
+def parse_coverage(raw: object, checked: datetime, now: datetime
                    ) -> tuple[tuple[str, str, datetime | None], ...] | None:
     if raw is None:
         return ()
@@ -90,7 +90,7 @@ def parse_coverage(raw: object, checked: datetime
             if observed.tzinfo is None:
                 return None
             observed = _utc_naive(observed)
-            if observed > _utc_naive(datetime.now(UTC)):
+            if observed > checked or observed > _utc_naive(now):
                 return None
         out.append((name, spec["coverage"], observed))
     return tuple(out)
@@ -123,7 +123,7 @@ def parse_runtime_snapshot(row: RoomMessageRow, now: datetime) -> RuntimeSnapsho
                 return None
             seen.add(key)
             entries.append(entry)
-        coverage = parse_coverage(raw.get("sources"), checked)
+        coverage = parse_coverage(raw.get("sources"), checked, now)
         if coverage is None:
             return None
         return RuntimeSnapshot(checked, received, row.message_id, tuple(entries), coverage)

@@ -130,3 +130,18 @@ def build_details(row: Any, last: Any, now: datetime,
     return CardDetails(artifact_of(last, row), executor_of(row, now),
                        safe_text(getattr(row, "next_action", None)), dependencies_of(row, infos),
                        delta_of(transitions, result_events, now))
+
+
+def details_by_task(rows_last: list[tuple[Any, Any]], infos: Mapping[tuple[str, str], StatusInfo],
+                    now: datetime, transitions: list[Any], results: list[Any]
+                    ) -> dict[tuple[str, str], CardDetails]:
+    """Details for every (row, latest result event) pair, grouping events once (no N+1)."""
+    moves: dict[tuple[str, str], list[Any]] = {}
+    for e in transitions:
+        moves.setdefault((e.room, e.task_id), []).append(e)
+    done: dict[tuple[str, str], list[Any]] = {}
+    for e in results:
+        done.setdefault((e.room, e.task_id), []).append(e)
+    return {(row.room, row.task_id): build_details(
+        row, last, now, infos, moves.get((row.room, row.task_id), []),
+        done.get((row.room, row.task_id), [])) for row, last in rows_last}

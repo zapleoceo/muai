@@ -16,7 +16,7 @@ FRESH_MAX_AGE = timedelta(hours=1)
 
 # raw `waiting` is deliberately absent: waiting for a decision/check is not a proven block
 _BLOCKER_RAW = frozenset({"blocked", "paused"})
-DECISION_OWNER_KEYS = ("decision_owner", "addressee")
+DECISION_OWNER_KEY = "decision_owner"
 BLOCKER_EVIDENCE_KINDS = frozenset({"blocked", "released", "waiting"})
 
 
@@ -128,11 +128,8 @@ def _dependency(row: Any, now: datetime, active: bool) -> str | None:
 
 def decision_owner_of(data: dict[str, Any] | None) -> str | None:
     """Who must act, only from explicit event data; never guessed from roles."""
-    for key in DECISION_OWNER_KEYS:
-        value = (data or {}).get(key)
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return None
+    value = (data or {}).get(DECISION_OWNER_KEY)
+    return value.strip() if isinstance(value, str) and value.strip() else None
 
 
 def wait_freshness_of(row: Any, now: datetime, control: str | None,

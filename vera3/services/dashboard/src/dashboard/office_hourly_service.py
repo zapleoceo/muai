@@ -14,26 +14,28 @@ from vera_shared.db.models_room import (
 )
 from vera_shared.room.attention import (
     ANSWERED,
-    PAUSED,
     Attention,
     attention,
 )
 from vera_shared.timeutil import utc_naive_now
 
-from dashboard.office_card_details import CardDetails, build_details
+from dashboard.office_card_details import CardDetails, details_by_task
 from dashboard.office_card_queries import load_transitions
+from dashboard.office_hourly_status import (  # noqa: F401  re-exported public names
+    evidence_of,
+    next_question_reminder,
+    status_info_of,
+    status_of,
+)
 from dashboard.office_runtime_service import RuntimeSnapshot, latest_runtime_snapshot
 from dashboard.office_status import (
     CANCELLED,
     DONE,
     STATUSES,
     StatusInfo,
-    bound_reason_of,
-    describe_status,
 )
 
 WINDOW = timedelta(hours=1)
-REMINDER = timedelta(hours=6)
 STATUS_LABELS = STATUSES
 VISIBLE_STATUSES = tuple(s for s in STATUSES if s not in (DONE, CANCELLED))
 RESULT_KINDS = ("progress", "done")
@@ -61,41 +63,6 @@ class HourlyReport:
     results: list[RoomTaskEventRow]
     counts: dict[str, int]
     runtime: RuntimeSnapshot | None = None
-
-
-def status_info_of(row: RoomTaskRow, att: Attention, question: RoomTaskQuestionRow | None,
-                   now: datetime, control: str | None = None,
-                   event_at: datetime | None = None,
-                   control_event: RoomTaskEventRow | None = None,
-                   control_next: RoomTaskEventRow | None = None) -> StatusInfo:
-    return describe_status(
-        row, now, has_open_question=question is not None, answered=att.state == ANSWERED,
-        control="paused" if att.state == PAUSED else control, event_at=event_at,
-        control_text=control_event.text if control_event else None,
-        control_agent=control_event.agent if control_event else None,
-        control_data=control_event.data if control_event else None,
-        control_bound_reason=bound_reason_of(control_event, control_next),
-        control_at=control_event.at if control_event else None)
-
-
-def status_of(row: RoomTaskRow, att: Attention, question: RoomTaskQuestionRow | None,
-              now: datetime, control: str | None = None) -> str:
-    return status_info_of(row, att, question, now, control).status
-
-
-def evidence_of(event: RoomTaskEventRow | None, now: datetime) -> str:
-    if event is None:
-        return "Сообщения о результате в Room нет; внешнее подтверждение неизвестно"
-    age = now - event.at
-    if age > timedelta(hours=24):
-        return "Сообщение о результате старше суток; внешнее подтверждение неизвестно"
-    return "Сообщение о результате с отметкой времени; внешнее подтверждение неизвестно"
-
-
-def next_question_reminder(question: RoomTaskQuestionRow, now: datetime) -> datetime:
-    """Next six-hour display checkpoint; an answered question is never passed here."""
-    elapsed = max((now - question.asked_at) // REMINDER, 0)
-    return question.asked_at + (elapsed + 1) * REMINDER
 
 
 def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Attention],
@@ -137,16 +104,11 @@ def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Atte
         if status in counts:
             counts[status] += 1
             pending.append((row, status, info, att, question, last, control))
-    by_task: dict[tuple[str, str], list[RoomTaskEventRow]] = {}
-    for e in transitions or []:
-        by_task.setdefault((e.room, e.task_id), []).append(e)
-    result_by_task: dict[tuple[str, str], list[RoomTaskEventRow]] = {}
-    for e in results:
-        result_by_task.setdefault((e.room, e.task_id), []).append(e)
+    all_details = details_by_task([(p[0], p[5]) for p in pending], infos, now,
+                                  transitions or [], results)
     for row, status, info, att, question, last, control in pending:
         key = (row.room, row.task_id)
-        details = build_details(row, last, now, infos, by_task.get(key, []),
-                                result_by_task.get(key, []))
+        details = all_details[key]
         cards.append(HourlyCard(row, status, info, att, question, last,
                                 evidence_of(last, now), "Не установлена",
                                 "Пауза зафиксирована" if control == "paused" else "", details))

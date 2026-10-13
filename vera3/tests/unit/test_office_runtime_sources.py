@@ -70,3 +70,13 @@ def test_zero_only_claimed_with_complete_coverage() -> None:
 
 def test_bad_coverage_value_rejected() -> None:
     assert parse_runtime_snapshot(message([], {"codex": {"coverage": "all"}}), NOW) is None
+
+
+def test_observed_at_after_checked_or_after_now_rejects_whole_message() -> None:
+    def with_observed(value: str) -> SimpleNamespace:
+        return message([entry(thread_id=UUID)],
+                       {"codex": {"coverage": "complete", "observed_at": value}})
+
+    assert parse_runtime_snapshot(with_observed("2026-10-14T12:30:00+00:00"), NOW) is None
+    assert parse_runtime_snapshot(with_observed("bad"), NOW) is None
+    assert parse_runtime_snapshot(with_observed("2026-10-14T11:59:00+00:00"), NOW) is not None
