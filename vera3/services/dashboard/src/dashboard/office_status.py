@@ -66,28 +66,46 @@ def _known_actors(row: Any, data: dict[str, Any] | None) -> set[str]:
     return {a for a in candidates if a}
 
 
-def _event_reason(row: Any, control: str | None, text: str | None,
-                  data: dict[str, Any] | None) -> str:
+BOUND_AT_TOLERANCE = timedelta(seconds=1)
+
+
+def bound_reason_of(blocked: Any, following: Any) -> str | None:
+    """Reason of a `blocked` flip, taken only from the progress event of the same update call.
+
+    update(status="blocked") writes the flip (no text) and then, in one transaction, a
+    progress event with text=note and data={"status": "blocked"}. The pair is the next event
+    of the task by id, same agent and fencing token, same `at` (within BOUND_AT_TOLERANCE).
+    Mutable row fields (note, last_progress_text) are never used: later progress or an older
+    note would otherwise "confirm" the blocker.
+    """
+    if blocked is None or following is None or blocked.kind != "blocked":
+        return None
+    same_call = (following.kind == "progress" and following.id > blocked.id
+                 and following.agent == blocked.agent
+                 and following.fencing_token == blocked.fencing_token
+                 and (following.data or {}).get("status") == "blocked"
+                 and abs(following.at - blocked.at) <= BOUND_AT_TOLERANCE)
+    return (following.text or "").strip() or None if same_call else None
+
+
+def _event_reason(control: str | None, text: str | None, data: dict[str, Any] | None,
+                  bound_reason: str | None) -> str:
     """Reason carried by the control event in the shapes vera_shared.room writes.
 
     `waiting` (task_wait) and `released` with data.status == "blocked" (release) carry it in
-    the event text. The `blocked` flip written by update(status="blocked") has no text; its
-    note goes to a separate progress event and is mirrored to row.last_progress_text, which
-    update sets to the note or to "status: <status>" when no note was given (row.note is
-    not reset by such an update, so it may be stale and is never used).
+    the event text; the `blocked` flip carries it through bound_reason_of.
     """
+    if control not in BLOCKER_EVIDENCE_KINDS:
+        return ""
     if control == "released" and (data or {}).get("status") != "blocked":
         return ""
-    reason = text
-    if not reason and control == "blocked":
-        progress = getattr(row, "last_progress_text", None) or ""
-        reason = "" if progress.startswith("status: ") else progress
-    return (reason or "").strip() if control else ""
+    return ((text or bound_reason or "") if control == "blocked" else (text or "")).strip()
 
 
 def blocker_confidence_of(row: Any, *, has_open_question: bool, control: str | None,
                           control_text: str | None, control_agent: str | None,
-                          control_data: dict[str, Any] | None = None) -> str:
+                          control_data: dict[str, Any] | None = None,
+                          control_bound_reason: str | None = None) -> str:
     """Confirmed only by explicit evidence: an open question on the task, or the latest
     control event being blocked/released(blocked)/waiting with a non-empty reason whose
     author is a known actor of the task (holder, created_by, owner, responsible).
@@ -96,7 +114,7 @@ def blocker_confidence_of(row: Any, *, has_open_question: bool, control: str | N
         return CONFIRMED
     if control not in BLOCKER_EVIDENCE_KINDS or not control_agent:
         return UNCONFIRMED
-    if not _event_reason(row, control, control_text, control_data):
+    if not _event_reason(control, control_text, control_data, control_bound_reason):
         return UNCONFIRMED
     known = _known_actors(row, control_data)
     return CONFIRMED if not known or control_agent in known else UNCONFIRMED
@@ -117,17 +135,21 @@ def describe_status(row: Any, now: datetime, *, has_open_question: bool = False,
                     answered: bool = False, control: str | None = None,
                     event_at: datetime | None = None, control_text: str | None = None,
                     control_agent: str | None = None,
-                    control_data: dict[str, Any] | None = None) -> StatusInfo:
+                    control_data: dict[str, Any] | None = None,
+                    control_bound_reason: str | None = None) -> StatusInfo:
     status = _status(row, now, has_open_question=has_open_question, answered=answered,
                      control=control)
     blocked = status == BLOCKER
     confidence = (blocker_confidence_of(row, has_open_question=has_open_question,
                                         control=control, control_text=control_text,
                                         control_agent=control_agent,
-                                        control_data=control_data) if blocked else None)
+                                        control_data=control_data,
+                                        control_bound_reason=control_bound_reason)
+                  if blocked else None)
     open_task = status not in (DONE, CANCELLED)
     waiting_reason = getattr(row, "waiting_reason", None) if open_task else None
-    wait_reason = waiting_reason or ((row.note or None) if blocked else None)
+    event_reason = _event_reason(control, control_text, control_data, control_bound_reason)
+    wait_reason = waiting_reason or (event_reason or None if blocked else None)
     waiting_active = bool(waiting_reason) or (
         getattr(row, "waiting_until", None) is not None and row.waiting_until > now)
     dependency = _dependency(row, now, blocked or waiting_active) if open_task else None

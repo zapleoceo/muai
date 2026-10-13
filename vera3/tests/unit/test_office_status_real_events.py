@@ -33,10 +33,19 @@ async def snapshot(task_id: str):
     return row, (events[0] if events else None)
 
 
+async def following_event(control: RoomTaskEventRow | None) -> RoomTaskEventRow | None:
+    if control is None:
+        return None
+    async with get_session() as s:
+        return (await s.execute(select(RoomTaskEventRow).where(
+            RoomTaskEventRow.task_id == control.task_id, RoomTaskEventRow.id > control.id
+        ).order_by(RoomTaskEventRow.id).limit(1))).scalar_one_or_none()
+
+
 async def info_of(task_id: str):
     row, control = await snapshot(task_id)
     return status_info_of(row, ATT, None, utc_naive_now(), control.kind if control else None,
-                          None, control)
+                          None, control, await following_event(control))
 
 
 async def test_update_blocked_with_note_flip_has_no_text_but_row_note_confirms(sqlite_db):
@@ -77,6 +86,30 @@ async def test_blocked_with_fresh_note_after_old_note_is_confirmed(sqlite_db):
     await tasks.update(room="main", task_id="B8", agent="claude", fencing_token=token,
                        status="blocked", note="reason")
     assert (await info_of("B8")).blocker_confidence == CONFIRMED
+
+
+async def test_unrelated_progress_after_blocked_without_note_does_not_confirm(sqlite_db):
+    token = await held("B9")
+    await tasks.update(room="main", task_id="B9", agent="claude", fencing_token=token,
+                       status="blocked")
+    await tasks.update(room="main", task_id="B9", agent="claude", fencing_token=token,
+                       note="unrelated progress")
+    info = await info_of("B9")
+    assert (info.status, info.blocker_confidence) == (BLOCKER, UNCONFIRMED)
+    assert info.wait_reason is None
+
+
+async def test_unrelated_progress_after_blocked_with_note_keeps_bound_reason(sqlite_db):
+    token = await held("B10")
+    await tasks.update(room="main", task_id="B10", agent="claude", fencing_token=token,
+                       status="blocked", note="reason")
+    await tasks.update(room="main", task_id="B10", agent="claude", fencing_token=token,
+                       note="unrelated progress")
+    row, control = await snapshot("B10")
+    assert row.last_progress_text == "unrelated progress"
+    info = await info_of("B10")
+    assert (info.status, info.blocker_confidence) == (BLOCKER, CONFIRMED)
+    assert info.wait_reason == "reason"
 
 
 async def test_release_blocked_with_note_clears_holder_and_confirms(sqlite_db):

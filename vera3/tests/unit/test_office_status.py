@@ -20,6 +20,7 @@ from dashboard.office_status import (
     UNCONFIRMED,
     UNKNOWN,
     WORKING,
+    bound_reason_of,
     describe_status,
 )
 
@@ -125,14 +126,41 @@ def test_blocker_confidence_from_control_event(kind: str | None, text: str | Non
     assert info.blocker_confidence == expected
 
 
-def test_blocked_flip_without_text_uses_last_progress_text_not_note() -> None:
-    reasoned = describe_status(row("blocked", last_progress_text="ждём ключ"), NOW,
-                               control="blocked", control_agent="dot")
+def event(kind: str, id_: int, **extra: object) -> SimpleNamespace:
+    fields = {"kind": kind, "id": id_, "agent": "dot", "fencing_token": 1, "at": NOW,
+              "text": None, "data": None}
+    return SimpleNamespace(**{**fields, **extra})
+
+
+def test_bound_reason_requires_the_paired_progress_event() -> None:
+    flip = event("blocked", 5, data={"status": "blocked"})
+    paired = event("progress", 6, text="ждём ключ", data={"status": "blocked"})
+    assert bound_reason_of(flip, paired) == "ждём ключ"
+    assert bound_reason_of(flip, event("progress", 6, text="  ")) is None
+    unrelated = [
+        event("progress", 6, text="x", data=None),
+        event("progress", 6, text="x", data={"status": "in_progress"}),
+        event("progress", 6, text="x", data={"status": "blocked"}, agent="other"),
+        event("progress", 6, text="x", data={"status": "blocked"}, fencing_token=2),
+        event("progress", 6, text="x", data={"status": "blocked"}, at=NOW + timedelta(minutes=5)),
+        event("progress", 4, text="x", data={"status": "blocked"}),
+        event("heartbeat", 6, text="x", data={"status": "blocked"}),
+    ]
+    assert [bound_reason_of(flip, e) for e in unrelated] == [None] * len(unrelated)
+    assert bound_reason_of(flip, None) is None
+    assert bound_reason_of(event("released", 5), paired) is None
+
+
+def test_blocked_flip_confirmed_only_by_bound_reason_not_row_fields() -> None:
+    reasoned = describe_status(row("blocked"), NOW, control="blocked", control_agent="dot",
+                               control_bound_reason="ждём ключ")
     assert reasoned.blocker_confidence == CONFIRMED
-    for progress in (None, "", "status: blocked"):
-        silent = describe_status(row("blocked", last_progress_text=progress), NOW,
-                                 control="blocked", control_agent="dot")
-        assert silent.blocker_confidence == UNCONFIRMED
+    assert reasoned.wait_reason == "ждём ключ"
+    stale = describe_status(
+        row("blocked", note="старая", last_progress_text="посторонний прогресс",
+            waiting_reason=None), NOW, control="blocked", control_agent="dot")
+    assert stale.blocker_confidence == UNCONFIRMED
+    assert stale.wait_reason is None
 
 
 def test_actor_must_be_a_known_actor_of_the_task() -> None:
@@ -175,9 +203,9 @@ def test_wait_fields_are_independent_of_status() -> None:
     assert only_until.dependency == "ждём до 2026-10-14 13:00"
 
 
-def test_wait_reason_falls_back_to_note_only_for_blocker() -> None:
+def test_wait_reason_for_blocker_never_uses_row_note() -> None:
     info = describe_status(row("blocked", depends_on=["T-1", "T-2"]), NOW)
-    assert info.wait_reason == "заметка"
+    assert info.wait_reason is None
     assert info.dependency == "зависит от: T-1, T-2"
     assert describe_status(row("open"), NOW).wait_reason is None
 

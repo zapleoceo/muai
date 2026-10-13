@@ -26,6 +26,7 @@ from dashboard.office_status import (
     DONE,
     STATUSES,
     StatusInfo,
+    bound_reason_of,
     describe_status,
 )
 
@@ -62,13 +63,15 @@ class HourlyReport:
 def status_info_of(row: RoomTaskRow, att: Attention, question: RoomTaskQuestionRow | None,
                    now: datetime, control: str | None = None,
                    event_at: datetime | None = None,
-                   control_event: RoomTaskEventRow | None = None) -> StatusInfo:
+                   control_event: RoomTaskEventRow | None = None,
+                   control_next: RoomTaskEventRow | None = None) -> StatusInfo:
     return describe_status(
         row, now, has_open_question=question is not None, answered=att.state == ANSWERED,
         control="paused" if att.state == PAUSED else control, event_at=event_at,
         control_text=control_event.text if control_event else None,
         control_agent=control_event.agent if control_event else None,
-        control_data=control_event.data if control_event else None)
+        control_data=control_event.data if control_event else None,
+        control_bound_reason=bound_reason_of(control_event, control_next))
 
 
 def status_of(row: RoomTaskRow, att: Attention, question: RoomTaskQuestionRow | None,
@@ -93,10 +96,12 @@ def next_question_reminder(question: RoomTaskQuestionRow, now: datetime) -> date
 
 def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Attention],
                  questions: list[RoomTaskQuestionRow], events: list[RoomTaskEventRow],
-                 now: datetime, controls: list[RoomTaskEventRow] | None = None) -> HourlyReport:
+                 now: datetime, controls: list[RoomTaskEventRow] | None = None,
+                 control_next: list[RoomTaskEventRow] | None = None) -> HourlyReport:
     open_questions = {(q.room, q.task_id): q for q in questions if q.status == "open"}
     control_events = {(e.room, e.task_id): e for e in (controls or [])}
     control_by_task = {k: e.kind for k, e in control_events.items()}
+    next_events = {(e.room, e.task_id): e for e in (control_next or [])}
     latest: dict[tuple[str, str], RoomTaskEventRow] = {}
     results: list[RoomTaskEventRow] = []
     start = now - WINDOW
@@ -119,7 +124,7 @@ def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Atte
         control = control_by_task.get(key)
         last = latest.get(key)
         info = status_info_of(row, att, question, now, control, last.at if last else None,
-                              control_events.get(key))
+                              control_events.get(key), next_events.get(key))
         status = info.status
         if status in counts:
             counts[status] += 1
@@ -171,6 +176,17 @@ async def load_report(now: datetime | None = None) -> HourlyReport:
         questions = list(questions_result.scalars().all())
         events = list(events_result.scalars().all())
         controls = list(controls_result.scalars().all())
+        blocked = [c for c in controls if c.kind == "blocked"]
+        control_next: list[RoomTaskEventRow] = []
+        if blocked:
+            following = select(ev.id.label("id"), func.row_number().over(
+                partition_by=(ev.room, ev.task_id), order_by=ev.id.asc()
+            ).label("rank")).where(or_(*[
+                and_(ev.room == c.room, ev.task_id == c.task_id, ev.id > c.id)
+                for c in blocked]), ev.at <= now).subquery()
+            next_result = await s.execute(select(ev).where(
+                ev.id.in_(select(following.c.id).where(following.c.rank == 1))))
+            control_next = list(next_result.scalars().all())
         runtime_rows = list(runtime_result.scalars().all())
     controls_by_task = {(e.room, e.task_id): e.kind for e in controls}
     open_by_task = {(q.room, q.task_id): q for q in questions if q.status == "open"}
@@ -182,7 +198,7 @@ async def load_report(now: datetime | None = None) -> HourlyReport:
         attentions[key] = (Attention(ANSWERED, "", None, None, None) if key in answered and not q
                            else attention(row, now, open_question_at=q.asked_at if q else None,
                                           paused=controls_by_task.get(key) == "paused"))
-    report = build_report(rows, attentions, questions, events, now, controls)
+    report = build_report(rows, attentions, questions, events, now, controls, control_next)
     runtime = latest_runtime_snapshot(runtime_rows, now)
     return HourlyReport(report.as_of, report.window_start, report.cards, report.results,
                         report.counts, runtime)
