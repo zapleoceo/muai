@@ -21,6 +21,7 @@ from vera_shared.llm.broker_client import (
     chat_via_broker,
     embed_via_broker,
 )
+from vera_shared.llm.redact_boundary import redact_embed_input, redact_messages
 from vera_shared.llm.routing import Capability
 
 log = logging.getLogger(__name__)
@@ -98,6 +99,7 @@ async def chat(
     temperature: float = 0.7,
     workflow: str | None = None,
     event_id: int | None = None,
+    redact_input: bool = True,
 ) -> tuple[str, dict[str, Any]]:
     """Chat-completion через брокер. Бросает LLMCallFailed при провале брокера —
     вызывающий код (триаж, бот) сам решает, что делать (ретрай / pending).
@@ -106,7 +108,7 @@ async def chat(
     await _circuit_precheck(capability)
     try:
         result = await chat_via_broker(
-            messages=messages,
+            messages=redact_messages(messages) if redact_input else messages,
             capability=capability,
             response_format=response_format,
             max_tokens=max_tokens,
@@ -132,6 +134,7 @@ async def chat_async(
     event_id: int | None = None,
     poll_deadline_s: float | None = None,
     resume_job_id: int | str | None = None,
+    redact_input: bool = True,
 ) -> tuple[str, dict[str, Any]]:
     """Same contract as chat(), submit+poll (/v1/jobs) instead of holding a
     connection open — a slow provider delays the poll loop, not the caller.
@@ -145,7 +148,7 @@ async def chat_async(
     await _circuit_precheck(capability)
     try:
         result = await chat_async_via_broker(
-            messages=messages,
+            messages=redact_messages(messages) if redact_input else messages,
             capability=capability,
             response_format=response_format,
             max_tokens=max_tokens,
@@ -166,7 +169,7 @@ async def chat_async(
     return result
 
 
-async def embed(text: str | list[str]) -> list[list[float]]:
+async def embed(text: str | list[str], *, redact_input: bool = True) -> list[list[float]]:
     """Voyage embedding через брокер. str → [str] (НЕ итерируем по char).
     Circuit breaker как у chat — embed-пул тоже бывает капнут."""
     _require_broker()
@@ -174,7 +177,7 @@ async def embed(text: str | list[str]) -> list[list[float]]:
         return []
     await _circuit_precheck("embed")
     try:
-        result = await embed_via_broker(text)
+        result = await embed_via_broker(redact_embed_input(text) if redact_input else text)
     except BrokerCallFailed as e:
         await _circuit_note("embed", e)
         raise LLMCallFailed(f"broker embed failed: {e}") from e

@@ -135,3 +135,31 @@ hide a secret column name require the value to match a text pattern.
   `reason`, `result`, `question`, `text` и `refs[].excerpt`. Задачные инструменты живут в
   `room_task_tools.py`, общие типы в `room_common.py`; имена инструментов и порядок
   `ROOM_TOOLS` не менялись.
+
+## Граница LLM (`redact_input`)
+
+Всё, что Vera отправляет внешнему провайдеру, маскируется `redact_view` на
+единственной границе — `vera_shared.llm.client`: `chat`, `chat_async` и `embed`
+получают `redact_input: bool = True`. Покрыты без правок вызывающих: brain-search
+(история, синтез, агент), triage (одиночный и батч), `rel_extract`, `pair_roles`,
+`identity`, `clusters`, `fold` (в нём же голосовая выжимка `voice_distill` и
+`claude_distill` — второй проход по транскрипту не нужен, он тот же), vision.
+Помощники `redact_messages(messages)` и `redact_embed_input(text)` лежат в
+`vera_shared.llm.redact_boundary`: маскируют строковый `content` и части
+`{"type": "text"}`, возвращают копии (вход не мутируется), части `image_url`/audio
+и `data:` URI не трогают. `redact_input=False` — только осознанный opt-out.
+
+Хранимые события остаются сырыми: FTS, `identifier_hits` и точные совпадения
+считаются по ним до вызова, маскируется лишь исходящий текст (в том числе вход
+embedding-эндпоинта). Лог тела ответа апстрима (`bot-telegram` `save_event`,
+dashboard `search_routes` и `entities_routes`, `_short` в `broker_client`)
+проходит через `redact_view`. Предел: эвристика ловит только помеченные формы
+(`token=...`, префиксы ключей); пароль «в свободной форме» не маскируется.
+Тесты: `tests/unit/test_llm_redact_boundary.py` (синтетический CANARY).
+
+Следствия. Ответы LLM, записываемые обратно в БД (саммари triage, голосовая
+выжимка), теперь содержат маску вместо секрета — так задумано. Проверка цитат
+`pair_roles` сравнивает с сырым текстом, поэтому цитата с замаскированным
+секретом не подтвердится. Аудио-загрузка whisper обходит текстовое маскирование
+по замыслу. Также маскируются `tool_calls[].function.arguments` и части
+`input_text`.
