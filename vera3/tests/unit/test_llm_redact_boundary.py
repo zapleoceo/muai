@@ -197,3 +197,14 @@ async def test_broker_failure_still_wrapped(wire, monkeypatch):
                         AsyncMock(side_effect=BrokerCallFailed("x")))
     with pytest.raises(client.LLMCallFailed):
         await chat_async([{"role": "user", "content": "hi"}])
+
+
+def test_redact_messages_masks_tool_call_arguments_and_input_text():
+    args = json.dumps({"q": BODY})
+    calls = [{"id": "1", "type": "function", "function": {"name": "f", "arguments": args}}]
+    msgs = [{"role": "assistant", "content": None, "tool_calls": calls},
+            {"role": "user", "content": [{"type": "input_text", "text": BODY}]}]
+    out = redact_messages(msgs)
+    assert CANARY not in json.dumps(out)
+    assert out[0]["content"] is None and out[0]["tool_calls"][0]["function"]["name"] == "f"
+    assert calls[0]["function"]["arguments"] == args
