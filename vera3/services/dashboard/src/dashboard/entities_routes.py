@@ -18,6 +18,7 @@ from vera_shared.graph.merge_candidates import entity_summaries, recommend_keep
 from vera_shared.graph.merge_errors import MergeError
 from vera_shared.graph.merge_guard import MergeBlocked
 from vera_shared.graph.suggestions import reject_pair
+from vera_shared.redact_view import redact_view
 
 from dashboard.csrf import same_origin_or_403
 from dashboard.duplicates_repo import load_queue, pair_dossiers
@@ -123,7 +124,7 @@ async def entities_roster_sync(request: Request):
                 f"{TELEGRAM_TOOLS_URL}/tools/sync_project_rosters",
                 headers={"X-Internal-Secret": INTERNAL_SECRET},
             )
-        log.info("roster sync trigger: %s %s", r.status_code, r.text[:200])
+        log.info("roster sync trigger: %s %s", r.status_code, redact_view(r.text[:200]))
     except httpx.HTTPError as e:
         log.warning("roster sync trigger failed: %s", e)
     return RedirectResponse("/entities/duplicates", status_code=303)

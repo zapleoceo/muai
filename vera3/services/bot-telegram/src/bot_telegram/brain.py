@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 import httpx
+from vera_shared.redact_view import redact_view
 from vera_shared.timeutil import utc_naive_now
 
 log = logging.getLogger(__name__)
@@ -87,6 +88,6 @@ async def save_event(chat_id: int, msg_id: int, role: str, content: str,
                 headers={"X-Internal-Secret": INTERNAL_SECRET} if INTERNAL_SECRET else {},
             )
         if r.status_code not in (200, 201):
-            log.warning("save_event %s: HTTP %s %s", role, r.status_code, r.text[:200])
+            log.warning("save_event %s: HTTP %s %s", role, r.status_code, redact_view(r.text[:200]))
     except Exception as e:
         log.warning("save_event %s failed: %s", role, e)

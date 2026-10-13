@@ -8,6 +8,7 @@ import os
 import httpx
 from fastapi import APIRouter, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse
+from vera_shared.redact_view import redact_view
 
 from dashboard.auth import COOKIE_NAME, require_owner
 from dashboard.render import esc
@@ -38,7 +39,7 @@ async def search_ui(request: Request, q: str = Form(...)):  # noqa: B008
             status_code=502,
         )
     if r.status_code != 200:
-        log.warning("search proxy: brain-search HTTP %s: %s", r.status_code, r.text[:200])
+        log.warning("search proxy: brain-search HTTP %s: %s", r.status_code, redact_view(r.text[:200]))
         return HTMLResponse(
             f'<div class="error">Поиск вернул ошибку (HTTP {r.status_code})</div>',
             status_code=502,
