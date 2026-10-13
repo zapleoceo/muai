@@ -66,18 +66,12 @@ def _known_actors(row: Any, data: dict[str, Any] | None) -> set[str]:
     return {a for a in candidates if a}
 
 
+# pair = next task event by id, same agent/fencing token, `at` within the tolerance
 BOUND_AT_TOLERANCE = timedelta(seconds=1)
 
 
 def bound_reason_of(blocked: Any, following: Any) -> str | None:
-    """Reason of a `blocked` flip, taken only from the progress event of the same update call.
-
-    update(status="blocked") writes the flip (no text) and then, in one transaction, a
-    progress event with text=note and data={"status": "blocked"}. The pair is the next event
-    of the task by id, same agent and fencing token, same `at` (within BOUND_AT_TOLERANCE).
-    Mutable row fields (note, last_progress_text) are never used: later progress or an older
-    note would otherwise "confirm" the blocker.
-    """
+    """Reason of a blocked flip, only from the paired progress event of the same update call."""
     if blocked is None or following is None or blocked.kind != "blocked":
         return None
     same_call = (following.kind == "progress" and following.id > blocked.id
@@ -90,11 +84,7 @@ def bound_reason_of(blocked: Any, following: Any) -> str | None:
 
 def _event_reason(control: str | None, text: str | None, data: dict[str, Any] | None,
                   bound_reason: str | None) -> str:
-    """Reason carried by the control event in the shapes vera_shared.room writes.
-
-    `waiting` (task_wait) and `released` with data.status == "blocked" (release) carry it in
-    the event text; the `blocked` flip carries it through bound_reason_of.
-    """
+    """Reason from the control event text, or from the bound progress event for a flip."""
     if control not in BLOCKER_EVIDENCE_KINDS:
         return ""
     if control == "released" and (data or {}).get("status") != "blocked":
