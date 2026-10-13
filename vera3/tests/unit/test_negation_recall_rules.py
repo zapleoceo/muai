@@ -26,6 +26,9 @@ def test_authorship_rules_keep_negated_status_out_of_done():
     assert "Открыто / ждёт решения" in AUTHORSHIP_RULES
     assert "MR на staging или в ревью" in AUTHORSHIP_RULES
     assert "Done/Closed" in AUTHORSHIP_RULES
+    assert "статус самой задачи" in AUTHORSHIP_RULES
+    assert "побочная" in AUTHORSHIP_RULES
+    assert "остаётся в «Что сделано»" in AUTHORSHIP_RULES
 
 
 def test_synthesis_prompt_carries_negation_rule_in_stable_prefix():

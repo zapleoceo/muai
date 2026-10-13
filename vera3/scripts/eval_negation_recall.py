@@ -50,27 +50,34 @@ CASES = (
          ("SIN-9005",), ("SIN-9005",)),
     Case("mr-staging", "SIN-9006: MR !1023 on staging, ждёт ревью.",
          ("SIN-9006", "1023"), ("SIN-9006",)),
+    Case("side-remark-done", "SIN-9008: Done, MR !1025 merged, изменений в API нет.",
+         (), ("SIN-9008",), expect_done=True),
     Case("control-done", "SIN-9007: статус Done, MR !1024 merged, выкачено на прод.",
          (), ("SIN-9007",), expect_done=True),
 )
 
 
-def sections(answer: str) -> tuple[str, str]:
+def sections(answer: str) -> tuple[str, str, bool]:
     done: list[str] = []
     other: list[str] = []
     target = other
+    has_headings = False
     for line in answer.splitlines():
         if DONE_HEAD.match(line):
             target = done
+            has_headings = True
         elif OPEN_HEAD.match(line):
             target = other
+            has_headings = True
         else:
             target.append(line)
-    return "\n".join(done), "\n".join(other)
+    return "\n".join(done), "\n".join(other), has_headings
 
 
 def check(case: Case, answer: str) -> str | None:
-    done, other = sections(answer)
+    done, other, has_headings = sections(answer)
+    if not has_headings:
+        return "формат: нет заголовков разделов"
     if not done and not other.strip():
         return "пустой ответ"
     if case.expect_done:
@@ -105,7 +112,8 @@ async def main(args: argparse.Namespace) -> int:
                       for _ in range(args.samples)]
             bad = [e for e in errors if e]
             failed += bool(bad)
-            print(f"{case.name:<20} {args.samples - len(bad)}/{args.samples:<4} {bad[0] if bad else '-'}")
+            ok = f"{args.samples - len(bad)}/{args.samples}"
+            print(f"{case.name:<20} {ok:<6} {bad[0] if bad else '-'}")
     print("PASS" if not failed else f"FAIL: {failed} case(s)")
     return 1 if failed else 0
 
