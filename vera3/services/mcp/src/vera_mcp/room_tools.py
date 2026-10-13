@@ -17,6 +17,7 @@ from vera_shared.room import (
 )
 
 from vera_mcp.auth import allowed_rooms, client_of
+from vera_mcp.room_redact import events_view, messages_view, tasks_view
 
 Room = Annotated[str, Field(pattern=r"^[a-z0-9_-]{1,64}$")]
 Ident = Annotated[str, Field(min_length=1, max_length=128)]
@@ -62,10 +63,10 @@ async def room_inbox(
     items, cursor = await messages.inbox(agent=me, room=_room(room), consumer=consumer,
                                          limit=limit, since_id=since_id)
     mine = await task_queue.held_by(room=_room(room), agent=me)
-    return {"agent": me, "consumer": consumer, "room": room, "messages": items,
+    return {"agent": me, "consumer": consumer, "room": room, "messages": messages_view(items),
             "cursor": cursor, "more": len(items) == limit,
-            "my_tasks": [{"task_id": t["task_id"], "title": t["title"],
-                          "attention": t["attention"]} for t in mine]}
+            "my_tasks": tasks_view([{"task_id": t["task_id"], "title": t["title"],
+                                     "attention": t["attention"]} for t in mine])}
 
 
 async def room_ack(
@@ -83,8 +84,8 @@ async def room_history(
     before_id: Annotated[int | None, Field(ge=1)] = None, task_id: Ident | None = None,
 ) -> dict[str, Any]:
     """Вся переписка комнаты (включая адресные сообщения), по возрастанию id. Full room transcript, oldest first."""
-    return {"room": room, "messages": await messages.history(
-        room=_room(room), limit=limit, before_id=before_id, task_id=task_id)}
+    return {"room": room, "messages": messages_view(await messages.history(
+        room=_room(room), limit=limit, before_id=before_id, task_id=task_id))}
 
 
 async def room_task_open(
@@ -212,8 +213,8 @@ async def room_task_history(
     limit: Annotated[int, Field(ge=1, le=200)] = 100,
 ) -> dict[str, Any]:
     """Журнал событий задачи по возрастанию id (только чтение, после since_id). Task event log, oldest first."""
-    return {"room": room, "task_id": task_id, "events": await task_progress.history(
-        room=_room(room), task_id=task_id, since_id=since_id, limit=limit)}
+    return {"room": room, "task_id": task_id, "events": events_view(await task_progress.history(
+        room=_room(room), task_id=task_id, since_id=since_id, limit=limit))}
 
 
 async def room_task_release(
@@ -234,8 +235,8 @@ async def room_tasks(
     queue: Literal["open", "unclaimed"] | None = None,
 ) -> dict[str, Any]:
     """Список задач комнаты со статусом, живым держателем и attention {state, label, since, last_result_at}. queue=open — все незавершённые, queue=unclaimed — незавершённые без живой аренды. List room tasks."""
-    return {"room": room, "tasks": await task_queue.list_tasks(
-        room=_room(room), status=status, limit=limit, queue=queue)}
+    return {"room": room, "tasks": tasks_view(await task_queue.list_tasks(
+        room=_room(room), status=status, limit=limit, queue=queue))}
 
 
 ROOM_TOOLS = (room_post, room_inbox, room_ack, room_history, room_task_open,

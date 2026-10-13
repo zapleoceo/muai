@@ -28,6 +28,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.events.visibility import NOT_HIDDEN_SQL
 from vera_shared.ingest.envelope import HEADER_SEPARATOR, message_body
 from vera_shared.ingest.quotes import strip_quoted
+from vera_shared.redact_view import redact_view
 from vera_shared.timeutil import utc_naive_now
 
 log = logging.getLogger(__name__)
@@ -103,8 +104,8 @@ async def _run(sql: str, params: dict[str, Any]) -> list[dict[str, Any]] | None:
             log.warning("панель: запрос событий не уложился в %sс: %s", EVENTS_TIMEOUT_S, e)
             return None
     return [{"id": r["id"], "source": r["source"], "occurred_at": _iso(r["occurred_at"]),
-             "subject": _subject(r["content_text"]) if r["source"] == "gmail" else "",
-             "snippet": snippet(r["content_text"])} for r in rows]
+             "subject": _subject(safe) if r["source"] == "gmail" else "",
+             "snippet": snippet(safe)} for r in rows for safe in [redact_view(r["content_text"])]]
 
 
 async def recent_events_status(aliases: list[tuple[str, str]],

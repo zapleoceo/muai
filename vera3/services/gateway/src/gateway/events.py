@@ -15,6 +15,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
 from vera_shared.events.schema import RawEvent
+from vera_shared.redact_view import redact_tree, redact_view
 
 from gateway.auth import check_internal_secret
 
@@ -102,11 +103,11 @@ async def get_event(
             "source_event_id": row.source_event_id,
             "account": row.account,
             "category": row.category,
-            "content_text": row.content_text,
+            "content_text": redact_view(row.content_text),
             "occurred_at": row.occurred_at.isoformat(),
             "received_at": row.received_at.isoformat() if row.received_at else None,
             "triage_status": row.triage_status,
-            "triage_metadata": row.triage_metadata,
+            "triage_metadata": redact_tree(row.triage_metadata),
             "importance": row.importance,
             "nature": row.nature,
             "project": row.project,

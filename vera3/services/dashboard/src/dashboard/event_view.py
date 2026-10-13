@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from dashboard.event_text import ParsedText, clean_name, describe, parse_content
+from dashboard.redaction import redact_event_row
 from dashboard.render import esc, local_dt
 from dashboard.source_registry import resolve_source
 from dashboard.ui.components import collapsible, kv_block
@@ -126,7 +127,16 @@ def service_pairs(row: Mapping[str, Any], meta: Mapping[str, Any]) -> list[tuple
     ]
 
 
-def event_card(row: Mapping[str, Any], links: Mapping[str, int] | None = None) -> str:
+def _raw_toggle(event_id: Any, raw: bool) -> str:
+    if raw:
+        return f'<p class="muted small">Показано как есть. <a href="/events/{event_id}">Скрыть секреты</a></p>'
+    return f'<p class="muted small"><a href="/events/{event_id}?raw=1">показать как есть</a></p>'
+
+
+def event_card(row: Mapping[str, Any], links: Mapping[str, int] | None = None,
+               raw: bool = False) -> str:
+    if not raw:
+        row = redact_event_row(row)
     meta = row["metadata"] or {}
     parsed = parse_content(row["content_text"])
     who = describe(parsed, meta).who
@@ -141,6 +151,7 @@ def event_card(row: Mapping[str, Any], links: Mapping[str, int] | None = None) -
         {error}
         <h3>{"Выжимка" if row["source"] == "voice" else "Текст"}</h3>
         <div class="body-text">{body}</div>
+        {_raw_toggle(row['id'], raw)}
         {transcript_html(row['content_extra'])}
         {collapsible("Служебное", kv_block(service_pairs(row, meta)))}
     """

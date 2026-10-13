@@ -8,6 +8,7 @@ from pydantic import Field
 from vera_shared.room import questions
 
 from vera_mcp.auth import client_of
+from vera_mcp.room_redact import questions_view
 from vera_mcp.room_tools import Ident, Room, _room
 
 Token = Annotated[int, Field(ge=1)]
@@ -39,7 +40,7 @@ async def room_task_answer_ack(
 async def room_task_questions(task_id: Ident, room: Room = "main") -> dict[str, Any]:
     """Вопросы задачи с ответами владельца (статусы open/answered/acked/withdrawn), по возрастанию qid. Только чтение. Task questions with answers."""
     return {"room": room, "task_id": task_id,
-            "questions": await questions.questions_of(_room(room), task_id)}
+            "questions": questions_view(await questions.questions_of(_room(room), task_id))}
 
 
 QUESTION_TOOLS = (room_task_ask, room_task_answer_ack, room_task_questions)
