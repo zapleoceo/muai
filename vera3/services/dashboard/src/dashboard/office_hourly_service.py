@@ -74,7 +74,8 @@ def status_info_of(row: RoomTaskRow, att: Attention, question: RoomTaskQuestionR
         control_text=control_event.text if control_event else None,
         control_agent=control_event.agent if control_event else None,
         control_data=control_event.data if control_event else None,
-        control_bound_reason=bound_reason_of(control_event, control_next))
+        control_bound_reason=bound_reason_of(control_event, control_next),
+        control_at=control_event.at if control_event else None)
 
 
 def status_of(row: RoomTaskRow, att: Attention, question: RoomTaskQuestionRow | None,

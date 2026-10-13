@@ -42,6 +42,10 @@ def details_html(details: CardDetails, info: StatusInfo) -> str:
         rows.append(("Ожидание", esc(info.dependency)))
     if info.wait_reason:
         rows.append(("Причина", esc(info.wait_reason)))
+    if info.waiting:
+        rows.append(("Ожидание решения/проверки", "да; не блокер без явного свидетельства"))
+        rows.append(("Кто действует", esc(info.decision_owner or "неизвестно")))
+        rows.append(("Актуальность ожидания", esc(info.wait_freshness or "unknown")))
     rows.append(("За час", _delta(details)))
     body = "".join(f'<dt>{t}</dt><dd>{v}</dd>' for t, v in rows)
     return f'<dl class="oh-fields oh-details">{body}</dl>'

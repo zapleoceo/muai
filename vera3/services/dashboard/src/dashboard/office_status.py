@@ -14,7 +14,9 @@ CONFIRMED, UNCONFIRMED = "подтверждён", "не подтверждён"
 FRESH, STALE, UNKNOWN = "fresh", "stale", "unknown"
 FRESH_MAX_AGE = timedelta(hours=1)
 
-_BLOCKER_RAW = frozenset({"blocked", "waiting", "paused"})
+# raw `waiting` is deliberately absent: waiting for a decision/check is not a proven block
+_BLOCKER_RAW = frozenset({"blocked", "paused"})
+DECISION_OWNER_KEYS = ("decision_owner", "addressee")
 BLOCKER_EVIDENCE_KINDS = frozenset({"blocked", "released", "waiting"})
 
 
@@ -27,6 +29,9 @@ class StatusInfo:
     open_question: bool
     last_signal_at: datetime | None
     freshness: str
+    waiting: bool = False
+    decision_owner: str | None = None
+    wait_freshness: str | None = None
 
 
 def _last_signal(row: Any, event_at: datetime | None) -> datetime | None:
@@ -121,12 +126,32 @@ def _dependency(row: Any, now: datetime, active: bool) -> str | None:
     return "; ".join(parts) or None
 
 
+def decision_owner_of(data: dict[str, Any] | None) -> str | None:
+    """Who must act, only from explicit event data; never guessed from roles."""
+    for key in DECISION_OWNER_KEYS:
+        value = (data or {}).get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return None
+
+
+def wait_freshness_of(row: Any, now: datetime, control: str | None,
+                      control_at: datetime | None) -> str:
+    until = getattr(row, "waiting_until", None)
+    if until is not None and until > now:
+        return FRESH
+    if control == "waiting" and control_at is not None:
+        return freshness_of(control_at, now)
+    return STALE if until is not None else UNKNOWN
+
+
 def describe_status(row: Any, now: datetime, *, has_open_question: bool = False,
                     answered: bool = False, control: str | None = None,
                     event_at: datetime | None = None, control_text: str | None = None,
                     control_agent: str | None = None,
                     control_data: dict[str, Any] | None = None,
-                    control_bound_reason: str | None = None) -> StatusInfo:
+                    control_bound_reason: str | None = None,
+                    control_at: datetime | None = None) -> StatusInfo:
     status = _status(row, now, has_open_question=has_open_question, answered=answered,
                      control=control)
     blocked = status == BLOCKER
@@ -139,10 +164,16 @@ def describe_status(row: Any, now: datetime, *, has_open_question: bool = False,
     open_task = status not in (DONE, CANCELLED)
     waiting_reason = getattr(row, "waiting_reason", None) if open_task else None
     event_reason = _event_reason(control, control_text, control_data, control_bound_reason)
-    wait_reason = waiting_reason or (event_reason or None if blocked else None)
+    waiting = open_task and not blocked and (
+        bool(waiting_reason) or row.status == "waiting" or control == "waiting"
+        or (getattr(row, "waiting_until", None) is not None and row.waiting_until > now))
+    wait_reason = waiting_reason or (event_reason or None if blocked or waiting else None)
     waiting_active = bool(waiting_reason) or (
         getattr(row, "waiting_until", None) is not None and row.waiting_until > now)
     dependency = _dependency(row, now, blocked or waiting_active) if open_task else None
     signal = _last_signal(row, event_at)
     return StatusInfo(status, confidence, wait_reason, dependency,
-                      has_open_question and open_task, signal, freshness_of(signal, now))
+                      has_open_question and open_task, signal, freshness_of(signal, now),
+                      waiting,
+                      decision_owner_of(control_data) if waiting or blocked else None,
+                      wait_freshness_of(row, now, control, control_at) if waiting else None)

@@ -165,3 +165,43 @@ async def test_card_details_hourly_delta_pg(pg_db):
     assert cards["H2"].details.delta.transitions[0][1] == "взята"
     later = await load_report(now=cards["H1"].row.updated_at + timedelta(hours=2))
     assert cards_by_id(later)["H1"].details.delta.unchanged
+
+
+async def test_waiting_with_expired_lease_is_not_blocker_pg(pg_db):
+    from datetime import datetime, timedelta
+
+    from dashboard.office_hourly_service import load_report
+    from vera_shared.room import task_wait
+
+    token = await held("W1")
+    task = await task_wait.wait(room="main", task_id="W1", agent="claude",
+                                fencing_token=token, until_seconds=600, reason="ждём решение")
+    later = await load_report(now=datetime.fromisoformat(task["updated_at"]) + timedelta(hours=3))
+    card = cards_by_id(later)["W1"]
+    assert card.status == "Новая / в очереди"
+    assert card.info.waiting is True
+    assert card.info.wait_reason == "ждём решение"
+    assert card.info.decision_owner is None
+    assert card.info.wait_freshness == "stale"
+    assert card.info.blocker_confidence is None
+
+
+async def test_waiting_decision_owner_only_from_explicit_event_data_pg(pg_db):
+    from dashboard.office_hourly_service import load_report
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models_room import RoomTaskEventRow
+    from vera_shared.room import task_wait
+
+    token = await held("W2")
+    await task_wait.wait(room="main", task_id="W2", agent="claude", fencing_token=token,
+                         until_seconds=600, reason="нужен ответ")
+    assert cards_by_id(await load_report())["W2"].info.decision_owner is None
+    async with get_session() as s:
+        from sqlalchemy import select
+        event = (await s.execute(select(RoomTaskEventRow).where(
+            RoomTaskEventRow.task_id == "W2", RoomTaskEventRow.kind == "waiting"))).scalar_one()
+        event.data = {**(event.data or {}), "decision_owner": "owner"}
+        await s.commit()
+    card = cards_by_id(await load_report())["W2"]
+    assert card.status == "В работе"
+    assert card.info.decision_owner == "owner"
