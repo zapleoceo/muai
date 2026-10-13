@@ -72,12 +72,17 @@ def _event_reason(row: Any, control: str | None, text: str | None,
 
     `waiting` (task_wait) and `released` with data.status == "blocked" (release) carry it in
     the event text. The `blocked` flip written by update(status="blocked") has no text; its
-    note goes to a separate progress event and is mirrored to row.note.
+    note goes to a separate progress event and is mirrored to row.last_progress_text, which
+    update sets to the note or to "status: <status>" when no note was given (row.note is
+    not reset by such an update, so it may be stale and is never used).
     """
     if control == "released" and (data or {}).get("status") != "blocked":
         return ""
-    reason = text or (getattr(row, "note", None) if control == "blocked" else None)
-    return (reason or getattr(row, "waiting_reason", None) or "").strip() if control else ""
+    reason = text
+    if not reason and control == "blocked":
+        progress = getattr(row, "last_progress_text", None) or ""
+        reason = "" if progress.startswith("status: ") else progress
+    return (reason or "").strip() if control else ""
 
 
 def blocker_confidence_of(row: Any, *, has_open_question: bool, control: str | None,

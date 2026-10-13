@@ -36,6 +36,7 @@ def row(status: str, lease: str = "none", progress_at: datetime | None = None,
     holder, until = LEASES[lease]
     fields = {"status": status, "lease_holder": holder, "lease_until": until,
               "last_progress_at": progress_at, "waiting_reason": None, "note": "заметка",
+              "last_progress_text": None,
               "owner": None, "responsible": None, "created_by": "dot", "depends_on": [],
               "waiting_until": None}
     return SimpleNamespace(**{**fields, **extra})
@@ -105,7 +106,7 @@ EVIDENCE = [
     ("released", "причина", "dot", {"status": "blocked"}, CONFIRMED),
     ("released", "причина", "dot", {"status": "open"}, UNCONFIRMED),
     ("released", "", "dot", {"status": "blocked"}, UNCONFIRMED),
-    ("blocked", "", "dot", None, CONFIRMED),
+    ("blocked", "", "dot", None, UNCONFIRMED),
     ("blocked", "причина", "other", None, UNCONFIRMED),
     ("blocked", "причина", None, None, UNCONFIRMED),
     ("paused", "причина", "dot", None, UNCONFIRMED),
@@ -124,15 +125,14 @@ def test_blocker_confidence_from_control_event(kind: str | None, text: str | Non
     assert info.blocker_confidence == expected
 
 
-def test_blocked_flip_without_text_uses_row_note_or_waiting_reason() -> None:
-    noted = describe_status(row("blocked"), NOW, control="blocked", control_agent="dot")
-    assert noted.blocker_confidence == CONFIRMED
-    silent = describe_status(row("blocked", note=None), NOW, control="blocked",
-                             control_agent="dot")
-    assert silent.blocker_confidence == UNCONFIRMED
-    waiting = describe_status(row("blocked", note=None, waiting_reason="ждём"), NOW,
-                              control="blocked", control_agent="dot")
-    assert waiting.blocker_confidence == CONFIRMED
+def test_blocked_flip_without_text_uses_last_progress_text_not_note() -> None:
+    reasoned = describe_status(row("blocked", last_progress_text="ждём ключ"), NOW,
+                               control="blocked", control_agent="dot")
+    assert reasoned.blocker_confidence == CONFIRMED
+    for progress in (None, "", "status: blocked"):
+        silent = describe_status(row("blocked", last_progress_text=progress), NOW,
+                                 control="blocked", control_agent="dot")
+        assert silent.blocker_confidence == UNCONFIRMED
 
 
 def test_actor_must_be_a_known_actor_of_the_task() -> None:

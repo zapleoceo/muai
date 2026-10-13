@@ -58,6 +58,27 @@ async def test_update_blocked_without_any_reason_is_unconfirmed(sqlite_db):
     assert (info.status, info.blocker_confidence) == (BLOCKER, UNCONFIRMED)
 
 
+async def test_blocked_without_note_ignores_stale_older_note(sqlite_db):
+    token = await held("B7")
+    await tasks.update(room="main", task_id="B7", agent="claude", fencing_token=token,
+                       note="old note")
+    await tasks.update(room="main", task_id="B7", agent="claude", fencing_token=token,
+                       status="blocked")
+    row, _ = await snapshot("B7")
+    assert (row.note, row.last_progress_text) == ("old note", "status: blocked")
+    info = await info_of("B7")
+    assert (info.status, info.blocker_confidence) == (BLOCKER, UNCONFIRMED)
+
+
+async def test_blocked_with_fresh_note_after_old_note_is_confirmed(sqlite_db):
+    token = await held("B8")
+    await tasks.update(room="main", task_id="B8", agent="claude", fencing_token=token,
+                       note="old note")
+    await tasks.update(room="main", task_id="B8", agent="claude", fencing_token=token,
+                       status="blocked", note="reason")
+    assert (await info_of("B8")).blocker_confidence == CONFIRMED
+
+
 async def test_release_blocked_with_note_clears_holder_and_confirms(sqlite_db):
     token = await held("B3")
     await tasks.release(room="main", task_id="B3", agent="claude", fencing_token=token,
