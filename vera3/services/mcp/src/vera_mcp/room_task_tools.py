@@ -7,6 +7,7 @@ from typing import Annotated, Any, Literal
 from mcp.server.mcpserver import Context
 from pydantic import Field
 from vera_shared.room import (
+    task_cancel,
     task_metadata,
     task_progress,
     task_queue,
@@ -164,6 +165,16 @@ async def room_task_release(
     """Отпустить задачу: done — сделано, blocked — упёрлись, open — вернуть в общий пул. Release a task you hold."""
     task = await tasks.release(room=_room(room), task_id=task_id, agent=client_of(ctx),
                                fencing_token=fencing_token, status=status, note=note)
+    return {"ok": True, "task": task_view(task)}
+
+
+async def room_task_cancel(
+    task_id: Ident, fencing_token: Annotated[int, Field(ge=0)], ctx: Context,
+    reason: Annotated[str, Field(min_length=1, max_length=4000)], room: Room = "main",
+) -> dict[str, Any]:
+    """Отменить задачу без захвата: статус cancelled, причина в note и журнале, аренда снимается, остальные поля сохраняются. Может держатель живой аренды или создатель задачи без живой аренды; fencing_token — текущий сохранённый (у ни разу не захваченной 0), устаревший отвергается. done/cancelled отменить нельзя. Cancel a task without claiming it."""
+    task = await task_cancel.cancel(room=_room(room), task_id=task_id, agent=client_of(ctx),
+                                    fencing_token=fencing_token, reason=reason)
     return {"ok": True, "task": task_view(task)}
 
 
