@@ -67,7 +67,8 @@ def status_info_of(row: RoomTaskRow, att: Attention, question: RoomTaskQuestionR
         row, now, has_open_question=question is not None, answered=att.state == ANSWERED,
         control="paused" if att.state == PAUSED else control, event_at=event_at,
         control_text=control_event.text if control_event else None,
-        control_agent=control_event.agent if control_event else None)
+        control_agent=control_event.agent if control_event else None,
+        control_data=control_event.data if control_event else None)
 
 
 def status_of(row: RoomTaskRow, att: Attention, question: RoomTaskQuestionRow | None,

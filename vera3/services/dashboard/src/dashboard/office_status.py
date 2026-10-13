@@ -15,7 +15,7 @@ FRESH, STALE, UNKNOWN = "fresh", "stale", "unknown"
 FRESH_MAX_AGE = timedelta(hours=1)
 
 _BLOCKER_RAW = frozenset({"blocked", "waiting", "paused"})
-BLOCKER_EVIDENCE_KINDS = frozenset({"blocked", "waiting"})
+BLOCKER_EVIDENCE_KINDS = frozenset({"blocked", "released", "waiting"})
 
 
 @dataclass(frozen=True)
@@ -29,8 +29,7 @@ class StatusInfo:
     freshness: str
 
 
-def last_signal_of(row: Any, event_at: datetime | None = None) -> datetime | None:
-    """Latest of row.last_progress_at and the latest done/progress event time."""
+def _last_signal(row: Any, event_at: datetime | None) -> datetime | None:
     times = [t for t in (row.last_progress_at, event_at) if t is not None]
     return max(times) if times else None
 
@@ -60,31 +59,51 @@ def _status(row: Any, now: datetime, *, has_open_question: bool, answered: bool,
     return WORKING if _live_lease(row, now) else QUEUE
 
 
-def _actor_ok(row: Any, agent: str | None) -> bool:
-    known = {a for a in (row.lease_holder, getattr(row, "owner", None),
-                         getattr(row, "responsible", None)) if a}
-    return bool(agent) and (not known or agent in known)
+def _known_actors(row: Any, data: dict[str, Any] | None) -> set[str]:
+    candidates = (row.lease_holder, getattr(row, "created_by", None),
+                  getattr(row, "owner", None), getattr(row, "responsible", None),
+                  (data or {}).get("holder"))
+    return {a for a in candidates if a}
+
+
+def _event_reason(row: Any, control: str | None, text: str | None,
+                  data: dict[str, Any] | None) -> str:
+    """Reason carried by the control event in the shapes vera_shared.room writes.
+
+    `waiting` (task_wait) and `released` with data.status == "blocked" (release) carry it in
+    the event text. The `blocked` flip written by update(status="blocked") has no text; its
+    note goes to a separate progress event and is mirrored to row.note.
+    """
+    if control == "released" and (data or {}).get("status") != "blocked":
+        return ""
+    reason = text or (getattr(row, "note", None) if control == "blocked" else None)
+    return (reason or getattr(row, "waiting_reason", None) or "").strip() if control else ""
 
 
 def blocker_confidence_of(row: Any, *, has_open_question: bool, control: str | None,
-                          control_text: str | None, control_agent: str | None) -> str:
+                          control_text: str | None, control_agent: str | None,
+                          control_data: dict[str, Any] | None = None) -> str:
     """Confirmed only by explicit evidence: an open question on the task, or the latest
-    control event being blocked/waiting with a non-empty reason from the task's actor."""
+    control event being blocked/released(blocked)/waiting with a non-empty reason whose
+    author is a known actor of the task (holder, created_by, owner, responsible).
+    With no known actor at all, any non-empty author is accepted."""
     if has_open_question:
         return CONFIRMED
-    if (control in BLOCKER_EVIDENCE_KINDS and (control_text or "").strip()
-            and _actor_ok(row, control_agent)):
-        return CONFIRMED
-    return UNCONFIRMED
+    if control not in BLOCKER_EVIDENCE_KINDS or not control_agent:
+        return UNCONFIRMED
+    if not _event_reason(row, control, control_text, control_data):
+        return UNCONFIRMED
+    known = _known_actors(row, control_data)
+    return CONFIRMED if not known or control_agent in known else UNCONFIRMED
 
 
-def dependency_of(row: Any) -> str | None:
+def _dependency(row: Any, now: datetime, active: bool) -> str | None:
     parts = []
     deps = getattr(row, "depends_on", None)
-    if deps:
+    if deps and active:
         parts.append("зависит от: " + ", ".join(str(d) for d in deps))
     until = getattr(row, "waiting_until", None)
-    if until is not None:
+    if until is not None and until > now:
         parts.append(f"ждём до {until:%Y-%m-%d %H:%M}")
     return "; ".join(parts) or None
 
@@ -92,15 +111,21 @@ def dependency_of(row: Any) -> str | None:
 def describe_status(row: Any, now: datetime, *, has_open_question: bool = False,
                     answered: bool = False, control: str | None = None,
                     event_at: datetime | None = None, control_text: str | None = None,
-                    control_agent: str | None = None) -> StatusInfo:
+                    control_agent: str | None = None,
+                    control_data: dict[str, Any] | None = None) -> StatusInfo:
     status = _status(row, now, has_open_question=has_open_question, answered=answered,
                      control=control)
     blocked = status == BLOCKER
     confidence = (blocker_confidence_of(row, has_open_question=has_open_question,
                                         control=control, control_text=control_text,
-                                        control_agent=control_agent) if blocked else None)
-    wait_reason = (getattr(row, "waiting_reason", None) or row.note or None) if blocked else None
-    signal = last_signal_of(row, event_at)
-    return StatusInfo(status, confidence, wait_reason, dependency_of(row) if blocked else None,
-                      has_open_question and status not in (DONE, CANCELLED), signal,
-                      freshness_of(signal, now))
+                                        control_agent=control_agent,
+                                        control_data=control_data) if blocked else None)
+    open_task = status not in (DONE, CANCELLED)
+    waiting_reason = getattr(row, "waiting_reason", None) if open_task else None
+    wait_reason = waiting_reason or ((row.note or None) if blocked else None)
+    waiting_active = bool(waiting_reason) or (
+        getattr(row, "waiting_until", None) is not None and row.waiting_until > now)
+    dependency = _dependency(row, now, blocked or waiting_active) if open_task else None
+    signal = _last_signal(row, event_at)
+    return StatusInfo(status, confidence, wait_reason, dependency,
+                      has_open_question and open_task, signal, freshness_of(signal, now))
