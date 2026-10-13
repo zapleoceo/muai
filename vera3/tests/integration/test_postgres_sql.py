@@ -405,10 +405,8 @@ async def test_retrieval_picks_the_expected_branch(pg_db, question, mode):
 
 
 @pytest.mark.asyncio
-async def test_vector_branch_requires_embedding_via_inner_join(pg_db):
-    """Ветка «есть вектор, нет слов» берёт INNER JOIN намеренно: строка без
-    эмбеддинга там бесполезна, ранжировать её нечем. Единственное место, где
-    JOIN не LEFT, — раньше это отличие терялось среди шести копий."""
+async def test_vector_branch_keeps_recent_unembedded_events(pg_db):
+    """A newly received event remains a candidate while embedding is pending."""
     from brain_search.retrieval import fetch_candidates
     from sqlalchemy import text as sa_text
     from vera_shared.db.engine import get_session
@@ -433,8 +431,11 @@ async def test_vector_branch_requires_embedding_via_inner_join(pg_db):
     found = await fetch_candidates(ts_query="", acc_words=[], time_range=None,
                                    project=None, q_vec=[0.1, 0.2, 0.0], limit=15)
 
-    assert found.mode == "vector"
-    assert [r[2] for r in found.rows] == ["has"], "строка без эмбеддинга просочилась"
+    assert found.mode == "vector+recent"
+    by_source_id = {r.source_event_id: r for r in found.rows}
+    assert set(by_source_id) == {"has", "none"}
+    assert by_source_id["has"].vec_sim is not None
+    assert by_source_id["none"].vec_sim is None
 
 
 # ─── pgvector: миграция 030 ─────────────────────────────────────────────────

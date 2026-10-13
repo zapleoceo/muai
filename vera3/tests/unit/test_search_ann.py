@@ -244,6 +244,22 @@ def test_primary_select_without_vector_has_no_join_and_null_embedding():
     assert "event_embeddings" not in sql and "NULL AS embedding" in sql
 
 
+@pytest.mark.asyncio
+async def test_unscoped_vector_query_keeps_unembedded_recent_rows(monkeypatch):
+    run = AsyncMock(return_value=retrieval.Candidates([], "vector+recent"))
+    monkeypatch.setattr(retrieval, "_run", run)
+
+    await retrieval._primary(
+        _Session(), ts_query="", acc_words=[], time_range=None,
+        project=None, q_vec=[0.1, 0.2], with_vec=True, limit=15,
+    )
+
+    sql = str(run.await_args.args[1])
+    assert "LEFT JOIN event_embeddings ee ON ee.event_id = events.id" in sql
+    assert "LIMIT 200" in sql
+    assert run.await_args.args[3] == "vector+recent"
+
+
 # ─── скоринг ────────────────────────────────────────────────────────────────
 
 

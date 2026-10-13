@@ -1,16 +1,9 @@
-"""Выборка кандидатов из events — один запрос вместо шести копий.
+"""Fetch bounded search candidates from events.
 
-В `search()` было шесть блоков `SELECT … FROM events LEFT JOIN
-event_embeddings …`, различавшихся только WHERE и LIMIT (плюс седьмой,
-почти такой же, в agent.py). Колонки в пяти из шести совпадали дословно.
-
-Здесь одна форма запроса и явный набор режимов. Ветка «есть вектор, нет
-слов» использует INNER JOIN намеренно: без эмбеддинга такая строка там
-бесполезна, ранжировать нечем. Агентский search_events идёт через тот же
-`fetch_candidates`, поэтому повторный поиск не отличается от первого.
-
-Поверх любого режима, когда есть вектор запроса, добавляются
-смысловые кандидаты из всего корпуса (ann.py) с тем же фильтром.
+The primary path includes recent events before their embeddings exist. FTS,
+project and time scopes use a left join for optional vector similarity; the
+unscoped vector path also keeps unembedded recent rows. ANN adds older semantic
+matches after the primary query. Search does not mutate stored events.
 """
 from __future__ import annotations
 
@@ -228,10 +221,12 @@ async def _primary(s, *, ts_query: str, acc_words: list[str], time_range,
         return await _run(s, stmt, {**time_params, **src_params, **vec_params}, "time")
 
     if q_vec is not None:
-        stmt = _select(extra_cols=_PLAIN, join="JOIN", where=f"1=1{world}",
+        # Newly received events can be searched before embedding finishes.
+        # Keep them in the recent pool; ANN still adds older semantic matches.
+        stmt = _select(extra_cols=_PLAIN, join="LEFT JOIN", where=f"1=1{world}",
                        order="occurred_at DESC", limit_sql=str(CANDIDATE_POOL),
                        with_vec=with_vec)
-        return await _run(s, stmt, {**src_params, **vec_params}, "vector")
+        return await _run(s, stmt, {**src_params, **vec_params}, "vector+recent")
 
     stmt = _select(extra_cols=_PLAIN, join="LEFT JOIN", where=f"1=1{world}",
                    order="occurred_at DESC", limit_sql=str(RECENT_FALLBACK))
