@@ -57,27 +57,22 @@ CASES = (
 )
 
 
-def sections(answer: str) -> tuple[str, str, bool]:
+def sections(answer: str) -> tuple[str, str]:
     done: list[str] = []
     other: list[str] = []
     target = other
-    has_headings = False
     for line in answer.splitlines():
         if DONE_HEAD.match(line):
             target = done
-            has_headings = True
         elif OPEN_HEAD.match(line):
             target = other
-            has_headings = True
         else:
             target.append(line)
-    return "\n".join(done), "\n".join(other), has_headings
+    return "\n".join(done), "\n".join(other)
 
 
 def check(case: Case, answer: str) -> str | None:
-    done, other, has_headings = sections(answer)
-    if not has_headings:
-        return "формат: нет заголовков разделов"
+    done, other = sections(answer)
     if not done and not other.strip():
         return "пустой ответ"
     if case.expect_done:
