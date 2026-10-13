@@ -324,7 +324,7 @@ fi
 # vera-backup-prune.sh удаляет дамп только по явному подтверждению NAS; пока его
 # нет, дампы копятся до ротации. Алерт — когда их объём выше порога.
 BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/vera}"
-BACKUP_PENDING_ALERT_GB="${BACKUP_PENDING_ALERT_GB:-5}"
+BACKUP_PENDING_ALERT_GB="${BACKUP_PENDING_ALERT_GB:-3}"
 if [ -d "$BACKUP_ROOT" ]; then
     pending_bytes=$(find "$BACKUP_ROOT" -type f \( -name '*.dump' -o -name '*.tar.gz' \) -printf '%s\n' 2>/dev/null | awk '{s+=$1} END {printf "%d", s}')
     pending_gb=$(( pending_bytes / 1073741824 ))
