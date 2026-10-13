@@ -14,7 +14,6 @@ from vera_shared.db.models_room import (
 )
 from vera_shared.room.attention import (
     ANSWERED,
-    NEEDS_OWNER,
     PAUSED,
     Attention,
     attention,
@@ -22,11 +21,11 @@ from vera_shared.room.attention import (
 from vera_shared.timeutil import utc_naive_now
 
 from dashboard.office_runtime_service import RuntimeSnapshot, latest_runtime_snapshot
+from dashboard.office_status import STATUSES, StatusInfo, describe_status
 
 WINDOW = timedelta(hours=1)
 REMINDER = timedelta(hours=6)
-STATUS_LABELS = ("Новая / в очереди", "В работе", "Блокер", "На проверке", "Готово",
-                 "Отменена")
+STATUS_LABELS = STATUSES
 RESULT_KINDS = ("progress", "done")
 
 
@@ -34,6 +33,7 @@ RESULT_KINDS = ("progress", "done")
 class HourlyCard:
     row: RoomTaskRow
     status: str
+    info: StatusInfo
     attention: Attention
     question: RoomTaskQuestionRow | None
     last_confirmed: RoomTaskEventRow | None
@@ -53,23 +53,17 @@ class HourlyReport:
     runtime: RuntimeSnapshot | None = None
 
 
+def status_info_of(row: RoomTaskRow, att: Attention, question: RoomTaskQuestionRow | None,
+                   now: datetime, control: str | None = None,
+                   event_at: datetime | None = None) -> StatusInfo:
+    return describe_status(
+        row, now, has_open_question=question is not None, answered=att.state == ANSWERED,
+        control="paused" if att.state == PAUSED else control, event_at=event_at)
+
+
 def status_of(row: RoomTaskRow, att: Attention, question: RoomTaskQuestionRow | None,
               now: datetime, control: str | None = None) -> str:
-    if row.status == "done":
-        return "Готово"
-    if row.status == "cancelled":
-        return "Отменена"
-    if question is not None or att.state == NEEDS_OWNER:
-        return "Блокер"
-    if att.state == ANSWERED or control == "review":
-        return "На проверке"
-    if att.state == PAUSED or control == "paused":
-        return "Новая / в очереди"
-    if row.status == "blocked":
-        return "Блокер"
-    if row.lease_holder and row.lease_until and row.lease_until > now:
-        return "В работе"
-    return "Новая / в очереди"
+    return status_info_of(row, att, question, now, control).status
 
 
 def evidence_of(event: RoomTaskEventRow | None, now: datetime) -> str:
@@ -112,11 +106,12 @@ def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Atte
         att = attentions[key]
         question = open_questions.get(key)
         control = control_by_task.get(key)
-        status = status_of(row, att, question, now, control)
+        last = latest.get(key)
+        info = status_info_of(row, att, question, now, control, last.at if last else None)
+        status = info.status
         counts[status] += 1
         if status != "Готово":
-            last = latest.get(key)
-            cards.append(HourlyCard(row, status, att, question, last,
+            cards.append(HourlyCard(row, status, info, att, question, last,
                                     evidence_of(last, now), "Не установлена",
                                     "Пауза зафиксирована" if control == "paused" else ""))
     cards.sort(key=lambda c: (STATUS_LABELS.index(c.status), c.row.priority,

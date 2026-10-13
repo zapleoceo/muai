@@ -24,7 +24,8 @@ def task(task_id: str, status: str = "open", *, holder: str | None = None,
                            project=project, status=status, priority=2,
                            lease_holder=holder, lease_until=NOW + timedelta(minutes=10)
                            if holder else None, responsible=None, next_action="Следующий шаг",
-                           note="Отменено владельцем")
+                           note="Отменено владельцем", last_progress_at=None,
+                           waiting_reason=None)
 
 
 def attention(state: str) -> Attention:
@@ -47,8 +48,8 @@ def test_statuses_sum_once_and_done_is_hidden() -> None:
                           [event("review", "review", 5)])
     assert sum(report.counts.values()) == len(rows)
     assert len(report.cards) == 4
-    assert report.counts == {"Новая / в очереди": 1, "В работе": 1, "Блокер": 1,
-                             "На проверке": 1, "Готово": 1, "Отменена": 0}
+    assert report.counts == {"Новая / в очереди": 1, "В работе": 1, "Ждёт / зависимость": 1,
+                             "Ревью": 1, "Готово": 1, "Отменена": 0}
     assert report.results == []
     html = report_body(report)
     assert "Готово</span>" not in html
@@ -76,7 +77,7 @@ def test_open_question_and_six_hour_checkpoint() -> None:
     q = SimpleNamespace(room="main", task_id="q", status="open",
                         question="Какой вариант выбрать?", asked_at=NOW - timedelta(hours=7))
     report = build_report([row], amap, [q], [], NOW)
-    assert report.cards[0].status == "Блокер"
+    assert report.cards[0].status == "Ждёт / зависимость"
     assert next_question_reminder(q, NOW) == NOW + timedelta(hours=5)
     assert "Какой вариант выбрать?" in report_body(report)
 
@@ -85,7 +86,7 @@ def test_answered_hold_is_review_without_reasking() -> None:
     row = task("answered", "blocked")
     amap = {(row.room, row.task_id): attention("answered")}
     report = build_report([row], amap, [], [], NOW)
-    assert report.cards[0].status == "На проверке"
+    assert report.cards[0].status == "Ревью"
     assert "Следующий шестичасовой контроль" not in report_body(report)
 
 
@@ -105,7 +106,7 @@ def test_review_event_and_pause_are_distinct() -> None:
     amap = {(r.room, r.task_id): attention("unassigned") for r in rows}
     controls = [event("review", "review", 2), event("pause", "paused", 2)]
     report = build_report(rows, amap, [], [], NOW, controls)
-    assert [c.status for c in report.cards] == ["Новая / в очереди", "На проверке"]
+    assert [c.status for c in report.cards] == ["Ждёт / зависимость", "Ревью"]
     assert "Пауза зафиксирована" in report_body(report)
 
 
@@ -114,7 +115,7 @@ def test_acknowledged_question_or_new_claim_ends_old_review_control() -> None:
     amap = {(r.room, r.task_id): attention("in_progress") for r in rows}
     controls = [event("answered", "ack_answer", 1), event("pause", "claimed", 1)]
     report = build_report(rows, amap, [], [], NOW, controls)
-    assert report.counts["На проверке"] == 0
+    assert report.counts["Ревью"] == 0
     assert report.counts["В работе"] == 1
     assert report.counts["Новая / в очереди"] == 1
 

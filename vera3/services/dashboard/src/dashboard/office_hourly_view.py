@@ -51,7 +51,9 @@ def _blocker(card: HourlyCard, now) -> str:
 
 def _card(card: HourlyCard, now) -> str:
     row = card.row
-    extra = _blocker(card, now) if card.status == "Блокер" else ""
+    extra = _blocker(card, now) if card.info.confirmed_blocker else ""
+    reason = (f'<p>Причина ожидания: {esc(card.info.reason)}</p>'
+              if card.info.reason and not extra else "")
     cancel = (f'<p>Причина отмены: {esc(row.note or "Не зафиксирована")}</p>'
               if card.status == "Отменена" else "")
     return (f'<article class="oh-card{" oh-blocker" if extra else ""}">'
@@ -60,7 +62,7 @@ def _card(card: HourlyCard, now) -> str:
             f'<h3><a href="{_task_url(card)}">{esc(row.title or row.task_id)}</a></h3>'
             f'<p>Ответственный: {esc(row.responsible or row.lease_holder or "не указан")}</p>'
             f'<p>Следующее действие: {esc(row.next_action or "не указано")}</p>'
-            f'{cancel}'
+            f'{cancel}{reason}'
             f'<p class="oh-meta">{esc(card.coordination_note)}</p>'
             f'<p class="oh-meta">Сопоставление с внешним runtime: {esc(card.runtime_mapping)}</p>'
             f'<p class="oh-meta">Последний зафиксированный результат: {_result_line(card)}</p>'
@@ -90,8 +92,8 @@ def _projects(report: HourlyReport) -> str:
                             else "")
         parts.append(f'<article><h3>{esc(project)}</h3><p>Room lease: {len(active)} · '
                      f'проверенные runtime в работе: {external_text}{external_warning} · '
-                     f'очередь: {counts["Новая / в очереди"]} · блокер: {counts["Блокер"]} · '
-                     f'проверка: {counts["На проверке"]} · отменена: {counts["Отменена"]}</p>'
+                     f'очередь: {counts["Новая / в очереди"]} · ждёт: {counts["Ждёт / зависимость"]} · '
+                     f'ревью: {counts["Ревью"]} · отменена: {counts["Отменена"]}</p>'
                      f'<p class="oh-meta">Фокус Room: {active_text}{overflow}</p></article>')
     return "".join(parts) or '<p class="oh-note">Открытых карточек нет.</p>'
 
@@ -123,7 +125,7 @@ def _runtime(report: HourlyReport) -> str:
 def report_body(report: HourlyReport) -> str:
     counts = report.counts
     tiles = "".join(f'<article class="oh-tile"><strong>{counts[label]}</strong><span>{label}</span></article>'
-                    for label in ("Новая / в очереди", "В работе", "Блокер", "На проверке",
+                    for label in ("Новая / в очереди", "В работе", "Ждёт / зависимость", "Ревью",
                                   "Отменена"))
     events = "".join(
         f'<li>{local_dt(e.at)} · <a href="/tasks/{quote(e.room, safe="")}/{quote(e.task_id, safe="")}">'
