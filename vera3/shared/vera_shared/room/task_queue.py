@@ -23,6 +23,8 @@ def _no_live_lease(now: Any) -> Any:
     return or_(RoomTaskRow.lease_holder.is_(None), RoomTaskRow.lease_until.is_(None),
                RoomTaskRow.lease_until <= now)
 
+FINAL_STATUSES = ("done", "cancelled")
+
 
 def _open_question() -> Any:
     return exists().where(RoomTaskQuestionRow.room == RoomTaskRow.room,
@@ -38,7 +40,7 @@ async def list_tasks(*, room: str, status: str | None, limit: int,
     if status is not None:
         q = q.where(RoomTaskRow.status == status)
     if queue is not None:
-        q = q.where(RoomTaskRow.status != "done")
+        q = q.where(RoomTaskRow.status.notin_(FINAL_STATUSES))
     if queue == "unclaimed":
         q = q.where(_no_live_lease(now))
     async with get_session() as s:
@@ -50,7 +52,7 @@ async def list_tasks(*, room: str, status: str | None, limit: int,
 async def held_by(*, room: str, agent: str, limit: int = 50) -> list[dict[str, Any]]:
     """Незавершённые задачи, где agent записан держателем (в т.ч. с истёкшей арендой)."""
     q = select(RoomTaskRow).where(RoomTaskRow.room == room, RoomTaskRow.lease_holder == agent,
-                                  RoomTaskRow.status != "done").limit(limit)
+                                  RoomTaskRow.status.notin_(FINAL_STATUSES)).limit(limit)
     async with get_session() as s:
         rows = (await s.execute(q)).scalars().all()
         return await tasks_with_attention(s, list(rows), utc_naive_now())

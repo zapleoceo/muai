@@ -1,12 +1,14 @@
 """room_task_cancel: держатель или создатель свободной задачи, без захвата и без in_progress."""
 from __future__ import annotations
 
+from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
 from vera_mcp import room_tools as r
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskRow
+from vera_shared.room import handoff
 from vera_shared.room.tasks import StaleLease, TaskBusy
 
 pytestmark = pytest.mark.asyncio
@@ -141,3 +143,90 @@ async def test_tool_is_registered_last_without_reordering_existing_ones():
                           "room_task_progress", "room_task_state", "room_task_history",
                           "room_task_wait", "room_task_next", "room_task_release",
                           "room_tasks"]
+
+
+async def expire_lease(task_id: str) -> None:
+    async with get_session() as s:
+        row = await s.get(RoomTaskRow, ("main", task_id))
+        row.lease_until = row.lease_until - timedelta(hours=10)
+
+
+async def test_creator_cancels_after_holder_lease_expired(sqlite_db):
+    await r.room_task_open("T1", CLAUDE)
+    token = (await r.room_task_claim("T1", CODEX))["task"]["fencing_token"]
+    await expire_lease("T1")
+    res = await r.room_task_cancel("T1", token, CLAUDE, reason="истекла")
+    assert res["task"]["status"] == "cancelled"
+    event = [e for e in (await r.room_task_history("T1"))["events"]
+             if e["kind"] == "cancelled"][0]
+    assert event["agent"] == "claude" and event["session"] is None
+    assert event["data"]["prior_status"] == "in_progress"
+
+
+async def test_non_creator_ex_holder_refused_after_expiry(sqlite_db):
+    await r.room_task_open("T1", CLAUDE)
+    token = (await r.room_task_claim("T1", CODEX))["task"]["fencing_token"]
+    await expire_lease("T1")
+    with pytest.raises(StaleLease):
+        await r.room_task_cancel("T1", token, CODEX, reason="поздно")
+
+
+async def test_holder_event_carries_callers_session(sqlite_db):
+    token = (await r.room_task_claim("T1", CODEX, session="laptop"))["task"]["fencing_token"]
+    await r.room_task_cancel("T1", token, CODEX, reason="отмена")
+    event = [e for e in (await r.room_task_history("T1"))["events"]
+             if e["kind"] == "cancelled"][0]
+    assert event["session"] == "laptop"
+
+
+async def test_pending_handoff_is_cleared(sqlite_db):
+    token = (await r.room_task_claim("T1", CLAUDE))["task"]["fencing_token"]
+    await handoff.offer(room="main", task_id="T1", agent="claude", fencing_token=token,
+                        to_agent="codex", note=None)
+    async with get_session() as s:
+        assert (await s.get(RoomTaskRow, ("main", "T1"))).pending_handoff_to == "codex"
+    await r.room_task_cancel("T1", token, CLAUDE, reason="не нужно")
+    async with get_session() as s:
+        assert (await s.get(RoomTaskRow, ("main", "T1"))).pending_handoff_to is None
+
+
+async def test_cancel_from_waiting_and_paused(sqlite_db):
+    token = (await r.room_task_claim("W", CLAUDE))["task"]["fencing_token"]
+    await r.room_task_wait("W", token, CLAUDE, until_seconds=600, reason="жду")
+    assert (await r.room_task_cancel("W", token, CLAUDE, reason="x"))["task"][
+        "status"] == "cancelled"
+    token = (await r.room_task_claim("P", CLAUDE))["task"]["fencing_token"]
+    await r.room_task_state("P", token, CLAUDE, state="paused", reason="пауза")
+    assert (await r.room_task_cancel("P", token, CLAUDE, reason="x"))["task"][
+        "status"] == "cancelled"
+
+
+async def test_attested_task_is_refused(sqlite_db, monkeypatch):
+    from vera_shared.room import task_cancel
+
+    async def attested(*_a):
+        return object()
+
+    await r.room_task_open("T1", CLAUDE)
+    monkeypatch.setattr(task_cancel, "attestation_for", attested)
+    with pytest.raises(TaskBusy, match="attested"):
+        await r.room_task_cancel("T1", 0, CLAUDE, reason="x")
+    assert (await r.room_tasks())["tasks"][0]["status"] == "open"
+
+
+async def test_cancelled_hidden_from_open_queues_but_listable_by_status(sqlite_db):
+    await r.room_task_open("keep", CLAUDE)
+    await r.room_task_open("gone", CLAUDE)
+    await r.room_task_cancel("gone", 0, CLAUDE, reason="x")
+    for queue in ("open", "unclaimed"):
+        ids = [t["task_id"] for t in (await r.room_tasks(queue=queue))["tasks"]]
+        assert ids == ["keep"]
+    listed = (await r.room_tasks(status="cancelled"))["tasks"]
+    assert [t["task_id"] for t in listed] == ["gone"]
+
+
+async def test_dependent_of_cancelled_task_stays_ineligible(sqlite_db):
+    await r.room_task_open("dep", CLAUDE)
+    await r.room_task_open("child", CLAUDE, depends_on=["dep"], auto_pickup=True)
+    await r.room_task_cancel("dep", 0, CLAUDE, reason="x")
+    assert (await r.room_task_next(CODEX))["task"] is None

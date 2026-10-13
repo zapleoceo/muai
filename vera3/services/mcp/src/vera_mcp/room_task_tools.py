@@ -180,7 +180,7 @@ async def room_task_cancel(
 
 async def room_tasks(
     room: Room = "main",
-    status: Literal["open", "in_progress", "blocked", "done"] | None = None,
+    status: Literal["open", "in_progress", "blocked", "done", "cancelled"] | None = None,
     limit: Annotated[int, Field(ge=1, le=200)] = 50,
     queue: Literal["open", "unclaimed"] | None = None,
 ) -> dict[str, Any]:

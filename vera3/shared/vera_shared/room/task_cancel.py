@@ -43,6 +43,7 @@ async def cancel(*, room: str, task_id: str, agent: str, fencing_token: int,
         if await attestation_for(s, room, task_id):
             raise TaskBusy("attested task cannot be cancelled by generic cancel")
         prior = row.status
+        was_holder = row.lease_holder == agent
         row.status = "cancelled"
         row.note = reason
         row.lease_holder = None
@@ -50,7 +51,8 @@ async def cancel(*, room: str, task_id: str, agent: str, fencing_token: int,
         row.pending_handoff_to = None
         row.updated_at = utc_naive_now()
         await record_event(s, room=room, task_id=task_id, kind="cancelled", agent=agent,
-                           session=row.holder_session, account=row.holder_account,
+                           session=row.holder_session if was_holder else None,
+                           account=row.holder_account if was_holder else None,
                            fencing_token=fencing_token, text=reason,
                            data={"status": "cancelled", "prior_status": prior,
                                  "reason": reason})
