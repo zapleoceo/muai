@@ -13,9 +13,13 @@ RECIPIENT = "office-dashboard"
 MAX_AGE = timedelta(hours=1)
 _THREAD = re.compile(r"^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$")
 _STATES = {"active", "completed", "waiting", "unknown"}
+COVERAGES = ("partial", "complete", "unavailable")
+CODEX = "codex"
+_SOURCE = re.compile(r"^[a-z][a-z0-9_-]{0,31}$")
+UNKNOWN_SOURCE = "unknown"
 
 
-def _utc_naive(value: datetime) -> datetime:
+def utc_naive(value: datetime) -> datetime:
     return value.astimezone(UTC).replace(tzinfo=None) if value.tzinfo else value
 
 
@@ -25,6 +29,8 @@ class RuntimeEntry:
     thread_id: str
     state: str
     detail: str
+    source: str = CODEX
+    source_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -33,9 +39,62 @@ class RuntimeSnapshot:
     received_at: datetime
     message_id: str
     entries: tuple[RuntimeEntry, ...]
+    coverage: tuple[tuple[str, str, datetime | None], ...] = ()
+
+    def source_coverage(self, source: str) -> tuple[str, datetime]:
+        """Declared coverage and observation time; undeclared (legacy V1) is partial:
+        confirmed entries count, but a zero is never proven."""
+        for name, coverage, observed in self.coverage:
+            if name == source:
+                return coverage, observed or self.checked_at
+        return "partial", self.checked_at
 
     def is_fresh(self, now: datetime) -> bool:
-        return timedelta(0) <= _utc_naive(now) - self.checked_at <= MAX_AGE
+        return timedelta(0) <= utc_naive(now) - self.checked_at <= MAX_AGE
+
+
+def parse_entry(item: dict) -> RuntimeEntry | None:
+    """V1 entry: no `source` means codex with a UUID thread_id. Other sources keep their
+    native `source_id` as given; nothing is invented for them."""
+    project, state, detail = item["project"], item["state"], item["detail"]
+    source = item.get("source", CODEX)
+    if (not all(isinstance(v, str) for v in (project, state, detail, source)) or
+            not 1 <= len(project) <= 64 or state not in _STATES or len(detail) > 500 or
+            not _SOURCE.fullmatch(source)):
+        return None
+    if source == CODEX:
+        thread_id = item["thread_id"]
+        if not isinstance(thread_id, str) or not _THREAD.fullmatch(thread_id):
+            return None
+        return RuntimeEntry(project, thread_id, state, detail, source, thread_id)
+    source_id = item.get("source_id", "")
+    if (not isinstance(source_id, str) or len(source_id) > 128 or
+            (not source_id and source != UNKNOWN_SOURCE)):
+        return None
+    return RuntimeEntry(project, "", state, detail, source, source_id)
+
+
+def parse_coverage(raw: object, checked: datetime, now: datetime
+                   ) -> tuple[tuple[str, str, datetime | None], ...] | None:
+    if raw is None:
+        return ()
+    if not isinstance(raw, dict) or len(raw) > 20:
+        return None
+    out = []
+    for name, spec in raw.items():
+        if (not isinstance(spec, dict) or not _SOURCE.fullmatch(name) or
+                spec.get("coverage") not in COVERAGES):
+            return None
+        observed = None
+        if "observed_at" in spec:
+            observed = datetime.fromisoformat(str(spec["observed_at"]).replace("Z", "+00:00"))
+            if observed.tzinfo is None:
+                return None
+            observed = utc_naive(observed)
+            if observed > checked or observed > utc_naive(now):
+                return None
+        out.append((name, spec["coverage"], observed))
+    return tuple(out)
 
 
 def parse_runtime_snapshot(row: RoomMessageRow, now: datetime) -> RuntimeSnapshot | None:
@@ -50,22 +109,25 @@ def parse_runtime_snapshot(row: RoomMessageRow, now: datetime) -> RuntimeSnapsho
         if checked.tzinfo is None or not isinstance(raw["entries"], list):
             return None
         checked = checked.astimezone(UTC).replace(tzinfo=None)
-        received = _utc_naive(row.created_at)
+        received = utc_naive(row.created_at)
         if (not 0 <= (received - checked).total_seconds() <= 7200 or
-                checked > _utc_naive(now) or len(raw["entries"]) > 20):
+                checked > utc_naive(now) or len(raw["entries"]) > 20):
             return None
         entries = []
         seen = set()
         for item in raw["entries"]:
-            project, thread_id, state, detail = (
-                item["project"], item["thread_id"], item["state"], item["detail"])
-            if (not all(isinstance(v, str) for v in (project, thread_id, state, detail)) or
-                    not 1 <= len(project) <= 64 or not _THREAD.fullmatch(thread_id) or
-                    state not in _STATES or len(detail) > 500 or thread_id in seen):
+            entry = parse_entry(item)
+            if entry is None:
                 return None
-            seen.add(thread_id)
-            entries.append(RuntimeEntry(project, thread_id, state, detail))
-        return RuntimeSnapshot(checked, received, row.message_id, tuple(entries))
+            key = (entry.source, entry.source_id)
+            if entry.source_id and key in seen:
+                return None
+            seen.add(key)
+            entries.append(entry)
+        coverage = parse_coverage(raw.get("sources"), checked, now)
+        if coverage is None:
+            return None
+        return RuntimeSnapshot(checked, received, row.message_id, tuple(entries), coverage)
     except (KeyError, TypeError, ValueError, AttributeError):
         return None
 
