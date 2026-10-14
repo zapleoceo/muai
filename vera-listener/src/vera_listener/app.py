@@ -139,7 +139,7 @@ class Listener:
 
             speech = self.detectors[frame.track].is_speech(frame.pcm)
             now = time.monotonic()
-            self._capture_activity.observe(frame.track, now, speech)
+            self._capture_activity.observe(frame.track, now, speech, frame.pcm)
             self._report_capture(now)
             # Спрашиваем «кто сейчас звучит», только когда ответ кому-то нужен.
             # Перебор звуковых сессий Windows стоит 28 мс процессора на вызов
@@ -179,9 +179,12 @@ class Listener:
         mic = self._capture_activity.tracks[MIC]
         system = self._capture_activity.tracks[SYSTEM]
         log.info("capture_health mic_frames=%d mic_vad=%d mic_age_s=%.1f "
-                 "system_frames=%d system_vad=%d system_age_s=%.1f",
-                 mic.frames, mic.vad_frames, mic.age(now), system.frames,
-                 system.vad_frames, system.age(now))
+                 "mic_peak_dbfs=%.1f mic_rms_dbfs=%.1f "
+                 "system_frames=%d system_vad=%d system_age_s=%.1f "
+                 "system_peak_dbfs=%.1f",
+                 mic.frames, mic.vad_frames, mic.age(now), mic.peak_dbfs(),
+                 mic.rms_dbfs(), system.frames, system.vad_frames, system.age(now),
+                 system.peak_dbfs())
         self._capture_activity.reset_window()
         self._capture_report_at = now + CAPTURE_REPORT_S
 

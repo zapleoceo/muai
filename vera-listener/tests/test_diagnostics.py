@@ -42,3 +42,27 @@ def test_capture_health_reports_stale_track_without_audio(tmp_path, caplog) -> N
         listener._report_capture(20.0)
     assert "mic_frames=0 mic_vad=0 mic_age_s=-1.0" in caplog.text
     assert "system_frames=1 system_vad=0 system_age_s=10.0" in caplog.text
+
+
+def test_level_is_measured_before_vad_and_reset_per_window() -> None:
+    import numpy as np
+
+    from vera_listener.diagnostics import TrackActivity, to_dbfs
+
+    track = TrackActivity()
+    loud = np.full(512, 16384, dtype=np.int16).tobytes()
+    track.observe(1.0, False, loud)
+    assert track.vad_frames == 0
+    assert abs(track.peak_dbfs() - to_dbfs(16384)) < 1e-6
+    assert abs(track.rms_dbfs() - to_dbfs(16384)) < 1e-3
+    track.reset_window()
+    assert track.peak_dbfs() == -120.0
+    assert track.rms_dbfs() == -120.0
+
+
+def test_silence_reports_floor_not_error() -> None:
+    from vera_listener.diagnostics import TrackActivity
+
+    track = TrackActivity()
+    track.observe(1.0, False, bytes(1024))
+    assert track.peak_dbfs() == -120.0
