@@ -62,9 +62,11 @@ client_task_id)`, `payload_hash`, `origin`, `result_recipient`, `context`, `atta
 разрешена только группа `-1002884053196`, где был подтверждён тест владельца.
 MCP получает `OWNER_TELEGRAM_ID` из существующей настройки compose; при пустом
 или нулевом значении маршрут выключен.
-Диспетчер выбирает из проекта `Veranda` только
-задачи с этим маркером и `created_by=veranda_bot`; остальные задачи Office не
-попадают в эту доставку.
+Диспетчер выбирает из проекта `Veranda` только задачи с этим маркером и
+`created_by=veranda_bot`; перед отправкой `verified_office_origin` повторно
+проверяет неизменяемую запись `room_task_origin` через `is_owner_message`.
+Захват задачи и изменение `refs`/`auto_pickup` не создают полномочия владельца:
+неподтверждённая запись остаётся заблокированной без отправки dot.
 Источник идентичности — цепочка Veranda: Telegram webhook с secret header,
 проверки чата/автора/пересылки в `OfficeTaskService`, сохранённый
 `origin_user_id` и сервисный токен `veranda_bot` при отправке в Office. Office

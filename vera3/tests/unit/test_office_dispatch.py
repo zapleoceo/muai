@@ -11,6 +11,8 @@ from bot_telegram.dispatcher import dispatch_one
 from gateway.voice_command import accept_voice_command
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskRow
+from vera_shared.office import intake
+from vera_shared.office.acl import OfficePrincipal
 from vera_shared.room import tasks
 from vera_shared.room.messages import post_message
 from vera_shared.room.task_queue import next_task
@@ -54,16 +56,45 @@ async def test_empty_queue_makes_no_writes():
 
 
 @uses_db
-async def test_only_marked_veranda_task_is_dispatched():
+async def test_only_marked_veranda_task_is_dispatched(monkeypatch):
+    monkeypatch.setenv("OFFICE_ROOM", ROOM)
+    monkeypatch.setenv("OWNER_TELEGRAM_ID", "169510539")
+    monkeypatch.setenv("OFFICE_OWNER_DISPATCH_CHATS", "-1002884053196")
     await _open("other", project="Veranda")
     await _open("forged", project="Veranda", refs=[
         {"kind": "source", "ref": "owner_dispatch: dot"}])
-    await _open("owner", project="Veranda", agent="veranda_bot", refs=[
-        {"kind": "source", "ref": "owner_dispatch: dot"},
-        {"kind": "source", "ref": "result_recipient: dot"}])
+    made = await intake.create_task(
+        OfficePrincipal(name="veranda_bot", project="Veranda"), "tg--1002884053196-12885",
+        "owner request", "owner request",
+        {"channel": "telegram", "chat": "-1002884053196", "message": 12885,
+         "from_id": 169510539},
+        {"channel": "telegram", "chat": "-1002884053196", "reply_to": 12885})
     assert await dispatch_one() is True
     assert [m.message_id for m in _dispatch_msgs(await messages_in(ROOM))] == [
-        "dispatch-owner"]
+        f"dispatch-{made['task_id']}"]
+
+
+@uses_db
+async def test_mutable_refs_cannot_authorize_non_owner_office_task(monkeypatch):
+    monkeypatch.setenv("OFFICE_ROOM", ROOM)
+    monkeypatch.setenv("OWNER_TELEGRAM_ID", "169510539")
+    monkeypatch.setenv("OFFICE_OWNER_DISPATCH_CHATS", "-1002884053196")
+    made = await intake.create_task(
+        OfficePrincipal(name="veranda_bot", project="Veranda"), "foreign-1", "foreign",
+        "foreign", {"channel": "telegram", "chat": "-1002884053196", "message": 9,
+                    "from_id": 777},
+        {"channel": "telegram", "chat": "-1002884053196", "reply_to": 9})
+    held = await tasks.claim(room=ROOM, task_id=made["task_id"], agent="alice",
+                             lease_seconds=300)
+    await tasks.update(room=ROOM, task_id=made["task_id"], agent="alice",
+                       fencing_token=held["fencing_token"], auto_pickup=True,
+                       refs=[{"kind": "source", "ref": "owner_dispatch: dot"}])
+    await tasks.release(room=ROOM, task_id=made["task_id"], agent="alice",
+                        fencing_token=held["fencing_token"], status="open")
+    assert await dispatch_one() is True
+    assert _dispatch_msgs(await messages_in(ROOM)) == []
+    row = next(t for t in await tasks_in(ROOM) if t.task_id == made["task_id"])
+    assert row.status == "blocked"
 
 
 async def test_slow_brain_does_not_hold_dispatch_loop():

@@ -35,6 +35,7 @@ from vera_shared.office.intake_input import (
     payload_hash,
     text_hash,
 )
+from vera_shared.office.owner_routing import is_owner_message
 from vera_shared.redact import redact_secrets
 from vera_shared.room import questions
 from vera_shared.room.messages import post_message
@@ -71,19 +72,6 @@ def office_room() -> str:
 def auto_pickup() -> bool:
     """Задачи приёма не берутся автоматически, пока флаг не включён."""
     return os.environ.get("OFFICE_AUTO_PICKUP", "0").lower() in ("1", "true", "yes")
-
-
-def _verified_owner_message(principal: OfficePrincipal, origin: dict[str, Any],
-                            recipient: dict[str, Any]) -> bool:
-    owner = os.environ.get("OWNER_TELEGRAM_ID", "")
-    allowed_groups = set(os.environ.get("OFFICE_OWNER_DISPATCH_CHATS", "").split(","))
-    chat = str(origin.get("chat"))
-    return (owner.isdecimal() and int(owner) > 0
-            and principal.name == "veranda_bot" and principal.project == "Veranda"
-            and origin.get("channel") == recipient.get("channel") == "telegram"
-            and str(origin.get("from_id")) == owner
-            and str(recipient.get("chat")) == chat
-            and (chat == owner or chat in allowed_groups))
 
 
 async def _resolve_existing(principal: OfficePrincipal, client_task_id: str, digest: str,
@@ -131,7 +119,7 @@ async def create_task(principal: OfficePrincipal, client_task_id: str, title: st
     title, body = clean_text(title, "title", MAX_TITLE), clean_text(body, "body", MAX_BODY)
     origin = clean_map(origin, "origin", ORIGIN_KEYS)
     recipient = clean_map(result_recipient, "result_recipient", RECIPIENT_KEYS)
-    owner_message = _verified_owner_message(principal, origin, recipient)
+    owner_message = is_owner_message(principal, origin, recipient)
     ctx, files = clean_context(context), clean_attachments(attachments)
     digest = payload_hash(title, body, origin, recipient, ctx, files)
     room = office_room()
