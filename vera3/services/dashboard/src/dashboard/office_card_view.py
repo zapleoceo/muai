@@ -37,7 +37,8 @@ def details_html(details: CardDetails, info: StatusInfo) -> str:
     rows.append(("Следующий шаг", esc(details.next_action or "не указан")))
     if details.dependencies:
         rows.append(("Зависит от", "; ".join(
-            f'{esc(d.task_id)} — {esc(d.status)}' for d in details.dependencies)))
+            f'{esc(d.task_id)} — {esc(d.status)}' if d.task_id else esc(d.status)
+            for d in details.dependencies)))
     if info.dependency:
         rows.append(("Ожидание", esc(info.dependency)))
     if info.wait_reason:

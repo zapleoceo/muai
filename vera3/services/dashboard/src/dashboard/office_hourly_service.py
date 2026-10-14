@@ -1,7 +1,7 @@
 """Owner dashboard projection of Room cards and timestamped results."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
 
 from sqlalchemy import and_, func, or_, select
@@ -12,14 +12,13 @@ from vera_shared.db.models_room import (
     RoomTaskQuestionRow,
     RoomTaskRow,
 )
-from vera_shared.room.attention import (
-    ANSWERED,
-    Attention,
-    attention,
-)
+from vera_shared.room.attention import ANSWERED, Attention, attention
 from vera_shared.timeutil import utc_naive_now
 
-from dashboard.office_card_details import CardDetails, details_by_task
+from dashboard.office_card_details import (
+    CardDetails,
+    details_by_task,
+)
 from dashboard.office_card_queries import load_transitions
 from dashboard.office_hourly_status import (  # noqa: F401  re-exported public names
     evidence_of,
@@ -28,6 +27,13 @@ from dashboard.office_hourly_status import (  # noqa: F401  re-exported public n
     status_of,
 )
 from dashboard.office_runtime_service import RuntimeSnapshot, latest_runtime_snapshot
+from dashboard.office_scope import (
+    ScopeConfig,
+    apply_scope,
+    env_config,
+    mask_hidden_deps,
+    scope_runtime,
+)
 from dashboard.office_status import (
     CANCELLED,
     DONE,
@@ -63,13 +69,21 @@ class HourlyReport:
     results: list[RoomTaskEventRow]
     counts: dict[str, int]
     runtime: RuntimeSnapshot | None = None
+    hidden_excluded: int = 0
+    hidden_inactive: int = 0
+    hidden_runtime: int = 0
+    active_only_label: str = ""
 
 
 def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Attention],
                  questions: list[RoomTaskQuestionRow], events: list[RoomTaskEventRow],
                  now: datetime, controls: list[RoomTaskEventRow] | None = None,
                  control_next: list[RoomTaskEventRow] | None = None,
-                 transitions: list[RoomTaskEventRow] | None = None) -> HourlyReport:
+                 transitions: list[RoomTaskEventRow] | None = None,
+                 scope: ScopeConfig | None = None) -> HourlyReport:
+    scope = scope or env_config()
+    split = apply_scope(rows, now, scope)
+    rows = split.visible
     open_questions = {(q.room, q.task_id): q for q in questions if q.status == "open"}
     control_events = {(e.room, e.task_id): e for e in (controls or [])}
     control_by_task = {k: e.kind for k, e in control_events.items()}
@@ -100,12 +114,13 @@ def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Atte
         info = status_info_of(row, att, question, now, control, last.at if last else None,
                               control_events.get(key), next_events.get(key))
         status = info.status
+        info = mask_hidden_deps(row, info, split.hidden_keys)
         infos[key] = info
         if status in counts:
             counts[status] += 1
             pending.append((row, status, info, att, question, last, control))
     all_details = details_by_task([(p[0], p[5]) for p in pending], infos, now,
-                                  transitions or [], results)
+                                  transitions or [], results, split.hidden_keys)
     for row, status, info, att, question, last, control in pending:
         key = (row.room, row.task_id)
         details = all_details[key]
@@ -117,7 +132,9 @@ def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Atte
     visible = {(c.row.room, c.row.task_id) for c in cards}
     results = [e for e in results if (e.room, e.task_id) in visible]
     results.sort(key=lambda e: (e.at, e.id), reverse=True)
-    return HourlyReport(now, start, cards, results, counts)
+    return HourlyReport(now, start, cards, results, counts, None,
+                        split.hidden_excluded, split.hidden_inactive, 0,
+                        "/".join(scope.active_only_names))
 
 
 async def load_report(now: datetime | None = None) -> HourlyReport:
@@ -182,6 +199,5 @@ async def load_report(now: datetime | None = None) -> HourlyReport:
                                           paused=controls_by_task.get(key) == "paused"))
     report = build_report(rows, attentions, questions, events, now, controls, control_next,
                           transitions)
-    runtime = latest_runtime_snapshot(runtime_rows, now)
-    return HourlyReport(report.as_of, report.window_start, report.cards, report.results,
-                        report.counts, runtime)
+    runtime, hidden_runtime = scope_runtime(latest_runtime_snapshot(runtime_rows, now))
+    return replace(report, runtime=runtime, hidden_runtime=hidden_runtime)

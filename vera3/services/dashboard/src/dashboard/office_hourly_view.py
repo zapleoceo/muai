@@ -144,6 +144,16 @@ def _runtime(report: HourlyReport) -> str:
             f'<div class="oh-projects">{items}</div>')
 
 
+def scope_note(report: HourlyReport) -> str:
+    total = report.hidden_excluded + report.hidden_inactive + report.hidden_runtime
+    if not total:
+        return ""
+    return (f'<p class="oh-meta" id="oh-scope-note">Скрыто фильтром Office: {total} (SIN/STEP и '
+            f'проекты вне мониторинга: {report.hidden_excluded}; не в работе в '
+            f'{esc(report.active_only_label)}: {report.hidden_inactive}; '
+            f'внешние runtime вне мониторинга: {report.hidden_runtime}).</p>')
+
+
 def report_body(report: HourlyReport) -> str:
     counts = report.counts
     tiles = "".join(f'<article class="oh-tile"><strong>{counts[label]}</strong><span>{label}</span></article>'
@@ -160,7 +170,7 @@ def report_body(report: HourlyReport) -> str:
             '<p class="oh-note">Один Room ID — одна карточка. Статус исполнения не выводится из количества open/blocked. '
             'Для Broker, Orchestra и других внешних runtime без точной связи с Room ID сопоставление неизвестно; '
             'их не прибавляем к карточному счётчику. Свежесть результата указана отдельно от статуса.</p>'
-            f'{_runtime(report)}'
+            f'{scope_note(report)}{_runtime(report)}'
             f'<h2>Статусы карточек Room</h2><div class="oh-grid">{tiles}</div>'
             f'<p class="oh-meta">Незакрытых карточек: {len(report.cards)}. '
             f'Внешняя связь не подтверждена: {sum(c.runtime_mapping == "Не установлена" for c in report.cards)}. '

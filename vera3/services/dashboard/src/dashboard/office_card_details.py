@@ -20,6 +20,7 @@ TRANSITION_LABELS = {
     "waiting": "ожидание", "handoff_accept": "передача принята", "ack_answer": "ответ принят",
     "cancelled": "отменена"}
 UNCHANGED = "без изменений"
+HIDDEN_DEPENDENCY = "скрыто фильтром Office"
 EXECUTOR_LABELS = {"lease": "держатель аренды", "responsible": "ответственный",
                    "owner": "владелец"}
 
@@ -108,10 +109,14 @@ def executor_of(row: Any, now: datetime) -> Executor | None:
     return None
 
 
-def dependencies_of(row: Any, infos: Mapping[tuple[str, str], StatusInfo]
+def dependencies_of(row: Any, infos: Mapping[tuple[str, str], StatusInfo],
+                    hidden: frozenset[tuple[str, str]] = frozenset()
                     ) -> tuple[DependencyState, ...]:
     out = []
     for dep in getattr(row, "depends_on", None) or []:
+        if (row.room, str(dep)) in hidden:
+            out.append(DependencyState("", HIDDEN_DEPENDENCY))
+            continue
         info = infos.get((row.room, str(dep)))
         out.append(DependencyState(str(dep), info.status if info else "не найдена"))
     return tuple(out)
@@ -126,15 +131,16 @@ def delta_of(transitions: list[Any], result_events: list[Any], now: datetime) ->
 
 def build_details(row: Any, last: Any, now: datetime,
                   infos: Mapping[tuple[str, str], StatusInfo],
-                  transitions: list[Any], result_events: list[Any]) -> CardDetails:
+                  transitions: list[Any], result_events: list[Any],
+                  hidden: frozenset[tuple[str, str]] = frozenset()) -> CardDetails:
     return CardDetails(artifact_of(last, row), executor_of(row, now),
-                       safe_text(getattr(row, "next_action", None)), dependencies_of(row, infos),
+                       safe_text(getattr(row, "next_action", None)), dependencies_of(row, infos, hidden),
                        delta_of(transitions, result_events, now))
 
 
 def details_by_task(rows_last: list[tuple[Any, Any]], infos: Mapping[tuple[str, str], StatusInfo],
-                    now: datetime, transitions: list[Any], results: list[Any]
-                    ) -> dict[tuple[str, str], CardDetails]:
+                    now: datetime, transitions: list[Any], results: list[Any],
+                    hidden: frozenset[tuple[str, str]] = frozenset()) -> dict[tuple[str, str], CardDetails]:
     """Details for every (row, latest result event) pair, grouping events once (no N+1)."""
     moves: dict[tuple[str, str], list[Any]] = {}
     for e in transitions:
@@ -144,4 +150,4 @@ def details_by_task(rows_last: list[tuple[Any, Any]], infos: Mapping[tuple[str, 
         done.setdefault((e.room, e.task_id), []).append(e)
     return {(row.room, row.task_id): build_details(
         row, last, now, infos, moves.get((row.room, row.task_id), []),
-        done.get((row.room, row.task_id), [])) for row, last in rows_last}
+        done.get((row.room, row.task_id), []), hidden) for row, last in rows_last}

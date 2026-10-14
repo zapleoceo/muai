@@ -262,3 +262,39 @@ async def test_active_wait_shows_waiting_with_reason_pg(pg_db):
     assert card.info.waiting is True
     assert card.info.wait_reason == "ждём CI"
     assert card.info.wait_freshness == "fresh"
+
+
+async def test_scope_filter_hides_and_counts_without_touching_data_pg(pg_db):
+    from dashboard.office_hourly_service import load_report
+    from sqlalchemy import func, select
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models_room import RoomTaskRow
+    from vera_shared.room import tasks
+
+    for task_id, project in (("SIN-77", None), ("S1", "Sintegrum"), ("O1", "Orchestra"),
+                             ("O2", "Orchestra"), ("V1", "Vera")):
+        await tasks.open_task(room="main", task_id=task_id, agent="claude", title="t",
+                              paths=None, project=project)
+    await tasks.claim(room="main", task_id="O2", agent="claude", lease_seconds=600)
+    report = await load_report()
+    assert set(cards_by_id(report)) == {"O2", "V1"}
+    assert (report.hidden_excluded, report.hidden_inactive) == (2, 1)
+    assert sum(report.counts.values()) == 2
+    async with get_session() as s:
+        total = await s.scalar(select(func.count()).select_from(RoomTaskRow))
+    assert total == 5
+
+
+async def test_visible_card_dependency_on_hidden_task_is_masked_pg(pg_db):
+    from dashboard.office_hourly_service import load_report
+    from dashboard.office_hourly_view import report_body
+    from vera_shared.room import tasks
+
+    await tasks.open_task(room="main", task_id="SIN-123", agent="claude", title="t", paths=None)
+    await tasks.open_task(room="main", task_id="V2", agent="claude", title="t", paths=None,
+                          project="Vera", depends_on=["SIN-123"])
+    report = await load_report()
+    assert set(cards_by_id(report)) == {"V2"}
+    deps = cards_by_id(report)["V2"].details.dependencies
+    assert [(d.task_id, d.status) for d in deps] == [("", "скрыто фильтром Office")]
+    assert "SIN-123" not in report_body(report)
