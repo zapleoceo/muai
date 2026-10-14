@@ -298,3 +298,23 @@ async def test_visible_card_dependency_on_hidden_task_is_masked_pg(pg_db):
     deps = cards_by_id(report)["V2"].details.dependencies
     assert [(d.task_id, d.status) for d in deps] == [("", "скрыто фильтром Office")]
     assert "SIN-123" not in report_body(report)
+
+
+async def test_active_only_requires_our_in_progress_lease_pg(pg_db):
+    from dashboard.office_hourly_service import load_report
+    from vera_shared.room import tasks
+
+    for task_id in ("A1", "A2", "A3", "A4"):
+        await tasks.open_task(room="main", task_id=task_id, agent="claude", title="t",
+                              paths=None, project="Orchestra")
+    await tasks.claim(room="main", task_id="A1", agent="claude", lease_seconds=600)
+    foreign = await tasks.claim(room="main", task_id="A2", agent="alice", lease_seconds=600)
+    token = await tasks.claim(room="main", task_id="A3", agent="claude", lease_seconds=600)
+    await tasks.update(room="main", task_id="A3", agent="claude",
+                       fencing_token=token["fencing_token"], status="blocked", note="reason")
+    await tasks.open_task(room="main", task_id="S9", agent="claude", title="t", paths=None,
+                          project="STEP")
+    assert foreign
+    report = await load_report()
+    assert set(cards_by_id(report)) == {"A1"}
+    assert (report.hidden_excluded, report.hidden_inactive) == (1, 3)
