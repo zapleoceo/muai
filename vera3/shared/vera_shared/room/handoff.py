@@ -85,6 +85,7 @@ async def accept(*, room: str, task_id: str, agent: str, session: str | None = N
         row.pending_handoff_to = None
         row.status = "in_progress"
         row.waiting_until, row.waiting_reason = None, None
+        row.waiting_decision_owner = None
         row.updated_at = now
         await record_event(s, room=room, task_id=task_id, kind="handoff_accept", agent=agent,
                            session=session, account=account, fencing_token=row.fencing_token,

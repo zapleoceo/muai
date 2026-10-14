@@ -222,7 +222,7 @@ MCP-инструменты поверх журнала шага 1 (код — `v
   (свободные и с истёкшей арендой). Код — `vera_shared/room/task_queue.py`
   (`list_tasks`, `held_by`) и `task_attention.py` (`attention_map`, `tasks_with_attention`:
   вопросы, паузы и захваты подтягиваются тремя запросами на весь список).
-- `room_task_wait(task_id, fencing_token, until_seconds, reason)` — ставит
+- `room_task_wait(task_id, fencing_token, until_seconds, reason, decision_owner?)` — ставит
   `waiting_until`/`waiting_reason` (60 с … 7 дней), пишет событие `waiting`. Ожидание снимают
   `room_task_progress`, `room_task_update` с `note`/`status`, `release` и новый захват.
 - `room_task_update` принимает `project` (`[A-Za-z0-9_.-]{1,64}`), `depends_on` (до 20

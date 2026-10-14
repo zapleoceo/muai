@@ -91,6 +91,7 @@ def apply_claim(row: RoomTaskRow, *, agent: str, now: datetime, lease_seconds: i
         row.lease_holder = agent
         row.holder_session, row.holder_account = session, account
         row.waiting_until, row.waiting_reason = None, None
+        row.waiting_decision_owner = None
         row.pending_handoff_to = None
     else:
         row.holder_session = session or row.holder_session
@@ -203,6 +204,7 @@ async def update(*, room: str, task_id: str, agent: str, fencing_token: int,
             row.last_progress_at = now
             row.last_progress_text = note if note is not None else f"status: {status}"
             row.waiting_until, row.waiting_reason = None, None
+            row.waiting_decision_owner = None
             kind = "progress"
             # переход блокировки пишется раньше progress: Гантт не рисует вспышку работы
             flip = ("blocked" if status == "blocked" and prev_status != "blocked" else
@@ -235,6 +237,7 @@ async def release(*, room: str, task_id: str, agent: str, fencing_token: int,
         row.lease_holder = None
         row.lease_until = None
         row.waiting_until, row.waiting_reason = None, None
+        row.waiting_decision_owner = None
         row.pending_handoff_to = None
         if note is not None:
             row.note = note
@@ -286,6 +289,7 @@ async def complete_attested(*, room: str, task_id: str, agent: str, fencing_toke
         row.lease_holder = None
         row.lease_until = None
         row.waiting_until, row.waiting_reason = None, None
+        row.waiting_decision_owner = None
         row.pending_handoff_to = None
         row.note = f"Existing reply receipt: {receipt_id}"
         row.updated_at = utc_naive_now()

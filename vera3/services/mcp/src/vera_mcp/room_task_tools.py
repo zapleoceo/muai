@@ -127,11 +127,12 @@ async def room_task_wait(
     task_id: Ident, fencing_token: Annotated[int, Field(ge=1)], ctx: Context,
     until_seconds: Annotated[int, Field(ge=60, le=604_800)],
     reason: Annotated[str, Field(min_length=1, max_length=4000)], room: Room = "main",
+    decision_owner: Annotated[str | None, Field(max_length=64)] = None,
 ) -> dict[str, Any]:
     """Законно ждать внешнее событие до срока (until_seconds от сейчас): до срока задача — waiting, после — stale_progress. Любой room_task_progress ожидание снимает. Wait for an external event with a deadline."""
     task = await task_wait.wait(
         room=_room(room), task_id=task_id, agent=client_of(ctx), fencing_token=fencing_token,
-        until_seconds=until_seconds, reason=reason)
+        until_seconds=until_seconds, reason=reason, decision_owner=decision_owner)
     return {"ok": True, "task": task_view(task)}
 
 
