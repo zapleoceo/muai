@@ -89,3 +89,22 @@ def test_partial_fresh_active_counts_as_floor() -> None:
     html = body_for([entry("active")], {"claude": {"coverage": "partial"}})
     assert "Подтверждённые активные потоки: 1" in html
     assert "claude: не менее 1 активных (покрытие partial)" in html
+
+
+def test_project_zero_not_claimed_when_another_declared_source_is_unavailable() -> None:
+    html = body_for(
+        [{"project": "Proj", "state": "completed", "detail": "d", "thread_id": UUID}],
+        {"codex": {"coverage": "complete"}, "claude": {"coverage": "unavailable"}})
+    assert "0 подтверждено" not in html
+    assert "проверенные runtime в работе: не подтверждено" in html
+    assert "Активных потоков нет" not in html
+
+
+def test_hostile_source_id_and_detail_are_escaped() -> None:
+    hostile = {"project": "Proj", "state": "active", "source": "claude",
+               "source_id": "<script>alert(1)</script>", "detail": "<img src=x onerror=1>"}
+    html = body_for([hostile], {"claude": {"coverage": "partial"}})
+    assert "<script>alert(1)" not in html
+    assert "<img src=x" not in html
+    assert "&lt;script&gt;alert(1)" in html
+    assert "&lt;img src=x" in html

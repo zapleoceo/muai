@@ -68,9 +68,9 @@ def runtime_count(snapshot: RuntimeSnapshot, now: datetime, *, project: str | No
         if (project is None or e.project.casefold() == project.casefold())
         and (source is None or e.source == source)]
     names = {e.source for e in entries}
-    if project is None and source is None:
+    if source is None:
         names |= {c[0] for c in snapshot.coverage}
-    elif source is not None:
+    else:
         names.add(source)
     counted: set[str] = set()
     all_complete = bool(names)
