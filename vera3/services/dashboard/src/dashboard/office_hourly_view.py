@@ -10,7 +10,6 @@ from dashboard.office_hourly_service import (
     HourlyReport,
     next_question_reminder,
 )
-from dashboard.office_runtime_summary import source_summaries
 from dashboard.render import esc, local_dt
 
 CSS = """<style>
@@ -110,30 +109,20 @@ def _runtime(report: HourlyReport) -> str:
                 'Число фактически работающих задач неизвестно; Room lease учитываются отдельно.</p>')
     fresh = snapshot.is_fresh(report.as_of)
     active = sum(entry.state == "active" for entry in snapshot.entries)
-    summaries = source_summaries(snapshot, report.as_of)
-    complete = all(x.coverage == "complete" and x.fresh for x in summaries) and bool(summaries)
-    if not fresh:
-        count = f'последняя проверка: {active} активных; текущий счёт неизвестен'
-    elif active:
-        count = f'Подтверждённые активные потоки: {active}'
-    else:
-        count = ('Активных потоков нет (покрытие полное)' if complete else
-                 'Активные потоки не подтверждены; нуль не утверждаем без полного покрытия')
-    by_source = "".join(f'<li>{esc(x.text)}; наблюдение {local_dt(x.observed_at)}</li>'
-                        for x in summaries)
+    count = (f'Подтверждённые активные потоки: {active}' if fresh else
+             f'последняя проверка: {active} активных; текущий счёт неизвестен')
     labels = {"active": "В работе", "completed": "Этап завершён",
               "waiting": "Ожидание", "unknown": "Неизвестно"}
     items = "".join(
         f'<article class="oh-card"><span class="oh-pill">{labels[entry.state]}</span>'
         f'<h3>{esc(entry.project)}</h3><p>{esc(entry.detail)}</p>'
-        f'<p class="oh-meta">Источник: {esc(entry.source)} {esc(entry.source_id or "без id")}; '
+        f'<p class="oh-meta">Источник: Codex thread {esc(entry.thread_id)}; '
         'связь с карточкой Room не подтверждена</p></article>'
         for entry in snapshot.entries)
     return (f'<h2>Внешние исполнения</h2><p class="oh-note">{count}. '
             f'Проверено dot: {local_dt(snapshot.checked_at)}; запись Room '
             f'{esc(snapshot.message_id)}. Room «В работе» = {report.counts["В работе"]} '
             'живых lease. Общую сумму без подтверждённой связи не выводим.</p>'
-            f'<ul class="oh-meta">{by_source}</ul>'
             f'<div class="oh-projects">{items}</div>')
 
 
