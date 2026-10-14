@@ -14,8 +14,10 @@ from dashboard.office_scope import (
     ScopeConfig,
     apply_scope,
     config_from_env,
+    mask_hidden_deps,
     scope_runtime,
 )
+from dashboard.office_status import StatusInfo
 from vera_shared.room.attention import Attention
 
 NOW = datetime(2026, 10, 12, 18, 0, tzinfo=UTC)
@@ -145,3 +147,14 @@ def test_note_lists_active_only_projects_from_config() -> None:
     html = report_body(build_report(rows, amap, [], [], NOW, scope=cfg))
     assert "не в работе в Alpha/Beta: 1" in html
     assert "Orchestra/Lamas" not in html
+
+
+def test_dependency_mask_is_not_substring_replace() -> None:
+    card = row("V1", "Vera", holder="dot", lease=H)
+    card.depends_on = ["O1", "O12"]
+    info = StatusInfo("Блокер", None, None, "зависит от: O1, O12; ждём до 2026-10-12 19:00",
+                      False, None, "fresh")
+    out = mask_hidden_deps(card, info, frozenset({("main", "O1")}))
+    assert out.dependency == ("зависит от: скрыто фильтром Office, O12; "
+                              "ждём до 2026-10-12 19:00")
+    assert mask_hidden_deps(card, info, frozenset()) is info

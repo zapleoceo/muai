@@ -10,6 +10,9 @@ from datetime import UTC, datetime, timedelta
 from functools import cache
 from typing import Any
 
+from dashboard.office_card_details import HIDDEN_DEPENDENCY
+from dashboard.office_status import StatusInfo
+
 log = logging.getLogger(__name__)
 DEFAULT_EXCLUDE_PREFIXES = ("SIN-", "STEP-")
 DEFAULT_EXCLUDE_PROJECTS = ("Sintegrum", "ИИ-звонилка")
@@ -120,3 +123,14 @@ def scope_runtime(snapshot: Any, cfg: ScopeConfig | None = None) -> tuple[Any, i
     kept = tuple(e for e in snapshot.entries if _project_key(e.project) not in cfg.exclude_projects)
     hidden = len(snapshot.entries) - len(kept)
     return (replace(snapshot, entries=kept) if hidden else snapshot), hidden
+
+
+def mask_hidden_deps(row: Any, info: StatusInfo, hidden: frozenset[tuple[str, str]]) -> StatusInfo:
+    """Rebuild the "зависит от" part from depends_on so a hidden id never reaches the page."""
+    prefix = "зависит от: "
+    if not info.dependency or not any((row.room, str(d)) in hidden for d in row.depends_on or []):
+        return info
+    names = ", ".join(HIDDEN_DEPENDENCY if (row.room, str(d)) in hidden else str(d)
+                      for d in row.depends_on)
+    parts = [prefix + names if p.startswith(prefix) else p for p in info.dependency.split("; ")]
+    return replace(info, dependency="; ".join(parts))

@@ -12,15 +12,10 @@ from vera_shared.db.models_room import (
     RoomTaskQuestionRow,
     RoomTaskRow,
 )
-from vera_shared.room.attention import (
-    ANSWERED,
-    Attention,
-    attention,
-)
+from vera_shared.room.attention import ANSWERED, Attention, attention
 from vera_shared.timeutil import utc_naive_now
 
 from dashboard.office_card_details import (
-    HIDDEN_DEPENDENCY,
     CardDetails,
     details_by_task,
 )
@@ -32,7 +27,13 @@ from dashboard.office_hourly_status import (  # noqa: F401  re-exported public n
     status_of,
 )
 from dashboard.office_runtime_service import RuntimeSnapshot, latest_runtime_snapshot
-from dashboard.office_scope import ScopeConfig, apply_scope, env_config, scope_runtime
+from dashboard.office_scope import (
+    ScopeConfig,
+    apply_scope,
+    env_config,
+    mask_hidden_deps,
+    scope_runtime,
+)
 from dashboard.office_status import (
     CANCELLED,
     DONE,
@@ -74,17 +75,6 @@ class HourlyReport:
     active_only_label: str = ""
 
 
-def _mask_hidden_deps(row: RoomTaskRow, info: StatusInfo,
-                      hidden: frozenset[tuple[str, str]]) -> StatusInfo:
-    if not info.dependency:
-        return info
-    text = info.dependency
-    for dep in row.depends_on or []:
-        if (row.room, str(dep)) in hidden:
-            text = text.replace(str(dep), HIDDEN_DEPENDENCY)
-    return replace(info, dependency=text)
-
-
 def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Attention],
                  questions: list[RoomTaskQuestionRow], events: list[RoomTaskEventRow],
                  now: datetime, controls: list[RoomTaskEventRow] | None = None,
@@ -124,7 +114,7 @@ def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Atte
         info = status_info_of(row, att, question, now, control, last.at if last else None,
                               control_events.get(key), next_events.get(key))
         status = info.status
-        info = _mask_hidden_deps(row, info, split.hidden_keys)
+        info = mask_hidden_deps(row, info, split.hidden_keys)
         infos[key] = info
         if status in counts:
             counts[status] += 1
