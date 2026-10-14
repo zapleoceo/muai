@@ -38,13 +38,14 @@ class SourceSummary:
     source: str
     count: RuntimeCount
     coverage: str
-    observed_at: datetime
+    observed_at: datetime | None
     fresh: bool
 
     @property
     def text(self) -> str:
         if not self.fresh:
-            return f"{self.source}: наблюдение устарело, текущий счёт неизвестен"
+            why = "не указано время наблюдения" if self.observed_at is None else "наблюдение устарело"
+            return f"{self.source}: {why}, текущий счёт неизвестен"
         if self.coverage == "unavailable":
             return f"{self.source}: источник недоступен, счёт неизвестен"
         if self.coverage == "unknown":
@@ -59,7 +60,8 @@ class SourceSummary:
 
 def _source_state(snapshot: RuntimeSnapshot, name: str, now: datetime) -> tuple[str, datetime, bool]:
     coverage, observed = snapshot.source_coverage(name)
-    fresh = timedelta(0) <= utc_naive(now) - observed <= MAX_AGE
+    # no explicit observed_at means unknown freshness, never inherited from checked_at
+    fresh = observed is not None and timedelta(0) <= utc_naive(now) - observed <= MAX_AGE
     return coverage, observed, fresh
 
 

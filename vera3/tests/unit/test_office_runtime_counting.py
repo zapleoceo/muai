@@ -18,7 +18,10 @@ STALE = (NOW - timedelta(minutes=90)).isoformat()
 FRESH_AT = (NOW - timedelta(minutes=5)).isoformat()
 
 
-def body_for(entries: list[dict], sources: dict[str, dict]) -> str:
+def body_for(entries: list[dict], sources: dict[str, dict], *,
+             default_observed: bool = True) -> str:
+    if default_observed:
+        sources = {k: {"observed_at": FRESH_AT, **v} for k, v in sources.items()}
     raw = {"checked_at": NOW.isoformat(), "entries": entries, "sources": sources}
     msg = SimpleNamespace(room="main", from_agent="dot", to_agent="office-dashboard",
                           task_id=None, status="info", body=PREFIX + json.dumps(raw),
@@ -108,3 +111,13 @@ def test_hostile_source_id_and_detail_are_escaped() -> None:
     assert "<img src=x" not in html
     assert "&lt;script&gt;alert(1)" in html
     assert "&lt;img src=x" in html
+
+
+def test_missing_observed_at_is_unknown_freshness_not_checked_at() -> None:
+    html = body_for([entry("active")], {"claude": {"coverage": "complete"}},
+                    default_observed=False)
+    assert "Подтверждённые активные потоки" not in html
+    assert "0 подтверждено" not in html
+    assert "Активных потоков нет" not in html
+    assert "claude: не указано время наблюдения, текущий счёт неизвестен" in html
+    assert "проверенные runtime в работе: не подтверждено" in html

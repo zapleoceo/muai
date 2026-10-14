@@ -31,7 +31,7 @@ def test_existing_v1_message_still_parses_as_codex_with_unknown_coverage() -> No
     assert (snap.entries[0].source, snap.entries[0].source_id) == ("codex", UUID)
     summary = source_summaries(snap, NOW)[0]
     assert summary.coverage == "unknown"
-    assert "только историческое наблюдение" in summary.text
+    assert "текущий счёт неизвестен" in summary.text
 
 
 def test_codex_requires_uuid_but_other_sources_keep_native_id() -> None:
@@ -58,8 +58,10 @@ def test_same_id_in_different_sources_is_not_a_duplicate_but_same_source_is() ->
 
 
 def test_zero_only_claimed_with_complete_coverage() -> None:
-    sources = {"codex": {"coverage": "partial"}, "claude": {"coverage": "complete"},
-               "orch": {"coverage": "unavailable"}}
+    seen = "2026-10-14T11:55:00+00:00"
+    sources = {"codex": {"coverage": "partial", "observed_at": seen},
+               "claude": {"coverage": "complete", "observed_at": seen},
+               "orch": {"coverage": "unavailable", "observed_at": seen}}
     snap = parse_runtime_snapshot(message([entry(source="claude", source_id="x",
                                                  state="completed")], sources), NOW)
     texts = {s.source: s.text for s in source_summaries(snap, NOW)}

@@ -119,7 +119,7 @@ def _runtime(report: HourlyReport) -> str:
         count = 'Текущий счёт неизвестен: сообщение без покрытия источников'
     else:
         count = 'Активные потоки не подтверждены; нуль не утверждаем без полного покрытия'
-    by_source = "".join(f'<li>{esc(x.text)}; наблюдение {local_dt(x.observed_at)}</li>'
+    by_source = "".join(f'<li>{esc(x.text)}; наблюдение {local_dt(x.observed_at, empty="не указано")}</li>'
                         for x in summaries)
     labels = {"active": "В работе", "completed": "Этап завершён",
               "waiting": "Ожидание", "unknown": "Неизвестно"}

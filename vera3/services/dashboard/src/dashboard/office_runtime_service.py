@@ -41,13 +41,13 @@ class RuntimeSnapshot:
     entries: tuple[RuntimeEntry, ...]
     coverage: tuple[tuple[str, str, datetime | None], ...] = ()
 
-    def source_coverage(self, source: str) -> tuple[str, datetime]:
+    def source_coverage(self, source: str) -> tuple[str, datetime | None]:
         """Declared coverage and observation time; undeclared (legacy V1) is unknown: its
         entries are historical only and never enter current counters."""
         for name, coverage, observed in self.coverage:
             if name == source:
-                return coverage, observed or self.checked_at
-        return "unknown", self.checked_at
+                return coverage, observed
+        return "unknown", None
 
     def declared(self, source: str) -> bool:
         return any(name == source for name, _, _ in self.coverage)
