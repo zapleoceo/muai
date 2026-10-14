@@ -119,3 +119,29 @@ def test_scope_note_rendered_and_absent_when_nothing_hidden() -> None:
     assert ("Скрыто фильтром Office: 5 (SIN/STEP и проекты вне мониторинга: 1; "
             "не в работе в Orchestra/Lamas/SinHRM: 2; внешние runtime вне мониторинга: 2)") in html
     assert "Скрыто фильтром" not in report_body(build_report([], {}, [], [], NOW))
+
+
+def test_visible_card_does_not_leak_hidden_dependency_id() -> None:
+    card = row("V1", "Vera", holder="dot", lease=H)
+    card.depends_on = ["SIN-123", "V0"]
+    card.waiting_until = None
+    hidden = row("SIN-123")
+    amap = {("main", "V1"): Attention("in_progress", "", None, None, None),
+            ("main", "SIN-123"): Attention("unassigned", "", None, None, None)}
+    report = build_report([card, hidden], amap, [], [], NOW)
+    html = report_body(report)
+    assert "SIN-123" not in html
+    assert "скрыто фильтром Office — " not in html
+    deps = report.cards[0].details.dependencies
+    assert [d.task_id for d in deps] == ["", "V0"]
+    assert deps[0].status == "скрыто фильтром Office"
+    assert len(deps) == 2
+
+
+def test_note_lists_active_only_projects_from_config() -> None:
+    cfg = config_from_env({"OFFICE_ACTIVE_ONLY_PROJECTS": "Alpha, Beta"})
+    rows = [row("a1", "Alpha")]
+    amap = {("main", "a1"): Attention("unassigned", "", None, None, None)}
+    html = report_body(build_report(rows, amap, [], [], NOW, scope=cfg))
+    assert "не в работе в Alpha/Beta: 1" in html
+    assert "Orchestra/Lamas" not in html

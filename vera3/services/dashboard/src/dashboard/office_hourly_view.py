@@ -150,8 +150,8 @@ def scope_note(report: HourlyReport) -> str:
         return ""
     return (f'<p class="oh-meta" id="oh-scope-note">Скрыто фильтром Office: {total} (SIN/STEP и '
             f'проекты вне мониторинга: {report.hidden_excluded}; не в работе в '
-            f'Orchestra/Lamas/SinHRM: {report.hidden_inactive}; внешние runtime вне '
-            f'мониторинга: {report.hidden_runtime}).</p>')
+            f'{esc(report.active_only_label)}: {report.hidden_inactive}; '
+            f'внешние runtime вне мониторинга: {report.hidden_runtime}).</p>')
 
 
 def report_body(report: HourlyReport) -> str:

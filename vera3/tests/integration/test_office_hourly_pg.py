@@ -283,3 +283,18 @@ async def test_scope_filter_hides_and_counts_without_touching_data_pg(pg_db):
     async with get_session() as s:
         total = await s.scalar(select(func.count()).select_from(RoomTaskRow))
     assert total == 5
+
+
+async def test_visible_card_dependency_on_hidden_task_is_masked_pg(pg_db):
+    from dashboard.office_hourly_service import load_report
+    from dashboard.office_hourly_view import report_body
+    from vera_shared.room import tasks
+
+    await tasks.open_task(room="main", task_id="SIN-123", agent="claude", title="t", paths=None)
+    await tasks.open_task(room="main", task_id="V2", agent="claude", title="t", paths=None,
+                          project="Vera", depends_on=["SIN-123"])
+    report = await load_report()
+    assert set(cards_by_id(report)) == {"V2"}
+    deps = cards_by_id(report)["V2"].details.dependencies
+    assert [(d.task_id, d.status) for d in deps] == [("", "скрыто фильтром Office")]
+    assert "SIN-123" not in report_body(report)

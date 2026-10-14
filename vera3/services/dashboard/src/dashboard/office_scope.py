@@ -1,6 +1,7 @@
 """Read-side scope filter for the Office report; never touches Room data."""
 from __future__ import annotations
 
+import logging
 import os
 import re
 from collections.abc import Mapping
@@ -9,6 +10,7 @@ from datetime import UTC, datetime, timedelta
 from functools import cache
 from typing import Any
 
+log = logging.getLogger(__name__)
 DEFAULT_EXCLUDE_PREFIXES = ("SIN-", "STEP-")
 DEFAULT_EXCLUDE_PROJECTS = ("Sintegrum", "ИИ-звонилка")
 DEFAULT_ACTIVE_ONLY_PROJECTS = ("Orchestra", "Lamas", "SinHRM")
@@ -24,6 +26,7 @@ class ScopeConfig:
     active_only_projects: frozenset[str] = frozenset(
         p.casefold() for p in DEFAULT_ACTIVE_ONLY_PROJECTS)
     active_window: timedelta = timedelta(hours=DEFAULT_ACTIVE_WINDOW_HOURS)
+    active_only_names: tuple[str, ...] = DEFAULT_ACTIVE_ONLY_PROJECTS
 
 
 @dataclass(frozen=True)
@@ -31,6 +34,7 @@ class ScopeSplit:
     visible: list[Any]
     hidden_excluded: int
     hidden_inactive: int
+    hidden_keys: frozenset[tuple[str, str]] = frozenset()
 
 
 def _csv(raw: str | None, default: tuple[str, ...]) -> tuple[str, ...]:
@@ -41,10 +45,13 @@ def _csv(raw: str | None, default: tuple[str, ...]) -> tuple[str, ...]:
 
 def config_from_env(environ: Mapping[str, str]) -> ScopeConfig:
     hours = environ.get("OFFICE_ACTIVE_WINDOW_HOURS")
-    try:
-        window = timedelta(hours=float(hours)) if hours not in (None, "") else None
-    except ValueError:
-        window = None
+    window = None
+    if hours not in (None, ""):
+        try:
+            window = timedelta(hours=float(hours))
+        except ValueError:
+            log.warning("OFFICE_ACTIVE_WINDOW_HOURS=%r invalid, using %s",
+                        hours, DEFAULT_ACTIVE_WINDOW_HOURS)
     return ScopeConfig(
         exclude_prefixes=tuple(p.upper() for p in _csv(
             environ.get("OFFICE_EXCLUDE_PREFIXES"), DEFAULT_EXCLUDE_PREFIXES)),
@@ -52,6 +59,8 @@ def config_from_env(environ: Mapping[str, str]) -> ScopeConfig:
             environ.get("OFFICE_EXCLUDE_PROJECTS"), DEFAULT_EXCLUDE_PROJECTS)),
         active_only_projects=frozenset(p.casefold() for p in _csv(
             environ.get("OFFICE_ACTIVE_ONLY_PROJECTS"), DEFAULT_ACTIVE_ONLY_PROJECTS)),
+        active_only_names=_csv(
+            environ.get("OFFICE_ACTIVE_ONLY_PROJECTS"), DEFAULT_ACTIVE_ONLY_PROJECTS),
         active_window=window or timedelta(hours=DEFAULT_ACTIVE_WINDOW_HOURS))
 
 
@@ -88,16 +97,19 @@ def apply_scope(rows: list[Any], now: datetime, cfg: ScopeConfig | None = None) 
     cfg = cfg or env_config()
     visible: list[Any] = []
     excluded = inactive = 0
+    hidden_keys: set[tuple[str, str]] = set()
     for row in rows:
         open_row = row.status not in ("done", "cancelled")
         if is_excluded(row, cfg):
             excluded += open_row
+            hidden_keys.add((row.room, row.task_id))
         elif (_project_key(row.project) in cfg.active_only_projects
               and not is_our_current_work(row, now, cfg)):
             inactive += open_row
+            hidden_keys.add((row.room, row.task_id))
         else:
             visible.append(row)
-    return ScopeSplit(visible, excluded, inactive)
+    return ScopeSplit(visible, excluded, inactive, frozenset(hidden_keys))
 
 
 def scope_runtime(snapshot: Any, cfg: ScopeConfig | None = None) -> tuple[Any, int]:

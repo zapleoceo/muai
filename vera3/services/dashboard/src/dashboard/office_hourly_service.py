@@ -19,7 +19,11 @@ from vera_shared.room.attention import (
 )
 from vera_shared.timeutil import utc_naive_now
 
-from dashboard.office_card_details import CardDetails, details_by_task
+from dashboard.office_card_details import (
+    HIDDEN_DEPENDENCY,
+    CardDetails,
+    details_by_task,
+)
 from dashboard.office_card_queries import load_transitions
 from dashboard.office_hourly_status import (  # noqa: F401  re-exported public names
     evidence_of,
@@ -28,7 +32,7 @@ from dashboard.office_hourly_status import (  # noqa: F401  re-exported public n
     status_of,
 )
 from dashboard.office_runtime_service import RuntimeSnapshot, latest_runtime_snapshot
-from dashboard.office_scope import ScopeConfig, apply_scope, scope_runtime
+from dashboard.office_scope import ScopeConfig, apply_scope, env_config, scope_runtime
 from dashboard.office_status import (
     CANCELLED,
     DONE,
@@ -67,6 +71,18 @@ class HourlyReport:
     hidden_excluded: int = 0
     hidden_inactive: int = 0
     hidden_runtime: int = 0
+    active_only_label: str = ""
+
+
+def _mask_hidden_deps(row: RoomTaskRow, info: StatusInfo,
+                      hidden: frozenset[tuple[str, str]]) -> StatusInfo:
+    if not info.dependency:
+        return info
+    text = info.dependency
+    for dep in row.depends_on or []:
+        if (row.room, str(dep)) in hidden:
+            text = text.replace(str(dep), HIDDEN_DEPENDENCY)
+    return replace(info, dependency=text)
 
 
 def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Attention],
@@ -75,6 +91,7 @@ def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Atte
                  control_next: list[RoomTaskEventRow] | None = None,
                  transitions: list[RoomTaskEventRow] | None = None,
                  scope: ScopeConfig | None = None) -> HourlyReport:
+    scope = scope or env_config()
     split = apply_scope(rows, now, scope)
     rows = split.visible
     open_questions = {(q.room, q.task_id): q for q in questions if q.status == "open"}
@@ -107,12 +124,13 @@ def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Atte
         info = status_info_of(row, att, question, now, control, last.at if last else None,
                               control_events.get(key), next_events.get(key))
         status = info.status
+        info = _mask_hidden_deps(row, info, split.hidden_keys)
         infos[key] = info
         if status in counts:
             counts[status] += 1
             pending.append((row, status, info, att, question, last, control))
     all_details = details_by_task([(p[0], p[5]) for p in pending], infos, now,
-                                  transitions or [], results)
+                                  transitions or [], results, split.hidden_keys)
     for row, status, info, att, question, last, control in pending:
         key = (row.room, row.task_id)
         details = all_details[key]
@@ -125,7 +143,8 @@ def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Atte
     results = [e for e in results if (e.room, e.task_id) in visible]
     results.sort(key=lambda e: (e.at, e.id), reverse=True)
     return HourlyReport(now, start, cards, results, counts, None,
-                        split.hidden_excluded, split.hidden_inactive)
+                        split.hidden_excluded, split.hidden_inactive, 0,
+                        "/".join(scope.active_only_names))
 
 
 async def load_report(now: datetime | None = None) -> HourlyReport:
