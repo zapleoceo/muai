@@ -43,8 +43,17 @@ def _confirm(f: Path, sha: str | None = None) -> None:
     Path(str(f) + ".nas-confirmed").write_text(sha + "\n", encoding="utf-8")
 
 
-def _run(root: Path) -> str:
-    env = dict(os.environ, ROOT=str(root), SETTLE_MIN="30")
+def _no_open_fd_fuser(root: Path) -> str:
+    # раннер CI может не иметь psmisc; заглушка «файл никем не открыт»
+    stub = root / "fake-fuser"
+    stub.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+    stub.chmod(0o755)
+    return str(stub)
+
+
+def _run(root: Path, **extra: str) -> str:
+    extra.setdefault("FUSER", _no_open_fd_fuser(root))
+    env = dict(os.environ, ROOT=str(root), SETTLE_MIN="30", **extra)
     r = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, encoding="utf-8",
                        env=env, timeout=60, check=True)
     return r.stdout
@@ -188,3 +197,11 @@ def test_content_changed_since_sums_is_kept(tmp_path: Path) -> None:
 
 def test_summary_logged_when_nothing_found(tmp_path: Path) -> None:
     assert "удалено 0 MB" in _run(tmp_path)
+
+
+def test_missing_fuser_keeps_confirmed_file(tmp_path: Path) -> None:
+    f = _make(tmp_path)
+    _confirm(f)
+    out = _run(tmp_path, FUSER="/nonexistent/fuser")
+    assert f.exists()
+    assert "no_fuser=1" in out
