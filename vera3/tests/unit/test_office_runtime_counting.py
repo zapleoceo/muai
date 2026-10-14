@@ -133,3 +133,10 @@ def test_mixed_complete_and_partial_is_floor() -> None:
     html = body_for([entry("active", "claude", "a"), entry("active", "gemini", "b")],
                     {"claude": {"coverage": "complete"}, "gemini": {"coverage": "partial"}})
     assert "Подтверждённые активные потоки: не менее 2 (покрытие неполное)" in html
+
+
+def test_stale_complete_source_without_entries_keeps_floor() -> None:
+    html = body_for([entry("active", "codex_like", "a")],
+                    {"codex_like": {"coverage": "complete"},
+                     "claude": {"coverage": "complete", "observed_at": STALE}})
+    assert "Подтверждённые активные потоки: не менее 1 (покрытие неполное)" in html

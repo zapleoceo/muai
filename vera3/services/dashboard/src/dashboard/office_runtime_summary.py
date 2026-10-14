@@ -24,6 +24,7 @@ class RuntimeCount:
     confirmed: int
     unproven: int
     proven_zero: bool
+    complete: bool = False
 
     @property
     def text(self) -> str:
@@ -86,7 +87,8 @@ def runtime_count(snapshot: RuntimeSnapshot, now: datetime, *, project: str | No
             name != UNKNOWN_SOURCE)
     confirmed = sum(e.state == "active" and e.source in counted for e in entries)
     unproven = sum(e.source not in counted or e.state == "unknown" for e in entries)
-    return RuntimeCount(confirmed, unproven, confirmed == 0 and unproven == 0 and all_complete)
+    exact = unproven == 0 and all_complete
+    return RuntimeCount(confirmed, unproven, confirmed == 0 and exact, exact)
 
 
 def source_summaries(snapshot: RuntimeSnapshot, now: datetime) -> list[SourceSummary]:

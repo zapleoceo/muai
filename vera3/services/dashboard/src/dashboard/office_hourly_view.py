@@ -112,8 +112,7 @@ def _runtime(report: HourlyReport) -> str:
         count = f'последняя проверка: {active} активных; текущий счёт неизвестен'
     elif total.confirmed:
         tail = f'; не подтверждено: {total.unproven}' if total.unproven else ''
-        complete = bool(snapshot.coverage) and all(c[1] == "complete" for c in snapshot.coverage)
-        number = (str(total.confirmed) if complete and not total.unproven
+        number = (str(total.confirmed) if total.complete
                   else f'не менее {total.confirmed} (покрытие неполное)')
         count = f'Подтверждённые активные потоки: {number}{tail}'
     elif total.proven_zero:
