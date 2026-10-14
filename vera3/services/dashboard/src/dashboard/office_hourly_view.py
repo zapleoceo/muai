@@ -10,6 +10,7 @@ from dashboard.office_hourly_service import (
     HourlyReport,
     next_question_reminder,
 )
+from dashboard.office_runtime_summary import runtime_count, source_summaries
 from dashboard.render import esc, local_dt
 
 CSS = """<style>
@@ -77,23 +78,18 @@ def _projects(report: HourlyReport) -> str:
     groups: dict[str, list[HourlyCard]] = defaultdict(list)
     for card in report.cards:
         groups[card.row.project or "Без проекта"].append(card)
-    external: dict[str, Counter[str]] = {}
-    if report.runtime and report.runtime.is_fresh(report.as_of):
-        for entry in report.runtime.entries:
-            key = entry.project.casefold()
-            external.setdefault(key, Counter())[entry.state] += 1
+    fresh = bool(report.runtime and report.runtime.is_fresh(report.as_of))
     parts = []
     for project, cards in sorted(groups.items(), key=lambda x: x[0].casefold()):
         counts = Counter(c.status for c in cards)
         active = [c for c in cards if c.status == "В работе"]
         active_text = ", ".join(esc(c.row.title or c.row.task_id) for c in active[:2]) or "нет подтверждённой живой аренды"
         overflow = f' · ещё {len(active) - 2} в работе — проверьте лимит' if len(active) > 2 else ""
-        observed = external.get(project.casefold())
-        external_text = (f'{observed["active"]} подтверждено'
-                         + (f', {observed["unknown"]} неизвестно' if observed["unknown"] else "")
-                         if observed is not None else "не проверено")
-        external_warning = (" · проверьте лимит 1–2" if observed and observed["active"] > 2
-                            else "")
+        seen = fresh and any(e.project.casefold() == project.casefold()
+                             for e in report.runtime.entries)
+        count = runtime_count(report.runtime, report.as_of, project=project) if seen else None
+        external_text = count.text if count else "не проверено"
+        external_warning = " · проверьте лимит 1–2" if count and count.confirmed > 2 else ""
         parts.append(f'<article><h3>{esc(project)}</h3><p>Room lease: {len(active)} · '
                      f'проверенные runtime в работе: {external_text}{external_warning} · '
                      f'очередь: {counts["Новая / в очереди"]} · блокер: {counts["Блокер"]} · '
@@ -109,20 +105,40 @@ def _runtime(report: HourlyReport) -> str:
                 'Число фактически работающих задач неизвестно; Room lease учитываются отдельно.</p>')
     fresh = snapshot.is_fresh(report.as_of)
     active = sum(entry.state == "active" for entry in snapshot.entries)
-    count = (f'Подтверждённые активные потоки: {active}' if fresh else
-             f'последняя проверка: {active} активных; текущий счёт неизвестен')
+    summaries = source_summaries(snapshot, report.as_of)
+    total = runtime_count(snapshot, report.as_of)
+    historical = [e for e in snapshot.entries if not snapshot.declared(e.source)]
+    if not fresh:
+        count = f'последняя проверка: {active} активных; текущий счёт неизвестен'
+    elif total.confirmed:
+        tail = f'; не подтверждено: {total.unproven}' if total.unproven else ''
+        count = f'Подтверждённые активные потоки: {total.confirmed}{tail}'
+    elif total.proven_zero:
+        count = 'Активных потоков нет (покрытие полное)'
+    elif historical:
+        count = 'Текущий счёт неизвестен: сообщение без покрытия источников'
+    else:
+        count = 'Активные потоки не подтверждены; нуль не утверждаем без полного покрытия'
+    by_source = "".join(f'<li>{esc(x.text)}; наблюдение {local_dt(x.observed_at, empty="не указано")}</li>'
+                        for x in summaries)
     labels = {"active": "В работе", "completed": "Этап завершён",
               "waiting": "Ожидание", "unknown": "Неизвестно"}
+    note = (f'<p class="oh-meta">Историческое наблюдение на {local_dt(snapshot.checked_at)} '
+            f'(не текущее состояние): записей без заявленного покрытия источника — '
+            f'{len(historical)}; в текущие счётчики не входят.</p>' if historical else "")
     items = "".join(
-        f'<article class="oh-card"><span class="oh-pill">{labels[entry.state]}</span>'
+        f'<article class="oh-card"><span class="oh-pill">'
+        f'{"Историческое · " if not snapshot.declared(entry.source) else ""}'
+        f'{labels[entry.state]}</span>'
         f'<h3>{esc(entry.project)}</h3><p>{esc(entry.detail)}</p>'
-        f'<p class="oh-meta">Источник: Codex thread {esc(entry.thread_id)}; '
+        f'<p class="oh-meta">Источник: {esc(entry.source)} {esc(entry.source_id or "без id")}; '
         'связь с карточкой Room не подтверждена</p></article>'
         for entry in snapshot.entries)
     return (f'<h2>Внешние исполнения</h2><p class="oh-note">{count}. '
             f'Проверено dot: {local_dt(snapshot.checked_at)}; запись Room '
             f'{esc(snapshot.message_id)}. Room «В работе» = {report.counts["В работе"]} '
             'живых lease. Общую сумму без подтверждённой связи не выводим.</p>'
+            f'{note}<ul class="oh-meta">{by_source}</ul>'
             f'<div class="oh-projects">{items}</div>')
 
 
