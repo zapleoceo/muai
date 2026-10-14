@@ -15,7 +15,7 @@ from dashboard.office_status import StatusInfo
 
 log = logging.getLogger(__name__)
 DEFAULT_EXCLUDE_PREFIXES = ("SIN-", "STEP-")
-DEFAULT_EXCLUDE_PROJECTS = ("Sintegrum", "ИИ-звонилка")
+DEFAULT_EXCLUDE_PROJECTS = ("Sintegrum", "ИИ-звонилка", "SIN", "STEP")
 DEFAULT_ACTIVE_ONLY_PROJECTS = ("Orchestra", "Lamas", "SinHRM")
 DEFAULT_ACTIVE_WINDOW_HOURS = 72
 OUR_AGENTS = ("claude", "codex", "dot")
@@ -87,16 +87,33 @@ def is_excluded(row: Any, cfg: ScopeConfig) -> bool:
     return _project_key(row.project) in cfg.exclude_projects
 
 
-def is_our_current_work(row: Any, now: datetime, cfg: ScopeConfig) -> bool:
+PAUSED_STATUSES = frozenset({"blocked", "waiting", "paused"})
+
+
+def is_parked(row: Any, now: datetime, control: str | None) -> bool:
+    """Waiting, blocked or paused: not in-progress work, whatever the lease says."""
+    until = getattr(row, "waiting_until", None)
+    return bool(row.status in PAUSED_STATUSES or control in PAUSED_STATUSES
+                or getattr(row, "waiting_reason", None)
+                or (until is not None and _aware(until) > _aware(now)))
+
+
+def is_our_current_work(row: Any, now: datetime, cfg: ScopeConfig,
+                        control: str | None = None) -> bool:
+    if is_parked(row, now, control):
+        return False
     if row.lease_until is not None and _aware(row.lease_until) > _aware(now):
-        return True
+        return bool(_AGENT_RE.search(row.lease_holder or ""))
+    if row.lease_holder and not _AGENT_RE.search(row.lease_holder):
+        return False
     progress = row.last_progress_at
     if progress is None or _aware(now) - _aware(progress) > cfg.active_window:
         return False
     return bool(_AGENT_RE.search(f"{row.lease_holder or ''} {row.responsible or ''}"))
 
 
-def apply_scope(rows: list[Any], now: datetime, cfg: ScopeConfig | None = None) -> ScopeSplit:
+def apply_scope(rows: list[Any], now: datetime, cfg: ScopeConfig | None = None,
+                controls: Mapping[tuple[str, str], str] | None = None) -> ScopeSplit:
     cfg = cfg or env_config()
     visible: list[Any] = []
     excluded = inactive = 0
@@ -107,7 +124,7 @@ def apply_scope(rows: list[Any], now: datetime, cfg: ScopeConfig | None = None) 
             excluded += open_row
             hidden_keys.add((row.room, row.task_id))
         elif (_project_key(row.project) in cfg.active_only_projects
-              and not is_our_current_work(row, now, cfg)):
+              and not is_our_current_work(row, now, cfg, (controls or {}).get((row.room, row.task_id)))):
             inactive += open_row
             hidden_keys.add((row.room, row.task_id))
         else:
@@ -115,12 +132,21 @@ def apply_scope(rows: list[Any], now: datetime, cfg: ScopeConfig | None = None) 
     return ScopeSplit(visible, excluded, inactive, frozenset(hidden_keys))
 
 
+def _runtime_excluded(entry: Any, cfg: ScopeConfig) -> bool:
+    ids = ((entry.source_id or "").upper(), (entry.thread_id or "").upper())
+    if (_project_key(entry.project) in cfg.exclude_projects
+            or any(i.startswith(p) for i in ids for p in cfg.exclude_prefixes)):
+        return True
+    return (_project_key(entry.project) in cfg.active_only_projects
+            and not (entry.state == "active" and _AGENT_RE.search(entry.source or "")))
+
+
 def scope_runtime(snapshot: Any, cfg: ScopeConfig | None = None) -> tuple[Any, int]:
-    """Runtime streams are only subject to the project exclusion, not the active-only rule."""
+    """Exclusion rules as for cards; in active-only projects only an active entry from our source."""
     if snapshot is None:
         return None, 0
     cfg = cfg or env_config()
-    kept = tuple(e for e in snapshot.entries if _project_key(e.project) not in cfg.exclude_projects)
+    kept = tuple(e for e in snapshot.entries if not _runtime_excluded(e, cfg))
     hidden = len(snapshot.entries) - len(kept)
     return (replace(snapshot, entries=kept) if hidden else snapshot), hidden
 

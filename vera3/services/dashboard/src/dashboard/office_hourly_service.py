@@ -15,10 +15,7 @@ from vera_shared.db.models_room import (
 from vera_shared.room.attention import ANSWERED, Attention, attention
 from vera_shared.timeutil import utc_naive_now
 
-from dashboard.office_card_details import (
-    CardDetails,
-    details_by_task,
-)
+from dashboard.office_card_details import CardDetails, details_by_task
 from dashboard.office_card_queries import load_transitions
 from dashboard.office_hourly_status import (  # noqa: F401  re-exported public names
     evidence_of,
@@ -82,11 +79,10 @@ def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Atte
                  transitions: list[RoomTaskEventRow] | None = None,
                  scope: ScopeConfig | None = None) -> HourlyReport:
     scope = scope or env_config()
-    split = apply_scope(rows, now, scope)
-    rows = split.visible
-    open_questions = {(q.room, q.task_id): q for q in questions if q.status == "open"}
     control_events = {(e.room, e.task_id): e for e in (controls or [])}
     control_by_task = {k: e.kind for k, e in control_events.items()}
+    split = apply_scope(rows, now, scope, control_by_task)
+    open_questions = {(q.room, q.task_id): q for q in questions if q.status == "open"}
     next_events = {(e.room, e.task_id): e for e in (control_next or [])}
     latest: dict[tuple[str, str], RoomTaskEventRow] = {}
     results: list[RoomTaskEventRow] = []
@@ -105,7 +101,7 @@ def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Atte
     counts = dict.fromkeys(VISIBLE_STATUSES, 0)
     infos: dict[tuple[str, str], StatusInfo] = {}
     pending = []
-    for row in rows:
+    for row in split.visible:
         key = (row.room, row.task_id)
         att = attentions[key]
         question = open_questions.get(key)

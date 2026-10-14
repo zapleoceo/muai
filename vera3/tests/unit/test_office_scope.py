@@ -9,7 +9,12 @@ from types import SimpleNamespace
 import pytest
 from dashboard.office_hourly_service import build_report
 from dashboard.office_hourly_view import report_body
-from dashboard.office_runtime_service import PREFIX, parse_runtime_snapshot
+from dashboard.office_runtime_service import (
+    PREFIX,
+    RuntimeEntry,
+    RuntimeSnapshot,
+    parse_runtime_snapshot,
+)
 from dashboard.office_scope import (
     ScopeConfig,
     apply_scope,
@@ -27,11 +32,14 @@ H = timedelta(hours=1)
 
 def row(task_id: str = "X-1", project: str = "Vera", *, lease: timedelta | None = None,
         progress: timedelta | None = None, holder: str | None = None,
-        responsible: str | None = None, status: str = "open") -> SimpleNamespace:
+        responsible: str | None = None, status: str = "open",
+        waiting_until: timedelta | None = None,
+        waiting_reason: str | None = None) -> SimpleNamespace:
     return SimpleNamespace(
         room="main", task_id=task_id, title=task_id, project=project, status=status,
         priority=2, lease_holder=holder, responsible=responsible, next_action=None,
-        note=None, waiting_reason=None,
+        note=None, waiting_reason=waiting_reason,
+        waiting_until=NOW + waiting_until if waiting_until is not None else None,
         lease_until=NOW + lease if lease is not None else None,
         last_progress_at=NOW - progress if progress is not None else None)
 
@@ -44,7 +52,36 @@ CASES = [
     ("excluded project casefold", row(project="ИИ-ЗВОНИЛКА"), False),
     ("plain project", row(), True),
     ("orchestra never claimed", row(project="Orchestra"), False),
-    ("orchestra live lease", row(project="Orchestra", lease=10 * H), True),
+    ("orchestra live lease no holder", row(project="Orchestra", lease=10 * H), False),
+    ("orchestra our live lease", row(project="Orchestra", lease=10 * H, holder="claude"), True),
+    ("foreign live lease, our responsible, fresh progress",
+     row(project="Orchestra", lease=H, holder="alice", responsible="claude", progress=H),
+     False),
+    ("foreign expired lease, our responsible, fresh progress",
+     row(project="Orchestra", lease=-H, holder="alice", responsible="claude", progress=H),
+     False),
+    ("expired lease held by claude, fresh progress",
+     row(project="Orchestra", lease=-H, holder="claude", progress=H), True),
+    ("no holder, our responsible, fresh progress",
+     row(project="Orchestra", responsible="claude", progress=H), True),
+    ("foreign holder without lease_until, our responsible",
+     row(project="Orchestra", holder="alice", responsible="claude", progress=H), False),
+    ("foreign live lease", row(project="Orchestra", lease=10 * H, holder="alice"), False),
+    ("our live lease blocked", row(project="Orchestra", lease=H, holder="claude",
+                                   status="blocked"), False),
+    ("our live lease paused status", row(project="Lamas", lease=H, holder="dot",
+                                         status="paused"), False),
+    ("our live lease waiting_until future",
+     row(project="Orchestra", lease=H, holder="claude", waiting_until=H), False),
+    ("our live lease waiting_until past",
+     row(project="Orchestra", lease=H, holder="claude", waiting_until=-H), True),
+    ("our progress with waiting_reason",
+     row(project="Lamas", progress=H, holder="codex", waiting_reason="CI"), False),
+    ("our progress not waiting", row(project="Lamas", progress=H, holder="codex"), True),
+    ("project STEP alias", row(project="step"), False),
+    ("project SIN alias", row(project="SIN"), False),
+    ("SinHRM is not the SIN alias", row(project="SinHRM", lease=H, holder="claude"), True),
+    ("SIN alias is exact not prefix", row(project="SINX"), True),
     ("orchestra expired lease no progress", row(project="Orchestra", lease=-H), False),
     ("progress inside window agent holder",
      row(project="Lamas", progress=71 * H, holder="codex"), True),
@@ -86,13 +123,50 @@ def test_env_config_overrides_and_empty_disables() -> None:
     assert bad.active_window == timedelta(hours=72)
 
 
+@pytest.mark.parametrize("control", ["paused", "blocked", "waiting"])
+def test_latest_control_event_parks_our_lease(control: str) -> None:
+    item = row("o1", "Orchestra", lease=H, holder="claude")
+    amap = {("main", "o1"): control}
+    assert apply_scope([item], NOW, CFG, amap).hidden_inactive == 1
+    assert apply_scope([item], NOW, CFG, {("main", "o1"): "resumed"}).visible == [item]
+
+
+def runtime_entry(project: str, source_id: str = "", thread_id: str = "",
+                  state: str = "active", source: str = "broker") -> RuntimeEntry:
+    return RuntimeEntry(project, thread_id, state, "d", source, source_id)
+
+
+@pytest.mark.parametrize(("entry", "shown"), [
+    (runtime_entry("STEP", "STEP-5933"), False),
+    (runtime_entry("Vera", "SIN-4878"), False),
+    (runtime_entry("Vera", "step-1"), False),
+    (runtime_entry("Vera", "", "SIN-9"), False),
+    (runtime_entry("sin", "x-1"), False),
+    (runtime_entry("SinHRM", "HRM-1"), False),
+    (runtime_entry("Orchestra", "ORCH-607", source="claude"), True),
+    (runtime_entry("Orchestra", "ORCH-607", source="codex"), True),
+    (runtime_entry("Lamas", "L-1", source="dot"), True),
+    (runtime_entry("Orchestra", "ORCH-607"), False),
+    (runtime_entry("Orchestra", "ORCH-607", source="claude", state="waiting"), False),
+    (runtime_entry("Lamas", "L-1", source="claude", state="completed"), False),
+    (runtime_entry("SinHRM", "H-1", source="claude", state="unknown"), False),
+    (runtime_entry("Vera", "V-1", state="waiting"), True),
+    (runtime_entry("Broker", "B-1"), True),
+])
+def test_runtime_exact_sin_step_exclusion(entry: RuntimeEntry, shown: bool) -> None:
+    snap = RuntimeSnapshot(NOW, NOW, "m", (entry,))
+    kept, hidden = scope_runtime(snap, CFG)
+    assert (len(kept.entries) == 1) is shown
+    assert hidden == (0 if shown else 1)
+
+
 def runtime_snapshot():
     body = PREFIX + json.dumps({"checked_at": NOW.isoformat(), "entries": [
-        {"project": "Orchestra", "source": "broker", "source_id": "ORCH-607",
+        {"project": "Orchestra", "source": "claude", "source_id": "ORCH-607",
          "state": "active", "detail": "Orchestra runtime work"},
         {"project": "Sintegrum", "source": "broker", "source_id": "SIN-1",
          "state": "active", "detail": "Sintegrum runtime work"}],
-        "sources": {"broker": {"coverage": "complete", "observed_at": NOW.isoformat()}}})
+        "sources": {"claude": {"coverage": "complete", "observed_at": NOW.isoformat()}}})
     msg = SimpleNamespace(room="main", from_agent="dot", to_agent="office-dashboard",
                           task_id=None, status="info", body=body, created_at=NOW,
                           message_id="m1")
