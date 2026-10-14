@@ -51,7 +51,8 @@ EXPECTED = [
     ("in_progress", "expired", False, False, None, QUEUE),
     ("blocked", "live", False, False, None, BLOCKER),
     ("blocked", "none", False, False, None, BLOCKER),
-    ("waiting", "none", False, False, None, BLOCKER),
+    ("waiting", "none", False, False, None, QUEUE),
+    ("waiting", "live", False, False, None, WORKING),
     ("paused", "none", False, False, None, BLOCKER),
     ("in_progress", "live", False, False, "paused", BLOCKER),
     ("in_progress", "live", True, False, None, BLOCKER),
@@ -217,3 +218,32 @@ def test_event_time_counts_as_signal_and_boundary_is_fresh() -> None:
     assert info.freshness == FRESH
     late = describe_status(r, NOW, event_at=NOW - FRESH_MAX_AGE - timedelta(seconds=1))
     assert late.freshness == STALE
+
+
+def test_expired_lease_with_wait_reason_is_waiting_not_blocker() -> None:
+    waiting = row("in_progress", "expired", waiting_reason="ждём ответ по трём вопросам",
+                  waiting_until=NOW - timedelta(hours=5))
+    info = describe_status(waiting, NOW, control="waiting", control_agent="dot",
+                           control_text="ждём ответ по трём вопросам",
+                           control_data={"until_seconds": 3600},
+                           control_at=NOW - timedelta(hours=6))
+    assert info.status == QUEUE
+    assert info.waiting is True
+    assert info.wait_reason == "ждём ответ по трём вопросам"
+    assert info.decision_owner is None
+    assert info.wait_freshness == STALE
+    assert info.blocker_confidence is None
+
+
+def test_decision_owner_only_from_explicit_event_data() -> None:
+    base = row("in_progress", "expired", waiting_reason="нужен live QA")
+    guessed = describe_status(base, NOW, control="waiting", control_agent="dot",
+                              control_text="нужен live QA", control_data={})
+    assert guessed.decision_owner is None
+    explicit = describe_status(
+        row("in_progress", "live", waiting_reason="решение"), NOW, control="waiting",
+        control_agent="dot", control_text="решение",
+        control_data={"decision_owner": " owner "}, control_at=NOW - timedelta(minutes=5))
+    assert explicit.status == WORKING
+    assert explicit.decision_owner == "owner"
+    assert explicit.wait_freshness == FRESH

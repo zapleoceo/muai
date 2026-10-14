@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from urllib.parse import quote
 
+from dashboard.office_card_view import details_html
 from dashboard.office_hourly_service import (
     HourlyCard,
     HourlyReport,
@@ -54,19 +55,21 @@ def _card(card: HourlyCard, now) -> str:
     extra = _blocker(card, now) if card.info.open_question else ""
     label = (f'{card.status} · {card.info.blocker_confidence}'
              if card.info.blocker_confidence else card.status)
-    reason = "".join(f'<p>{title}: {esc(value)}</p>' for title, value in (
+    reason = "" if card.details else "".join(f'<p>{title}: {esc(value)}</p>' for title, value in (
         ("Причина ожидания", card.info.wait_reason), ("Зависимость", card.info.dependency))
         if value)
     return (f'<article class="oh-card{" oh-blocker" if extra else ""}">'
             f'<span class="oh-pill">{esc(label)}</span>'
             f'<span class="oh-meta">{esc(row.project or "Без проекта")} · {esc(row.room)}/{esc(row.task_id)}</span>'
             f'<h3><a href="{_task_url(card)}">{esc(row.title or row.task_id)}</a></h3>'
-            f'<p>Ответственный: {esc(row.responsible or row.lease_holder or "не указан")}</p>'
-            f'<p>Следующее действие: {esc(row.next_action or "не указано")}</p>'
+            + ("" if card.details else
+               f'<p>Ответственный: {esc(row.responsible or row.lease_holder or "не указан")}</p>'
+               f'<p>Следующее действие: {esc(row.next_action or "не указано")}</p>') +
             f'{reason}'
             f'<p class="oh-meta">{esc(card.coordination_note)}</p>'
             f'<p class="oh-meta">Сопоставление с внешним runtime: {esc(card.runtime_mapping)}</p>'
             f'<p class="oh-meta">Последний зафиксированный результат: {_result_line(card)}</p>'
+            f'{details_html(card.details, card.info) if card.details else ""}'
             f'{extra}</article>')
 
 
