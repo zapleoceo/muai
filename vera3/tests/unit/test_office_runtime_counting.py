@@ -54,7 +54,7 @@ def test_stale_source_active_entry_is_not_confirmed_in_fresh_snapshot() -> None:
                      {"project": "Proj", "state": "active", "detail": "d", "thread_id": UUID}],
                     {"claude": {"coverage": "complete", "observed_at": STALE},
                      "codex": {"coverage": "partial", "observed_at": FRESH_AT}})
-    assert "Подтверждённые активные потоки: 1; не подтверждено: 1" in html
+    assert "Подтверждённые активные потоки: не менее 1 (покрытие неполное); не подтверждено: 1" in html
     assert "проверенные runtime в работе: 1 подтверждено; не подтверждено: 1" in html
     assert "claude: наблюдение устарело" in html
 
@@ -90,7 +90,7 @@ def test_complete_fresh_source_completed_only_is_proven_zero() -> None:
 
 def test_partial_fresh_active_counts_as_floor() -> None:
     html = body_for([entry("active")], {"claude": {"coverage": "partial"}})
-    assert "Подтверждённые активные потоки: 1" in html
+    assert "Подтверждённые активные потоки: не менее 1 (покрытие неполное)" in html
     assert "claude: не менее 1 активных (покрытие partial)" in html
 
 
@@ -121,3 +121,15 @@ def test_missing_observed_at_is_unknown_freshness_not_checked_at() -> None:
     assert "Активных потоков нет" not in html
     assert "claude: не указано время наблюдения, текущий счёт неизвестен" in html
     assert "проверенные runtime в работе: не подтверждено" in html
+
+
+def test_complete_fresh_active_is_exact_not_floor() -> None:
+    html = body_for([entry("active")], {"claude": {"coverage": "complete"}})
+    assert "Подтверждённые активные потоки: 1." in html
+    assert "не менее 1 (покрытие неполное)" not in html
+
+
+def test_mixed_complete_and_partial_is_floor() -> None:
+    html = body_for([entry("active", "claude", "a"), entry("active", "gemini", "b")],
+                    {"claude": {"coverage": "complete"}, "gemini": {"coverage": "partial"}})
+    assert "Подтверждённые активные потоки: не менее 2 (покрытие неполное)" in html
