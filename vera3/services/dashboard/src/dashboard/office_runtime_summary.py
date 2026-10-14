@@ -47,6 +47,8 @@ class SourceSummary:
             return f"{self.source}: наблюдение устарело, текущий счёт неизвестен"
         if self.coverage == "unavailable":
             return f"{self.source}: источник недоступен, счёт неизвестен"
+        if self.coverage == "unknown":
+            return f"{self.source}: без заявленного покрытия, только историческое наблюдение"
         c = self.count
         if c.proven_zero:
             return f"{self.source}: 0 активных (покрытие полное)"

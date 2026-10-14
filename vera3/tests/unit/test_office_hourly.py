@@ -145,9 +145,12 @@ def test_external_runtime_is_separate_from_room_statuses() -> None:
     snapshot = parse_runtime_snapshot(runtime_message(), NOW)
     assert snapshot is not None
     html = report_body(replace(report, runtime=snapshot))
-    assert "Подтверждённые активные потоки: 2" in html
+    assert "Подтверждённые активные потоки" not in html
+    assert "Текущий счёт неизвестен" in html
+    assert "Историческое наблюдение на" in html
+    assert "0 подтверждено" not in html
     assert "Room «В работе» = 0 живых lease" in html
-    assert "Room lease: 0 · проверенные runtime в работе: 1 подтверждено" in html
+    assert "Room lease: 0 · проверенные runtime в работе: не подтверждено" in html
     assert "Этап завершён" in html
     assert report.counts["В работе"] == 0
 

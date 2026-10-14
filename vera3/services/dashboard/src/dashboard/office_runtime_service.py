@@ -42,12 +42,15 @@ class RuntimeSnapshot:
     coverage: tuple[tuple[str, str, datetime | None], ...] = ()
 
     def source_coverage(self, source: str) -> tuple[str, datetime]:
-        """Declared coverage and observation time; undeclared (legacy V1) is partial:
-        confirmed entries count, but a zero is never proven."""
+        """Declared coverage and observation time; undeclared (legacy V1) is unknown: its
+        entries are historical only and never enter current counters."""
         for name, coverage, observed in self.coverage:
             if name == source:
                 return coverage, observed or self.checked_at
-        return "partial", self.checked_at
+        return "unknown", self.checked_at
+
+    def declared(self, source: str) -> bool:
+        return any(name == source for name, _, _ in self.coverage)
 
     def is_fresh(self, now: datetime) -> bool:
         return timedelta(0) <= utc_naive(now) - self.checked_at <= MAX_AGE

@@ -25,13 +25,13 @@ def entry(**kw) -> dict:
     return {"project": "P", "state": "active", "detail": "d", **kw}
 
 
-def test_existing_v1_message_still_parses_as_codex_with_partial_coverage() -> None:
+def test_existing_v1_message_still_parses_as_codex_with_unknown_coverage() -> None:
     snap = parse_runtime_snapshot(message([entry(thread_id=UUID)]), NOW)
     assert snap is not None
     assert (snap.entries[0].source, snap.entries[0].source_id) == ("codex", UUID)
     summary = source_summaries(snap, NOW)[0]
-    assert summary.coverage == "partial"
-    assert "не менее 1 активных" in summary.text
+    assert summary.coverage == "unknown"
+    assert "только историческое наблюдение" in summary.text
 
 
 def test_codex_requires_uuid_but_other_sources_keep_native_id() -> None:

@@ -107,6 +107,7 @@ def _runtime(report: HourlyReport) -> str:
     active = sum(entry.state == "active" for entry in snapshot.entries)
     summaries = source_summaries(snapshot, report.as_of)
     total = runtime_count(snapshot, report.as_of)
+    historical = [e for e in snapshot.entries if not snapshot.declared(e.source)]
     if not fresh:
         count = f'последняя проверка: {active} активных; текущий счёт неизвестен'
     elif total.confirmed:
@@ -114,14 +115,21 @@ def _runtime(report: HourlyReport) -> str:
         count = f'Подтверждённые активные потоки: {total.confirmed}{tail}'
     elif total.proven_zero:
         count = 'Активных потоков нет (покрытие полное)'
+    elif historical:
+        count = 'Текущий счёт неизвестен: сообщение без покрытия источников'
     else:
         count = 'Активные потоки не подтверждены; нуль не утверждаем без полного покрытия'
     by_source = "".join(f'<li>{esc(x.text)}; наблюдение {local_dt(x.observed_at)}</li>'
                         for x in summaries)
     labels = {"active": "В работе", "completed": "Этап завершён",
               "waiting": "Ожидание", "unknown": "Неизвестно"}
+    note = (f'<p class="oh-meta">Историческое наблюдение на {local_dt(snapshot.checked_at)} '
+            f'(не текущее состояние): записей без заявленного покрытия источника — '
+            f'{len(historical)}; в текущие счётчики не входят.</p>' if historical else "")
     items = "".join(
-        f'<article class="oh-card"><span class="oh-pill">{labels[entry.state]}</span>'
+        f'<article class="oh-card"><span class="oh-pill">'
+        f'{"Историческое · " if not snapshot.declared(entry.source) else ""}'
+        f'{labels[entry.state]}</span>'
         f'<h3>{esc(entry.project)}</h3><p>{esc(entry.detail)}</p>'
         f'<p class="oh-meta">Источник: {esc(entry.source)} {esc(entry.source_id or "без id")}; '
         'связь с карточкой Room не подтверждена</p></article>'
@@ -130,7 +138,7 @@ def _runtime(report: HourlyReport) -> str:
             f'Проверено dot: {local_dt(snapshot.checked_at)}; запись Room '
             f'{esc(snapshot.message_id)}. Room «В работе» = {report.counts["В работе"]} '
             'живых lease. Общую сумму без подтверждённой связи не выводим.</p>'
-            f'<ul class="oh-meta">{by_source}</ul>'
+            f'{note}<ul class="oh-meta">{by_source}</ul>'
             f'<div class="oh-projects">{items}</div>')
 
 
