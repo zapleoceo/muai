@@ -235,6 +235,31 @@ if [ "${1:-}" = "--selftest-notify" ]; then
     exit 0
 fi
 
+# Прогноз «через сколько дней df покажет 92%» (ceil, т.е. рубеж 91%+). Темп роста берётся из истории
+# замеров (файл "epoch used_kb"): самый старый замер vs текущий, если разброс
+# ≥ 1 суток и рост положителен; иначе фиксированный DISK_GROWTH_GB_DAY (0.45 —
+# замеренный темп 2026-10). Ротация бэкапов даёт пилу, поэтому окно длинное.
+DISK_GROWTH_GB_DAY="${DISK_GROWTH_GB_DAY:-0.45}"
+DISK_RUNWAY_ALERT_DAYS="${DISK_RUNWAY_ALERT_DAYS:-7}"
+project_days() { # $1 history, $2 now, $3 used_kb, $4 total_kb → целые дни до 92%
+    local first
+    first=$(head -n1 "$1" 2>/dev/null || true)
+    awk -v now="$2" -v used="$3" -v total="$4" -v dflt="$DISK_GROWTH_GB_DAY" -v first="$first" '
+        BEGIN {
+            split(first, f, " "); rate = dflt * 1048576
+            if (f[1] != "" && now - f[1] >= 86400 && used > f[2])
+                rate = (used - f[2]) * 86400 / (now - f[1])
+            room = total * 0.91 - used  # df показывает ceil(%): 92% видно при used/total > 91%
+            if (room <= 0) { print 0; exit }
+            printf "%d\n", room / rate
+        }'
+}
+
+if [ "${1:-}" = "--project-days" ]; then
+    project_days "$2" "$3" "$4" "$5"
+    exit 0
+fi
+
 # ─── 1. Весь состав стека поднят ────────────────────────────────────────────
 # Сравнение идёт с объявленным числом реплик, поэтому отдельная проверка
 # «хотя бы одна реплика brain-triage» больше не нужна — она входит сюда.
@@ -275,6 +300,40 @@ elif [ "$disk_pct" -ge 85 ]; then
 else
     recover "disk_critical" "Disk back to ${disk_pct}%."
     recover "disk_warn" "Disk back to ${disk_pct}%."
+fi
+
+# ─── 3a. Запас по диску: дней до 92% ─────────────────────────────────────────
+mkdir -p "$STATE_DIR"
+hist="$STATE_DIR/disk_history"
+now_ts=$(date +%s)
+read -r used_kb total_kb < <(df -Pk / | awk 'NR==2 {print $3, $3+$4}')
+last_ts=$(tail -n1 "$hist" 2>/dev/null | awk '{print $1}')
+if [ -z "${last_ts:-}" ] || [ $(( now_ts - last_ts )) -ge 3300 ]; then
+    echo "$now_ts $used_kb" >> "$hist"
+    awk -v cut=$(( now_ts - 14*86400 )) '$1 >= cut' "$hist" > "$hist.tmp" && mv "$hist.tmp" "$hist"
+fi
+runway_days=$(project_days "$hist" "$now_ts" "$used_kb" "$total_kb")
+echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) disk_runway days_to_92pct=${runway_days} threshold_days=${DISK_RUNWAY_ALERT_DAYS}"
+if [ "$runway_days" -lt "$DISK_RUNWAY_ALERT_DAYS" ]; then
+    alert "disk_runway" "Disk reaches 92% in ~${runway_days} days at current growth."
+else
+    recover "disk_runway" "Disk runway ${runway_days} days."
+fi
+
+# ─── 3a2. Неподтверждённые бэкапы на диске ───────────────────────────────────
+# vera-backup-prune.sh удаляет дамп только по явному подтверждению NAS; пока его
+# нет, дампы копятся до ротации. Алерт — когда их объём выше порога.
+BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/vera}"
+BACKUP_PENDING_ALERT_GB="${BACKUP_PENDING_ALERT_GB:-3}"
+if [ -d "$BACKUP_ROOT" ]; then
+    pending_bytes=$(find "$BACKUP_ROOT" -type f \( -name '*.dump' -o -name '*.tar.gz' \) -printf '%s\n' 2>/dev/null | awk '{s+=$1} END {printf "%d", s}')
+    pending_gb=$(( pending_bytes / 1073741824 ))
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) backup_pending bytes=${pending_bytes} threshold_gb=${BACKUP_PENDING_ALERT_GB}"
+    if [ "$pending_bytes" -gt $(( BACKUP_PENDING_ALERT_GB * 1073741824 )) ]; then
+        alert "backup_pending" "Backups on disk: <b>${pending_gb} GB</b> in ${BACKUP_ROOT} (threshold ${BACKUP_PENDING_ALERT_GB} GB). Prune removes only NAS-confirmed files."
+    else
+        recover "backup_pending" "Backups on disk ${pending_gb} GB, below threshold."
+    fi
 fi
 
 # ─── 3b. Память хоста ────────────────────────────────────────────────────────
