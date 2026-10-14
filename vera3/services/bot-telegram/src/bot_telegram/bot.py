@@ -12,7 +12,7 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
-from bot_telegram import voice_worker
+from bot_telegram import dispatcher, voice_worker
 from bot_telegram.brain import BrainError, ask_brain, save_event
 from bot_telegram.formatting import format_error, format_reply, plain_fallback
 
@@ -166,10 +166,14 @@ async def main():
     await init_engine()
     worker = asyncio.create_task(voice_worker.run_forever(send_to_owner, OWNER_ID),
                                  name="voice-worker")
+    dispatch_worker = asyncio.create_task(dispatcher.run_forever(OWNER_ID),
+                                          name="office-dispatcher")
     try:
         await dp.start_polling(bot)
     finally:
         worker.cancel()
+        dispatch_worker.cancel()
+        await asyncio.gather(worker, dispatch_worker, return_exceptions=True)
 
 
 if __name__ == "__main__":

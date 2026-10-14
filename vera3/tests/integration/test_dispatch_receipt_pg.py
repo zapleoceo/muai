@@ -115,3 +115,21 @@ async def test_queue_over_candidates_limit_new_task_still_dispatched():
     await _open("NEW")
     assert await dispatch_one() is True
     assert await _dispatch_ids() == ["dispatch-NEW"]
+
+
+@pytest.mark.usefixtures("pg_db")
+async def test_owner_office_route_requires_creator_and_exact_marker():
+    from bot_telegram.dispatcher import dispatch_one
+    from vera_shared.room import tasks
+
+    for task_id, creator, marker in (
+        ("foreign", "vera", "owner_dispatch: dot"),
+        ("near", "veranda_bot", "owner_dispatch: dot-extra"),
+        ("owner", "veranda_bot", "owner_dispatch: dot"),
+    ):
+        await tasks.open_task(
+            room=ROOM, task_id=task_id, agent=creator, title="owner request", paths=None,
+            project="Veranda", auto_pickup=True,
+            refs=[{"kind": "source", "ref": marker}])
+    assert await dispatch_one() is True
+    assert await _dispatch_ids() == ["dispatch-owner"]

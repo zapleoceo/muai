@@ -17,6 +17,7 @@ release в `blocked` (задача видна, не потеряна). Сбой 
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 import re
@@ -42,6 +43,7 @@ log = logging.getLogger(__name__)
 DISPATCHED_PREFIX = "dispatched:"
 ATTEMPTS_PREFIX = "dispatch_attempts:"
 NEXT_AT_PREFIX = "dispatch_next_at:"
+OWNER_OFFICE_REF = "owner_dispatch: dot"
 RECIPIENT_PREFIX = RESULT_RECIPIENT_REF.split(":")[0] + ":"
 MAX_ATTEMPTS = 3
 LEASE_S = 60
@@ -169,8 +171,13 @@ async def dispatch_one() -> bool:
     if await _settle_pending():
         return True
     task = await task_queue.next_task(
-        room=help_room(), agent=AGENT, project=DEFAULT_PROJECT, lease_seconds=LEASE_S,
-        session=None, account=None, skip_ref_prefix=DISPATCHED_PREFIX)
+        room=help_room(), agent=AGENT, project="Veranda", lease_seconds=LEASE_S,
+        session=None, account=None, skip_ref_prefix=DISPATCHED_PREFIX,
+        required_ref=OWNER_OFFICE_REF, created_by="veranda_bot")
+    if task is None:
+        task = await task_queue.next_task(
+            room=help_room(), agent=AGENT, project=DEFAULT_PROJECT, lease_seconds=LEASE_S,
+            session=None, account=None, skip_ref_prefix=DISPATCHED_PREFIX)
     if task is None:
         return False
     try:
@@ -178,3 +185,17 @@ async def dispatch_one() -> bool:
     except tasks.StaleLease:
         log.warning("dispatcher: аренда %s потеряна — пропускаю", task["task_id"])
     return True
+
+
+async def run_forever(owner_id: int) -> None:
+    if owner_id == 0:
+        log.error("dispatcher: OWNER_TELEGRAM_ID is missing; dispatch disabled")
+        return
+    while True:
+        try:
+            await dispatch_one()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("dispatcher: pass failed")
+        await asyncio.sleep(2.0)

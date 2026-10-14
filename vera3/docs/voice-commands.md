@@ -177,15 +177,23 @@ Postgres (`tests/integration/test_voice_help_pg.py`): на SQLite `FOR UPDATE`
 и снимает кнопки, чужому — пустой ответ; ничего не меняет. Каждый шаг —
 сначала сообщение, потом отметка: at-least-once, как у ответа.
 
-**Диспетчер** (`bot_telegram/dispatcher.py`, `dispatch_one()`; зовётся в том же
-`run_forever` после `process_one`, без LLM). Один проход: сначала ожидающие
-квитанции, затем новая задача. Новая: `task_queue.next_task(project="Vera",
+**Диспетчер** (`bot_telegram/dispatcher.py`, `dispatch_one()`; отдельный цикл
+`run_forever` в том же процессе бота, без LLM). Он не ждёт `ask_brain` в
+голосовом цикле: ожидание ответа не задерживает доставку новых задач. Один
+проход: сначала ожидающие квитанции, затем новая задача. Новая:
+`task_queue.next_task(project="Vera",
 skip_ref_prefix=DISPATCHED_PREFIX)` берёт от имени `AGENT` (`vera`) первую
 `auto_pickup`-задачу без ref `dispatched:` и без открытого вопроса (фильтр по refs
 — в SQL, поэтому 50+ уже обработанных задач не прячут новые) → `room_post`
 получателю (`recipient_of`: ref `result_recipient: X`, иначе `dot`) с
 `message_id=dispatch-<task_id>`, `task_id`, `origin` и очищенным заголовком
 (`dispatch_body`).
+Перед проектом `Vera` диспетчер проверяет узкий маршрут `Veranda`: только
+`created_by=veranda_bot` с точным ref `owner_dispatch: dot`; источник этого
+маркера описан в `office-intake.md`.
+Перед проектом `Vera` диспетчер проверяет узкий маршрут `Veranda`: только
+`created_by=veranda_bot` с точным ref `owner_dispatch: dot`; источник этого
+маркера описан в `office-intake.md`.
 
 **Успешный `room_post` — не квитанция.** Задача остаётся за `vera`
 (`in_progress`) в `room_task_wait` на `RECEIPT_WAIT_S` (10 мин), refs:

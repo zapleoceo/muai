@@ -1,6 +1,7 @@
 """Диспетчер офиса: пост, ожидание квитанции доставки, повтор, блок, без «Взял: vera»."""
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -37,8 +38,8 @@ def _test_room(monkeypatch):
 
 
 async def _open(task_id: str = "T1", *, refs: list[dict] | None = None, project: str = "Vera",
-                title: str = "починить бота") -> None:
-    await tasks.open_task(room=ROOM, task_id=task_id, agent="vera", title=title, paths=None,
+                title: str = "починить бота", agent: str = "vera") -> None:
+    await tasks.open_task(room=ROOM, task_id=task_id, agent=agent, title=title, paths=None,
                           project=project, priority=1, auto_pickup=True, refs=refs)
 
 
@@ -50,6 +51,50 @@ def _dispatch_msgs(msgs):
 async def test_empty_queue_makes_no_writes():
     assert await dispatch_one() is False
     assert await messages_in(ROOM) == [] and await tasks_in(ROOM) == []
+
+
+@uses_db
+async def test_only_marked_veranda_task_is_dispatched():
+    await _open("other", project="Veranda")
+    await _open("forged", project="Veranda", refs=[
+        {"kind": "source", "ref": "owner_dispatch: dot"}])
+    await _open("owner", project="Veranda", agent="veranda_bot", refs=[
+        {"kind": "source", "ref": "owner_dispatch: dot"},
+        {"kind": "source", "ref": "result_recipient: dot"}])
+    assert await dispatch_one() is True
+    assert [m.message_id for m in _dispatch_msgs(await messages_in(ROOM))] == [
+        "dispatch-owner"]
+
+
+async def test_slow_brain_does_not_hold_dispatch_loop():
+    brain_started = asyncio.Event()
+    brain_release = asyncio.Event()
+    dispatched = asyncio.Event()
+
+    async def slow_command(*args):
+        brain_started.set()
+        await brain_release.wait()
+        return True
+
+    async def dispatch():
+        dispatched.set()
+        return True
+
+    with patch.object(voice_worker, "revive_stale", AsyncMock()), \
+         patch.object(voice_worker, "notify_failed", AsyncMock()), \
+         patch.object(voice_worker, "track_help", AsyncMock()), \
+         patch.object(voice_worker, "process_one", slow_command), \
+         patch.object(dispatcher, "dispatch_one", dispatch):
+        voice = asyncio.create_task(voice_worker.run_forever(AsyncMock(), OWNER))
+        await asyncio.wait_for(brain_started.wait(), 1)
+        office = asyncio.create_task(dispatcher.run_forever(OWNER))
+        try:
+            await asyncio.wait_for(dispatched.wait(), 1)
+        finally:
+            brain_release.set()
+            voice.cancel()
+            office.cancel()
+            await asyncio.gather(voice, office, return_exceptions=True)
 
 
 async def _ack(task_id: str = "T1", *, who: str = "dot", status: str = "ack",
