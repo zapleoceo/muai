@@ -235,15 +235,31 @@ def test_expired_lease_with_wait_reason_is_waiting_not_blocker() -> None:
     assert info.blocker_confidence is None
 
 
-def test_decision_owner_only_from_explicit_event_data() -> None:
+def test_decision_owner_only_from_explicit_row_field() -> None:
     base = row("in_progress", "expired", waiting_reason="нужен live QA")
     guessed = describe_status(base, NOW, control="waiting", control_agent="dot",
-                              control_text="нужен live QA", control_data={})
+                              control_text="нужен live QA",
+                              control_data={"decision_owner": "from-event-ignored"})
     assert guessed.decision_owner is None
     explicit = describe_status(
-        row("in_progress", "live", waiting_reason="решение"), NOW, control="waiting",
-        control_agent="dot", control_text="решение",
-        control_data={"decision_owner": " owner "}, control_at=NOW - timedelta(minutes=5))
+        row("in_progress", "live", waiting_reason="решение", waiting_decision_owner=" owner "),
+        NOW, control="waiting", control_agent="dot", control_text="решение",
+        control_at=NOW - timedelta(minutes=5))
     assert explicit.status == WORKING
     assert explicit.decision_owner == "owner"
     assert explicit.wait_freshness == FRESH
+
+
+@pytest.mark.parametrize(("raw", "expected"), [(None, None), ("  ", None), (" Owner ", "Owner")])
+def test_clean_decision_owner_accepts(raw: str | None, expected: str | None) -> None:
+    from vera_shared.room.task_fields import clean_decision_owner
+
+    assert clean_decision_owner(raw) == expected
+
+
+@pytest.mark.parametrize("raw", ["x" * 65, "a\nb", "a\x00b"])
+def test_clean_decision_owner_rejects(raw: str) -> None:
+    from vera_shared.room.task_fields import clean_decision_owner
+
+    with pytest.raises(ValueError, match="decision_owner"):
+        clean_decision_owner(raw)

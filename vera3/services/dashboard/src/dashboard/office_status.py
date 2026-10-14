@@ -16,7 +16,6 @@ FRESH_MAX_AGE = timedelta(hours=1)
 
 # raw `waiting` is deliberately absent: waiting for a decision/check is not a proven block
 _BLOCKER_RAW = frozenset({"blocked", "paused"})
-DECISION_OWNER_KEY = "decision_owner"
 BLOCKER_EVIDENCE_KINDS = frozenset({"blocked", "released", "waiting"})
 
 
@@ -126,9 +125,9 @@ def _dependency(row: Any, now: datetime, active: bool) -> str | None:
     return "; ".join(parts) or None
 
 
-def decision_owner_of(data: dict[str, Any] | None) -> str | None:
-    """Who must act, only from explicit event data; never guessed from roles."""
-    value = (data or {}).get(DECISION_OWNER_KEY)
+def decision_owner_of(row: Any) -> str | None:
+    """Who must decide: only the explicit row field set by room_task_wait; never guessed."""
+    value = getattr(row, "waiting_decision_owner", None)
     return value.strip() if isinstance(value, str) and value.strip() else None
 
 
@@ -172,5 +171,5 @@ def describe_status(row: Any, now: datetime, *, has_open_question: bool = False,
     return StatusInfo(status, confidence, wait_reason, dependency,
                       has_open_question and open_task, signal, freshness_of(signal, now),
                       waiting,
-                      decision_owner_of(control_data) if waiting or blocked else None,
+                      decision_owner_of(row) if waiting or blocked else None,
                       wait_freshness_of(row, now, control, control_at) if waiting else None)

@@ -186,25 +186,37 @@ async def test_waiting_with_expired_lease_is_not_blocker_pg(pg_db):
     assert card.info.blocker_confidence is None
 
 
-async def test_waiting_decision_owner_only_from_explicit_event_data_pg(pg_db):
+async def test_waiting_decision_owner_explicit_row_field_pg(pg_db):
     from dashboard.office_hourly_service import load_report
-    from vera_shared.db.engine import get_session
-    from vera_shared.db.models_room import RoomTaskEventRow
-    from vera_shared.room import task_wait
+    from vera_shared.room import task_progress, task_wait
 
     token = await held("W2")
     await task_wait.wait(room="main", task_id="W2", agent="claude", fencing_token=token,
                          until_seconds=600, reason="нужен ответ")
     assert cards_by_id(await load_report())["W2"].info.decision_owner is None
-    async with get_session() as s:
-        from sqlalchemy import select
-        event = (await s.execute(select(RoomTaskEventRow).where(
-            RoomTaskEventRow.task_id == "W2", RoomTaskEventRow.kind == "waiting"))).scalar_one()
-        event.data = {**(event.data or {}), "decision_owner": "owner"}
-        await s.commit()
+    task = await task_wait.wait(room="main", task_id="W2", agent="claude", fencing_token=token,
+                                until_seconds=600, reason="нужен ответ",
+                                decision_owner=" owner ")
+    assert task["waiting_decision_owner"] == "owner"
     card = cards_by_id(await load_report())["W2"]
     assert card.status == "В работе"
     assert card.info.decision_owner == "owner"
+    await task_progress.progress(room="main", task_id="W2", agent="claude",
+                                 fencing_token=token, result="решено",
+                                 next_checkpoint_seconds=300)
+    cleared = cards_by_id(await load_report())["W2"].info
+    assert cleared.waiting is False
+    assert cleared.decision_owner is None
+
+
+async def test_decision_owner_rejected_when_too_long_pg(pg_db):
+    import pytest
+    from vera_shared.room import task_wait
+
+    token = await held("W4")
+    with pytest.raises(ValueError, match="decision_owner"):
+        await task_wait.wait(room="main", task_id="W4", agent="claude", fencing_token=token,
+                             until_seconds=600, reason="r", decision_owner="x" * 65)
 
 
 async def test_wait_then_progress_clears_waiting_pg(pg_db):

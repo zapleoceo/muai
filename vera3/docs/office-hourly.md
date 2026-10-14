@@ -174,12 +174,17 @@ control-событие `waiting`, raw `waiting`) само по себе не д�
 `waiting`, точный `wait_reason`, `decision_owner`, `wait_freshness`
 (fresh/stale/unknown по `waiting_until` или времени события `waiting`, функция
 `wait_freshness_of`) и существующие `freshness`, `blocker_confidence` (у
-ожидания пусто). `decision_owner_of` берёт «кто действует» только из явных полей
-события (только `data.decision_owner`); ни ответственный, ни автор
-события `waiting`, ни адресат не подставляются, потому что это исполнитель, а не
-решающий. Нынешний `room_task_wait` таких полей не пишет, поэтому до их появления
-поле пусто, а страница пишет «неизвестно». Открытый вопрос для Codex: нужен ли
-отдельный явный способ указать решающего в `room_task_wait`.
+ожидания пусто). `decision_owner_of` читает «кто решает» только из явного поля
+строки `waiting_decision_owner`, которое пишет `room_task_wait` (необязательный
+параметр `decision_owner`, `clean_decision_owner`: обрезка пробелов, не длиннее 64
+символов, без управляющих символов; это свободная метка, а не проверенная
+идентичность агента). Метка дублируется в `data.decision_owner` события `waiting`,
+но Office читает только поле строки. Ответственный, автор события и адресат не
+подставляются. Поле очищается вместе с `waiting_until`/`waiting_reason` каждым
+писателем, снимающим ожидание (progress, update, claim, handoff). Пока метка не
+задана, страница пишет «неизвестно». Колонка `waiting_decision_owner` добавлена
+миграцией `059_room_task_waiting_decision_owner.sql`; её нужно применить через
+`scripts/apply_migration.sh` до выкладки кода.
 
 Состояние ожидания берётся только из авторитетных полей строки: `waiting_reason`,
 `waiting_until` в будущем либо raw `waiting`. Одно лишь последнее control-событие

@@ -24,6 +24,16 @@ def clean_responsible(value: str | None) -> str | None:
     return text or None
 
 
+def clean_decision_owner(value: str | None) -> str | None:
+    """Free label of who must decide: strip, at most 64 chars, no control characters."""
+    text = (value or "").strip()
+    if len(text) > 64:
+        raise ValueError("decision_owner must be at most 64 chars")
+    if any(ord(ch) < 32 or ord(ch) == 127 for ch in text):
+        raise ValueError("decision_owner must not contain control characters")
+    return text or None
+
+
 def validate_depends_on(task_id: str, depends_on: list[str]) -> list[str]:
     if not isinstance(depends_on, list) or len(depends_on) > MAX_DEPENDS_ON:
         raise ValueError(f"depends_on must be a list of at most {MAX_DEPENDS_ON} task_ids")
