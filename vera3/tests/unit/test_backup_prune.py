@@ -205,3 +205,14 @@ def test_missing_fuser_keeps_confirmed_file(tmp_path: Path) -> None:
     out = _run(tmp_path, FUSER="/nonexistent/fuser")
     assert f.exists()
     assert "no_fuser=1" in out
+
+
+def test_open_file_is_kept(tmp_path: Path) -> None:
+    f = _make(tmp_path)
+    _confirm(f)
+    busy = tmp_path / "busy-fuser"
+    busy.write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+    busy.chmod(0o755)
+    out = _run(tmp_path, FUSER=str(busy))
+    assert f.exists()
+    assert "open_fd=1" in out
