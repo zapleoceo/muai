@@ -102,9 +102,8 @@ def is_our_current_work(row: Any, now: datetime, cfg: ScopeConfig,
                         control: str | None = None) -> bool:
     if is_parked(row, now, control):
         return False
-    if (row.lease_until is not None and _aware(row.lease_until) > _aware(now)
-            and _AGENT_RE.search(row.lease_holder or "")):
-        return True
+    if row.lease_until is not None and _aware(row.lease_until) > _aware(now):
+        return bool(_AGENT_RE.search(row.lease_holder or ""))
     progress = row.last_progress_at
     if progress is None or _aware(now) - _aware(progress) > cfg.active_window:
         return False

@@ -302,7 +302,7 @@ async def test_visible_card_dependency_on_hidden_task_is_masked_pg(pg_db):
 
 async def test_active_only_requires_our_in_progress_lease_pg(pg_db):
     from dashboard.office_hourly_service import load_report
-    from vera_shared.room import tasks
+    from vera_shared.room import task_progress, tasks
 
     for task_id in ("A1", "A2", "A3", "A4"):
         await tasks.open_task(room="main", task_id=task_id, agent="claude", title="t",
@@ -315,6 +315,12 @@ async def test_active_only_requires_our_in_progress_lease_pg(pg_db):
     await tasks.open_task(room="main", task_id="S9", agent="claude", title="t", paths=None,
                           project="STEP")
     assert foreign
+    await tasks.open_task(room="main", task_id="A5", agent="claude", title="t", paths=None,
+                          project="Orchestra", responsible="claude")
+    token5 = await tasks.claim(room="main", task_id="A5", agent="alice", lease_seconds=600)
+    await task_progress.progress(room="main", task_id="A5", agent="alice",
+                                 fencing_token=token5["fencing_token"], result="fresh",
+                                 next_checkpoint_seconds=300)
     report = await load_report()
     assert set(cards_by_id(report)) == {"A1"}
-    assert (report.hidden_excluded, report.hidden_inactive) == (1, 3)
+    assert (report.hidden_excluded, report.hidden_inactive) == (1, 4)
