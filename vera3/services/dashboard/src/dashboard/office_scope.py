@@ -134,12 +134,15 @@ def apply_scope(rows: list[Any], now: datetime, cfg: ScopeConfig | None = None,
 
 def _runtime_excluded(entry: Any, cfg: ScopeConfig) -> bool:
     ids = ((entry.source_id or "").upper(), (entry.thread_id or "").upper())
-    return (_project_key(entry.project) in cfg.exclude_projects
-            or any(i.startswith(p) for i in ids for p in cfg.exclude_prefixes))
+    if (_project_key(entry.project) in cfg.exclude_projects
+            or any(i.startswith(p) for i in ids for p in cfg.exclude_prefixes)):
+        return True
+    return (_project_key(entry.project) in cfg.active_only_projects
+            and not (entry.state == "active" and _AGENT_RE.search(entry.source or "")))
 
 
 def scope_runtime(snapshot: Any, cfg: ScopeConfig | None = None) -> tuple[Any, int]:
-    """Runtime streams are only subject to the project exclusion, not the active-only rule."""
+    """Exclusion rules as for cards; in active-only projects only an active entry from our source."""
     if snapshot is None:
         return None, 0
     cfg = cfg or env_config()

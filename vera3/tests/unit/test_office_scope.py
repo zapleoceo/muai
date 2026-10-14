@@ -131,8 +131,9 @@ def test_latest_control_event_parks_our_lease(control: str) -> None:
     assert apply_scope([item], NOW, CFG, {("main", "o1"): "resumed"}).visible == [item]
 
 
-def runtime_entry(project: str, source_id: str = "", thread_id: str = "") -> RuntimeEntry:
-    return RuntimeEntry(project, thread_id, "active", "d", "broker", source_id)
+def runtime_entry(project: str, source_id: str = "", thread_id: str = "",
+                  state: str = "active", source: str = "broker") -> RuntimeEntry:
+    return RuntimeEntry(project, thread_id, state, "d", source, source_id)
 
 
 @pytest.mark.parametrize(("entry", "shown"), [
@@ -141,8 +142,16 @@ def runtime_entry(project: str, source_id: str = "", thread_id: str = "") -> Run
     (runtime_entry("Vera", "step-1"), False),
     (runtime_entry("Vera", "", "SIN-9"), False),
     (runtime_entry("sin", "x-1"), False),
-    (runtime_entry("SinHRM", "HRM-1"), True),
-    (runtime_entry("Orchestra", "ORCH-607"), True),
+    (runtime_entry("SinHRM", "HRM-1"), False),
+    (runtime_entry("Orchestra", "ORCH-607", source="claude"), True),
+    (runtime_entry("Orchestra", "ORCH-607", source="codex"), True),
+    (runtime_entry("Lamas", "L-1", source="dot"), True),
+    (runtime_entry("Orchestra", "ORCH-607"), False),
+    (runtime_entry("Orchestra", "ORCH-607", source="claude", state="waiting"), False),
+    (runtime_entry("Lamas", "L-1", source="claude", state="completed"), False),
+    (runtime_entry("SinHRM", "H-1", source="claude", state="unknown"), False),
+    (runtime_entry("Vera", "V-1", state="waiting"), True),
+    (runtime_entry("Broker", "B-1"), True),
 ])
 def test_runtime_exact_sin_step_exclusion(entry: RuntimeEntry, shown: bool) -> None:
     snap = RuntimeSnapshot(NOW, NOW, "m", (entry,))
@@ -153,11 +162,11 @@ def test_runtime_exact_sin_step_exclusion(entry: RuntimeEntry, shown: bool) -> N
 
 def runtime_snapshot():
     body = PREFIX + json.dumps({"checked_at": NOW.isoformat(), "entries": [
-        {"project": "Orchestra", "source": "broker", "source_id": "ORCH-607",
+        {"project": "Orchestra", "source": "claude", "source_id": "ORCH-607",
          "state": "active", "detail": "Orchestra runtime work"},
         {"project": "Sintegrum", "source": "broker", "source_id": "SIN-1",
          "state": "active", "detail": "Sintegrum runtime work"}],
-        "sources": {"broker": {"coverage": "complete", "observed_at": NOW.isoformat()}}})
+        "sources": {"claude": {"coverage": "complete", "observed_at": NOW.isoformat()}}})
     msg = SimpleNamespace(room="main", from_agent="dot", to_agent="office-dashboard",
                           task_id=None, status="info", body=body, created_at=NOW,
                           message_id="m1")
