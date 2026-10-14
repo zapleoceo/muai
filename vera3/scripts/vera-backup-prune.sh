@@ -23,6 +23,7 @@
 set -euo pipefail
 ROOT=${ROOT:-/var/backups/vera}
 SETTLE_MIN=${SETTLE_MIN:-30}
+FUSER=${FUSER:-fuser}
 [ -d "$ROOT" ] || { echo "$(date +%F_%T) нет каталога $ROOT"; exit 0; }
 
 freed=0
@@ -52,7 +53,9 @@ while IFS= read -r -d '' f; do
   [ -n "$got" ] || { keep empty_confirm "$sz"; continue; }
   [ "$got" = "$want" ] || { keep mismatch "$sz"; continue; }
   [ $(( (now - mt) / 60 )) -ge "$SETTLE_MIN" ] || { keep unsettled "$sz"; continue; }
-  if command -v fuser >/dev/null 2>&1 && fuser -s "$f" 2>/dev/null; then
+  # без fuser нельзя доказать, что файл никто не читает: не удаляем (fail-closed)
+  command -v "$FUSER" >/dev/null 2>&1 || { keep no_fuser "$sz"; continue; }
+  if "$FUSER" -s "$f" 2>/dev/null; then
     keep open_fd "$sz"; continue
   fi
   cur=$(sha256sum < "$f" 2>/dev/null | awk '{print tolower($1)}') || cur=""
