@@ -13,3 +13,7 @@ def test_mcp_environment_has_office_vars() -> None:
     assert env["OFFICE_SERVICE_TOKENS"] == "${OFFICE_SERVICE_TOKENS:-}"
     assert env["OFFICE_ROOM"] == "${OFFICE_ROOM:-main}"
     assert env["OFFICE_AUTO_PICKUP"] == "${OFFICE_AUTO_PICKUP:-0}"
+    assert env["OWNER_TELEGRAM_ID"] == "${OWNER_TELEGRAM_ID:-0}"
+    assert env["OFFICE_OWNER_DISPATCH_CHATS"] == "${OFFICE_OWNER_DISPATCH_CHATS:--1002884053196}"
+    bot_env = yaml.safe_load(COMPOSE.read_text(encoding="utf-8"))["services"]["bot-telegram"]["environment"]
+    assert bot_env["OFFICE_OWNER_DISPATCH_CHATS"] == env["OFFICE_OWNER_DISPATCH_CHATS"]

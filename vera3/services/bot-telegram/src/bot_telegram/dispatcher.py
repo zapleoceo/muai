@@ -17,12 +17,14 @@ release в `blocked` (задача видна, не потеряна). Сбой 
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 import re
 from datetime import timedelta
 from typing import Any
 
+from vera_shared.office.owner_routing import verified_office_origin
 from vera_shared.redact import redact_secrets
 from vera_shared.room import task_queue, task_wait, tasks
 from vera_shared.room.messages import has_reply, post_message
@@ -42,6 +44,7 @@ log = logging.getLogger(__name__)
 DISPATCHED_PREFIX = "dispatched:"
 ATTEMPTS_PREFIX = "dispatch_attempts:"
 NEXT_AT_PREFIX = "dispatch_next_at:"
+OWNER_OFFICE_REF = "owner_dispatch: dot"
 RECIPIENT_PREFIX = RESULT_RECIPIENT_REF.split(":")[0] + ":"
 MAX_ATTEMPTS = 3
 LEASE_S = 60
@@ -51,6 +54,7 @@ TITLE_CHARS = 120
 BLOCKED_NOTE = "получатель не подтвердил получение"
 ATTEST_BLOCKED_NOTE = ("подтверждение через dot разрешает результат только владельцу; "
                        "получатель результата другой")
+UNVERIFIED_OFFICE_NOTE = "маршрут Office не подтверждён сохранённым origin"
 _NAME = re.compile(r"^[a-z0-9_-]{1,32}$")
 
 
@@ -99,6 +103,12 @@ async def _delivered(task: dict[str, Any]) -> bool:
 async def _attempt(task: dict[str, Any]) -> None:
     """Одна попытка доставки под живой арендой: пост, refs, ожидание квитанции."""
     refs = task["refs"]
+    if task["created_by"] == "veranda_bot" and not await verified_office_origin(task):
+        await tasks.release(room=task["room"], task_id=task["task_id"], agent=AGENT,
+                            fencing_token=task["fencing_token"], status="blocked",
+                            note=UNVERIFIED_OFFICE_NOTE)
+        log.warning("dispatcher: %s — %s", task["task_id"], UNVERIFIED_OFFICE_NOTE)
+        return
     if attest_recipient_blocked(
             refs, _ref_value(refs, RECIPIENT_PREFIX),
             attested=await is_attested(task["room"], task["task_id"])):
@@ -169,8 +179,13 @@ async def dispatch_one() -> bool:
     if await _settle_pending():
         return True
     task = await task_queue.next_task(
-        room=help_room(), agent=AGENT, project=DEFAULT_PROJECT, lease_seconds=LEASE_S,
-        session=None, account=None, skip_ref_prefix=DISPATCHED_PREFIX)
+        room=help_room(), agent=AGENT, project="Veranda", lease_seconds=LEASE_S,
+        session=None, account=None, skip_ref_prefix=DISPATCHED_PREFIX,
+        required_ref=OWNER_OFFICE_REF, created_by="veranda_bot")
+    if task is None:
+        task = await task_queue.next_task(
+            room=help_room(), agent=AGENT, project=DEFAULT_PROJECT, lease_seconds=LEASE_S,
+            session=None, account=None, skip_ref_prefix=DISPATCHED_PREFIX)
     if task is None:
         return False
     try:
@@ -178,3 +193,17 @@ async def dispatch_one() -> bool:
     except tasks.StaleLease:
         log.warning("dispatcher: аренда %s потеряна — пропускаю", task["task_id"])
     return True
+
+
+async def run_forever(owner_id: int) -> None:
+    if owner_id == 0:
+        log.error("dispatcher: OWNER_TELEGRAM_ID is missing; dispatch disabled")
+        return
+    while True:
+        try:
+            await dispatch_one()
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            log.exception("dispatcher: pass failed")
+        await asyncio.sleep(2.0)

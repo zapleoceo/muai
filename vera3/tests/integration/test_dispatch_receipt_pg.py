@@ -115,3 +115,30 @@ async def test_queue_over_candidates_limit_new_task_still_dispatched():
     await _open("NEW")
     assert await dispatch_one() is True
     assert await _dispatch_ids() == ["dispatch-NEW"]
+
+
+@pytest.mark.usefixtures("pg_db")
+async def test_owner_office_route_requires_creator_and_exact_marker(monkeypatch):
+    from bot_telegram.dispatcher import dispatch_one
+    from vera_shared.office import intake
+    from vera_shared.office.acl import OfficePrincipal
+    from vera_shared.room import tasks
+
+    monkeypatch.setenv("OFFICE_ROOM", ROOM)
+    monkeypatch.setenv("OWNER_TELEGRAM_ID", "169510539")
+    monkeypatch.setenv("OFFICE_OWNER_DISPATCH_CHATS", "-1002884053196")
+    for task_id, creator, marker in (
+        ("foreign", "vera", "owner_dispatch: dot"),
+        ("near", "veranda_bot", "owner_dispatch: dot-extra"),
+    ):
+        await tasks.open_task(
+            room=ROOM, task_id=task_id, agent=creator, title="owner request", paths=None,
+            project="Veranda", auto_pickup=True,
+            refs=[{"kind": "source", "ref": marker}])
+    made = await intake.create_task(
+        OfficePrincipal(name="veranda_bot", project="Veranda"), "owner-pg", "owner request",
+        "owner request", {"channel": "telegram", "chat": "-1002884053196",
+                          "message": 12885, "from_id": 169510539},
+        {"channel": "telegram", "chat": "-1002884053196", "reply_to": 12885})
+    assert await dispatch_one() is True
+    assert await _dispatch_ids() == [f"dispatch-{made['task_id']}"]

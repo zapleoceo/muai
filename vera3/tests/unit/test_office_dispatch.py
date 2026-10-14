@@ -1,6 +1,7 @@
 """Диспетчер офиса: пост, ожидание квитанции доставки, повтор, блок, без «Взял: vera»."""
 from __future__ import annotations
 
+import asyncio
 from datetime import timedelta
 from unittest.mock import AsyncMock, patch
 
@@ -10,6 +11,8 @@ from bot_telegram.dispatcher import dispatch_one
 from gateway.voice_command import accept_voice_command
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskRow
+from vera_shared.office import intake
+from vera_shared.office.acl import OfficePrincipal
 from vera_shared.room import tasks
 from vera_shared.room.messages import post_message
 from vera_shared.room.task_queue import next_task
@@ -37,8 +40,8 @@ def _test_room(monkeypatch):
 
 
 async def _open(task_id: str = "T1", *, refs: list[dict] | None = None, project: str = "Vera",
-                title: str = "починить бота") -> None:
-    await tasks.open_task(room=ROOM, task_id=task_id, agent="vera", title=title, paths=None,
+                title: str = "починить бота", agent: str = "vera") -> None:
+    await tasks.open_task(room=ROOM, task_id=task_id, agent=agent, title=title, paths=None,
                           project=project, priority=1, auto_pickup=True, refs=refs)
 
 
@@ -50,6 +53,79 @@ def _dispatch_msgs(msgs):
 async def test_empty_queue_makes_no_writes():
     assert await dispatch_one() is False
     assert await messages_in(ROOM) == [] and await tasks_in(ROOM) == []
+
+
+@uses_db
+async def test_only_marked_veranda_task_is_dispatched(monkeypatch):
+    monkeypatch.setenv("OFFICE_ROOM", ROOM)
+    monkeypatch.setenv("OWNER_TELEGRAM_ID", "169510539")
+    monkeypatch.setenv("OFFICE_OWNER_DISPATCH_CHATS", "-1002884053196")
+    await _open("other", project="Veranda")
+    await _open("forged", project="Veranda", refs=[
+        {"kind": "source", "ref": "owner_dispatch: dot"}])
+    made = await intake.create_task(
+        OfficePrincipal(name="veranda_bot", project="Veranda"), "tg--1002884053196-12885",
+        "owner request", "owner request",
+        {"channel": "telegram", "chat": "-1002884053196", "message": 12885,
+         "from_id": 169510539},
+        {"channel": "telegram", "chat": "-1002884053196", "reply_to": 12885})
+    assert await dispatch_one() is True
+    assert [m.message_id for m in _dispatch_msgs(await messages_in(ROOM))] == [
+        f"dispatch-{made['task_id']}"]
+
+
+@uses_db
+async def test_mutable_refs_cannot_authorize_non_owner_office_task(monkeypatch):
+    monkeypatch.setenv("OFFICE_ROOM", ROOM)
+    monkeypatch.setenv("OWNER_TELEGRAM_ID", "169510539")
+    monkeypatch.setenv("OFFICE_OWNER_DISPATCH_CHATS", "-1002884053196")
+    made = await intake.create_task(
+        OfficePrincipal(name="veranda_bot", project="Veranda"), "foreign-1", "foreign",
+        "foreign", {"channel": "telegram", "chat": "-1002884053196", "message": 9,
+                    "from_id": 777},
+        {"channel": "telegram", "chat": "-1002884053196", "reply_to": 9})
+    held = await tasks.claim(room=ROOM, task_id=made["task_id"], agent="alice",
+                             lease_seconds=300)
+    await tasks.update(room=ROOM, task_id=made["task_id"], agent="alice",
+                       fencing_token=held["fencing_token"], auto_pickup=True,
+                       refs=[{"kind": "source", "ref": "owner_dispatch: dot"}])
+    await tasks.release(room=ROOM, task_id=made["task_id"], agent="alice",
+                        fencing_token=held["fencing_token"], status="open")
+    assert await dispatch_one() is True
+    assert _dispatch_msgs(await messages_in(ROOM)) == []
+    row = next(t for t in await tasks_in(ROOM) if t.task_id == made["task_id"])
+    assert row.status == "blocked"
+
+
+async def test_slow_brain_does_not_hold_dispatch_loop():
+    brain_started = asyncio.Event()
+    brain_release = asyncio.Event()
+    dispatched = asyncio.Event()
+
+    async def slow_command(*args):
+        brain_started.set()
+        await brain_release.wait()
+        return True
+
+    async def dispatch():
+        dispatched.set()
+        return True
+
+    with patch.object(voice_worker, "revive_stale", AsyncMock()), \
+         patch.object(voice_worker, "notify_failed", AsyncMock()), \
+         patch.object(voice_worker, "track_help", AsyncMock()), \
+         patch.object(voice_worker, "process_one", slow_command), \
+         patch.object(dispatcher, "dispatch_one", dispatch):
+        voice = asyncio.create_task(voice_worker.run_forever(AsyncMock(), OWNER))
+        await asyncio.wait_for(brain_started.wait(), 1)
+        office = asyncio.create_task(dispatcher.run_forever(OWNER))
+        try:
+            await asyncio.wait_for(dispatched.wait(), 1)
+        finally:
+            brain_release.set()
+            voice.cancel()
+            office.cancel()
+            await asyncio.gather(voice, office, return_exceptions=True)
 
 
 async def _ack(task_id: str = "T1", *, who: str = "dot", status: str = "ack",

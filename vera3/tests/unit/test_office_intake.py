@@ -65,6 +65,69 @@ async def test_create_opens_room_task_in_principal_project():
     assert made["revision"] > 0
 
 
+async def test_verified_owner_dm_is_routed_to_dot(monkeypatch):
+    monkeypatch.setenv("OWNER_TELEGRAM_ID", "169510539")
+    principal = OfficePrincipal(name="veranda_bot", project="Veranda")
+    origin = {**ORIGIN, "from_id": 169510539, "chat": "169510539"}
+    recipient = {**RECIPIENT, "chat": "169510539"}
+    made = await _create(principal, cid="owner-dm", origin=origin, recipient=recipient)
+    from vera_shared.db.engine import get_session
+    async with get_session() as s:
+        task = await s.get(RoomTaskRow, (ROOM, made["task_id"]))
+    assert task.auto_pickup and task.responsible == "dot"
+    assert {r["ref"] for r in task.refs} >= {
+        "owner_dispatch: dot", "result_recipient: dot"}
+
+
+async def test_owner_in_allowed_group_is_routed_once(monkeypatch):
+    monkeypatch.setenv("OWNER_TELEGRAM_ID", "169510539")
+    monkeypatch.setenv("OFFICE_OWNER_DISPATCH_CHATS", "-1002884053196")
+    principal = OfficePrincipal(name="veranda_bot", project="Veranda")
+    origin = {**ORIGIN, "from_id": 169510539, "chat": "-1002884053196"}
+    recipient = {**RECIPIENT, "chat": "-1002884053196"}
+    first = await _create(principal, cid="tg--1002884053196-12885",
+                          origin=origin, recipient=recipient)
+    again = await _create(principal, cid="tg--1002884053196-12885",
+                          origin=origin, recipient=recipient)
+    from vera_shared.db.engine import get_session
+    async with get_session() as s:
+        task = await s.get(RoomTaskRow, (ROOM, first["task_id"]))
+    assert first["created"] and not again["created"]
+    assert first["task_id"] == again["task_id"]
+    assert await _count(RoomTaskRow) == await _count(RoomTaskOriginRow) == 1
+    assert task.auto_pickup and task.responsible == "dot"
+
+
+async def test_other_group_author_cannot_auto_dispatch(monkeypatch):
+    monkeypatch.setenv("OWNER_TELEGRAM_ID", "169510539")
+    monkeypatch.setenv("OFFICE_OWNER_DISPATCH_CHATS", "-1002884053196")
+    principal = OfficePrincipal(name="veranda_bot", project="Veranda")
+    origin = {**ORIGIN, "from_id": 123456, "chat": "-1002884053196"}
+    recipient = {**RECIPIENT, "chat": "-1002884053196"}
+    made = await _create(principal, origin=origin, recipient=recipient)
+    from vera_shared.db.engine import get_session
+    async with get_session() as s:
+        task = await s.get(RoomTaskRow, (ROOM, made["task_id"]))
+    assert not task.auto_pickup and task.responsible is None
+
+
+@pytest.mark.parametrize("origin,recipient", [
+    ({**ORIGIN, "from_id": 169510539, "chat": "-100"}, RECIPIENT),
+    ({**ORIGIN, "from_id": 7, "chat": "169510539"},
+     {**RECIPIENT, "chat": "169510539"}),
+    ({**ORIGIN, "from_id": 169510539, "chat": "169510539"}, RECIPIENT),
+])
+async def test_non_owner_or_non_allowed_chat_is_not_auto_routed(monkeypatch, origin, recipient):
+    monkeypatch.setenv("OWNER_TELEGRAM_ID", "169510539")
+    principal = OfficePrincipal(name="veranda_bot", project="Veranda")
+    made = await _create(principal, origin=origin, recipient=recipient)
+    from vera_shared.db.engine import get_session
+    async with get_session() as s:
+        task = await s.get(RoomTaskRow, (ROOM, made["task_id"]))
+    assert not task.auto_pickup and task.responsible is None
+    assert not any(r["ref"].startswith("owner_dispatch:") for r in task.refs)
+
+
 async def test_same_payload_returns_existing_task_without_duplicates():
     first, again = await _create(), await _create()
     assert again["task_id"] == first["task_id"] and not again["created"]
