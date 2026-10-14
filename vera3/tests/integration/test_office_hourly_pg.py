@@ -324,3 +324,34 @@ async def test_active_only_requires_our_in_progress_lease_pg(pg_db):
     report = await load_report()
     assert set(cards_by_id(report)) == {"A1"}
     assert (report.hidden_excluded, report.hidden_inactive) == (1, 4)
+
+
+async def test_expired_lease_holder_must_be_ours_pg(pg_db):
+    from datetime import timedelta
+
+    from dashboard.office_hourly_service import load_report
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models_room import RoomTaskRow
+    from vera_shared.room import task_progress, tasks
+    from vera_shared.timeutil import utc_naive_now
+
+    for task_id, holder in (("E1", "alice"), ("E2", "claude")):
+        await tasks.open_task(room="main", task_id=task_id, agent="claude", title="t",
+                              paths=None, project="Orchestra", responsible="claude")
+        claimed = await tasks.claim(room="main", task_id=task_id, agent=holder,
+                                    lease_seconds=600)
+        await task_progress.progress(room="main", task_id=task_id, agent=holder,
+                                     fencing_token=claimed["fencing_token"], result="fresh",
+                                     next_checkpoint_seconds=300)
+    await tasks.open_task(room="main", task_id="E3", agent="claude", title="t", paths=None,
+                          project="Orchestra", responsible="claude")
+    async with get_session() as s:
+        for task_id in ("E1", "E2"):
+            row = await s.get(RoomTaskRow, ("main", task_id))
+            row.lease_until = utc_naive_now() - timedelta(minutes=5)
+        row = await s.get(RoomTaskRow, ("main", "E3"))
+        row.last_progress_at = utc_naive_now()
+        await s.commit()
+    report = await load_report()
+    assert set(cards_by_id(report)) == {"E2", "E3"}
+    assert report.hidden_inactive == 1
