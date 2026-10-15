@@ -131,6 +131,7 @@ def doubts_for(prefix: str, instruction: str, *, quoted: bool = False) -> list[s
 
 def payload(pending: Pending, *, command_id: str, session_id: str, started: datetime,
             app: str | None, window_title: str | None, speakers_silent: bool,
+            guard: str,
             ) -> dict[str, Any]:
     reprompt = pending.reprompt or is_truncated(pending.instruction)
     instruction = "" if reprompt else pending.instruction.strip(" \t\n,.;:!?—-–")
@@ -148,7 +149,8 @@ def payload(pending: Pending, *, command_id: str, session_id: str, started: date
                      for a, e, t in pending.fragment],
         "confidence": confidence(pending.score, speakers_silent=speakers_silent,
                                  closed=pending.closed),
-        "guard": "own",
+        # Вердикт `command_guard`: владельцем на сервере может стать только "own".
+        "guard": guard,
         # Паузы после фразы никто не видел (сессия оборвалась) — запас: источник
         # не подтверждён, как бы высоко ни вышла уверенность.
         "doubts": [] if reprompt else
