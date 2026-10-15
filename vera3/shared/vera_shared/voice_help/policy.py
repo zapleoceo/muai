@@ -97,7 +97,8 @@ OWNER_RECIPIENTS = frozenset({"owner", "voice"})
 ATTEST_MAX_INSTRUCTION = 200
 _LITERAL_REPLY = re.compile(
     r"^(?:вера[,!.?]?\s+)?(?:мне нужна помощь[.!?]?\s+)?"
-    r"ответь(?: мне)?(?: словом)?\s+([а-яёa-z]{1,40})[.!?]?\s*$",
+    r"ответь(?: мне)?(?: словом)?\s+"
+    r"(?:«([а-яёa-z]{1,40})»|([а-яёa-z]{1,40}))[.!?]?\s*$",
     re.IGNORECASE,
 )
 _NON_LITERAL_REPLIES = frozenset({
@@ -111,9 +112,10 @@ def attest_reply_text(instruction: str) -> str | None:
     if len(instruction) > ATTEST_MAX_INSTRUCTION:
         return None
     match = _LITERAL_REPLY.fullmatch(instruction.strip())
-    if match is None or match.group(1).casefold() in _NON_LITERAL_REPLIES:
+    if match is None:
         return None
-    return match.group(1)
+    word = match.group(1) or match.group(2)
+    return None if word.casefold() in _NON_LITERAL_REPLIES else word
 
 
 def attest_limited(refs: list[dict[str, str]] | None) -> bool:
