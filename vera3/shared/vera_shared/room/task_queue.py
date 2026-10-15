@@ -11,7 +11,7 @@ from vera_shared.db.models_room import RoomTaskEventRow, RoomTaskQuestionRow, Ro
 from vera_shared.room.task_attention import tasks_with_attention
 from vera_shared.room.task_events import record_event
 from vera_shared.room.task_view import task_dict
-from vera_shared.room.tasks import apply_claim
+from vera_shared.room.tasks import _unconfirmed_voice, apply_claim
 from vera_shared.timeutil import utc_naive_now
 from vera_shared.voice_help.attest_state import attestation_for
 
@@ -79,6 +79,8 @@ async def _deps_done(s: AsyncSession, row: RoomTaskRow) -> bool:
 
 async def _still_eligible(s: AsyncSession, row: RoomTaskRow, now: Any) -> bool:
     if await attestation_for(s, row.room, row.task_id):
+        return False
+    if _unconfirmed_voice(row.refs):
         return False
     if (row.status != "open" or not row.auto_pickup
             or (row.lease_holder and row.lease_until and row.lease_until > now)):

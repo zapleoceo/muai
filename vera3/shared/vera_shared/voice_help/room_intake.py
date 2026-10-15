@@ -101,7 +101,7 @@ async def open_help_task(*, command_id: str, event_id: int | None, instruction: 
     await open_task(
         room=room, task_id=task_id, agent=AGENT, title=title, paths=None,
         project=project_for(src.get("app"), src.get("window_title")),
-        priority=0, auto_pickup=True, responsible=RESPONSIBLE,
+        priority=0, auto_pickup=not uncertain, responsible=RESPONSIBLE,
         next_action=action, refs=refs)
     await post_message(room=room, message_id=task_id, from_agent=AGENT,
                        task_id=task_id, status="request", body=body)

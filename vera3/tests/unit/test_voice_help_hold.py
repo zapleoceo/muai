@@ -15,8 +15,11 @@ from unittest.mock import AsyncMock, patch
 import pytest
 from bot_telegram import help_worker, voice_worker
 from gateway.voice_command import accept_voice_command
+from vera_shared.db.engine import get_session
+from vera_shared.db.models_room import RoomTaskRow
 from vera_shared.room import questions, tasks
 from vera_shared.room.task_queue import next_task
+from vera_shared.room.tasks import TaskBusy
 from vera_shared.voice_help.hold import ask_owner_once
 from vera_shared.voice_help.policy import (
     CONFIRMED_NOTE,
@@ -83,6 +86,7 @@ async def test_uncertain_holds_until_owner_answers():
     rec = await _open(doubts=["blind"])
     [task] = await tasks_in(ROOM)
     assert UNCERTAIN_HOLD in task.next_action
+    assert task.auto_pickup is False
     [q] = await questions.questions_of(ROOM, "help-vc-h")
     assert q["status"] == "open"
     assert not await ask_owner_once(ROOM, "help-vc-h")
@@ -101,16 +105,77 @@ async def test_uncertain_holds_until_owner_answers():
     assert [r["ref"] for r in task.refs].count(SOURCE_CONFIRMED) == 1
     assert task.next_action.startswith(CONFIRMED_NOTE)
     assert UNCERTAIN_HOLD not in task.next_action
+    assert task.auto_pickup is True
     assert (await _pick())["task_id"] == "help-vc-h"
 
 
 @uses_db
-async def test_owner_answer_lifts_even_on_the_claim_pass():
+async def test_direct_claim_waits_for_owner_decision():
+    rec = await _open(doubts=["blind"])
+    [q] = await questions.questions_of(ROOM, "help-vc-h")
+    with pytest.raises(TaskBusy, match="unconfirmed voice source"):
+        await tasks.claim(room=ROOM, task_id="help-vc-h", agent="codex",
+                          lease_seconds=900)
+    await questions.answer(room=ROOM, task_id="help-vc-h", qid=q["qid"],
+                           text="может быть")
+    assert await _pick() is None
+    with pytest.raises(TaskBusy, match="unconfirmed voice source"):
+        await tasks.claim(room=ROOM, task_id="help-vc-h", agent="codex",
+                          lease_seconds=900)
+    [task] = await tasks_in(ROOM)
+    assert task.auto_pickup is False
+    assert SOURCE_CONFIRMED not in [r["ref"] for r in task.refs]
+    now = (await queue_row("vc-h")).task_opened_at
+    assert await help_worker.track_help(rec, now + timedelta(seconds=30)) == 0
+
+
+@uses_db
+async def test_legacy_auto_pickup_stays_held_after_ambiguous_answer():
+    rec = await _open(doubts=["blind"])
+    async with get_session() as session:
+        row = await session.get(RoomTaskRow, (ROOM, "help-vc-h"))
+        row.auto_pickup = True  # задача, созданная до исправления
+    [q] = await questions.questions_of(ROOM, "help-vc-h")
+    await questions.answer(room=ROOM, task_id="help-vc-h", qid=q["qid"],
+                           text="не уверен")
+    assert await _pick() is None
+    now = (await queue_row("vc-h")).task_opened_at
+    assert await help_worker.track_help(rec, now + timedelta(seconds=30)) == 0
+    with pytest.raises(TaskBusy, match="unconfirmed voice source"):
+        await tasks.claim(room=ROOM, task_id="help-vc-h", agent="codex",
+                          lease_seconds=900)
+
+
+@uses_db
+async def test_owner_denial_cancels_without_claim():
+    rec = await _open(doubts=["blind"])
+    [q] = await questions.questions_of(ROOM, "help-vc-h")
+    await questions.answer(room=ROOM, task_id="help-vc-h", qid=q["qid"],
+                           text="нет, это не я")
+    now = (await queue_row("vc-h")).task_opened_at
+    assert await help_worker.track_help(rec, now + timedelta(seconds=30)) == 1
+    [task] = await tasks_in(ROOM)
+    assert task.status == "cancelled"
+    assert task.auto_pickup is False
+    assert SOURCE_CONFIRMED not in [r["ref"] for r in task.refs]
+    assert await _pick() is None
+    with pytest.raises(TaskBusy, match="cancelled"):
+        await tasks.claim(room=ROOM, task_id="help-vc-h", agent="codex",
+                          lease_seconds=900)
+    assert (await queue_row("vc-h")).status == "done"
+
+
+@uses_db
+async def test_owner_answer_lifts_then_claims():
     rec = await _open(doubts=["blind"])
     [q] = await questions.questions_of(ROOM, "help-vc-h")
     await questions.answer(room=ROOM, task_id="help-vc-h", qid=q["qid"], text="да")
-    await tasks.claim(room=ROOM, task_id="help-vc-h", agent="codex", lease_seconds=900)
+    with pytest.raises(TaskBusy, match="unconfirmed voice source"):
+        await tasks.claim(room=ROOM, task_id="help-vc-h", agent="codex",
+                          lease_seconds=900)
     now = (await queue_row("vc-h")).task_opened_at
+    assert await help_worker.track_help(rec, now + timedelta(seconds=30)) == 0
+    await tasks.claim(room=ROOM, task_id="help-vc-h", agent="codex", lease_seconds=900)
     assert await help_worker.track_help(rec, now + timedelta(minutes=1)) == 1
     [task] = await tasks_in(ROOM)
     assert SOURCE_CONFIRMED in [r["ref"] for r in task.refs]
@@ -133,3 +198,16 @@ async def test_dot_phrase_sets_result_recipient_not_responsible():
 ])
 def test_routes_to_dot(text, dot):
     assert routes_to_dot(text) is dot
+
+
+@uses_db
+async def test_uncertain_task_cannot_auto_pick_before_question_exists():
+    from vera_shared.voice_help import room_intake
+
+    with patch.object(room_intake, "ask_owner_once", AsyncMock()):
+        await room_intake.open_help_task(
+            command_id="vc-pre-question", event_id=None, instruction="посмотри логи",
+            source={"guard": "blind", "doubts": ["blind"]}, uncertain=True)
+    [task] = await tasks_in(ROOM)
+    assert task.auto_pickup is False
+    assert await _pick() is None

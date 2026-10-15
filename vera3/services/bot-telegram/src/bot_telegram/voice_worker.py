@@ -26,6 +26,7 @@ from html import escape
 from vera_shared.db.models_voice import VoiceCommandRow
 from vera_shared.timeutil import utc_naive_now
 from vera_shared.voice_commands import (
+    GUARD_VERSION,
     claim_command,
     fail_command,
     finish_command,
@@ -87,7 +88,10 @@ async def open_and_notify(send: Send, row: VoiceCommandRow, now: datetime) -> bo
     Неподтверждённый источник — только задача с пометкой и уведомление:
     ответ мозга не запускается, ничего не исполняется.
     """
-    uncertain = source_uncertain(row.confidence, (row.source or {}).get("doubts") or [])
+    source = row.source or {}
+    uncertain = (source.get("guard_version") != GUARD_VERSION
+                 or source.get("guard") != "own"
+                 or source_uncertain(row.confidence, source.get("doubts") or []))
     task_id = await open_help_task(
         command_id=row.command_id, event_id=row.event_id,
         instruction=row.instruction, source=row.source, uncertain=uncertain)
