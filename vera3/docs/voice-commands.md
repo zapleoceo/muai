@@ -76,16 +76,31 @@
 продолжения; длиннее шлюз отвергает 422). Без `confidence` (старый слушатель)
 поручение идёт прежним путём — только ответ мозга, без задачи. С `confidence`
 `help_state_for` всегда даёт `ready`. Подтверждён ли источник, решает
-`source_uncertain` (`voice_help/policy.py`) при открытии задачи: ниже порога
-`CONFIRM_BELOW` = 0.75 или **любое** непустое `doubts` (`quoted` — похоже на
+`source_uncertain` (`voice_help/policy.py`) и versioned guard при открытии задачи:
+только `guard="own"` с `guard_version=2`, уверенностью не ниже порога и без
+сомнений считается подтверждённым. Старый guard без версии остаётся на удержании.
+Уверенность ниже `CONFIRM_BELOW` = 0.75 или **любое** непустое `doubts` (`quoted` — похоже на
 пересказ, `mid_sentence`, `short`, `unclosed` — пауза после фразы не видна,
 `blind` — системная дорожка не писалась, эхо не исключить, и незнакомые
 серверу признаки тоже) — источник не подтверждён. `command_id` — до 59 ASCII
 (`[A-Za-z0-9_.:-]`).
 
-**Граница доверия.** `confidence`, `guard` и `doubts` приходят от клиента —
+**`guard` и авторство.** `guard` ∈ `own` | `echo` | `blind` — вердикт
+`command_guard` слушателя (`echo` слушатель не отправляет, но шлюз его
+принимает); иное значение — 422. Шлюз передаёт его в `create_command`, оно
+ложится в `metadata.guard` события и в `source.guard` строки очереди.
+Подпись события решает `voice_commands.author_for`: `author_role="self"`,
+`author_label="Я"` — только при `guard="own"`, `guard_version=2`
+(`GUARD_VERSION`: старые слушатели слали литерал `"own"` для любой
+команды; нечисло в `guard_version` — None; хранится рядом с `guard`), `confidence` ≥
+`CONFIRM_BELOW` и пустых `doubts` (тот же `source_uncertain`). Всё остальное,
+включая старого слушателя без `guard`, — `author_role="unverified"`,
+`author_label="не подтверждено"` (fail closed). До 15.10.2026 каждое
+поручение подписывалось «Я», даже слепое и неуверенное.
+
+**Граница доверия.** `confidence`, `guard`, `guard_version` и `doubts` приходят от клиента —
 слушателя на ноутбуке. Защищены они только `X-Internal-Secret` и самим
-слушателем; сервер авторство не проверяет. Кто знает секрет, заведёт задачу
+слушателем; `guard_version` различает ревизии кода, но сам по себе не доказывает личность. Кто знает секрет, заведёт задачу
 «Срочно: …» без пометки. Защита от чужого голоса — на стороне слушателя
 (mic-only, ECHO отбрасывается); неподтверждённое (BLIND и прочие сомнения)
 доходит до комнаты только как помеченное непроверенное входящее.
@@ -102,8 +117,10 @@
 **Задача** (`vera_shared/voice_help/room_intake.py`, `open_help_task`):
 `room=help_room()` (`VOICE_HELP_ROOM`, по умолчанию `main`), `task_id=help-<command_id>`,
 `project=project_for(app, window)` (правило в `voice_help/policy.py`,
-`PROJECT_RULES`, иначе `Vera`), `priority=0`, `auto_pickup=True` (задачу
-выдаёт исполнителю `room_task_next`),
+`PROJECT_RULES`, иначе `Vera`), `priority=0`, `auto_pickup=True` только для
+подтверждённого источника (задачу выдаёт `room_task_next`). Неподтверждённая
+задача создаётся с `auto_pickup=False` до вопроса; явное «да, это я» включает
+`auto_pickup` под блокировкой строки вместе с `source_confirmed`.
 `responsible="Claude"`, `refs` — `voice_event`, `voice_command`, `source`
 (`source_ref`: `session@start-end`). Тексты собирает `help_texts`:
 владелец подтверждён — заголовок «Срочно: <текст>», `next_action` —
@@ -122,14 +139,18 @@ room_post to=dot с task_id; закрывать только по receipt»).
 менялась, миграции нет); `next_action` режется до `NEXT_ACTION_CHARS`.
 
 **Удержание** (`voice_help/hold.py`): `ask_owner_once` — вопрос владельцу
-`UNCERTAIN_QUESTION` («Это ты сказал? Подтверди ответом на этот вопрос.») в
-`room_task_questions` от `vera`, без аренды (иначе первым держателем в
+`UNCERTAIN_QUESTION` («Это ты сказал? Ответь „да, это я“ или „нет, не я“.»)
+в `room_task_questions` от `vera`, без аренды (иначе первым держателем в
 журнале стала бы Вера), один на задачу при повторе и рестарте. Задача
 остаётся `open`: открытый вопрос не пускает её в `room_task_next`.
-`lift_hold` (на каждом проходе `track_help`): есть ответ с
-`answered_by="owner"` (его пишет только дашборд) — ref `source`
-`SOURCE_CONFIRMED` и `next_action` = `CONFIRMED_NOTE` + `normal_action`;
-`is_confirmed` не даёт снять дважды. Ответ не владельца удержание не снимает.
+`lift_hold` (на каждом проходе `track_help`) читает последний ответ дашборда
+с `answered_by="owner"`. Явное «да, это я» добавляет ref `SOURCE_CONFIRMED`,
+включает `auto_pickup=True` и возвращает обычный `next_action`; «нет, не я»
+отменяет задачу и инвалидирует lease через fencing. Двусмысленный или чужой
+ответ оставляет удержание. Прямой claim и подбор через `room_task_next`
+не проходят для `source_uncertain` без `SOURCE_CONFIRMED`, даже если старое
+значение `auto_pickup` было true или статус вопроса уже `answered`.
+`is_confirmed` не даёт снять удержание повторно.
 Плюс пост `status="request"` с тем же `task_id`.
 Дедуп — только `task_id` и `message_id` поста (`help_task_id`): повтор
 слушателя, ретрай бота, перезапуск — одна задача и один пост. Текст в

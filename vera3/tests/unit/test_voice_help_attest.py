@@ -20,6 +20,9 @@ from vera_shared.room import (
     tasks,
 )
 from vera_shared.room.task_queue import next_task
+from vera_shared.room.task_view import task_dict
+from vera_shared.room.tasks import apply_claim
+from vera_shared.timeutil import utc_naive_now
 from vera_shared.voice_help import attest as svc
 from vera_shared.voice_help.hold import lift_hold
 from vera_shared.voice_help.policy import (
@@ -52,6 +55,16 @@ async def _open(instruction: str = SAFE, cid: str = "vc-a") -> int:
         assert await voice_worker.process_one(Recorder(), OWNER)
     [q] = await questions.questions_of(ROOM, f"help-{cid}")
     return q["qid"]
+
+
+async def _legacy_claim(agent: str) -> dict:
+    """Сымитировать аренду, выданную до запрета claim на неподтверждённом голосе."""
+    async with get_session() as s:
+        row = await s.get(RoomTaskRow, (ROOM, TID), with_for_update=True)
+        apply_claim(row, agent=agent, now=utc_naive_now(), lease_seconds=60,
+                    session=None, account=None)
+        await s.flush()
+        return task_dict(row)
 
 
 async def _rev(task_id: str = TID) -> int:
@@ -118,7 +131,7 @@ async def test_non_voice_task_invalid_scope():
 
 async def test_non_authorship_question_invalid_scope():
     await _open()
-    claimed = await tasks.claim(room=ROOM, task_id=TID, agent="codex", lease_seconds=60)
+    claimed = await _legacy_claim("codex")
     other = await questions.ask(room=ROOM, task_id=TID, agent="codex",
                                 fencing_token=claimed["fencing_token"],
                                 question="можно удалить?")
@@ -135,7 +148,7 @@ async def test_answered_question_invalid_scope():
 
 async def test_closed_task_invalid_scope():
     qid = await _open()
-    claimed = await tasks.claim(room=ROOM, task_id=TID, agent="codex", lease_seconds=60)
+    claimed = await _legacy_claim("codex")
     await tasks.release(room=ROOM, task_id=TID, agent="codex",
                         fencing_token=claimed["fencing_token"], status="done")
     with pytest.raises(svc.InvalidScope):
@@ -332,7 +345,7 @@ async def test_missing_recipient_blocks_dispatch():
         row.refs = [*row.refs, {"kind": "source", "ref": SOURCE_ATTESTED},
                     {"kind": "source", "ref": ATTEST_SCOPE_REF}]
     posted = AsyncMock()
-    claimed = await tasks.claim(room=ROOM, task_id=TID, agent="vera", lease_seconds=60)
+    claimed = await _legacy_claim("vera")
     with patch.object(dispatcher, "post_message", posted):
         await dispatcher._attempt(claimed)
     posted.assert_not_called()
@@ -368,7 +381,7 @@ async def test_dispatcher_blocks_attested_task_with_foreign_recipient():
                     {"kind": "source", "ref": ATTEST_SCOPE_REF},
                     {"kind": "source", "ref": "result_recipient: dot"}]
     posted = AsyncMock()
-    claimed = await tasks.claim(room=ROOM, task_id=TID, agent="vera", lease_seconds=60)
+    claimed = await _legacy_claim("vera")
     with patch.object(dispatcher, "post_message", posted):
         await dispatcher._attempt(claimed)
     posted.assert_not_called()

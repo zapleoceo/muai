@@ -26,6 +26,15 @@ from vera_shared.room.task_refs import validate_refs
 from vera_shared.room.task_view import task_dict
 from vera_shared.timeutil import utc_naive_now
 from vera_shared.voice_help.attest_state import attestation_for
+from vera_shared.voice_help.policy import SOURCE_CONFIRMED, SOURCE_UNCERTAIN_PREFIX
+
+
+def _unconfirmed_voice(refs: list[dict[str, Any]] | None) -> bool:
+    marks = {r.get("ref") for r in refs or []}
+    return (SOURCE_CONFIRMED not in marks
+            and any(isinstance(mark, str) and mark.startswith(SOURCE_UNCERTAIN_PREFIX)
+                    for mark in marks))
+
 
 RELEASE_STATUSES = ("open", "done", "blocked")
 HELD_STATUSES = ("in_progress", "blocked")
@@ -119,8 +128,12 @@ async def claim(*, room: str, task_id: str, agent: str, lease_seconds: int,
                                    agent=agent, text=title)
             elif row.status in ("done", "cancelled"):
                 raise TaskBusy(f"task {task_id!r} is {row.status}; open a new task_id")
-            if (row is not None and await attestation_for(s, room, task_id)
-                    and (agent != "dot" or title is not None or paths is not None)):
+            attested = bool(row is not None and await attestation_for(s, room, task_id))
+            if (row is not None and _unconfirmed_voice(row.refs)
+                    and not (attested and agent == "dot"
+                             and title is None and paths is None)):
+                raise TaskBusy("unconfirmed voice source awaits owner answer")
+            if attested and (agent != "dot" or title is not None or paths is not None):
                 raise TaskBusy("attested task may only be claimed by dot without edits")
             live = apply_claim(row, agent=agent, now=now, lease_seconds=lease_seconds,
                                session=session, account=account)
@@ -176,6 +189,10 @@ async def update(*, room: str, task_id: str, agent: str, fencing_token: int,
                      or project is not None or depends_on is not None
                      or auto_pickup is not None or responsible is not None)):
             raise TaskBusy("attested task permits only dot lease renewal")
+        if (_unconfirmed_voice(row.refs)
+                and (auto_pickup is True or (clean_refs is not None
+                                             and not _unconfirmed_voice(clean_refs)))):
+            raise TaskBusy("unconfirmed voice source cannot remove hold")
         now = utc_naive_now()
         prev_status = row.status
         if status is not None:

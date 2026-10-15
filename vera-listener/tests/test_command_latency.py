@@ -78,6 +78,56 @@ def test_command_is_queued_seconds_after_the_pause(tmp_path):
     assert len(listener.commands.ready()) == 1
 
 
+def test_short_mic_command_is_queued_even_when_session_is_too_short(
+        tmp_path, caplog):
+    listener = _listener(tmp_path)
+    at = _play(listener, 0.0, 3.0, mic_speech=True)
+    at = _play(listener, at, at + PAUSE_FLUSH_S + 0.1, mic_speech=False)
+    for job in _mic_chunks(listener):
+        listener._run_job(job)
+    _play(listener, at, 11.0, mic_speech=False)
+    listener._tick_watches()
+    closed = listener.segmenter.flush(11.0)
+    assert closed is not None
+    listener._finish(closed)
+    with caplog.at_level("INFO", logger="listener"):
+        while not listener.jobs.empty():
+            listener._run_job(listener.jobs.get())
+    assert len(listener.commands.ready()) == 1
+    assert "gate=too_short stage=command_queued" in caplog.text
+
+
+def test_mic_asr_without_codeword_reports_exact_stage(tmp_path, caplog):
+    listener = _listener(tmp_path)
+    listener.transcriber.transcribe = lambda pcm, track="": (
+        [Segment(at=0.0, end=3.0, text="ordinary speech")]
+        if track == MIC else [])
+    at = _play(listener, 0.0, 3.0, mic_speech=True)
+    _play(listener, at, at + PAUSE_FLUSH_S + 0.1, mic_speech=False)
+    for job in _mic_chunks(listener):
+        listener._run_job(job)
+    closed = listener.segmenter.flush(6.0)
+    assert closed is not None
+    listener._finish(closed)
+    with caplog.at_level("INFO", logger="listener"):
+        while not listener.jobs.empty():
+            listener._run_job(listener.jobs.get())
+    assert listener.commands.ready() == []
+    assert "stage=no_codeword" in caplog.text
+    assert "mic_asr_attempts=1 mic_text_segments=1" in caplog.text
+
+
+def test_record_survives_diagnostics_cleanup_during_session_stop(tmp_path):
+    listener = _listener(tmp_path)
+    session = listener.session
+    assert session is not None
+    listener._log_diagnostics(session, None, "too_short")
+    listener._record(Frame(MIC, FRAME_S, PCM), True)
+    listener.session = None
+    listener._record(Frame(MIC, 2 * FRAME_S, PCM), True)
+    assert listener.recorders[MIC].speech_s == 2 * FRAME_S
+
+
 def test_no_early_mic_flush_when_commands_are_off(tmp_path):
     listener = _listener(tmp_path, commands=False)
     at = _play(listener, 0.0, 3.0, mic_speech=True)

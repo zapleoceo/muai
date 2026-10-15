@@ -25,14 +25,15 @@ def help_cmd(command_id: str = "vc-help1", *, confidence: float | None = 0.95,
              instruction: str = INSTRUCTION, kind: str = "command",
              doubts: list[str] | None = None, app: str = "Code.exe",
              window_title: str = "myAI — vera3", session_id: str = "s-9",
-             **extra: Any) -> VoiceCommand:
+             guard_version: int | None = 2, **extra: Any) -> VoiceCommand:
     return VoiceCommand(
         command_id=command_id, kind=kind, instruction=instruction,
         spoken_at=datetime.now(timezone.utc), app=app, window_title=window_title,
         session_id=session_id, start=5.0, end=9.0,
         fragment=[{"start": 5.0, "end": 9.0,
                    "text": f"Вера, мне нужна помощь, {instruction}"}],
-        confidence=confidence, guard="own", doubts=doubts or [], **extra)
+        confidence=confidence, guard="own", guard_version=guard_version,
+        doubts=doubts or [], **extra)
 
 
 def answer() -> BrainAnswer:

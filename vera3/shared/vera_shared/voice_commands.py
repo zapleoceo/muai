@@ -22,6 +22,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_voice import VoiceCommandRow
 from vera_shared.timeutil import utc_naive_now
+from vera_shared.voice_help.policy import source_uncertain
 
 log = logging.getLogger(__name__)
 
@@ -41,6 +42,25 @@ def event_text(instruction: str) -> str:
     return f"Голосовое поручение Вере: {instruction}"
 
 
+#: Версия протокола guard, с которой `guard` — настоящий вердикт. Старые
+#: слушатели слали литерал "own" для любой команды, включая слепые.
+GUARD_VERSION = 2
+
+
+def author_for(guard: str | None, guard_version: int | None,
+               confidence: float | None,
+               doubts: list[str] | None) -> tuple[str, str]:
+    """(author_role, author_label) события. «Я» — только голос, который
+    слушатель сам признал владельцем (`guard="own"`) без единого сомнения и
+    с уверенностью не ниже порога. Всё остальное — в том числе старый
+    слушатель без `guard` — не подтверждено: подписать чужой голос из
+    динамиков именем владельца значит выдать его за владельца в истории."""
+    if (guard == "own" and guard_version == GUARD_VERSION
+            and not source_uncertain(confidence, list(doubts or []))):
+        return "self", "Я"
+    return "unverified", "не подтверждено"
+
+
 def help_state_for(kind: str, confidence: float | None) -> str | None:
     """Куда идёт просьба: None — только ответ мозга (переспрос или старый
     слушатель без уверенности), ready — сразу срочная задача в комнате.
@@ -55,6 +75,8 @@ async def create_command(command_id: str, instruction: str, spoken_at: datetime,
                          *, app: str | None, window_title: str | None,
                          kind: str = "command", confidence: float | None = None,
                          doubts: list[str] | None = None,
+                         guard: str | None = None,
+                         guard_version: int | None = None,
                          source: dict[str, Any] | None = None,
                          fragment: list[dict[str, Any]] | None = None,
                          ) -> tuple[int | None, bool]:
@@ -66,12 +88,14 @@ async def create_command(command_id: str, instruction: str, spoken_at: datetime,
         )).first()
         if existing is not None:
             return existing[0], True
+        role, label = author_for(guard, guard_version, confidence, doubts)
         event = EventRow(
             source=SOURCE, source_event_id=command_id, account="laptop",
             category="command", content_text=event_text(instruction),
             occurred_at=spoken_at,
             metadata_={"app": app, "window_title": window_title,
-                       "author_role": "self", "author_label": "Я",
+                       "author_role": role, "author_label": label,
+                       "guard": guard, "guard_version": guard_version,
                        "kind": kind, "confidence": confidence,
                        "fragment": fragment or []},
             triage_status="pending",
@@ -83,7 +107,9 @@ async def create_command(command_id: str, instruction: str, spoken_at: datetime,
                               status="pending", kind=kind, confidence=confidence,
                               source={**(source or {}), "app": app,
                                       "window_title": window_title,
-                                      "doubts": list(doubts or [])},
+                                      "doubts": list(doubts or []),
+                                      "guard": guard,
+                                      "guard_version": guard_version},
                               help_state=help_state_for(kind, confidence)))
         try:
             await s.flush()

@@ -224,3 +224,41 @@ class TestRestartAndOffline:
         assert box.flush() == 0
         assert box.flush() == 0
         assert got == ["vc-2"]
+
+
+class TestGuardVerdictInPayload:
+    """guard в payload — настоящий вердикт, а не литерал "own"."""
+
+    @staticmethod
+    def _blind_watch() -> tuple[CommandWatch, list[dict]]:
+        watch, sent = _watch()
+        t = 0.0
+        while t < 40.0:
+            watch.hear("mic", t, 0.5, False)
+            t += 0.5
+        return watch, sent
+
+    def test_blind_command_payload_says_blind(self):
+        watch, sent = self._blind_watch()
+        watch.on_segment("mic", 10.0, 13.0,
+                         "Вера, мне нужна помощь, срочно напиши мне в телеграм")
+        watch.close()
+        [command] = sent
+        assert command["kind"] == "command"
+        assert command["guard"] == "blind" and "blind" in command["doubts"]
+
+    def test_blind_reprompt_payload_says_blind(self):
+        watch, sent = self._blind_watch()
+        watch.on_segment("mic", 10.0, 12.0, "Вера, мне нужна помощь")
+        watch.close()
+        [command] = sent
+        assert command["kind"] == "reprompt" and command["guard"] == "blind"
+
+    def test_own_command_payload_says_own(self):
+        watch, sent = _watch()
+        _hear(watch, 40)
+        watch.on_segment("mic", 10.0, 13.0,
+                         "Вера, мне нужна помощь, срочно напиши мне в телеграм")
+        watch.chunk_done("mic", 15.0)
+        [command] = sent
+        assert command["guard"] == "own" and command["guard_version"] == 2

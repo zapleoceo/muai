@@ -54,6 +54,7 @@ W_SIMILARITY, W_GUARD, W_CLOSED = 0.3, 0.5, 0.2
 GUARD_SILENT, GUARD_TEXT = 1.0, 0.4
 CLOSED_PAUSE, CLOSED_UNKNOWN = 1.0, 0.5
 CONFIRM_BELOW = 0.75
+GUARD_VERSION = 2
 
 #: Слова, на которых поручение не кончается: «найди письмо и…», «перешли его в…».
 _DANGLING = frozenset({
@@ -131,6 +132,7 @@ def doubts_for(prefix: str, instruction: str, *, quoted: bool = False) -> list[s
 
 def payload(pending: Pending, *, command_id: str, session_id: str, started: datetime,
             app: str | None, window_title: str | None, speakers_silent: bool,
+            guard: str,
             ) -> dict[str, Any]:
     reprompt = pending.reprompt or is_truncated(pending.instruction)
     instruction = "" if reprompt else pending.instruction.strip(" \t\n,.;:!?—-–")
@@ -148,7 +150,10 @@ def payload(pending: Pending, *, command_id: str, session_id: str, started: date
                      for a, e, t in pending.fragment],
         "confidence": confidence(pending.score, speakers_silent=speakers_silent,
                                  closed=pending.closed),
-        "guard": "own",
+        # Вердикт `command_guard`: владельцем на сервере может стать только "own".
+        "guard": guard,
+        # Сервер отличает настоящий вердикт от литерала "own" старых слушателей.
+        "guard_version": GUARD_VERSION,
         # Паузы после фразы никто не видел (сессия оборвалась) — запас: источник
         # не подтверждён, как бы высоко ни вышла уверенность.
         "doubts": [] if reprompt else

@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+import re
+
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -62,21 +64,50 @@ def is_confirmed(refs: list[dict[str, str]] | None) -> bool:
     return any(r.get("ref") == SOURCE_CONFIRMED for r in refs or [])
 
 
+def _answer_decision(text: str) -> str | None:
+    words = re.sub(r"[^\w]+", " ", text.casefold().replace("ё", "е")).strip()
+    if words in {"да", "да я", "да это я", "это я", "подтверждаю", "подтверждаю это я"}:
+        return "confirmed"
+    if words in {"нет", "нет не я", "нет это не я", "не я", "это не я"}:
+        return "denied"
+    return None
+
+
 async def lift_hold(room: str, task_id: str, action: str) -> bool:
     """Ответ владельца есть, а пометки ещё нет → снять удержание. → сняли ли сейчас."""
     a = RoomTaskAnswerRow
     async with get_session() as s:
         task = await _locked(s, room, task_id)
-        if task is None or is_confirmed(task.refs):
+        if task is None or task.status in ("done", "cancelled") or is_confirmed(task.refs):
             return False
-        answered = (await s.execute(
-            select(a.id).where(a.qid.in_(_our_question(room, task_id)),
-                               a.answered_by == OWNER).limit(1))).first()
-        if answered is None:
+        answer = (await s.execute(
+            select(a.text).where(a.qid.in_(_our_question(room, task_id)),
+                                 a.answered_by == OWNER)
+            .order_by(a.id.desc()).limit(1))).scalar_one_or_none()
+        if answer is None:
+            return False
+        decision = _answer_decision(answer)
+        if decision == "denied":
+            prior = task.status
+            task.status = "cancelled"
+            task.note = "Владелец отрицает источник голосовой команды"
+            task.auto_pickup = False
+            task.fencing_token = (task.fencing_token or 0) + 1
+            task.lease_holder = None
+            task.lease_until = None
+            task.pending_handoff_to = None
+            task.updated_at = utc_naive_now()
+            await record_event(s, room=room, task_id=task_id, kind="cancelled", agent=AGENT,
+                               fencing_token=task.fencing_token, text=task.note,
+                               data={"status": "cancelled", "prior_status": prior,
+                                     "reason": "owner_denied_source"})
+            return False
+        if decision != "confirmed":
             return False
         task.refs = validate_refs([*(task.refs or []),
                                    {"kind": "source", "ref": SOURCE_CONFIRMED}])
         task.next_action = f"{CONFIRMED_NOTE}\n{action}"[:2000]
+        task.auto_pickup = True
         task.updated_at = utc_naive_now()
         await record_event(s, room=room, task_id=task_id, kind="progress", agent=AGENT,
                            text=CONFIRMED_NOTE, data={"ref": SOURCE_CONFIRMED})

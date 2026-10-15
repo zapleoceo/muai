@@ -15,7 +15,7 @@ from datetime import datetime, timezone
 from typing import Literal
 
 from fastapi import APIRouter, Header
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 from vera_shared.voice_commands import create_command
 
 from gateway.auth import check_internal_secret
@@ -51,8 +51,17 @@ class VoiceCommand(BaseModel):
     end: float | None = None
     fragment: list[FragmentLine] = Field(default_factory=list, max_length=4)
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
-    guard: Literal["own"] | None = None
+    #: Чей голос по мнению слушателя (`command_guard`). None — старый
+    #: слушатель: владельцем такое поручение не считается (fail closed).
+    guard: Literal["own", "echo", "blind"] | None = None
+    #: Версия протокола guard; 2 — guard настоящий вердикт. Нечисло — None.
+    guard_version: int | None = None
     doubts: list[str] = Field(default_factory=list, max_length=5)
+
+    @field_validator("guard_version", mode="before")
+    @classmethod
+    def _known_version(cls, value: object) -> int | None:
+        return value if isinstance(value, int) and not isinstance(value, bool) else None
 
     @model_validator(mode="after")
     def _instruction_for_command(self) -> VoiceCommand:
@@ -77,7 +86,8 @@ async def accept_voice_command(
     event_id, deduped = await create_command(
         body.command_id, body.instruction.strip(), spoken,
         app=body.app, window_title=body.window_title, kind=body.kind,
-        confidence=body.confidence, doubts=body.doubts,
+        confidence=body.confidence, doubts=body.doubts, guard=body.guard,
+        guard_version=body.guard_version,
         source={"session_id": body.session_id, "start": body.start, "end": body.end},
         fragment=[line.model_dump() for line in body.fragment])
     # Текст поручения — только DEBUG: это содержимое сообщения владельца.

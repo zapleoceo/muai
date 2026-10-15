@@ -240,3 +240,36 @@ async def test_nothing_unredacted_anywhere_in_the_room():
     dump += repr([(m.body, m.task_id, m.message_id) for m in await messages_in(ROOM)])
     for leak in ("Qwerty", "!23", "4111 1111 1111 1112", key, "4821", "s3cr3t"):
         assert leak not in dump, leak
+
+
+@pytest.mark.parametrize("guard", [None, "blind", "echo"])
+@uses_db
+async def test_non_own_guard_never_opens_owner_task(guard):
+    command = help_cmd("vc-guard").model_copy(update={"guard": guard})
+    await accept_voice_command(command, x_internal_secret=SECRET)
+    rec = Recorder()
+    brain = AsyncMock(return_value=answer())
+    assert await _run(rec, 2, brain) == [True, False]
+    brain.assert_not_awaited()
+    [task] = await tasks_in(ROOM)
+    assert task.title.startswith(UNCERTAIN_TITLE)
+    assert task.auto_pickup is False
+    assert len(_uncertain_refs(task)) == 1
+    assert len(await messages_in(ROOM)) == 2  # request and owner question
+    assert rec.sent[0].startswith("Источник не подтверждён.")
+
+
+@pytest.mark.parametrize("version", [None, 1, 3])
+@uses_db
+async def test_legacy_guard_version_cannot_open_owner_task(version):
+    await accept_voice_command(help_cmd("vc-legacy", guard_version=version),
+                               x_internal_secret=SECRET)
+    rec = Recorder()
+    brain = AsyncMock(return_value=answer())
+    assert await _run(rec, 2, brain) == [True, False]
+    brain.assert_not_awaited()
+    [task] = await tasks_in(ROOM)
+    assert task.title.startswith(UNCERTAIN_TITLE)
+    assert task.auto_pickup is False
+    assert len(_uncertain_refs(task)) == 1
+    assert rec.sent[0].startswith("Источник не подтверждён.")

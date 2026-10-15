@@ -61,6 +61,8 @@ class CommandWatch:
         self._sent: list[tuple[float, str]] = []
         self._seen: set[tuple[float, str]] = set()
         self._last_mic: tuple[float, str] | None = None
+        self.codeword_hits = 0
+        self.commands_queued = 0
 
     def hear(self, track: str, at: float, duration: float, speech: bool) -> None:
         # Микрофон двигает только часы: речь в нём эхом не бывает источником.
@@ -80,6 +82,7 @@ class CommandWatch:
         hit = codeword.find(text, self.phrase)
         if hit is None:
             return
+        self.codeword_hits += 1
         prefix = text[:hit.start]
         quoted = hit.quoted or (not codeword.words(prefix) and previous is not None
                                 and at - previous[0] <= CONTINUE_GAP_S
@@ -205,9 +208,11 @@ class CommandWatch:
             f"{self.session_id}|{round(pending.at, 1)}".encode()).hexdigest()[:16]
         silent = "blind" not in pending.doubts and all(
             self.system.speakers_silent(a, e) for a, e, _ in pending.parts)
-        command = payload(pending, command_id=f"vc-{digest}", session_id=self.session_id,
+        command = payload(pending, command_id=f"vc-{digest}",
+                          session_id=self.session_id,
                           started=self.started_wall, app=self.app,
-                          window_title=self.window_title, speakers_silent=silent)
+                          window_title=self.window_title, speakers_silent=silent,
+                          guard=BLIND if "blind" in pending.doubts else OWN)
         log.info("поручение принято (%.1fс, %s, %d симв., уверенность %.2f) — "
                  "в очередь отправки", pending.at, command["kind"],
                  len(command["instruction"]), command["confidence"])
@@ -217,3 +222,4 @@ class CommandWatch:
                  command["command_id"], (pending.detected_at - phrase_end) * 1000,
                  (now - phrase_end) * 1000)
         self.deliver(command)
+        self.commands_queued += 1

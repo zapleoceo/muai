@@ -8,6 +8,9 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+import pytest
+
+from vera_listener.command_guard import BLIND_GAP_S, VAD_SLACK_S
 from vera_listener.commands import FOLLOWUP_S, CommandWatch
 
 T0 = datetime(2026, 9, 30, 10, 0, tzinfo=UTC)
@@ -217,12 +220,41 @@ class TestCaptureJitter:
         assert "blind" in sent[0]["doubts"]
 
     def test_command_in_first_seconds_of_session(self):
-        """Loopback открылся на полсекунды позже микрофона — это не слепота."""
+        """Loopback открылся за полсекунды до фразы — окна ±6 с никто не
+        видел: слепота (dot #2719), поручение уходит неподтверждённым."""
         watch, sent = _watch()
         _frames(watch, 30, system_from=0.5)
         watch.on_segment("mic", 1.0, 4.0, PHRASE)
-        watch.chunk_done("mic", 6.0)
-        assert len(sent) == 1
+        watch.close()
+        [command] = sent
+        assert command["guard"] == "blind" and "blind" in command["doubts"]
+
+    @pytest.mark.parametrize("started_before", [0.0, 2.0, 4.9])
+    def test_capture_started_less_than_slack_before_phrase_is_blind(
+            self, started_before):
+        watch, sent = _watch()
+        _frames(watch, 40, system_from=10.0 - started_before)
+        watch.on_segment("mic", 10.0, 13.0, PHRASE)
+        watch.close()
+        [command] = sent
+        assert command["guard"] == "blind"
+
+    def test_full_window_coverage_is_own(self):
+        watch, sent = _watch()
+        _frames(watch, 40, system_from=10.0 - VAD_SLACK_S)
+        watch.on_segment("mic", 10.0, 13.0, PHRASE)
+        watch.chunk_done("mic", 15.0)
+        [command] = sent
+        assert command["guard"] == "own" and "blind" not in command["doubts"]
+
+    @pytest.mark.parametrize("hole_at", [5.0, 11.0, 17.0])
+    def test_hole_inside_window_is_blind(self, hole_at):
+        watch, sent = _watch()
+        _frames(watch, 40, gaps=[(hole_at, BLIND_GAP_S + 0.2)])
+        watch.on_segment("mic", 10.0, 13.0, PHRASE)
+        watch.close()
+        [command] = sent
+        assert command["guard"] == "blind"
 
     def test_system_that_appears_after_the_phrase_needs_confirmation(self):
         """Loopback заработал только через 30 с — фразу на 2-й секунде никто
