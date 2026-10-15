@@ -261,4 +261,4 @@ class TestGuardVerdictInPayload:
                          "Вера, мне нужна помощь, срочно напиши мне в телеграм")
         watch.chunk_done("mic", 15.0)
         [command] = sent
-        assert command["guard"] == "own"
+        assert command["guard"] == "own" and command["guard_version"] == 2

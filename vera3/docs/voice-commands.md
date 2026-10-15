@@ -88,7 +88,9 @@
 принимает); иное значение — 422. Шлюз передаёт его в `create_command`, оно
 ложится в `metadata.guard` события и в `source.guard` строки очереди.
 Подпись события решает `voice_commands.author_for`: `author_role="self"`,
-`author_label="Я"` — только при `guard="own"`, `confidence` ≥
+`author_label="Я"` — только при `guard="own"`, `guard_version=2`
+(`GUARD_VERSION`: старые слушатели слали литерал `"own"` для любой
+команды; нечисло в `guard_version` — None; хранится рядом с `guard`), `confidence` ≥
 `CONFIRM_BELOW` и пустых `doubts` (тот же `source_uncertain`). Всё остальное,
 включая старого слушателя без `guard`, — `author_role="unverified"`,
 `author_label="не подтверждено"` (fail closed). До 15.10.2026 каждое

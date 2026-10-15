@@ -87,19 +87,22 @@ class TestOwnerAttribution:
 
     @pytest.mark.asyncio
     async def test_own_confident_without_doubts_is_self(self, sqlite_db):
-        assert await self._author(sqlite_db, guard="own",
+        assert await self._author(sqlite_db, guard="own", guard_version=2,
                                   confidence=1.0) == ("self", "Я")
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("fields", [
-        {"guard": "blind", "confidence": 1.0},
+        {"guard": "blind", "guard_version": 2, "confidence": 1.0},
+        {"guard": "own", "confidence": 1.0},
+        {"guard": "own", "guard_version": 1, "confidence": 1.0},
+        {"guard": "own", "guard_version": "x", "confidence": 1.0},
         {"guard": "echo", "confidence": 1.0},
         {"guard": "own", "confidence": 0.7},
         {"guard": "own", "confidence": 1.0, "doubts": ["blind"]},
         {"guard": "own"},
         {"confidence": 1.0},
         {},
-    ], ids=["blind", "echo", "low", "doubt", "no-confidence", "old-listener",
+    ], ids=["v2-blind", "legacy-own", "v1-own", "junk-version", "echo", "low", "doubt", "no-confidence", "old-listener",
             "bare"])
     async def test_anything_else_is_unverified(self, sqlite_db, fields):
         role, label = await self._author(sqlite_db, **fields)
@@ -107,9 +110,12 @@ class TestOwnerAttribution:
 
     @pytest.mark.asyncio
     async def test_guard_is_kept_in_queue_source(self, sqlite_db):
-        await self._author(sqlite_db, guard="blind", confidence=0.7)
+        await self._author(sqlite_db, guard="blind", guard_version=2,
+                           confidence=0.7)
         [row] = await _rows(sqlite_db, VoiceCommandRow)
-        assert row.source["guard"] == "blind"
+        assert (row.source["guard"], row.source["guard_version"]) == ("blind", 2)
+        [event] = await _rows(sqlite_db, EventRow)
+        assert event.metadata_["guard_version"] == 2
 
     def test_unknown_guard_is_rejected(self):
         with pytest.raises(ValidationError):
