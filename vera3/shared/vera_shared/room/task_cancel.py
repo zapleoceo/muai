@@ -3,8 +3,10 @@ from __future__ import annotations
 
 from typing import Any
 
+from sqlalchemy import select
+
 from vera_shared.db.engine import get_session
-from vera_shared.db.models_room import RoomTaskRow
+from vera_shared.db.models_room import RoomTaskQuestionRow, RoomTaskRow
 from vera_shared.room.task_events import record_event
 from vera_shared.room.task_view import task_dict
 from vera_shared.room.tasks import StaleLease, TaskBusy, TaskNotFound, _locked
@@ -42,6 +44,14 @@ async def cancel(*, room: str, task_id: str, agent: str, fencing_token: int,
             raise TaskBusy(f"task {task_id!r} is already {row.status}")
         if await attestation_for(s, room, task_id):
             raise TaskBusy("attested task cannot be cancelled by generic cancel")
+        questions = (await s.execute(select(RoomTaskQuestionRow).where(
+            RoomTaskQuestionRow.room == room,
+            RoomTaskQuestionRow.task_id == task_id,
+            RoomTaskQuestionRow.status.in_(("open", "answered")),
+        ).order_by(RoomTaskQuestionRow.qid).with_for_update())).scalars().all()
+        withdrawn_qids = [q.qid for q in questions]
+        for question in questions:
+            question.status = "withdrawn"
         prior = row.status
         was_holder = row.lease_holder == agent
         row.status = "cancelled"
@@ -55,6 +65,6 @@ async def cancel(*, room: str, task_id: str, agent: str, fencing_token: int,
                            account=row.holder_account if was_holder else None,
                            fencing_token=fencing_token, text=reason,
                            data={"status": "cancelled", "prior_status": prior,
-                                 "reason": reason})
+                                 "reason": reason, "withdrawn_qids": withdrawn_qids})
         await s.refresh(row)
         return task_dict(row)

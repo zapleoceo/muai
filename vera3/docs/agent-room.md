@@ -533,3 +533,8 @@ The existing `room_post` without a task ID remains a general room capability. Th
 стандартным путём выкатки; решение по праву отмены создателем и по миграции за
 владельцем/Codex. У `room_tasks.status` CHECK нет (`models_room.py:53-54`), значение
 `cancelled` допустимо без правки схемы.
+
+Successful task cancellation also withdraws its open and answered questions in
+the same transaction. Already acked questions and answer rows remain unchanged.
+The single `cancelled` audit event records the cancellation reason and the
+withdrawn question IDs; authorization and fencing rules are unchanged.
