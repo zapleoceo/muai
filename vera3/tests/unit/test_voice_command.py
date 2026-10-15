@@ -75,6 +75,48 @@ class TestGateway:
             _cmd(instruction="")
 
 
+class TestOwnerAttribution:
+    """«Я» в истории — только голос, который слушатель признал владельцем."""
+
+    async def _author(self, sqlite_db, **fields) -> tuple[str, str]:
+        body = VoiceCommand(command_id="vc-a", instruction=TEST_INSTRUCTION,
+                            spoken_at=datetime.now(timezone.utc), **fields)
+        await accept_voice_command(body, x_internal_secret=SECRET)
+        [event] = await _rows(sqlite_db, EventRow)
+        return event.metadata_["author_role"], event.metadata_["author_label"]
+
+    @pytest.mark.asyncio
+    async def test_own_confident_without_doubts_is_self(self, sqlite_db):
+        assert await self._author(sqlite_db, guard="own",
+                                  confidence=1.0) == ("self", "Я")
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("fields", [
+        {"guard": "blind", "confidence": 1.0},
+        {"guard": "echo", "confidence": 1.0},
+        {"guard": "own", "confidence": 0.7},
+        {"guard": "own", "confidence": 1.0, "doubts": ["blind"]},
+        {"guard": "own"},
+        {"confidence": 1.0},
+        {},
+    ], ids=["blind", "echo", "low", "doubt", "no-confidence", "old-listener",
+            "bare"])
+    async def test_anything_else_is_unverified(self, sqlite_db, fields):
+        role, label = await self._author(sqlite_db, **fields)
+        assert role == "unverified" and label != "Я"
+
+    @pytest.mark.asyncio
+    async def test_guard_is_kept_in_queue_source(self, sqlite_db):
+        await self._author(sqlite_db, guard="blind", confidence=0.7)
+        [row] = await _rows(sqlite_db, VoiceCommandRow)
+        assert row.source["guard"] == "blind"
+
+    def test_unknown_guard_is_rejected(self):
+        with pytest.raises(ValidationError):
+            VoiceCommand(command_id="vc-x", instruction=TEST_INSTRUCTION,
+                         spoken_at=datetime.now(timezone.utc), guard="owner")
+
+
 async def _set_row(get_session, **values) -> None:
     async with get_session() as s:
         await s.execute(update(VoiceCommandRow).values(**values))

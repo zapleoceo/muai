@@ -25,6 +25,7 @@ from vera_listener.diagnostics import CaptureActivity, command_stage
 from vera_listener.gate import judge, system_audio_allowed
 from vera_listener.hold import BYTES_PER_S, Hold
 from vera_listener.outbox import Outbox, read_payload
+from vera_listener.preroll import PreRoll
 from vera_listener.recorder import PAUSE_FLUSH_S, TrackRecorder
 from vera_listener.segmenter import Closed, Segmenter
 from vera_listener.sender import Sender
@@ -68,6 +69,9 @@ class Listener:
         # задания распознавания несут путь, и по нему находят своё слежение
         # даже когда главный поток уже открыл следующую сессию.
         self._watches: dict[Path, CommandWatch] = {}
+        # Хвост наблюдений system до сессии — см. preroll.py: без него
+        # фраза, открывшая сессию, проверялась бы вслепую.
+        self._preroll = PreRoll()
         # Опознание говорящих. Хранилище отпечатков — одно на всё время
         # жизни слушателя, сессия опознания — своя на каждый разговор.
         self.voiceprints = VoiceprintRegistry(config.voiceprints_file)
@@ -159,6 +163,8 @@ class Listener:
             if self.segmenter.current is not None:
                 self._ensure_open()
                 self._record(frame, speech)
+            if frame.track == SYSTEM:
+                self._preroll.observe(frame.at, FRAME_S, speech)
 
     def _tick_idle(self) -> None:
         """Кадров нет (устройство переоткрывается) — но тишина всё равно течёт."""
@@ -216,12 +222,19 @@ class Listener:
                 phrase=self.config.codeword, app=session.app,
                 window_title=session.window_title,
                 clock=lambda zero=self._session_zero: time.monotonic() - zero)
+            self._replay_preroll(self._watches[self.session])
         self.status.set_state(TALKING)
         if part > 1:
             log.info("разговор продолжается, часть %d (%s)", part, meeting_id)
         else:
             log.info("разговор начался (%s / %s)", session.app or "?",
                      session.window_title or "?")
+
+    def _replay_preroll(self, watch: CommandWatch) -> None:
+        replayed = self._preroll.replay(
+            lambda at, duration, speech: watch.hear(SYSTEM, at, duration, speech),
+            self._session_zero)
+        log.info("pre-roll системной дорожки: %d кадров", replayed)
 
     def _record(self, frame: Frame, speech: bool) -> None:
         session = self.session

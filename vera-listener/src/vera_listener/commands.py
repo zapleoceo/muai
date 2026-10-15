@@ -211,7 +211,8 @@ class CommandWatch:
         command = payload(pending, command_id=f"vc-{digest}",
                           session_id=self.session_id,
                           started=self.started_wall, app=self.app,
-                          window_title=self.window_title, speakers_silent=silent)
+                          window_title=self.window_title, speakers_silent=silent,
+                          guard=BLIND if "blind" in pending.doubts else OWN)
         log.info("поручение принято (%.1fс, %s, %d симв., уверенность %.2f) — "
                  "в очередь отправки", pending.at, command["kind"],
                  len(command["instruction"]), command["confidence"])
