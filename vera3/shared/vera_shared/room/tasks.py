@@ -189,8 +189,10 @@ async def update(*, room: str, task_id: str, agent: str, fencing_token: int,
                      or project is not None or depends_on is not None
                      or auto_pickup is not None or responsible is not None)):
             raise TaskBusy("attested task permits only dot lease renewal")
-        if auto_pickup is True and _unconfirmed_voice(row.refs):
-            raise TaskBusy("unconfirmed voice source cannot enable auto pickup")
+        if _unconfirmed_voice(row.refs):
+            if auto_pickup is True or (clean_refs is not None
+                                       and not _unconfirmed_voice(clean_refs)):
+                raise TaskBusy("unconfirmed voice source cannot remove hold")
         now = utc_naive_now()
         prev_status = row.status
         if status is not None:

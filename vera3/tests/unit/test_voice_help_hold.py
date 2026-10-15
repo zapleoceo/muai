@@ -155,11 +155,18 @@ async def test_legacy_holder_cannot_enable_unverified_auto_pickup():
         tasks.apply_claim(row, agent="codex", now=utc_naive_now(), lease_seconds=60,
                           session=None, account=None)
         token = row.fencing_token
-    with pytest.raises(TaskBusy, match="cannot enable auto pickup"):
+    with pytest.raises(TaskBusy, match="cannot remove hold"):
         await tasks.update(room=ROOM, task_id="help-vc-h", agent="codex",
                            fencing_token=token, auto_pickup=True)
     [task] = await tasks_in(ROOM)
     assert task.auto_pickup is False
+    with pytest.raises(TaskBusy, match="cannot remove hold"):
+        await tasks.update(room=ROOM, task_id="help-vc-h", agent="codex",
+                           fencing_token=token, refs=[])
+    with pytest.raises(TaskBusy, match="cannot remove hold"):
+        await tasks.update(room=ROOM, task_id="help-vc-h", agent="codex",
+                           fencing_token=token,
+                           refs=[*task.refs, {"kind": "source", "ref": SOURCE_CONFIRMED}])
 
 
 @uses_db
