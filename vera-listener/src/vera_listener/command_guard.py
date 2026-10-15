@@ -41,7 +41,7 @@ _EPS = 0.05
 #: Кадры двух дорожек приходят в общую очередь не строго вперемешку: system
 #: может отставать от mic на доли секунды. Решаем, когда часы ушли дальше окна
 #: с запасом, — иначе хвост окна выглядел бы «без кадров» из-за очерёдности.
-_LAG_S = 1.0
+LAG_S = 1.0
 
 #: Разрыв в кадрах system, с которого дорожка считается НЕ пишущейся, а не
 #: дрожащей. Кадр — 32 мс, и паузы в десятки–сотни миллисекунд на захвате
@@ -120,7 +120,7 @@ class SystemTrack:
             return self._verdict(at, end, text, final=final)
 
     def _verdict(self, at: float, end: float, text: str, *, final: bool) -> str:
-        if not final and self.heard_until < end + VAD_SLACK_S + _LAG_S:
+        if not final and self.heard_until < end + VAD_SLACK_S + LAG_S:
             return WAIT
         first = self._frames.first
         if first is None:
@@ -128,7 +128,8 @@ class SystemTrack:
         # System появился уже ПОСЛЕ начала фразы — пока она звучала, динамиков
         # никто не слушал, и доказать, что они молчали, нечем. Без этой
         # проверки окно «от первого кадра» сжималось бы в пустоту, а пустое
-        # окно `covers` считает покрытым — и выходило бы OWN.
+        # окно `covers` считает покрытым — и выходило бы OWN. Кадры до
+        # открытия сессии сюда приносит `preroll`; не принёс — это слепота.
         if first > at:
             return BLIND
         # Окно не раньше первого кадра system: захват двух дорожек стартует не

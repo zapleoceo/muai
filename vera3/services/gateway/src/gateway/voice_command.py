@@ -51,7 +51,9 @@ class VoiceCommand(BaseModel):
     end: float | None = None
     fragment: list[FragmentLine] = Field(default_factory=list, max_length=4)
     confidence: float | None = Field(default=None, ge=0.0, le=1.0)
-    guard: Literal["own"] | None = None
+    #: Чей голос по мнению слушателя (`command_guard`). None — старый
+    #: слушатель: владельцем такое поручение не считается (fail closed).
+    guard: Literal["own", "echo", "blind"] | None = None
     doubts: list[str] = Field(default_factory=list, max_length=5)
 
     @model_validator(mode="after")
@@ -77,7 +79,7 @@ async def accept_voice_command(
     event_id, deduped = await create_command(
         body.command_id, body.instruction.strip(), spoken,
         app=body.app, window_title=body.window_title, kind=body.kind,
-        confidence=body.confidence, doubts=body.doubts,
+        confidence=body.confidence, doubts=body.doubts, guard=body.guard,
         source={"session_id": body.session_id, "start": body.start, "end": body.end},
         fragment=[line.model_dump() for line in body.fragment])
     # Текст поручения — только DEBUG: это содержимое сообщения владельца.
