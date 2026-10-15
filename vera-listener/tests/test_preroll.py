@@ -121,7 +121,7 @@ class TestPreRollMemory:
 
     def test_hard_cap_on_frame_count(self):
         roll = PreRoll()
-        for i in range(10_000):
+        for _ in range(10_000):
             roll.observe(5.0, 0.0, False)
         assert len(roll) == MAX_FRAMES
 
