@@ -6,6 +6,11 @@ Status: draft PR only. Migration 056 and policy activation require separate appr
 
 Only one-word literal text replies from `help-vc-*` voice commands with the matching Vera authorship question can be attested. The OAuth principal is `dot`; the resulting answer is `dot-attested`, never `OWNER`. An evidence message ID, timestamp, quote, exact task ID, qid and Office revision are required. The code phrase alone is not evidence of identity. The system records dot's assertion about an owner message; it cannot independently inspect that chat. No permission, table, microphone or Listener configuration change is included.
 
+The instruction parser accepts either a bare one-word reply or that same word
+inside paired `«...»` quotation marks. Text inside the marks must still be one
+literal word. A second clause, requested tool action, data retrieval or expense
+remains outside this attestation scope.
+
 The task is left with `auto_pickup=false`. Dot explicitly claims it and records an existing send receipt with `room_task_attested_complete`; the tool does not send text. The same receipt replays without a second done event and cannot be bound to another task through this tool. Generic task completion, mutation and task-scoped room posting are rejected after attestation. Unscoped `room_post` remains a general OAuth capability and is outside this task workflow.
 
 ## Migration 056, separate approval
@@ -20,6 +25,6 @@ If phase 1 fails, its transaction rolls back to the 19-value CHECK. If phase 2 f
 
 After migration verification and reviewed code deployment, set `ROOM_ATTEST_ENABLED=1` and `ROOM_ATTEST_ACTORS=dot` only for `vera3-mcp` through its compose environment. The default is off. Confirm the existing OAuth principal is exactly `dot`; do not create a new owner credential or broaden room access. Before a live attempt, read current task/qid/revision and inspect the owner's exact confirmation in the dot chat. Do not infer it from a code phrase. Check the destination and prior receipt. Monitor the single `delegated_attestation` event, answer authorship, `done` event and receipt; investigate any duplicate or mismatch before another attempt.
 
-For `help-vc-7a37fd482d018b1a/qid2`, the word `Привет` was already sent at 10:21:06 UTC with receipt `Sentinel_3d38696ef9fc81918b7c81c63280117c`. Never send it again. After approval and evidence verification, attest that task, claim it as dot, record this existing receipt once, and verify the task and audit. The three subsequent voice tests have not been run and must wait for the complete reviewed chain.
+For `help-vc-7a37fd482d018b1a/qid2`, the reply `Привет!` was already sent at 10:21:06 UTC with receipt `Sentinel_3d38696ef9fc81918b7c81c63280117c`. Never send it again. The permitted literal word is `Привет`; the completion tool still requires exact equality, so this receipt must not be bound by claiming it carried `Привет`. Keep the task open until that mismatch has a separate reviewed resolution.
 
 CI on PR #27 at `ef5e28d75cac772c3b766f5e21103af29693588b` passed 3,313 tests including PostgreSQL migration tests. Later completion guards require their own CI run before merge. Production preflight remains unverified: the available read-only SSH key was refused by SSH file-permission checks; no production configuration was changed to bypass that failure.
