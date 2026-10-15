@@ -122,27 +122,19 @@ class SystemTrack:
     def _verdict(self, at: float, end: float, text: str, *, final: bool) -> str:
         if not final and self.heard_until < end + VAD_SLACK_S + LAG_S:
             return WAIT
-        first = self._frames.first
-        if first is None:
+        if self._frames.first is None:
             return BLIND
-        # System появился уже ПОСЛЕ начала фразы — пока она звучала, динамиков
-        # никто не слушал, и доказать, что они молчали, нечем. Без этой
-        # проверки окно «от первого кадра» сжималось бы в пустоту, а пустое
-        # окно `covers` считает покрытым — и выходило бы OWN. Кадры до
-        # открытия сессии сюда приносит `preroll`; не принёс — это слепота.
-        if first > at:
-            return BLIND
-        # Окно не раньше первого кадра system: захват двух дорожек стартует не
-        # одновременно, и без этого команда в первые секунды сессии казалась
-        # бы сказанной «вслепую».
-        lo_vad = max(at - VAD_SLACK_S, first)
+        # OWN — только при кадрах system во ВСЁМ окне, с допуском `BLIND_GAP_S`
+        # у краёв и внутри. Раньше окно обрезалось первым кадром system, и
+        # эхо за секунды до старта захвата никто не видел (dot #2719): теперь
+        # захват, начатый меньше чем за VAD_SLACK_S до фразы, — слепота, если
+        # недостающее не принёс `preroll`.
+        lo_vad = at - VAD_SLACK_S
         hi_vad = end + VAD_SLACK_S
         if final:
             hi_vad = min(hi_vad, self.heard_until)
         if not self._frames.covers(lo_vad, hi_vad):
-            # Системной дорожки на части окна не было — доказать, что
-            # динамики молчали, нечем. Ждать нечего тоже: пропавшие кадры не
-            # вернутся, а на закрытии это отказ.
+            # Ждать нечего: пропавшие кадры не вернутся, на закрытии это отказ.
             return BLIND
         if not self._speech.overlapping(lo_vad, hi_vad):
             return OWN
@@ -166,9 +158,7 @@ class SystemTrack:
         динамиков надёжнее, чем OWN по сверке текста с системным звуком.
         """
         with self._lock:
-            first = self._frames.first or 0.0
-            return not self._speech.overlapping(max(at - VAD_SLACK_S, first),
-                                                end + VAD_SLACK_S)
+            return not self._speech.overlapping(at - VAD_SLACK_S, end + VAD_SLACK_S)
 
     def _all_transcribed(self, lo: float, hi: float) -> bool:
         spans = Spans()
