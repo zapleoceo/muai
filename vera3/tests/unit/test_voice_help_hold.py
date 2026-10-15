@@ -20,6 +20,7 @@ from vera_shared.db.models_room import RoomTaskRow
 from vera_shared.room import questions, tasks
 from vera_shared.room.task_queue import next_task
 from vera_shared.room.tasks import TaskBusy
+from vera_shared.timeutil import utc_naive_now
 from vera_shared.voice_help.hold import ask_owner_once
 from vera_shared.voice_help.policy import (
     CONFIRMED_NOTE,
@@ -144,6 +145,21 @@ async def test_legacy_auto_pickup_stays_held_after_ambiguous_answer():
     with pytest.raises(TaskBusy, match="unconfirmed voice source"):
         await tasks.claim(room=ROOM, task_id="help-vc-h", agent="codex",
                           lease_seconds=900)
+
+
+@uses_db
+async def test_legacy_holder_cannot_enable_unverified_auto_pickup():
+    await _open(doubts=["blind"])
+    async with get_session() as session:
+        row = await session.get(RoomTaskRow, (ROOM, "help-vc-h"), with_for_update=True)
+        tasks.apply_claim(row, agent="codex", now=utc_naive_now(), lease_seconds=60,
+                          session=None, account=None)
+        token = row.fencing_token
+    with pytest.raises(TaskBusy, match="cannot enable auto pickup"):
+        await tasks.update(room=ROOM, task_id="help-vc-h", agent="codex",
+                           fencing_token=token, auto_pickup=True)
+    [task] = await tasks_in(ROOM)
+    assert task.auto_pickup is False
 
 
 @uses_db
