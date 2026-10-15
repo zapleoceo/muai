@@ -5,10 +5,11 @@ from datetime import timedelta
 from types import SimpleNamespace
 
 import pytest
+from vera_mcp import room_question_tools as qt
 from vera_mcp import room_tools as r
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskRow
-from vera_shared.room import handoff
+from vera_shared.room import handoff, questions
 from vera_shared.room.tasks import StaleLease, TaskBusy
 
 pytestmark = pytest.mark.asyncio
@@ -230,3 +231,37 @@ async def test_dependent_of_cancelled_task_stays_ineligible(sqlite_db):
     await r.room_task_open("child", CLAUDE, depends_on=["dep"], auto_pickup=True)
     await r.room_task_cancel("dep", 0, CLAUDE, reason="x")
     assert (await r.room_task_next(CODEX))["task"] is None
+
+
+async def test_cancel_withdraws_unresolved_questions_and_keeps_answers(sqlite_db):
+    token = (await r.room_task_claim("T1", CLAUDE))["task"]["fencing_token"]
+    qids = [(await qt.room_task_ask("T1", token, CLAUDE, f"question {i}"))[
+        "question"]["qid"] for i in range(3)]
+    await questions.answer(room="main", task_id="T1", qid=qids[1], text="owner answer")
+    await questions.answer(room="main", task_id="T1", qid=qids[2], text="kept answer")
+    await qt.room_task_answer_ack("T1", token, qids[2], CLAUDE)
+    await r.room_task_release("T1", token, CLAUDE, status="blocked", note="waiting")
+
+    await r.room_task_cancel("T1", token, CLAUDE, reason="obsolete by owner decision")
+
+    got = (await qt.room_task_questions("T1"))["questions"]
+    assert [q["status"] for q in got] == ["withdrawn", "withdrawn", "acked"]
+    assert got[1]["answers"][0]["text"] == "owner answer"
+    assert got[2]["answers"][0]["text"] == "kept answer"
+    event = (await r.room_task_history("T1"))["events"][-1]
+    assert event["kind"] == "cancelled"
+    assert event["data"]["withdrawn_qids"] == qids[:2]
+    assert event["data"]["reason"] == "obsolete by owner decision"
+
+
+async def test_rejected_cancel_does_not_withdraw_question(sqlite_db):
+    token = (await r.room_task_claim("T1", CLAUDE))["task"]["fencing_token"]
+    qid = (await qt.room_task_ask("T1", token, CLAUDE, "question"))["question"]["qid"]
+    await r.room_task_release("T1", token, CLAUDE, status="blocked", note="waiting")
+
+    with pytest.raises(StaleLease):
+        await r.room_task_cancel("T1", token, CODEX, reason="unauthorized")
+
+    assert (await qt.room_task_questions("T1"))["questions"][0]["status"] == "open"
+    assert all(qid not in (e["data"] or {}).get("withdrawn_qids", [])
+               for e in (await r.room_task_history("T1"))["events"])
