@@ -636,8 +636,17 @@ events (706 МБ, 445 тыс. строк) не переписывается.
 
 **Answer evidence (2026-10):** `evidence_excerpt()` builds the bounded source text. The API result card still shows a 400-character
 preview, but synthesis uses a bounded excerpt of the stored event text: up to
-4,000 characters for the first three hits and 900 for later hits. Long excerpts
-keep their beginning and end and mark the omitted middle. The agent search tool
+8,000 characters for the first three hits (a typical email fits whole) and 900
+for later hits. Longer events keep their beginning and end and mark the omitted
+middle with an explicit "part of the event is not shown" marker. The excerpt is
+query-aware: `excerpt_terms()` takes the question's identifiers and distinctive
+words (5+ characters, no stopwords; shared tokenizer from `lang.py` and
+`identifiers.py`), and if one occurs case-insensitively in the dropped middle,
+the excerpt becomes head + marker + a window around the first match + marker +
+tail, still within the budget. Without terms or a match the output is the plain
+head/tail form. When the marker is visible and the asked detail is not, the
+prompt requires the answer to say that part of the source was not shown and the
+detail is unverified, never "not mentioned". The agent search tool
 uses the same excerpt rule. The next agent step serializes complete compact
 event cards with ID, source, excerpt, and available link inside a 3,000-character
 observation budget. If a whole card does not fit, `omitted_events` counts it;

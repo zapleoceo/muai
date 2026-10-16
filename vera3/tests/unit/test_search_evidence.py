@@ -15,7 +15,7 @@ sys.path.insert(0, os.path.join(
 
 from brain_search import agent, agent_tools, synthesis
 from brain_search.agent import SYSTEM_PROMPT
-from brain_search.evidence import EVIDENCE_RULES, evidence_excerpt
+from brain_search.evidence import EVIDENCE_RULES, evidence_excerpt, excerpt_terms
 from brain_search.models import SearchQuery
 from brain_search.rows import Candidate
 
@@ -35,7 +35,7 @@ def _mail(body: str) -> Candidate:
 async def test_answer_context_keeps_payment_cause_at_end(monkeypatch):
     cause = ("Payment declined, so ads were paused. 12345678901234 is the "
              "advertising account identifier, not a transaction ID.")
-    mail = _mail("Introduction. " + "Additional details. " * 300 + cause)
+    mail = _mail("Introduction. " + "Additional details. " * 500 + cause)
     seen = {}
 
     async def self_context():
@@ -100,7 +100,7 @@ def test_adjacent_login_alert_is_not_a_payment_cause_in_answer_prompts():
 @pytest.mark.asyncio
 async def test_agent_search_tool_keeps_reason_at_end(monkeypatch):
     cause = "Payment declined, therefore ads paused."
-    mail = _mail("x" * 5000 + cause)
+    mail = _mail("x" * 9000 + cause)
 
     async def ranked(*args, **kwargs):
         return None, [(1.0, mail)]
@@ -169,3 +169,50 @@ def test_search_observation_keeps_three_compact_cards():
     assert parsed["omitted_events"] == 0
     assert all(card["source_url"] is None for card in parsed["events"])
     assert all(len(card["chat_title"]) == 120 for card in parsed["events"])
+
+
+WARNING = ("Найнебезпечніше — schools-purge-closed: пробний прогін через раннер "
+           "неможливий, а бойове видалення незворотне. Також на стенді не задано "
+           "SENTRY_RELEASE")
+LAM_QUERIES = (
+    ("LAM-274 event 516485 16 октября 2026: какие ограничения и риски остались "
+    "после выкладки? Только это новое событие."),
+    "Что с schools-purge-closed: dry-run возможен и задан ли SENTRY_RELEASE?",
+)
+
+
+def _filler_body(total: int, warning_at: int) -> str:
+    filler = "Деплой завершён, миграции применены, проверки зелёные. "
+    pad = (filler * (total // len(filler) + 1))
+    return pad[:warning_at] + WARNING + pad[: total - warning_at - len(WARNING)]
+
+
+@pytest.mark.parametrize("question", LAM_QUERIES)
+def test_build_context_keeps_warning_in_middle_of_typical_email(question):
+    body = _filler_body(4687, 2739)
+    assert 4600 < len(body) < 4800
+    result = SimpleNamespace(event_id=1, occurred_at="2026-10-16 09:00:00",
+                             source="gmail", source_url=None)
+    context = synthesis.build_context([result], {1: _mail(body)}, question)
+    assert WARNING in context
+
+
+def test_excerpt_with_terms_reveals_middle_of_huge_event():
+    body = _filler_body(15000, 7000)
+    excerpt = evidence_excerpt(body, 4000, ["SENTRY_RELEASE".lower()])
+    assert len(excerpt) <= 4000
+    assert "SENTRY_RELEASE" in excerpt
+    assert "schools-purge-closed" in excerpt
+    assert excerpt.count("middle of stored event omitted") == 2
+    assert excerpt.startswith(body[:100]) and excerpt.endswith(body[-100:])
+    assert "SENTRY_RELEASE" in excerpt_terms("Задан ли SENTRY_RELEASE?")
+
+
+def test_excerpt_without_terms_or_match_is_head_tail_only():
+    body = _filler_body(15000, 7000)
+    plain = evidence_excerpt(body, 4000)
+    assert evidence_excerpt(body, 4000, ["no-such-term"]) == plain
+    assert evidence_excerpt(body, 4000, []) == plain
+    assert WARNING not in plain
+    assert len(plain) == 4000
+    assert plain.count("middle of stored event omitted") == 1

@@ -17,6 +17,7 @@ from brain_search.evidence import (
     PRIMARY_CHARS,
     SECONDARY_CHARS,
     evidence_excerpt,
+    excerpt_terms,
 )
 from brain_search.identifiers import (
     exact_identifiers,
@@ -100,9 +101,11 @@ def build_prompt(*, question: str, self_ctx: str, context: str,
     )
 
 
-def build_context(results: list[SearchResult], by_id: dict[int, Candidate]) -> str:
+def build_context(results: list[SearchResult], by_id: dict[int, Candidate],
+                  question: str = "") -> str:
     """Блоки событий; автор и направление — из metadata, не из владельца ящика."""
     blocks = []
+    terms = excerpt_terms(question)
     for i, r in enumerate(results):
         c = by_id[r.event_id]
         tag = author_tag(c)
@@ -111,7 +114,7 @@ def build_context(results: list[SearchResult], by_id: dict[int, Candidate]) -> s
             f"[event:{r.event_id} | {r.occurred_at[:16]} UTC | {r.source} | "
             f"{r.source_url or 'original link unavailable'}"
             f"{' | ' + tag if tag else ''}] "
-            f"{redact_view(evidence_excerpt(c.content_text, limit))}")
+            f"{redact_view(evidence_excerpt(c.content_text, limit, terms))}")
     return "\n\n".join(blocks) if blocks else "(нет данных)"
 
 
@@ -134,7 +137,8 @@ async def answer(
 
     self_ctx = await self_context()
     ctx_n = CONTEXT_EVENTS_SUMMARY if summary else CONTEXT_EVENTS
-    context = build_context(results[:ctx_n], {c.id: c for c in map(Candidate.of, rows)})
+    context = build_context(results[:ctx_n], {c.id: c for c in map(Candidate.of, rows)},
+                           query.q)
     identifiers = exact_identifiers(query.q)
     hits = identifier_hits(identifiers,
                            {r.event_id: full_text_by_id[r.event_id] for r in results})

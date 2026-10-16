@@ -21,7 +21,12 @@ from vera_shared.db.models import EventRow
 from vera_shared.redact_view import redact_tree, redact_view
 from vera_shared.timeutil import utc_naive_now
 
-from brain_search.evidence import PRIMARY_CHARS, SECONDARY_CHARS, evidence_excerpt
+from brain_search.evidence import (
+    PRIMARY_CHARS,
+    SECONDARY_CHARS,
+    evidence_excerpt,
+    excerpt_terms,
+)
 from brain_search.identifiers import (
     exact_identifiers,
     identifier_hits,
@@ -187,6 +192,7 @@ async def _exec_search_events(args: SearchEventsArgs) -> dict[str, Any]:
         args.q, limit=args.limit, source=args.source,
         time_range=date_window(args.date_from, args.date_to))
     identifiers = exact_identifiers(args.q)
+    terms = excerpt_terms(args.q)
     hits = identifier_hits(identifiers, {c.id: c.content_text for _s, c in ranked})
     note = (identifier_note(hits) + identifier_miss_note(identifiers, hits)).strip()
     return {
@@ -201,7 +207,7 @@ async def _exec_search_events(args: SearchEventsArgs) -> dict[str, Any]:
             "direction": c.direction,
              "chat_title": c.chat_title,
              "preview": redact_view(evidence_excerpt(
-                 c.content_text, PRIMARY_CHARS if i < 3 else SECONDARY_CHARS))}
+                 c.content_text, PRIMARY_CHARS if i < 3 else SECONDARY_CHARS, terms))}
             for i, (_score, c) in enumerate(ranked)
         ],
     }
