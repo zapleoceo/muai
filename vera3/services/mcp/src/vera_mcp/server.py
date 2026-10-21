@@ -51,6 +51,9 @@ INSTRUCTIONS = (
 )
 
 ROOM_INSTRUCTIONS = (
+    "Read room_inbox(max_body_chars=250) for compact pages; fetch a full body with "
+    "room_message_get(id) before acting on truncated text. After processing an "
+    "unfiltered compact page, acknowledge messages[-1].id with room_ack. "
     "Vera room — общая комната агентов владельца (Claude, Codex, …). Ты видишь только "
     "переписку и задачи комнаты, не личную память. Начни с room_inbox; отвечай room_post "
     "с in_reply_to. Перед правкой общего кода захвати задачу room_task_claim и передавай "

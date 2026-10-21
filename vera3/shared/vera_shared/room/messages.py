@@ -1,21 +1,19 @@
-"""Сообщения комнаты агентов: запись с идемпотентностью и входящий поток с курсором.
+"""Room messages, idempotent posting, and cursor reads.
 
-Курсор полагается на то, что внутри комнаты порядок id совпадает с порядком
-фиксации. BIGSERIAL этого не гарантирует: две транзакции берут id 1 и 2, вторая
-коммитится первой, читатель видит 2, подтверждает его — и id=1 после своего
-коммита уже никогда не попадёт во входящие. Поэтому запись в комнату
-сериализуется advisory-локом транзакции до INSERT (на SQLite запись и так одна).
+BIGSERIAL can commit id 2 before id 1, causing a cursor to skip id 1 forever.
+Posting takes a per-room transaction lock before INSERT to preserve commit order.
 """
 from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import and_, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomCursorRow, RoomMessageRow, RoomTaskRow
+from vera_shared.room.session_labels import _exclusive_labels
 from vera_shared.timeutil import utc_naive_now
 from vera_shared.voice_help.attest_state import attestation_for
 
@@ -121,33 +119,73 @@ async def ack(*, agent: str, room: str, consumer: str, up_to_id: int) -> int:
 
 
 async def inbox(*, agent: str, room: str, consumer: str, limit: int,
-                since_id: int | None = None) -> tuple[list[dict[str, Any]], int]:
+                since_id: int | None = None, to: str | None = None,
+                kind: str | None = None, exclude_system: bool = False,
+                task_id: str | None = None, session: str | None = None,
+                after_id: int | None = None) -> tuple[list[dict[str, Any]], int]:
     """Чужие сообщения мне или всем после курсора (или since_id) и сам курсор. Курсор
     не двигает: подтверждение — отдельный `ack` после обработки."""
     cursor = await _cursor(agent, room, consumer)
-    after = cursor if since_id is None else since_id
+    if since_id is not None and after_id is not None:
+        raise ValueError("since_id and after_id are mutually exclusive")
+    after = cursor if since_id is None and after_id is None else (
+        after_id if after_id is not None else since_id)
     async with get_session() as s:
-        rows = (await s.execute(
-            select(RoomMessageRow).where(
-                RoomMessageRow.room == room, RoomMessageRow.id > after,
+        own_labels = await _exclusive_labels(s, room, agent)
+        recipients = [RoomMessageRow.to_agent.is_(None), RoomMessageRow.to_agent == agent]
+        if own_labels:
+            recipients.append(RoomMessageRow.to_agent.in_(own_labels))
+        q = select(RoomMessageRow).where(
+            RoomMessageRow.room == room, RoomMessageRow.id > after,
+            RoomMessageRow.from_agent != agent if session is None else or_(
                 RoomMessageRow.from_agent != agent,
-                or_(RoomMessageRow.to_agent.is_(None), RoomMessageRow.to_agent == agent),
-            ).order_by(RoomMessageRow.id).limit(limit)
-        )).scalars().all()
+                and_(RoomMessageRow.from_session.is_not(None),
+                     RoomMessageRow.from_session != session)),
+            or_(*recipients),
+        )
+        if to is not None:
+            q = q.where(RoomMessageRow.to_agent == to)
+        if kind is not None:
+            q = q.where(RoomMessageRow.status == kind)
+        if task_id is not None:
+            q = q.where(RoomMessageRow.task_id == task_id)
+        if exclude_system:
+            q = q.where(~RoomMessageRow.body.startswith("OFFICE_RUNTIME_V1\n",
+                                                       autoescape=True))
+        rows = (await s.execute(q.order_by(RoomMessageRow.id).limit(limit))).scalars().all()
     return [message_dict(r) for r in rows], cursor
 
 
 async def history(*, room: str, limit: int, before_id: int | None = None,
-                  task_id: str | None = None) -> list[dict[str, Any]]:
+                  task_id: str | None = None, after_id: int | None = None,
+                  to: str | None = None, kind: str | None = None,
+                  exclude_system: bool = False,
+                  ) -> list[dict[str, Any]]:
     q = select(RoomMessageRow).where(RoomMessageRow.room == room)
     if before_id is not None:
         q = q.where(RoomMessageRow.id < before_id)
+    if after_id is not None:
+        q = q.where(RoomMessageRow.id > after_id)
     if task_id is not None:
         q = q.where(RoomMessageRow.task_id == task_id)
+    if to is not None:
+        q = q.where(RoomMessageRow.to_agent == to)
+    if kind is not None:
+        q = q.where(RoomMessageRow.status == kind)
+    if exclude_system:
+        q = q.where(~RoomMessageRow.body.startswith("OFFICE_RUNTIME_V1\n",
+                                                   autoescape=True))
     async with get_session() as s:
         rows = (await s.execute(q.order_by(RoomMessageRow.id.desc()).limit(limit))
                 ).scalars().all()
     return [message_dict(r) for r in reversed(rows)]
+
+
+async def get_message(*, room: str, id: int) -> dict[str, Any] | None:
+    """Read one full message in the requested room without changing any cursor."""
+    async with get_session() as s:
+        row = await s.get(RoomMessageRow, id)
+        return message_dict(row) if row is not None and row.room == room else None
 
 
 async def has_reply(*, room: str, in_reply_to: str, from_agent: str, status: str) -> bool:

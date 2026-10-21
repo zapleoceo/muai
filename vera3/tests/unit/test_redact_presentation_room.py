@@ -34,7 +34,8 @@ async def test_room_messages_masked_ids_byte_identical_and_dedupe_on_raw(sqlite_
     again = await r.room_post(body, CLAUDE, message_id=LOOK_ID, task_id=LOOK_ID)
     assert again["deduped"] is True and again["message"]["id"] == first["message"]["id"]
     for msgs in ((await r.room_inbox(CODEX))["messages"],
-                 (await r.room_history())["messages"]):
+                 (await r.room_history())["messages"],
+                 [(await r.room_message_get(first["message"]["id"]))["message"]]):
         m = msgs[0]
         assert "CANARY" not in m["body"] and UUID in m["body"] and MASK in m["body"]
         assert (m["message_id"], m["task_id"], m["from"]) == (LOOK_ID, LOOK_ID, "claude")
@@ -43,6 +44,15 @@ async def test_room_messages_masked_ids_byte_identical_and_dedupe_on_raw(sqlite_
         from vera_shared.db.models_room import RoomMessageRow
         stored = (await s.execute(select(RoomMessageRow.body))).scalar_one()
     assert stored == body
+
+
+@pytest.mark.asyncio
+async def test_compact_inbox_redacts_before_truncation(sqlite_db, _rooms):
+    await r.room_post("x" * 245 + " " + GH, CLAUDE)
+    shown = (await r.room_inbox(CODEX, max_body_chars=250))["messages"][0]
+    assert shown["truncated"] is True
+    assert GH not in shown["body"] and "ghp_" not in shown["body"]
+    assert len(shown["body"]) == 250
 
 
 @pytest.mark.asyncio
