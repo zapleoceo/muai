@@ -49,7 +49,7 @@ async def test_room_messages_masked_ids_byte_identical_and_dedupe_on_raw(sqlite_
 @pytest.mark.asyncio
 async def test_compact_inbox_redacts_before_truncation(sqlite_db, _rooms):
     await r.room_post("x" * 245 + " " + GH, CLAUDE)
-    shown = (await r.room_inbox(CODEX))["messages"][0]
+    shown = (await r.room_inbox(CODEX, max_body_chars=250))["messages"][0]
     assert shown["truncated"] is True
     assert GH not in shown["body"] and "ghp_" not in shown["body"]
     assert len(shown["body"]) == 250
