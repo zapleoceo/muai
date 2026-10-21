@@ -76,11 +76,10 @@ async def room_inbox(
     room_message_get for full text. next_cursor is safe only for unfiltered,
     untruncated pages and never moves the stored cursor; ack after processing."""
     me = client_of(ctx)
-    effective_session = session or (consumer if consumer != messages.DEFAULT_CONSUMER else None)
     items, cursor = await messages.inbox(agent=me, room=_room(room), consumer=consumer,
                                          limit=limit, since_id=since_id, after_id=after_id,
                                          to=to, kind=kind, exclude_system=exclude_system,
-                                         task_id=task_id, session=effective_session)
+                                         task_id=task_id, session=session)
     mine = await task_queue.held_by(room=_room(room), agent=me)
     viewed = messages_view(items, max_body_chars)
     safe_cursor = (since_id is None and after_id is None and to is None and

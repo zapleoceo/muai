@@ -155,8 +155,12 @@ async def test_cross_session_delivery_and_addressed_labels(sqlite_db):
     await r.room_post("other session", CODEX, session="orchestra")
     await r.room_post("to office", CLAUDE, to="office")
     await r.room_post("foreign label", CLAUDE, to="unclaimed")
-    assert await inbox_bodies(CODEX, consumer="office") == ["other session", "to office"]
-    assert await inbox_bodies(CODEX, consumer="orchestra") == ["same session", "to office"]
+    assert [m["body"] for m in (await r.room_inbox(CODEX, consumer="office",
+                                                  session="office"))["messages"]] == [
+                                                      "other session", "to office"]
+    assert [m["body"] for m in (await r.room_inbox(CODEX, consumer="orchestra",
+                                                  session="orchestra"))["messages"]] == [
+                                                      "same session", "to office"]
     assert await inbox_bodies(CLAUDE) == ["same session", "other session"]
 
 
@@ -164,18 +168,31 @@ async def test_default_consumer_does_not_echo_own_session(sqlite_db):
     await r.room_post("own laptop", CODEX, session="laptop")
     await r.room_post("own cloud", CODEX, session="cloud")
     assert await inbox_bodies(CODEX) == []
-    assert await inbox_bodies(CODEX, consumer="laptop") == ["own cloud"]
+    assert await inbox_bodies(CODEX, consumer="laptop") == []
+    assert [m["body"] for m in (await r.room_inbox(CODEX, consumer="laptop",
+                                                  session="laptop"))["messages"]] == [
+                                                      "own cloud"]
     assert [m["body"] for m in (await r.room_inbox(CODEX, consumer="reader",
                                                   session="cloud"))["messages"]] == [
                                                       "own laptop"]
 
 
-async def test_session_label_used_by_another_agent_is_not_claimed(sqlite_db):
+async def test_session_label_used_by_another_agent_is_not_claimed(sqlite_db, caplog):
     await r.room_post("claim", CODEX, session="office")
     await r.room_post("spoof label", CLAUDE, session="office")
     await r.room_post("addressed", CLAUDE, to="office")
     assert "addressed" not in await inbox_bodies(CODEX)
     assert "addressed" not in await inbox_bodies(CLAUDE)
+    assert "session labels conflict" in caplog.text
+
+
+async def test_session_label_matching_another_agent_name_is_not_claimed(sqlite_db,
+                                                                         caplog):
+    await r.room_post("codex exists", CODEX)
+    await r.room_post("spoof", CLAUDE, session="codex")
+    await r.room_post("to codex", CODEX, to="codex")
+    assert "to codex" not in await inbox_bodies(CLAUDE, session="codex")
+    assert "session labels conflict" in caplog.text
 
 
 async def test_message_filters_history_compact_and_numeric_reply(sqlite_db):

@@ -1,10 +1,7 @@
-"""Сообщения комнаты агентов: запись с идемпотентностью и входящий поток с курсором.
+"""Room messages, idempotent posting, and cursor reads.
 
-Курсор полагается на то, что внутри комнаты порядок id совпадает с порядком
-фиксации. BIGSERIAL этого не гарантирует: две транзакции берут id 1 и 2, вторая
-коммитится первой, читатель видит 2, подтверждает его — и id=1 после своего
-коммита уже никогда не попадёт во входящие. Поэтому запись в комнату
-сериализуется advisory-локом транзакции до INSERT (на SQLite запись и так одна).
+BIGSERIAL can commit id 2 before id 1, causing a cursor to skip id 1 forever.
+Posting takes a per-room transaction lock before INSERT to preserve commit order.
 """
 from __future__ import annotations
 
@@ -16,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomCursorRow, RoomMessageRow, RoomTaskRow
+from vera_shared.room.session_labels import _exclusive_labels
 from vera_shared.timeutil import utc_naive_now
 from vera_shared.voice_help.attest_state import attestation_for
 
@@ -133,15 +131,7 @@ async def inbox(*, agent: str, room: str, consumer: str, limit: int,
     after = cursor if since_id is None and after_id is None else (
         after_id if after_id is not None else since_id)
     async with get_session() as s:
-        claimed = (await s.execute(select(RoomMessageRow.from_session).where(
-            RoomMessageRow.room == room, RoomMessageRow.from_agent == agent,
-            RoomMessageRow.from_session.is_not(None),
-        ).distinct())).scalars().all()
-        others = (await s.execute(select(RoomMessageRow.from_session).where(
-            RoomMessageRow.room == room, RoomMessageRow.from_agent != agent,
-            RoomMessageRow.from_session.is_not(None),
-        ).distinct())).scalars().all()
-        own_labels = set(claimed) - set(others)
+        own_labels = await _exclusive_labels(s, room, agent)
         recipients = [RoomMessageRow.to_agent.is_(None), RoomMessageRow.to_agent == agent]
         if own_labels:
             recipients.append(RoomMessageRow.to_agent.in_(own_labels))

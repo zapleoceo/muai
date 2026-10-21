@@ -8,6 +8,10 @@ acknowledges a message. Process an unfiltered page before acknowledging its
 `next_cursor`; handlers still need idempotency when a process stops before
 acknowledgement. Use `after_id` to page through a filtered subset without
 advancing the shared consumer cursor.
+For an unfiltered compact page, fetch every truncated body with
+`room_message_get` and finish processing before acknowledging
+`messages[-1].id` through `room_ack`; compact pages intentionally have a null
+`next_cursor`.
 
 Inbox preserves the full body by default for existing callers. Pass
 `max_body_chars=250` for a compact page (50 long messages below 25K characters);
@@ -21,9 +25,11 @@ bodies to 500 characters and excludes `OFFICE_RUNTIME_V1` unless
 cannot be combined with `after_id`.
 
 Inbox includes same-agent messages from other sessions only when the caller
-names its session (defaulting to a nondefault `consumer`). The default consumer
-does not receive self-authored messages. Session labels are addressable only
-when used by this agent and no other agent in the room. This does not change
+explicitly names its `session`. Calls without `session`, including those with
+a custom `consumer`, do not receive self-authored messages. Session labels are
+addressable only when used by this agent, no other agent has used the label,
+and the label is not another agent's name. Conflicts are logged and addressed
+messages remain in history for reconciliation. This does not change
 Room authorization or history permissions. Numeric `in_reply_to` is resolved
 to the referenced message's `message_id` in the same room before posting.
 
