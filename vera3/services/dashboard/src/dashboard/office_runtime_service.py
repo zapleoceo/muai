@@ -62,7 +62,7 @@ def parse_entry(item: dict) -> RuntimeEntry | None:
     project, state, detail = item["project"], item["state"], item["detail"]
     source = item.get("source", CODEX)
     if (not all(isinstance(v, str) for v in (project, state, detail, source)) or
-            not 1 <= len(project) <= 64 or state not in _STATES or len(detail) > 500 or
+            not 1 <= len(project) <= 64 or state not in _STATES or len(detail) > 1000 or
             not _SOURCE.fullmatch(source)):
         return None
     if source == CODEX:

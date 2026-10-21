@@ -82,3 +82,15 @@ def test_observed_at_after_checked_or_after_now_rejects_whole_message() -> None:
     assert parse_runtime_snapshot(with_observed("2026-10-14T12:30:00+00:00"), NOW) is None
     assert parse_runtime_snapshot(with_observed("bad"), NOW) is None
     assert parse_runtime_snapshot(with_observed("2026-10-14T11:59:00+00:00"), NOW) is not None
+
+
+def test_newer_snapshot_with_565_character_detail_is_accepted() -> None:
+    old = message([entry(thread_id=UUID)])
+    old.message_id = "dot-office-runtime-older"
+    old.body = old.body.replace("2026-10-14T12:00:00+00:00", "2026-10-14T11:59:00+00:00")
+    newer = message([entry(thread_id=UUID, detail="x" * 565)])
+    newer.message_id = "dot-office-runtime-20261021T152900Z"
+    from dashboard.office_runtime_service import latest_runtime_snapshot
+    picked = latest_runtime_snapshot([old, newer], NOW)
+    assert picked is not None and picked.message_id == newer.message_id
+    assert parse_runtime_snapshot(message([entry(thread_id=UUID, detail="x" * 1001)]), NOW) is None
