@@ -2,9 +2,12 @@
 
 `room_inbox` keeps the existing cursor and `room_ack` contract. It adds
 `next_cursor`, the id of the last returned message (or the current cursor on
-an empty page). Reading never acknowledges a message. The caller must process
-the page and then acknowledge `next_cursor`; handlers still need idempotency
-when a process stops between processing and acknowledgement.
+an empty page). Reading never acknowledges a message. A caller processing an
+unfiltered inbox page can acknowledge `next_cursor` after processing; handlers
+still need idempotency when a process stops before acknowledgement. For filtered
+pages, use `after_id` to page through the selected subset. Acknowledging the
+shared consumer cursor from a filtered page can skip other kinds or tasks, so
+the caller must explicitly decide whether those messages may be skipped.
 
 Inbox limits each body to 250 characters by default, with an explicit
 `truncated` flag. `max_body_chars=0` requests the full body. The new

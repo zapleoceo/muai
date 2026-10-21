@@ -179,6 +179,15 @@ async def test_message_filters_history_compact_and_numeric_reply(sqlite_db):
         await r.room_message_get(first + 100, room="other")
 
 
+async def test_filtered_inbox_does_not_ack_unselected_messages(sqlite_db):
+    info = (await r.room_post("info", CLAUDE, status="info"))["message"]["id"]
+    request = (await r.room_post("request", CLAUDE, status="request"))["message"]["id"]
+    filtered = await r.room_inbox(CODEX, kind="request")
+    assert [m["id"] for m in filtered["messages"]] == [request]
+    assert filtered["cursor"] == 0 and filtered["next_cursor"] == request
+    assert [m["id"] for m in (await r.room_inbox(CODEX))["messages"]] == [info, request]
+
+
 # ─── задачи ──────────────────────────────────────────────────────────────────
 
 
