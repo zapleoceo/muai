@@ -130,6 +130,55 @@ async def test_history_filters_by_task_and_pages_backwards(sqlite_db):
         "m0", "m1"]
 
 
+async def test_compact_inbox_full_get_and_safe_cursor(sqlite_db):
+    ids = [(await r.room_post("x" * 2000, CLAUDE, message_id=f"long-{i}"))
+           ["message"]["id"] for i in range(50)]
+    got = await r.room_inbox(CODEX, limit=50)
+    assert sum(len(str(m)) for m in got["messages"]) < 25_000
+    assert all(m["truncated"] and len(m["body"]) == 250 for m in got["messages"])
+    assert (got["cursor"], got["next_cursor"]) == (0, ids[-1])
+    assert (await r.room_inbox(CODEX))["messages"] == got["messages"]
+    full = (await r.room_message_get(ids[0]))["message"]
+    assert full["body"] == "x" * 2000 and full["truncated"] is False
+    await r.room_ack(got["next_cursor"], CODEX)
+    assert (await r.room_inbox(CODEX))["messages"] == []
+    assert [m["id"] for m in (await r.room_inbox(CODEX, after_id=ids[-2]))["messages"]] == [ids[-1]]
+    with pytest.raises(ValueError, match="mutually exclusive"):
+        await r.room_inbox(CODEX, since_id=0, after_id=0)
+
+
+async def test_cross_session_delivery_and_addressed_labels(sqlite_db):
+    await r.room_post("same session", CODEX, session="office")
+    await r.room_post("other session", CODEX, session="orchestra")
+    await r.room_post("to office", CLAUDE, to="office")
+    await r.room_post("foreign label", CLAUDE, to="unclaimed")
+    assert await inbox_bodies(CODEX, consumer="office") == ["other session", "to office"]
+    assert await inbox_bodies(CODEX, consumer="orchestra") == ["same session", "to office"]
+    assert await inbox_bodies(CLAUDE) == ["same session", "other session"]
+
+
+async def test_message_filters_history_compact_and_numeric_reply(sqlite_db):
+    first = (await r.room_post("x" * 800, CLAUDE, status="request", task_id="T",
+                               to="codex"))["message"]["id"]
+    await r.room_post("OFFICE_RUNTIME_V1\n{}", CLAUDE, status="info")
+    reply = (await r.room_post("reply", CODEX, in_reply_to=first))["message"]
+    assert reply["in_reply_to"] == str(first)
+    assert len((await r.room_history())["messages"]) == 3  # legacy full history
+    assert (await r.room_history())["messages"][0]["body"] == "x" * 800
+    compact = (await r.room_history(compact=True))["messages"]
+    assert len(compact) == 2 and compact[0]["truncated"]
+    assert len(compact[0]["body"]) == 500
+    assert [m["id"] for m in (await r.room_history(after_id=first, kind="info",
+                                                    exclude_system=True))["messages"]] == [
+                                                        reply["id"]]
+    assert [m["id"] for m in (await r.room_history(to="codex", task_id="T",
+                                                    kind="request"))["messages"]] == [first]
+    assert [m["id"] for m in (await r.room_inbox(CODEX, to="codex", task_id="T",
+                                                  kind="request"))["messages"]] == [first]
+    with pytest.raises(ValueError, match="not found"):
+        await r.room_message_get(first + 100, room="other")
+
+
 # ─── задачи ──────────────────────────────────────────────────────────────────
 
 

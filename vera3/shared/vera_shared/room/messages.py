@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import func, or_, select, text
+from sqlalchemy import and_, exists, func, or_, select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -121,33 +121,71 @@ async def ack(*, agent: str, room: str, consumer: str, up_to_id: int) -> int:
 
 
 async def inbox(*, agent: str, room: str, consumer: str, limit: int,
-                since_id: int | None = None) -> tuple[list[dict[str, Any]], int]:
+                since_id: int | None = None, to: str | None = None,
+                kind: str | None = None, exclude_system: bool = False,
+                task_id: str | None = None,
+                after_id: int | None = None) -> tuple[list[dict[str, Any]], int]:
     """Чужие сообщения мне или всем после курсора (или since_id) и сам курсор. Курсор
     не двигает: подтверждение — отдельный `ack` после обработки."""
     cursor = await _cursor(agent, room, consumer)
-    after = cursor if since_id is None else since_id
+    if since_id is not None and after_id is not None:
+        raise ValueError("since_id and after_id are mutually exclusive")
+    after = cursor if since_id is None and after_id is None else (
+        after_id if after_id is not None else since_id)
+    own_session = RoomMessageRow.__table__.alias("own_session")
+    session_recipient = exists(select(1).select_from(own_session).where(
+        own_session.c.room == room, own_session.c.from_agent == agent,
+        own_session.c.from_session == RoomMessageRow.to_agent,
+    ))
+    q = select(RoomMessageRow).where(
+        RoomMessageRow.room == room, RoomMessageRow.id > after,
+        or_(RoomMessageRow.from_agent != agent,
+            and_(RoomMessageRow.from_session.is_not(None),
+                 RoomMessageRow.from_session != consumer)),
+        or_(RoomMessageRow.to_agent.is_(None), RoomMessageRow.to_agent == agent,
+            session_recipient),
+    )
+    if to is not None:
+        q = q.where(RoomMessageRow.to_agent == to)
+    if kind is not None:
+        q = q.where(RoomMessageRow.status == kind)
+    if task_id is not None:
+        q = q.where(RoomMessageRow.task_id == task_id)
+    if exclude_system:
+        q = q.where(~RoomMessageRow.body.startswith("OFFICE_RUNTIME_V1\n"))
     async with get_session() as s:
-        rows = (await s.execute(
-            select(RoomMessageRow).where(
-                RoomMessageRow.room == room, RoomMessageRow.id > after,
-                RoomMessageRow.from_agent != agent,
-                or_(RoomMessageRow.to_agent.is_(None), RoomMessageRow.to_agent == agent),
-            ).order_by(RoomMessageRow.id).limit(limit)
-        )).scalars().all()
+        rows = (await s.execute(q.order_by(RoomMessageRow.id).limit(limit))).scalars().all()
     return [message_dict(r) for r in rows], cursor
 
 
 async def history(*, room: str, limit: int, before_id: int | None = None,
-                  task_id: str | None = None) -> list[dict[str, Any]]:
+                  task_id: str | None = None, after_id: int | None = None,
+                  to: str | None = None, kind: str | None = None,
+                  exclude_system: bool = False,
+                  ) -> list[dict[str, Any]]:
     q = select(RoomMessageRow).where(RoomMessageRow.room == room)
     if before_id is not None:
         q = q.where(RoomMessageRow.id < before_id)
+    if after_id is not None:
+        q = q.where(RoomMessageRow.id > after_id)
     if task_id is not None:
         q = q.where(RoomMessageRow.task_id == task_id)
+    if to is not None:
+        q = q.where(RoomMessageRow.to_agent == to)
+    if kind is not None:
+        q = q.where(RoomMessageRow.status == kind)
+    if exclude_system:
+        q = q.where(~RoomMessageRow.body.startswith("OFFICE_RUNTIME_V1\n"))
     async with get_session() as s:
         rows = (await s.execute(q.order_by(RoomMessageRow.id.desc()).limit(limit))
                 ).scalars().all()
     return [message_dict(r) for r in reversed(rows)]
+
+
+async def get_message(*, room: str, id: int) -> dict[str, Any] | None:
+    async with get_session() as s:
+        row = await s.get(RoomMessageRow, id)
+        return message_dict(row) if row is not None and row.room == room else None
 
 
 async def has_reply(*, room: str, in_reply_to: str, from_agent: str, status: str) -> bool:

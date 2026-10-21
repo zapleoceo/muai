@@ -26,12 +26,17 @@ def _refs(refs: Any) -> Any:
     return [_mask(r, ("excerpt",)) if isinstance(r, dict) else r for r in refs]
 
 
-def message_view(m: dict[str, Any]) -> dict[str, Any]:
-    return _mask(m, _MESSAGE_TEXT)
+def message_view(m: dict[str, Any], max_body_chars: int = 0) -> dict[str, Any]:
+    out = _mask(m, _MESSAGE_TEXT)
+    body = out["body"]
+    truncated = max_body_chars > 0 and len(body) > max_body_chars
+    return {**out, "body": body[:max_body_chars] if truncated else body,
+            "truncated": truncated}
 
 
-def messages_view(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [message_view(m) for m in items]
+def messages_view(items: list[dict[str, Any]], max_body_chars: int = 0
+                  ) -> list[dict[str, Any]]:
+    return [message_view(m, max_body_chars) for m in items]
 
 
 def task_view(t: dict[str, Any] | None) -> dict[str, Any] | None:
