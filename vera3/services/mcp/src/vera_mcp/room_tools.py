@@ -119,8 +119,8 @@ async def room_message_get(
     return {"room": room, "message": message_view(item)}
 
 
-ROOM_TOOLS = (room_post, room_inbox, room_ack, room_history, room_message_get,
+ROOM_TOOLS = (room_post, room_inbox, room_ack, room_history,
               room_task_open, room_task_claim, room_task_update, room_task_progress,
               room_task_state,
               room_task_history, room_task_wait, room_task_next, room_task_release,
-              room_tasks, room_task_cancel)
+              room_tasks, room_message_get, room_task_cancel)
