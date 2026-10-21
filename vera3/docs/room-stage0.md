@@ -9,7 +9,8 @@ when a process stops between processing and acknowledgement.
 Inbox limits each body to 250 characters by default, with an explicit
 `truncated` flag. `max_body_chars=0` requests the full body. The new
 `room_message_get(id)` returns one full message through the existing redaction
-view. `room_history` continues to return full bodies by default for existing
+view. The shared `get_message` repository function reads exactly that row.
+`room_history` continues to return full bodies by default for existing
 callers. `compact=true` limits bodies to 500 characters and excludes
 `OFFICE_RUNTIME_V1` snapshots. Both reads accept `to`, `kind` (message status),
 `task_id`, `after_id`, and `exclude_system`; inbox retains `since_id`, which
