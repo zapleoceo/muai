@@ -14,7 +14,8 @@ For an unfiltered compact page, fetch every truncated body with
 `next_cursor`.
 
 Inbox preserves the full body by default for existing callers. Pass
-`max_body_chars=250` for a compact page (50 long messages below 25K characters);
+`max_body_chars=180` for a compact page (50 Room messages measured at
+22,633 characters, below the 25K target; 250 measured 26,031);
 `truncated` shows whether each displayed body was shortened. The new
 `room_message_get(id)` returns one full message through the existing redaction
 view. The shared `get_message` repository function reads exactly that row.

@@ -1,6 +1,7 @@
 """Комната агентов: сообщения с идемпотентностью и курсором, задачи с арендой и fencing."""
 from __future__ import annotations
 
+import json
 from datetime import timedelta
 from types import SimpleNamespace
 
@@ -135,11 +136,11 @@ async def test_history_filters_by_task_and_pages_backwards(sqlite_db):
 async def test_compact_inbox_full_get_and_safe_cursor(sqlite_db):
     ids = [(await r.room_post("x" * 2000, CLAUDE, message_id=f"long-{i}"))
            ["message"]["id"] for i in range(50)]
-    got = await r.room_inbox(CODEX, limit=50, max_body_chars=250)
-    assert sum(len(str(m)) for m in got["messages"]) < 25_000
-    assert all(m["truncated"] and len(m["body"]) == 250 for m in got["messages"])
+    got = await r.room_inbox(CODEX, limit=50, max_body_chars=180)
+    assert len(json.dumps(got, ensure_ascii=False)) < 25_000
+    assert all(m["truncated"] and len(m["body"]) == 180 for m in got["messages"])
     assert (got["cursor"], got["next_cursor"]) == (0, None)
-    assert (await r.room_inbox(CODEX, max_body_chars=250))["messages"] == got["messages"]
+    assert (await r.room_inbox(CODEX, max_body_chars=180))["messages"] == got["messages"]
     assert (await r.room_inbox(CODEX))["messages"][0]["body"] == "x" * 2000
     full = (await r.room_message_get(ids[0]))["message"]
     assert full["body"] == "x" * 2000 and full["truncated"] is False
