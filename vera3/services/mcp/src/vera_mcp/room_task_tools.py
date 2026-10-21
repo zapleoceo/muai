@@ -8,6 +8,7 @@ from mcp.server.mcpserver import Context
 from pydantic import Field
 from vera_shared.room import (
     task_cancel,
+    task_inventory,
     task_metadata,
     task_progress,
     task_queue,
@@ -96,7 +97,7 @@ async def room_task_metadata_correct(
         room=_room(room), task_id=task_id, agent=client_of(ctx),
         expected_updated_at=expected_updated_at, reason=reason,
         responsible=responsible, next_action=next_action)
-    return {"ok": True, **{**result, "task": task_view(result["task"])}}
+    return {"ok": True, **result, "task": task_view(result["task"])}
 
 
 async def room_task_progress(
@@ -188,3 +189,13 @@ async def room_tasks(
     """Список задач комнаты со статусом, живым держателем и attention {state, label, since, last_result_at}. queue=open — все незавершённые, queue=unclaimed — незавершённые без живой аренды. List room tasks."""
     return {"room": room, "tasks": tasks_view(await task_queue.list_tasks(
         room=_room(room), status=status, limit=limit, queue=queue))}
+
+
+async def room_task_inventory(
+    room: Room = "main", limit: Annotated[int, Field(ge=1, le=200)] = 100,
+    cursor: Annotated[str | None, Field(max_length=1024)] = None,
+) -> dict[str, Any]:
+    """Read every Room task through a checked keyset cursor. Continue until
+    complete=true; if inconsistent=true, restart from the first page. Read-only."""
+    result = await task_inventory.page(room=_room(room), limit=limit, cursor=cursor)
+    return {"room": room, **result, "tasks": tasks_view(result["tasks"])}
