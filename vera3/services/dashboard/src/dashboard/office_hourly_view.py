@@ -175,7 +175,8 @@ def _scope_decisions(report: HourlyReport) -> str:
     rows = report.pending_cancellations or []
     if not rows:
         return (f'<p class="kb-meta">Сверка отмен по записи Room '
-                f'{esc(report.scope_message_id)}: ожидающих записи отмен нет.</p>')
+                f'{esc(report.scope_message_id)}: ожидающих записи отмен нет; '
+                f'Jira-зеркал вне доски: {report.hidden_jira_backlog}.</p>')
     items = []
     for row, source in sorted(rows, key=lambda pair: pair[0].task_id):
         url = f"/office/hourly/detail/{quote(row.room, safe='')}/{quote(row.task_id, safe='')}"
@@ -186,7 +187,7 @@ def _scope_decisions(report: HourlyReport) -> str:
     return (f'<details class="kb-info"><summary>Отмена владельца ожидает записи в Room: {len(rows)}</summary>'
             f'<p class="kb-meta">По записи Room {esc(report.scope_message_id)} эти карточки исключены '
             'из рабочей доски. Их исходный статус и история сохранены; отмену должен записать '
-            'штатный actor создателя.</p>'
+            f'штатный actor создателя. Jira-зеркал вне доски: {report.hidden_jira_backlog}.</p>'
             f'<ul class="kb-history">{"".join(items)}</ul></details>')
 
 

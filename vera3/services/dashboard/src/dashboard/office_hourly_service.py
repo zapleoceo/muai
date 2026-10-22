@@ -75,9 +75,12 @@ class HourlyReport:
     active_only_label: str = ""
     pending_cancellations: list[tuple[RoomTaskRow, str]] | None = None
     scope_message_id: str | None = None
+    hidden_jira_backlog: int = 0
 
 
-def parse_scope_decisions(row: RoomMessageRow) -> dict[tuple[str, str], str] | None:
+def parse_scope_decisions(row: RoomMessageRow) -> tuple[
+    dict[tuple[str, str], str], dict[tuple[str, str], str]
+] | None:
     """Read a dot-attributed scope record, never treating it as a Room status change."""
     if (row.room != "main" or row.from_agent != "dot" or
             row.to_agent != "office-dashboard" or row.task_id is not None or
@@ -86,19 +89,24 @@ def parse_scope_decisions(row: RoomMessageRow) -> dict[tuple[str, str], str] | N
         return None
     try:
         raw: Any = json.loads(row.body[len(SCOPE_PREFIX):])
-        entries = raw["pending_owner_cancellations"]
-        if not isinstance(entries, list) or len(entries) > 100:
-            return None
-        out: dict[tuple[str, str], str] = {}
-        for entry in entries:
-            room, task_id, source = entry["room"], entry["task_id"], entry["source"]
-            if (room != "main" or not isinstance(task_id, str) or
-                    not 1 <= len(task_id) <= 128 or not isinstance(source, str) or
-                    not source.startswith("room:") or not source[5:].isdigit() or
-                    (room, task_id) in out):
+        parsed = []
+        for name in ("pending_owner_cancellations", "excluded_jira_backlog"):
+            entries = raw[name]
+            if not isinstance(entries, list) or len(entries) > 100:
                 return None
-            out[(room, task_id)] = source
-        return out
+            out: dict[tuple[str, str], str] = {}
+            for entry in entries:
+                room, task_id, source = entry["room"], entry["task_id"], entry["source"]
+                if (room != "main" or not isinstance(task_id, str) or
+                        not 1 <= len(task_id) <= 128 or not isinstance(source, str) or
+                        not source.startswith("room:") or not source[5:].isdigit() or
+                        (room, task_id) in out):
+                    return None
+                out[(room, task_id)] = source
+            parsed.append(out)
+        if parsed[0].keys() & parsed[1].keys():
+            return None
+        return parsed[0], parsed[1]
     except (KeyError, TypeError, ValueError):
         return None
 
@@ -111,16 +119,20 @@ def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Atte
                  scope: ScopeConfig | None = None,
                  include_closed: bool = False,
                  pending_decisions: dict[tuple[str, str], str] | None = None,
-                 scope_message_id: str | None = None) -> HourlyReport:
+                 scope_message_id: str | None = None,
+                 excluded_backlog: dict[tuple[str, str], str] | None = None) -> HourlyReport:
     scope = scope or env_config()
     control_events = {(e.room, e.task_id): e for e in (controls or [])}
     control_by_task = {k: e.kind for k, e in control_events.items()}
     pending_decisions = pending_decisions or {}
+    excluded_backlog = excluded_backlog or {}
     pending = [(r, pending_decisions[(r.room, r.task_id)]) for r in rows
                if (r.room, r.task_id) in pending_decisions
                and r.status not in ("done", "cancelled")]
     pending_keys = {(r.room, r.task_id) for r, _ in pending}
-    split = apply_scope([r for r in rows if (r.room, r.task_id) not in pending_keys],
+    excluded_keys = set(excluded_backlog)
+    split = apply_scope([r for r in rows if (r.room, r.task_id) not in pending_keys
+                         and (r.room, r.task_id) not in excluded_keys],
                         now, scope, control_by_task)
     open_questions = {(q.room, q.task_id): q for q in questions if q.status == "open"}
     next_events = {(e.room, e.task_id): e for e in (control_next or [])}
@@ -170,7 +182,8 @@ def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Atte
     results.sort(key=lambda e: (e.at, e.id), reverse=True)
     return HourlyReport(now, start, cards, results, counts, None,
                         split.hidden_excluded, split.hidden_inactive, 0,
-                        "/".join(scope.active_only_names), pending, scope_message_id)
+                        "/".join(scope.active_only_names), pending, scope_message_id,
+                        sum((r.room, r.task_id) in excluded_keys for r in rows))
 
 
 async def load_report(now: datetime | None = None,
@@ -234,7 +247,7 @@ async def load_report(now: datetime | None = None,
         transitions = await load_transitions(s, now, WINDOW)
     scope_record = next(((r, parsed) for r in scope_rows
                          if (parsed := parse_scope_decisions(r)) is not None), None)
-    pending_decisions = scope_record[1] if scope_record else {}
+    pending_decisions, excluded_backlog = scope_record[1] if scope_record else ({}, {})
     scope_message_id = scope_record[0].message_id if scope_record else None
     controls_by_task = {(e.room, e.task_id): e.kind for e in controls}
     open_by_task = {(q.room, q.task_id): q for q in questions if q.status == "open"}
@@ -249,7 +262,8 @@ async def load_report(now: datetime | None = None,
     report = build_report(rows, attentions, questions, events, now, controls, control_next,
                           transitions, include_closed=include_closed,
                           pending_decisions=pending_decisions,
-                          scope_message_id=scope_message_id)
+                          scope_message_id=scope_message_id,
+                          excluded_backlog=excluded_backlog)
     runtime, hidden_runtime = scope_runtime(latest_runtime_snapshot(runtime_rows, now))
     return replace(report, runtime=runtime, hidden_runtime=hidden_runtime)
 

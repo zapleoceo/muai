@@ -247,14 +247,15 @@ def test_owner_cancel_scope_uses_attributed_room_record_without_changing_raw_sta
     decisions = {("main", row.task_id): "room:3867"}
     raw = SimpleNamespace(room="main", from_agent="dot", to_agent="office-dashboard",
                           task_id=None, status="info", body=SCOPE_PREFIX + json.dumps({
-                              "pending_owner_cancellations": [
+                          "pending_owner_cancellations": [
                                   {"room": "main", "task_id": row.task_id,
-                                   "source": "room:3867"}]}))
-    assert parse_scope_decisions(raw) == decisions
+                                   "source": "room:3867"}],
+                          "excluded_jira_backlog": []}))
+    assert parse_scope_decisions(raw) == (decisions, {})
     raw.from_agent = "claude"
     assert parse_scope_decisions(raw) is None
     raw.from_agent = "dot"
-    raw.body = SCOPE_PREFIX + '{"pending_owner_cancellations": [{"room": "main", "task_id": "x", "source": "arbitrary"}]}'
+    raw.body = SCOPE_PREFIX + '{"pending_owner_cancellations": [{"room": "main", "task_id": "x", "source": "arbitrary"}], "excluded_jira_backlog": []}'
     assert parse_scope_decisions(raw) is None
     report = build_report([row], {(row.room, row.task_id): attention("unassigned")},
                           [], [], NOW, pending_decisions=decisions,
@@ -270,6 +271,19 @@ def test_owner_cancel_scope_uses_attributed_room_record_without_changing_raw_sta
                           scope_message_id="scope-check")
     assert closed.pending_cancellations == []
     assert closed.counts["Отменена"] == 1
+
+
+def test_jira_mirror_exclusion_is_read_only_and_keeps_current_handoff() -> None:
+    mirror = task("ORCH-614", project="Orchestra", holder="dot")
+    current = task("ORCH-633", project="Orchestra", holder="dot")
+    rows = [mirror, current]
+    amap = {(r.room, r.task_id): attention("unassigned") for r in rows}
+    report = build_report(rows, amap, [], [], NOW,
+                          excluded_backlog={("main", "ORCH-614"): "room:3867"},
+                          scope_message_id="scope-check")
+    assert [c.row.task_id for c in report.cards] == ["ORCH-633"]
+    assert mirror.status == "open" and report.hidden_jira_backlog == 1
+    assert "Jira-зеркал вне доски: 1" in report_body(report)
 
 
 def test_modal_is_read_only_and_escapes_task_history() -> None:
