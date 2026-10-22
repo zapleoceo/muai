@@ -661,6 +661,17 @@ remain supported: label possibilities unverified, separate them from the stated
 reason, and say what evidence is missing. If an email's local Date header and
 the event UTC timestamp fall on different calendar days, name the time zone.
 
+**Version polarity (Room #3920):** `POLARITY_RULES` (`brain_search/evidence.py`) sits next to
+`EVIDENCE_RULES` in the stable prefix of both `synthesis.build_prompt` and the agent
+`SYSTEM_PROMPT`. "fixes / fixed in / patched in / resolved in / addresses version X" means X
+is fixed, not affected; affected versions and exposure are stated only when a source says so,
+otherwise the answer says the source does not specify; each vulnerability, version or status
+claim quotes the exact source phrase next to its `[event:ID]`. Background: recall answered that
+PHP 8.5.12/8.4.27/8.3.36/8.2.35 were affected while the full source text said they fix the
+vulnerabilities. Tests: `test_recall_version_polarity.py`. Known gap: `excerpt_terms()` yields no
+term from a bare version such as "PHP 8.4.27", so such a query does not pull a dropped middle
+window by itself; CVE ids contribute only their numeric part.
+
 `explicit_event_ids()` recognizes an explicit `event:ID` or `событие ID` query;
 the direct ID path reads up to five named IDs from visible legacy `events`,
 applying the same visibility, source, people, date, and project filters as ordinary

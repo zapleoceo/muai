@@ -14,6 +14,7 @@ from brain_search.agent import run_agent
 from brain_search.authorship import AUTHORSHIP_RULES, author_tag
 from brain_search.evidence import (
     EVIDENCE_RULES,
+    POLARITY_RULES,
     PRIMARY_CHARS,
     SECONDARY_CHARS,
     evidence_excerpt,
@@ -92,7 +93,7 @@ def build_prompt(*, question: str, self_ctx: str, context: str,
         "4) Каждое существенное утверждение о событии сопровождай [event:ID] "
         "из найденных событий. Если у события есть ссылка на оригинал, "
         "приведи её рядом; если ссылки нет, не выдумывай её.\n"
-        f"{AUTHORSHIP_RULES}{EVIDENCE_RULES}{SOURCE_PROMPT_NOTE}\n"
+        f"{AUTHORSHIP_RULES}{EVIDENCE_RULES}{POLARITY_RULES}{SOURCE_PROMPT_NOTE}\n"
         f"### Твоя конфигурация (твоя реальная, не из писем!)\n{self_ctx}\n\n"
         f"{history_block}"
         f"### Текущий вопрос Димы:\n{question}\n\n"

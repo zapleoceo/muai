@@ -33,6 +33,17 @@ EVIDENCE_RULES = (
     "unverified; never say it is \"not mentioned\" or «не указано».\n"
 )
 
+#: Room #3920: "PHP 8.5.12 ... fix two critical vulnerabilities" was answered as "affected".
+POLARITY_RULES = (
+    "\nPolarity rules: \"fixes\", \"fixed in\", \"patched in\", \"resolved in\" or "
+    "\"addresses\" a flaw in version X means X contains the fix and is NOT "
+    "affected; earlier versions are affected only if the source says so. Never "
+    "list fixed versions as affected. State affected versions or exposure only "
+    "when a source says it explicitly, otherwise say the source does not "
+    "specify. For any claim about a vulnerability, version or status, quote the "
+    "exact source phrase in quotes next to its [event:ID].\n"
+)
+
 
 MIN_TERM_LEN = 5
 MAX_TERMS = 12

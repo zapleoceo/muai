@@ -30,7 +30,7 @@ from brain_search.agent_tools import (
     load_remote_tool_specs,
 )
 from brain_search.authorship import AUTHORSHIP_RULES
-from brain_search.evidence import EVIDENCE_RULES, evidence_excerpt
+from brain_search.evidence import EVIDENCE_RULES, POLARITY_RULES, evidence_excerpt
 
 log = logging.getLogger(__name__)
 
@@ -99,7 +99,7 @@ SYSTEM_PROMPT = """Ты — Вера, цифровая память Димы. Т
     найденных событий. Если у события есть source_url, добавь ссылку.
     Не придумывай адрес оригинала, если source_url отсутствует.
 """
-SYSTEM_PROMPT += AUTHORSHIP_RULES + EVIDENCE_RULES
+SYSTEM_PROMPT += AUTHORSHIP_RULES + EVIDENCE_RULES + POLARITY_RULES
 
 
 def _observation_text(name: str, obs: Any) -> str:
