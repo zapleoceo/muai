@@ -8,6 +8,7 @@ from types import SimpleNamespace
 
 from dashboard.office_hourly_service import (
     SCOPE_PREFIX,
+    _latest_scope_record,
     build_report,
     next_question_reminder,
     parse_scope_decisions,
@@ -230,6 +231,8 @@ def test_kanban_six_columns_and_explicit_closed_filter() -> None:
     default = build_report(rows, amap, [], [], NOW)
     html = report_body(default)
     assert html.count('class="kb-col"') == 6
+    assert 'grid-template-columns:repeat(6,minmax(0,1fr))' in html
+    assert '.oh-projects article,.oh-card' in html
     assert 'aria-label="На проверке"' in html
     assert 'data-detail="/office/hourly/detail/main/active"' in html
     assert 'data-detail="/office/hourly/detail/main/finished"' not in html
@@ -250,12 +253,12 @@ def test_owner_cancel_scope_uses_attributed_room_record_without_changing_raw_sta
                           "pending_owner_cancellations": [
                                   {"room": "main", "task_id": row.task_id,
                                    "source": "room:3867"}],
-                          "excluded_jira_backlog": []}))
-    assert parse_scope_decisions(raw) == (decisions, {})
+                          "excluded_jira_backlog": [], "current_handoffs": []}))
+    assert parse_scope_decisions(raw) == (decisions, {}, {})
     raw.from_agent = "claude"
     assert parse_scope_decisions(raw) is None
     raw.from_agent = "dot"
-    raw.body = SCOPE_PREFIX + '{"pending_owner_cancellations": [{"room": "main", "task_id": "x", "source": "arbitrary"}], "excluded_jira_backlog": []}'
+    raw.body = SCOPE_PREFIX + '{"pending_owner_cancellations": [{"room": "main", "task_id": "x", "source": "arbitrary"}], "excluded_jira_backlog": [], "current_handoffs": []}'
     assert parse_scope_decisions(raw) is None
     report = build_report([row], {(row.room, row.task_id): attention("unassigned")},
                           [], [], NOW, pending_decisions=decisions,
@@ -273,6 +276,20 @@ def test_owner_cancel_scope_uses_attributed_room_record_without_changing_raw_sta
     assert closed.counts["Отменена"] == 1
 
 
+def test_newest_invalid_scope_does_not_fall_back_to_old_exclusions() -> None:
+    valid = SimpleNamespace(room="main", from_agent="dot", to_agent="office-dashboard",
+                            task_id=None, status="info", body=SCOPE_PREFIX + json.dumps({
+                                "pending_owner_cancellations": [{"room": "main",
+                                                                  "task_id": "old",
+                                                                  "source": "room:3867"}],
+                                "excluded_jira_backlog": [], "current_handoffs": []}))
+    invalid = SimpleNamespace(room="main", from_agent="dot", to_agent="office-dashboard",
+                              task_id=None, status="info", body=SCOPE_PREFIX + "{invalid")
+    assert _latest_scope_record([invalid, valid]) is None
+    assert _latest_scope_record([valid]) == (valid, parse_scope_decisions(valid))
+    assert "полнота охвата неизвестна" in report_body(build_report([], {}, [], [], NOW))
+
+
 def test_jira_mirror_exclusion_is_read_only_and_keeps_current_handoff() -> None:
     mirror = task("ORCH-614", project="Orchestra", holder="dot")
     current = task("ORCH-633", project="Orchestra", holder="dot")
@@ -284,6 +301,18 @@ def test_jira_mirror_exclusion_is_read_only_and_keeps_current_handoff() -> None:
     assert [c.row.task_id for c in report.cards] == ["ORCH-633"]
     assert mirror.status == "open" and report.hidden_jira_backlog == 1
     assert "Jira-зеркал вне доски: 1" in report_body(report)
+
+
+def test_current_handoff_remains_visible_when_waiting_without_live_lease() -> None:
+    current = task("ORCH-633", project="Orchestra")
+    current.waiting_reason = "Ждём проверку"
+    amap = {(current.room, current.task_id): attention("needs_owner")}
+    assert build_report([current], amap, [], [], NOW).cards == []
+    report = build_report([current], amap, [], [], NOW,
+                          current_handoffs={("main", "ORCH-633"): "room:3867"},
+                          scope_message_id="scope-check")
+    assert [c.row.task_id for c in report.cards] == ["ORCH-633"]
+    assert report.cards[0].status == "Новая / в очереди"
 
 
 def test_modal_is_read_only_and_escapes_task_history() -> None:
@@ -302,3 +331,5 @@ def test_modal_is_read_only_and_escapes_task_history() -> None:
     assert "&lt;script&gt;" in html and "<script>" not in html
     assert "&lt;bad&gt;" in html and "<bad>" not in html
     assert "<form" not in html
+    assert "Вопросов нет" not in html
+    assert "Вопросов нет" in modal_body(SimpleNamespace(row=row), [], [])

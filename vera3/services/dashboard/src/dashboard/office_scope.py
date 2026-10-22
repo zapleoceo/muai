@@ -113,7 +113,8 @@ def is_our_current_work(row: Any, now: datetime, cfg: ScopeConfig,
 
 
 def apply_scope(rows: list[Any], now: datetime, cfg: ScopeConfig | None = None,
-                controls: Mapping[tuple[str, str], str] | None = None) -> ScopeSplit:
+                controls: Mapping[tuple[str, str], str] | None = None,
+                current_handoffs: frozenset[tuple[str, str]] = frozenset()) -> ScopeSplit:
     cfg = cfg or env_config()
     visible: list[Any] = []
     excluded = inactive = 0
@@ -124,6 +125,7 @@ def apply_scope(rows: list[Any], now: datetime, cfg: ScopeConfig | None = None,
             excluded += open_row
             hidden_keys.add((row.room, row.task_id))
         elif (_project_key(row.project) in cfg.active_only_projects
+              and (row.room, row.task_id) not in current_handoffs
               and not is_our_current_work(row, now, cfg, (controls or {}).get((row.room, row.task_id)))):
             inactive += open_row
             hidden_keys.add((row.room, row.task_id))

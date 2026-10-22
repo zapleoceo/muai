@@ -79,7 +79,7 @@ class HourlyReport:
 
 
 def parse_scope_decisions(row: RoomMessageRow) -> tuple[
-    dict[tuple[str, str], str], dict[tuple[str, str], str]
+    dict[tuple[str, str], str], dict[tuple[str, str], str], dict[tuple[str, str], str]
 ] | None:
     """Read a dot-attributed scope record, never treating it as a Room status change."""
     if (row.room != "main" or row.from_agent != "dot" or
@@ -90,7 +90,8 @@ def parse_scope_decisions(row: RoomMessageRow) -> tuple[
     try:
         raw: Any = json.loads(row.body[len(SCOPE_PREFIX):])
         parsed = []
-        for name in ("pending_owner_cancellations", "excluded_jira_backlog"):
+        for name in ("pending_owner_cancellations", "excluded_jira_backlog",
+                     "current_handoffs"):
             entries = raw[name]
             if not isinstance(entries, list) or len(entries) > 100:
                 return None
@@ -104,11 +105,21 @@ def parse_scope_decisions(row: RoomMessageRow) -> tuple[
                     return None
                 out[(room, task_id)] = source
             parsed.append(out)
-        if parsed[0].keys() & parsed[1].keys():
+        if (parsed[0].keys() & parsed[1].keys() or
+                parsed[0].keys() & parsed[2].keys() or
+                parsed[1].keys() & parsed[2].keys()):
             return None
-        return parsed[0], parsed[1]
+        return parsed[0], parsed[1], parsed[2]
     except (KeyError, TypeError, ValueError):
         return None
+
+
+def _latest_scope_record(rows: list[RoomMessageRow]) -> tuple[RoomMessageRow, tuple] | None:
+    """A bad newest record means unknown coverage, never an older silent fallback."""
+    if not rows:
+        return None
+    parsed = parse_scope_decisions(rows[0])
+    return (rows[0], parsed) if parsed is not None else None
 
 
 def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Attention],
@@ -120,7 +131,8 @@ def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Atte
                  include_closed: bool = False,
                  pending_decisions: dict[tuple[str, str], str] | None = None,
                  scope_message_id: str | None = None,
-                 excluded_backlog: dict[tuple[str, str], str] | None = None) -> HourlyReport:
+                 excluded_backlog: dict[tuple[str, str], str] | None = None,
+                 current_handoffs: dict[tuple[str, str], str] | None = None) -> HourlyReport:
     scope = scope or env_config()
     control_events = {(e.room, e.task_id): e for e in (controls or [])}
     control_by_task = {k: e.kind for k, e in control_events.items()}
@@ -133,7 +145,8 @@ def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Atte
     excluded_keys = set(excluded_backlog)
     split = apply_scope([r for r in rows if (r.room, r.task_id) not in pending_keys
                          and (r.room, r.task_id) not in excluded_keys],
-                        now, scope, control_by_task)
+                        now, scope, control_by_task,
+                        frozenset(current_handoffs or {}))
     open_questions = {(q.room, q.task_id): q for q in questions if q.status == "open"}
     next_events = {(e.room, e.task_id): e for e in (control_next or [])}
     latest: dict[tuple[str, str], RoomTaskEventRow] = {}
@@ -226,7 +239,7 @@ async def load_report(now: datetime | None = None,
             RoomMessageRow.task_id.is_(None), RoomMessageRow.status == "info",
             RoomMessageRow.body.startswith(SCOPE_PREFIX),
             RoomMessageRow.created_at <= now,
-        ).order_by(RoomMessageRow.id.desc()).limit(20))
+        ).order_by(RoomMessageRow.id.desc()).limit(1))
         rows = list(rows_result.scalars().all())
         questions = list(questions_result.scalars().all())
         events = list(events_result.scalars().all())
@@ -245,9 +258,9 @@ async def load_report(now: datetime | None = None,
         runtime_rows = list(runtime_result.scalars().all())
         scope_rows = list(scope_result.scalars().all())
         transitions = await load_transitions(s, now, WINDOW)
-    scope_record = next(((r, parsed) for r in scope_rows
-                         if (parsed := parse_scope_decisions(r)) is not None), None)
-    pending_decisions, excluded_backlog = scope_record[1] if scope_record else ({}, {})
+    scope_record = _latest_scope_record(scope_rows)
+    pending_decisions, excluded_backlog, current_handoffs = (
+        scope_record[1] if scope_record else ({}, {}, {}))
     scope_message_id = scope_record[0].message_id if scope_record else None
     controls_by_task = {(e.room, e.task_id): e.kind for e in controls}
     open_by_task = {(q.room, q.task_id): q for q in questions if q.status == "open"}
@@ -263,7 +276,8 @@ async def load_report(now: datetime | None = None,
                           transitions, include_closed=include_closed,
                           pending_decisions=pending_decisions,
                           scope_message_id=scope_message_id,
-                          excluded_backlog=excluded_backlog)
+                          excluded_backlog=excluded_backlog,
+                          current_handoffs=current_handoffs)
     runtime, hidden_runtime = scope_runtime(latest_runtime_snapshot(runtime_rows, now))
     return replace(report, runtime=runtime, hidden_runtime=hidden_runtime)
 

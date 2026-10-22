@@ -103,7 +103,7 @@ KANBAN_CSS = """<style>
 .kb-filter{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
 .kb-filter a{display:inline-block;padding:.45rem .75rem;border:1px solid var(--line);border-radius:2rem}
 .kb-filter a[aria-current=page]{background:var(--bg-inset);color:var(--text-strong);font-weight:700}
-.kb-board{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.8rem;align-items:start;margin:1.2rem 0;width:100%;min-width:0}
+.kb-board{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:.8rem;align-items:start;margin:1.2rem 0;width:100%;min-width:0}
 .kb-col{min-width:0;background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-md);padding:.7rem}
 .kb-col h2{font-size:1rem;margin:.2rem 0 .8rem}.kb-col h2 span{color:var(--muted);font-size:.85rem}
 .kb-stack{display:grid;gap:.6rem}.kb-card{display:block;width:100%;text-align:left;color:var(--text-strong);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md);padding:.8rem;cursor:pointer;font:inherit}
@@ -116,6 +116,9 @@ KANBAN_CSS = """<style>
 .kb-dialog-head h2{margin:0;font-size:1.2rem}.kb-close{min-width:2.4rem;min-height:2.4rem;font-size:1.3rem;cursor:pointer}
 .kb-dialog-content{padding:1.2rem;overflow-wrap:anywhere}.kb-fields{display:grid;grid-template-columns:minmax(9rem,12rem) 1fr;gap:.55rem 1rem}.kb-fields dt{color:var(--muted)}.kb-fields dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
 .kb-history{display:grid;gap:.55rem;padding:0;list-style:none}.kb-history li{border-top:1px solid var(--line);padding:.5rem 0;white-space:pre-wrap;overflow-wrap:anywhere}
+.oh-meta,.oh-note{color:var(--muted);font-size:.85rem}.oh-projects{display:grid;grid-template-columns:repeat(auto-fit,minmax(15rem,1fr));gap:.7rem}
+.oh-projects article,.oh-card{border:1px solid var(--line);border-radius:var(--r-md);padding:.8rem;background:var(--surface)}
+.oh-card h3,.oh-projects h3{font-size:1rem;margin:.2rem 0}.oh-pill{display:inline-block;padding:.2rem .6rem;border-radius:1rem;background:var(--bg-inset);font-size:.75rem}
 body:has(.kb-dialog[open]){overflow:hidden}
 @media(max-width:1100px){.kb-board{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:650px){.kb-board{grid-template-columns:1fr}.kb-dialog{width:100%;max-width:100%;max-height:100dvh;height:100dvh;border-radius:0}.kb-fields{grid-template-columns:1fr}.kb-fields dt{margin-top:.5rem}}
@@ -240,5 +243,5 @@ def modal_body(item, events, questions) -> str:
     history = ''.join(f'<li><span class="kb-meta">{local_dt(e.at)} · {esc(e.kind)} · {esc(e.agent or "—")}</span><br>{esc(safe_text(e.text, 2000))}</li>'
                       for e in reversed(events)) or '<li>Событий нет</li>'
     return (f'<dl class="kb-fields">{field_html}</dl>'
-            f'<h3>Вопросы</h3><ul class="kb-history">{question_html or "<li>Нет открытых вопросов</li>"}</ul>'
+            f'<h3>Вопросы</h3><ul class="kb-history">{question_html or "<li>Вопросов нет</li>"}</ul>'
             f'<h3>История (последние 200 событий)</h3><ol class="kb-history">{history}</ol>')
