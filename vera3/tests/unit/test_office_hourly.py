@@ -6,8 +6,14 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 
-from dashboard.office_hourly_service import build_report, next_question_reminder
-from dashboard.office_hourly_view import report_body
+from dashboard.office_hourly_service import (
+    SCOPE_PREFIX,
+    _latest_scope_record,
+    build_report,
+    next_question_reminder,
+    parse_scope_decisions,
+)
+from dashboard.office_hourly_view import modal_body, report_body
 from dashboard.office_runtime_service import (
     PREFIX,
     latest_runtime_snapshot,
@@ -51,7 +57,7 @@ def test_statuses_sum_once_and_done_is_hidden() -> None:
     assert report.counts == {"Новая / в очереди": 1, "В работе": 1, "Блокер": 1, "Ревью": 1}
     assert report.results == []
     html = report_body(report)
-    assert "Готово</span>" not in html
+    assert 'aria-label="Готово"' in html
     assert "done</a>" not in html
 
 
@@ -98,7 +104,8 @@ def test_cancelled_and_done_are_absent_from_the_report() -> None:
     assert report.results == []
     assert sum(report.counts.values()) == 0
     html = report_body(report)
-    assert "Отменена" not in html
+    assert 'aria-label="Отменена"' in html
+    assert 'data-detail="/office/hourly/detail/main/cancelled"' not in html
     assert "Отменено владельцем" not in html
     assert "cancelled</a>" not in html
     assert "finished</a>" not in html
@@ -111,7 +118,8 @@ def test_review_event_and_pause_are_distinct() -> None:
     controls = [event("review", "review", 2), event("pause", "paused", 2)]
     report = build_report(rows, amap, [], [], NOW, controls)
     assert [c.status for c in report.cards] == ["Блокер", "Ревью"]
-    assert "Пауза зафиксирована" in report_body(report)
+    assert 'aria-label="Блокер"' in report_body(report)
+    assert 'aria-label="На проверке"' in report_body(report)
 
 
 def test_acknowledged_question_or_new_claim_ends_old_review_control() -> None:
@@ -212,5 +220,132 @@ def test_blocker_label_shows_confidence() -> None:
     report = build_report([blocked, asked], amap, [q], [], NOW)
     assert report.counts["Блокер"] == 2
     html = report_body(report)
-    assert "Блокер · не подтверждён" in html
-    assert "Блокер · подтверждён" in html
+    assert "Основание блокера: не подтверждён" in html
+    assert "Основание блокера: подтверждён" in html
+
+
+def test_kanban_six_columns_and_explicit_closed_filter() -> None:
+    rows = [task("active", holder="dot"), task("finished", "done"),
+            task("cancelled", "cancelled")]
+    amap = {(r.room, r.task_id): attention(r.status) for r in rows}
+    default = build_report(rows, amap, [], [], NOW)
+    html = report_body(default)
+    assert html.count('class="kb-col"') == 6
+    assert 'grid-template-columns:repeat(6,minmax(0,1fr))' in html
+    assert '.oh-projects article,.oh-card' in html
+    assert 'aria-label="На проверке"' in html
+    assert 'data-detail="/office/hourly/detail/main/active"' in html
+    assert 'data-detail="/office/hourly/detail/main/finished"' not in html
+    assert 'data-detail="/office/hourly/detail/main/cancelled"' not in html
+    shown = build_report(rows, amap, [], [], NOW, include_closed=True)
+    shown_html = report_body(shown, show_closed=True)
+    assert shown.counts["Готово"] == shown.counts["Отменена"] == 1
+    assert 'data-detail="/office/hourly/detail/main/finished"' in shown_html
+    assert 'data-detail="/office/hourly/detail/main/cancelled"' in shown_html
+    assert 'href="/office/hourly?show_closed=true" aria-current="page"' in shown_html
+
+
+def test_owner_cancel_scope_uses_attributed_room_record_without_changing_raw_status() -> None:
+    row = task("studio-balcony-model")
+    decisions = {("main", row.task_id): "room:3867"}
+    raw = SimpleNamespace(room="main", from_agent="dot", to_agent="office-dashboard",
+                          task_id=None, status="info", body=SCOPE_PREFIX + json.dumps({
+                          "pending_owner_cancellations": [
+                                  {"room": "main", "task_id": row.task_id,
+                                   "source": "room:3867"}],
+                          "excluded_jira_backlog": [], "current_handoffs": []}))
+    assert parse_scope_decisions(raw) == (decisions, {}, {})
+    raw.from_agent = "claude"
+    assert parse_scope_decisions(raw) is None
+    raw.from_agent = "dot"
+    raw.body = SCOPE_PREFIX + '{"pending_owner_cancellations": [{"room": "main", "task_id": "x", "source": "arbitrary"}], "excluded_jira_backlog": [], "current_handoffs": []}'
+    assert parse_scope_decisions(raw) is None
+    report = build_report([row], {(row.room, row.task_id): attention("unassigned")},
+                          [], [], NOW, pending_decisions=decisions,
+                          scope_message_id="scope-check")
+    assert report.cards == [] and row.status == "open"
+    assert report.pending_cancellations == [(row, "room:3867")]
+    html = report_body(report)
+    assert "Отмена владельца ожидает записи в Room: 1" in html
+    assert "запись Room: open" in html
+    row.status = "cancelled"
+    closed = build_report([row], {(row.room, row.task_id): attention("cancelled")},
+                          [], [], NOW, include_closed=True, pending_decisions=decisions,
+                          scope_message_id="scope-check")
+    assert closed.pending_cancellations == []
+    assert closed.counts["Отменена"] == 1
+
+
+def test_newest_invalid_scope_does_not_fall_back_to_old_exclusions() -> None:
+    valid = SimpleNamespace(room="main", from_agent="dot", to_agent="office-dashboard",
+                            task_id=None, status="info", body=SCOPE_PREFIX + json.dumps({
+                                "pending_owner_cancellations": [{"room": "main",
+                                                                  "task_id": "old",
+                                                                  "source": "room:3867"}],
+                                "excluded_jira_backlog": [], "current_handoffs": []}))
+    invalid = SimpleNamespace(room="main", from_agent="dot", to_agent="office-dashboard",
+                              task_id=None, status="info", body=SCOPE_PREFIX + "{invalid")
+    assert _latest_scope_record([invalid, valid]) is None
+    assert _latest_scope_record([valid]) == (valid, parse_scope_decisions(valid))
+    assert "полнота охвата неизвестна" in report_body(build_report([], {}, [], [], NOW))
+
+
+def test_jira_mirror_exclusion_is_read_only_and_keeps_current_handoff() -> None:
+    mirror = task("ORCH-614", project="Orchestra", holder="dot")
+    current = task("ORCH-633", project="Orchestra", holder="dot")
+    finished = task("ORCH-587", "done", project="Orchestra")
+    rows = [mirror, current]
+    amap = {(r.room, r.task_id): attention("unassigned") for r in rows}
+    q = SimpleNamespace(room="main", task_id="ORCH-614", status="open",
+                        question="Что дальше?", asked_at=NOW)
+    report = build_report(rows, amap, [q], [], NOW,
+                          excluded_backlog={("main", "ORCH-614"): "room:3867"},
+                          scope_message_id="scope-check")
+    assert [c.row.task_id for c in report.cards] == ["ORCH-633"]
+    assert mirror.status == "open" and report.excluded_by_decision == [
+        (mirror, "room:3867", True)]
+    html = report_body(report)
+    assert "Вне Office по решению владельца: 1 открытых" in html
+    assert "запись Room: open · источник room:3867 · открытый вопрос в Room" in html
+    assert 'data-detail="/office/hourly/detail/main/ORCH-614"' in html
+    assert 'data-detail="/office/hourly/detail/main/ORCH-633"' in html
+    rows.append(finished)
+    amap[(finished.room, finished.task_id)] = attention("done")
+    excluded = {("main", "ORCH-614"): "room:3867", ("main", "ORCH-587"): "room:3867"}
+    closed = build_report(rows, amap, [q], [], NOW, include_closed=True,
+                          excluded_backlog=excluded, scope_message_id="scope-check")
+    assert "Вне Office по решению владельца: 1 открытых" in report_body(closed)
+    assert 'data-detail="/office/hourly/detail/main/ORCH-587"' not in report_body(closed)
+    assert 'data-detail="/office/hourly/detail/main/ORCH-587"' in report_body(closed, show_closed=True)
+
+
+def test_current_handoff_remains_visible_when_waiting_without_live_lease() -> None:
+    current = task("ORCH-633", project="Orchestra")
+    current.waiting_reason = "Ждём проверку"
+    amap = {(current.room, current.task_id): attention("needs_owner")}
+    assert build_report([current], amap, [], [], NOW).cards == []
+    report = build_report([current], amap, [], [], NOW,
+                          current_handoffs={("main", "ORCH-633"): "room:3867"},
+                          scope_message_id="scope-check")
+    assert [c.row.task_id for c in report.cards] == ["ORCH-633"]
+    assert report.cards[0].status == "Новая / в очереди"
+
+
+def test_modal_is_read_only_and_escapes_task_history() -> None:
+    row = task("modal", holder="dot")
+    row.note = "Описание <script>alert(1)</script>"
+    row.refs = [{"kind": "source", "ref": "<img onerror=alert(2)>"}]
+    row.depends_on = ["other"]
+    row.last_progress_at = NOW
+    row.last_progress_text = "Результат готов"
+    row.waiting_reason = "Ждём проверку"
+    q = SimpleNamespace(question="<owner?>", status="open")
+    ev = event("modal", "progress", 3, "<bad> событие")
+    html = modal_body(SimpleNamespace(row=row), [ev], [(q, [])])
+    assert "Описание" in html and "Следующий шаг" in html
+    assert "Результат готов" in html and "История" in html
+    assert "&lt;script&gt;" in html and "<script>" not in html
+    assert "&lt;bad&gt;" in html and "<bad>" not in html
+    assert "<form" not in html
+    assert "Вопросов нет" not in html
+    assert "Вопросов нет" in modal_body(SimpleNamespace(row=row), [], [])
