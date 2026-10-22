@@ -21,7 +21,7 @@ from vera_shared.db.models_room_events import (
 )
 from vera_shared.timeutil import utc_naive_now
 
-from vera_mcp.auth import allowed_rooms, load_room_tokens, load_tokens
+from vera_mcp.auth import allowed_rooms
 from vera_mcp.events_net import (
     MAX_BODY_BYTES,
     CallbackRejected,
@@ -29,7 +29,7 @@ from vera_mcp.events_net import (
     post_pinned,
     signed_headers,
 )
-from vera_mcp.room_oauth import allowed_actors
+from vera_mcp.room_oauth import configured_agents
 
 log = logging.getLogger(__name__)
 
@@ -61,8 +61,7 @@ async def _revoke_all(sub_id: str) -> None:
 
 def principal_still_authorised(principal: str, room: str) -> bool:
     """Токен/актор принципала ещё существует и комната по-прежнему разрешена."""
-    known = set(load_room_tokens().values()) | set(load_tokens().values()) | set(allowed_actors())
-    return principal in known and room in allowed_rooms()
+    return principal in configured_agents(include_internal=False) and room in allowed_rooms()
 
 
 async def _post(sub: RoomEventSubscriptionRow, row: RoomEventOutboxRow,

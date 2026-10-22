@@ -8,6 +8,7 @@ from pydantic import Field
 from vera_shared.room import handoff
 
 from vera_mcp.auth import client_of
+from vera_mcp.room_common import check_session
 from vera_mcp.room_redact import task_view
 from vera_mcp.room_tools import MAX_LEASE_S, Agent, Ident, Room, _room
 
@@ -32,7 +33,8 @@ async def room_task_handoff_accept(
 ) -> dict[str, Any]:
     """Принять переданную тебе задачу: аренда переходит к тебе, fencing_token растёт на 1 (токен отправителя устаревает). Верни новый токен во все правки. Accept a handoff offered to you."""
     task = await handoff.accept(room=_room(room), task_id=task_id, agent=client_of(ctx),
-                                session=session, account=account, lease_seconds=lease_seconds)
+                                session=check_session(client_of(ctx), session),
+                                account=account, lease_seconds=lease_seconds)
     return {"ok": True, "task": task_view(task)}
 
 

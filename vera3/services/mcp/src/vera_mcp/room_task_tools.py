@@ -25,6 +25,7 @@ from vera_mcp.room_common import (
     Project,
     Room,
     _room,
+    check_session,
 )
 from vera_mcp.room_redact import events_view, task_view, tasks_view
 
@@ -57,7 +58,7 @@ async def room_task_claim(
     """Захватить задачу в аренду; верни fencing_token во все последующие правки. Повтор своим агентом продлевает аренду. Claim a task lease; pass the returned fencing_token to update/release."""
     task = await tasks.claim(room=_room(room), task_id=task_id, agent=client_of(ctx),
                              lease_seconds=lease_seconds, title=title, paths=paths,
-                             session=session, account=account)
+                             session=check_session(client_of(ctx), session), account=account)
     return {"ok": True, "task": task_view(task)}
 
 
@@ -146,7 +147,7 @@ async def room_task_next(
     """Атомарно взять ОДНУ следующую задачу: open, без живой аренды, auto_pickup, все depends_on done, нет открытого вопроса владельцу, не на паузе; сперва priority (0 срочнее), затем created_at. task=null, если подходящей нет. Claim the next eligible task."""
     task = await task_queue.next_task(
         room=_room(room), agent=client_of(ctx), project=project, lease_seconds=lease_seconds,
-        session=session, account=account)
+        session=check_session(client_of(ctx), session), account=account)
     return {"ok": True, "task": task_view(task)}
 
 

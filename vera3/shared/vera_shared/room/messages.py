@@ -5,6 +5,7 @@ Posting takes a per-room transaction lock before INSERT to preserve commit order
 """
 from __future__ import annotations
 
+from collections.abc import Iterable
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select, text
@@ -122,7 +123,8 @@ async def inbox(*, agent: str, room: str, consumer: str, limit: int,
                 since_id: int | None = None, to: str | None = None,
                 kind: str | None = None, exclude_system: bool = False,
                 task_id: str | None = None, session: str | None = None,
-                after_id: int | None = None) -> tuple[list[dict[str, Any]], int]:
+                after_id: int | None = None,
+                reserved: Iterable[str] = ()) -> tuple[list[dict[str, Any]], int]:
     """Чужие сообщения мне или всем после курсора (или since_id) и сам курсор. Курсор
     не двигает: подтверждение — отдельный `ack` после обработки."""
     cursor = await _cursor(agent, room, consumer)
@@ -131,7 +133,7 @@ async def inbox(*, agent: str, room: str, consumer: str, limit: int,
     after = cursor if since_id is None and after_id is None else (
         after_id if after_id is not None else since_id)
     async with get_session() as s:
-        own_labels = await _exclusive_labels(s, room, agent)
+        own_labels = await _exclusive_labels(s, room, agent, reserved)
         recipients = [RoomMessageRow.to_agent.is_(None), RoomMessageRow.to_agent == agent]
         if own_labels:
             recipients.append(RoomMessageRow.to_agent.in_(own_labels))
