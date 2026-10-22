@@ -232,6 +232,13 @@ def test_kanban_six_columns_and_explicit_closed_filter() -> None:
     html = report_body(default)
     assert html.count('class="kb-col"') == 6
     assert 'grid-template-columns:repeat(6,minmax(0,1fr))' in html
+    # The global button style sets nowrap; narrow columns must override it.
+    assert '.kb-card{display:block;min-width:0;width:100%;white-space:normal;' in html
+    assert '.kb-stack{display:grid;grid-template-columns:minmax(0,1fr)' in html
+    assert '@media(max-width:1280px)' in html
+    assert '@media(max-width:1100px)' in html
+    assert '@media(max-width:650px)' in html
+    assert 'main:has(.kb-board) nav.top ul{flex-wrap:wrap' in html
     assert '.oh-projects article,.oh-card' in html
     assert 'aria-label="На проверке"' in html
     assert 'data-detail="/office/hourly/detail/main/active"' in html
