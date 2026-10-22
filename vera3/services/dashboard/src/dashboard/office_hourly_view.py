@@ -178,8 +178,7 @@ def _scope_decisions(report: HourlyReport) -> str:
     rows = report.pending_cancellations or []
     if not rows:
         return (f'<p class="kb-meta">Сверка отмен по записи Room '
-                f'{esc(report.scope_message_id)}: ожидающих записи отмен нет; '
-                f'Jira-зеркал вне доски: {report.hidden_jira_backlog}.</p>')
+                f'{esc(report.scope_message_id)}: ожидающих записи отмен нет.</p>')
     items = []
     for row, source in sorted(rows, key=lambda pair: pair[0].task_id):
         url = f"/office/hourly/detail/{quote(row.room, safe='')}/{quote(row.task_id, safe='')}"
@@ -190,8 +189,33 @@ def _scope_decisions(report: HourlyReport) -> str:
     return (f'<details class="kb-info"><summary>Отмена владельца ожидает записи в Room: {len(rows)}</summary>'
             f'<p class="kb-meta">По записи Room {esc(report.scope_message_id)} эти карточки исключены '
             'из рабочей доски. Их исходный статус и история сохранены; отмену должен записать '
-            f'штатный actor создателя. Jira-зеркал вне доски: {report.hidden_jira_backlog}.</p>'
+            'штатный actor создателя.</p>'
             f'<ul class="kb-history">{"".join(items)}</ul></details>')
+
+
+def _excluded_scope(report: HourlyReport, show_closed: bool) -> str:
+    rows = report.excluded_by_decision or []
+    open_rows = [(row, source, has_question) for row, source, has_question in rows
+                 if row.status not in ("done", "cancelled")]
+    shown = rows if show_closed else open_rows
+    if not rows:
+        return ""
+    items = []
+    for row, source, has_question in sorted(shown, key=lambda entry: entry[0].task_id):
+        url = f"/office/hourly/detail/{quote(row.room, safe='')}/{quote(row.task_id, safe='')}"
+        question = ' · открытый вопрос в Room' if has_question else ''
+        items.append(f'<li><button type="button" class="kb-card" data-detail="{esc(url)}">'
+                     f'<strong>{esc(_short(row.title or row.task_id))}</strong>'
+                     f'<small>{esc(row.project or "Без проекта")} · запись Room: {esc(row.status)}'
+                     f' · источник {esc(source)}{question}</small></button></li>')
+    hidden_closed = len(rows) - len(open_rows)
+    closed_note = (f' · закрытых записей {"показано" if show_closed else "скрыто"}: '
+                   f'{hidden_closed}' if hidden_closed else '')
+    return (f'<details class="kb-info"><summary>Вне Office по решению владельца: '
+            f'{len(open_rows)} открытых{closed_note}</summary>'
+            '<p class="kb-meta">Они не входят в рабочую доску. Исходный статус, вопрос '
+            'и история доступны по карточке; backlog этих проектов ведётся в Jira.</p>'
+            f'<ul class="kb-history">{"".join(items) or "<li>Открытых записей нет</li>"}</ul></details>')
 
 
 def report_body(report: HourlyReport, show_closed: bool = False) -> str:
@@ -210,7 +234,8 @@ setInterval(()=>{if(!dialog.open)location.reload()},300000);
 })();</script>"""
     return (f'{KANBAN_CSS}<div class="kb-head"><div><h1>Office · задачи</h1>'
             f'<p class="kb-sub">Текущая координация · обновлено {local_dt(report.as_of)}</p></div>{filters}</div>'
-            f'{_scope_decisions(report)}{_kanban_board(report, show_closed)}{summary}'
+            f'{_scope_decisions(report)}{_kanban_board(report, show_closed)}'
+            f'{_excluded_scope(report, show_closed)}{summary}'
             '<dialog id="kb-detail" class="kb-dialog" aria-labelledby="kb-detail-title">'
             '<div class="kb-dialog-head"><h2 id="kb-detail-title">Задача</h2>'
             '<button type="button" id="kb-detail-close" class="kb-close" aria-label="Закрыть">×</button></div>'

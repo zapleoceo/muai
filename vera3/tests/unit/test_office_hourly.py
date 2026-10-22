@@ -293,14 +293,30 @@ def test_newest_invalid_scope_does_not_fall_back_to_old_exclusions() -> None:
 def test_jira_mirror_exclusion_is_read_only_and_keeps_current_handoff() -> None:
     mirror = task("ORCH-614", project="Orchestra", holder="dot")
     current = task("ORCH-633", project="Orchestra", holder="dot")
+    finished = task("ORCH-587", "done", project="Orchestra")
     rows = [mirror, current]
     amap = {(r.room, r.task_id): attention("unassigned") for r in rows}
-    report = build_report(rows, amap, [], [], NOW,
+    q = SimpleNamespace(room="main", task_id="ORCH-614", status="open",
+                        question="Что дальше?", asked_at=NOW)
+    report = build_report(rows, amap, [q], [], NOW,
                           excluded_backlog={("main", "ORCH-614"): "room:3867"},
                           scope_message_id="scope-check")
     assert [c.row.task_id for c in report.cards] == ["ORCH-633"]
-    assert mirror.status == "open" and report.hidden_jira_backlog == 1
-    assert "Jira-зеркал вне доски: 1" in report_body(report)
+    assert mirror.status == "open" and report.excluded_by_decision == [
+        (mirror, "room:3867", True)]
+    html = report_body(report)
+    assert "Вне Office по решению владельца: 1 открытых" in html
+    assert "запись Room: open · источник room:3867 · открытый вопрос в Room" in html
+    assert 'data-detail="/office/hourly/detail/main/ORCH-614"' in html
+    assert 'data-detail="/office/hourly/detail/main/ORCH-633"' in html
+    rows.append(finished)
+    amap[(finished.room, finished.task_id)] = attention("done")
+    excluded = {("main", "ORCH-614"): "room:3867", ("main", "ORCH-587"): "room:3867"}
+    closed = build_report(rows, amap, [q], [], NOW, include_closed=True,
+                          excluded_backlog=excluded, scope_message_id="scope-check")
+    assert "Вне Office по решению владельца: 1 открытых" in report_body(closed)
+    assert 'data-detail="/office/hourly/detail/main/ORCH-587"' not in report_body(closed)
+    assert 'data-detail="/office/hourly/detail/main/ORCH-587"' in report_body(closed, show_closed=True)
 
 
 def test_current_handoff_remains_visible_when_waiting_without_live_lease() -> None:

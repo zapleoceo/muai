@@ -21,8 +21,11 @@ entry excludes
 an *open* task from the actionable board and lists it in a separate, collapsed
 "owner cancellation awaiting Room write" section with its actual Room status and
 source. It never changes a task row or asserts that Room has cancelled the task.
-An excluded Jira backlog entry hides an old Room mirror while Jira remains its
-backlog source; it does not affect the underlying Room record.
+An `excluded_jira_backlog` entry keeps an old Room coordination mirror out of
+the actionable board while Jira remains its backlog source; it does not affect
+the underlying Room record. These entries remain visible in a collapsed "outside
+Office by owner decision" list with raw status, source, open-question marker,
+and modal history. The default view hides closed entries in this list too.
 An explicit current handoff remains visible even while waiting without a live
 lease, so the active Office transfer is not lost to the generic active-only
 project filter. The scope record does not turn a Jira backlog into Office work.

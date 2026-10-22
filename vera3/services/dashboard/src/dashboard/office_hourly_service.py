@@ -75,7 +75,7 @@ class HourlyReport:
     active_only_label: str = ""
     pending_cancellations: list[tuple[RoomTaskRow, str]] | None = None
     scope_message_id: str | None = None
-    hidden_jira_backlog: int = 0
+    excluded_by_decision: list[tuple[RoomTaskRow, str, bool]] | None = None
 
 
 def parse_scope_decisions(row: RoomMessageRow) -> tuple[
@@ -138,16 +138,19 @@ def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Atte
     control_by_task = {k: e.kind for k, e in control_events.items()}
     pending_decisions = pending_decisions or {}
     excluded_backlog = excluded_backlog or {}
+    open_questions = {(q.room, q.task_id): q for q in questions if q.status == "open"}
     pending = [(r, pending_decisions[(r.room, r.task_id)]) for r in rows
                if (r.room, r.task_id) in pending_decisions
                and r.status not in ("done", "cancelled")]
     pending_keys = {(r.room, r.task_id) for r, _ in pending}
     excluded_keys = set(excluded_backlog)
+    excluded_rows = [(r, excluded_backlog[(r.room, r.task_id)],
+                      (r.room, r.task_id) in open_questions) for r in rows
+                     if (r.room, r.task_id) in excluded_keys]
     split = apply_scope([r for r in rows if (r.room, r.task_id) not in pending_keys
                          and (r.room, r.task_id) not in excluded_keys],
                         now, scope, control_by_task,
                         frozenset(current_handoffs or {}))
-    open_questions = {(q.room, q.task_id): q for q in questions if q.status == "open"}
     next_events = {(e.room, e.task_id): e for e in (control_next or [])}
     latest: dict[tuple[str, str], RoomTaskEventRow] = {}
     results: list[RoomTaskEventRow] = []
@@ -196,7 +199,7 @@ def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Atte
     return HourlyReport(now, start, cards, results, counts, None,
                         split.hidden_excluded, split.hidden_inactive, 0,
                         "/".join(scope.active_only_names), pending, scope_message_id,
-                        sum((r.room, r.task_id) in excluded_keys for r in rows))
+                        excluded_rows)
 
 
 async def load_report(now: datetime | None = None,
