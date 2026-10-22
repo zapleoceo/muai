@@ -194,7 +194,7 @@ def test_scope_note_rendered_and_absent_when_nothing_hidden() -> None:
     html = report_body(replace(build_report(rows, amap, [], [], NOW), hidden_runtime=2))
     assert ("Скрыто фильтром Office: 5 (SIN/STEP и проекты вне мониторинга: 1; "
             "не в работе в Orchestra/Lamas/SinHRM: 2; внешние runtime вне мониторинга: 2)") in html
-    assert "Скрыто фильтром" not in report_body(build_report([], {}, [], [], NOW))
+    assert 'id="oh-scope-note"' not in report_body(build_report([], {}, [], [], NOW))
 
 
 def test_visible_card_does_not_leak_hidden_dependency_id() -> None:

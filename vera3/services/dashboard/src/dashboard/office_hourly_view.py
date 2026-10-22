@@ -4,74 +4,14 @@ from __future__ import annotations
 from collections import Counter, defaultdict
 from urllib.parse import quote
 
-from dashboard.office_card_view import details_html
+from dashboard.office_card_details import safe_text
 from dashboard.office_hourly_service import (
     HourlyCard,
     HourlyReport,
-    next_question_reminder,
 )
 from dashboard.office_runtime_summary import runtime_count, source_summaries
+from dashboard.office_status import CANCELLED, DONE, STATUSES
 from dashboard.render import esc, local_dt
-
-CSS = """<style>
-.oh-head{display:flex;justify-content:space-between;gap:1rem;align-items:end;flex-wrap:wrap}
-.oh-head p,.oh-note{color:var(--muted)}.oh-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(12rem,1fr));gap:.7rem;margin:1.2rem 0}
-.oh-tile,.oh-card{border:1px solid var(--line);border-radius:var(--r-md);padding:1rem;background:var(--surface)}
-.oh-tile strong{display:block;font-size:1.8rem;color:var(--text-strong)}.oh-tile span{font-size:.8rem;color:var(--muted)}
-.oh-list{display:grid;gap:.7rem}.oh-card h3{margin:.1rem 0 .5rem;font-size:1rem}.oh-card p{margin:.3rem 0}
-.oh-meta{font-size:.78rem;color:var(--muted)}.oh-pill{display:inline-block;border-radius:1rem;padding:.2rem .6rem;font-size:.75rem;background:var(--bg-inset);margin:.2rem .4rem .2rem 0}
-.oh-blocker{border-color:var(--warn)}.oh-fields{display:grid;grid-template-columns:8rem 1fr;gap:.3rem .7rem;margin:.8rem 0;font-size:.85rem}
-.oh-fields dt{color:var(--muted)}.oh-fields dd{margin:0;overflow-wrap:anywhere}.oh-projects{display:grid;grid-template-columns:repeat(auto-fit,minmax(16rem,1fr));gap:.7rem}
-.oh-projects article{border:1px solid var(--line);border-radius:var(--r-md);padding:.8rem}.oh-projects h3{margin:.1rem 0 .5rem;font-size:.95rem}
-@media(max-width:600px){.oh-fields{grid-template-columns:1fr}.oh-fields dt{margin-top:.4rem}}
-</style>"""
-
-
-def _task_url(card: HourlyCard) -> str:
-    return f"/tasks/{quote(card.row.room, safe='')}/{quote(card.row.task_id, safe='')}"
-
-
-def _result_line(card: HourlyCard) -> str:
-    event = card.last_confirmed
-    if event is None:
-        return esc(card.evidence)
-    return f'{esc(card.evidence)} · {local_dt(event.at)} · {esc(event.text or event.kind)}'
-
-
-def _blocker(card: HourlyCard, now) -> str:
-    q = card.question
-    question = esc(q.question) if q else "Конкретный вопрос владельцу не зафиксирован"
-    reminder = (f'Следующий шестичасовой контроль: {local_dt(next_question_reminder(q, now))}'
-                if q else "Повторять нечего до формулировки вопроса")
-    return (f'<dl class="oh-fields"><dt>Вопрос</dt><dd>{question}</dd>'
-            '<dt>Рекомендация</dt><dd>Не зафиксирована в источнике</dd>'
-            '<dt>Варианты</dt><dd>Не зафиксированы в источнике</dd>'
-            '<dt>Последствия</dt><dd>Не зафиксированы в источнике</dd>'
-            f'<dt>Следующий шаг</dt><dd>{esc(card.row.next_action or "Не зафиксирован")}</dd>'
-            f'<dt>Контроль</dt><dd>{reminder}</dd></dl>')
-
-
-def _card(card: HourlyCard, now) -> str:
-    row = card.row
-    extra = _blocker(card, now) if card.info.open_question else ""
-    label = (f'{card.status} · {card.info.blocker_confidence}'
-             if card.info.blocker_confidence else card.status)
-    reason = "" if card.details else "".join(f'<p>{title}: {esc(value)}</p>' for title, value in (
-        ("Причина ожидания", card.info.wait_reason), ("Зависимость", card.info.dependency))
-        if value)
-    return (f'<article class="oh-card{" oh-blocker" if extra else ""}">'
-            f'<span class="oh-pill">{esc(label)}</span>'
-            f'<span class="oh-meta">{esc(row.project or "Без проекта")} · {esc(row.room)}/{esc(row.task_id)}</span>'
-            f'<h3><a href="{_task_url(card)}">{esc(row.title or row.task_id)}</a></h3>'
-            + ("" if card.details else
-               f'<p>Ответственный: {esc(row.responsible or row.lease_holder or "не указан")}</p>'
-               f'<p>Следующее действие: {esc(row.next_action or "не указано")}</p>') +
-            f'{reason}'
-            f'<p class="oh-meta">{esc(card.coordination_note)}</p>'
-            f'<p class="oh-meta">Сопоставление с внешним runtime: {esc(card.runtime_mapping)}</p>'
-            f'<p class="oh-meta">Последний зафиксированный результат: {_result_line(card)}</p>'
-            f'{details_html(card.details, card.info) if card.details else ""}'
-            f'{extra}</article>')
 
 
 def _projects(report: HourlyReport) -> str:
@@ -154,29 +94,150 @@ def scope_note(report: HourlyReport) -> str:
             f'внешние runtime вне мониторинга: {report.hidden_runtime}).</p>')
 
 
-def report_body(report: HourlyReport) -> str:
-    counts = report.counts
-    tiles = "".join(f'<article class="oh-tile"><strong>{counts[label]}</strong><span>{label}</span></article>'
-                    for label in ("Новая / в очереди", "В работе", "Блокер", "Ревью"))
-    events = "".join(
-        f'<li>{local_dt(e.at)} · <a href="/tasks/{quote(e.room, safe="")}/{quote(e.task_id, safe="")}">'
-        f'{esc(e.task_id)}</a> · {esc(e.text or e.kind)}</li>' for e in report.results)
-    results = f'<ul>{events}</ul>' if events else '<p class="oh-note">Зафиксированных результатов за час нет.</p>'
-    cards = "".join(_card(c, report.as_of) for c in report.cards)
-    return (f'{CSS}<div class="oh-head"><div><h1>Офис · часовой отчёт</h1>'
-            f'<p>Окно: {local_dt(report.window_start)} — {local_dt(report.as_of)}. '
-            'Страница обновляется каждые пять минут.</p></div>'
-            f'<div class="oh-meta">Проверено: {local_dt(report.as_of)}</div></div>'
-            '<p class="oh-note">Один Room ID — одна карточка. Статус исполнения не выводится из количества open/blocked. '
-            'Для Broker, Orchestra и других внешних runtime без точной связи с Room ID сопоставление неизвестно; '
-            'их не прибавляем к карточному счётчику. Свежесть результата указана отдельно от статуса.</p>'
-            f'{scope_note(report)}{_runtime(report)}'
-            f'<h2>Статусы карточек Room</h2><div class="oh-grid">{tiles}</div>'
-            f'<p class="oh-meta">Незакрытых карточек: {len(report.cards)}. '
-            f'Внешняя связь не подтверждена: {sum(c.runtime_mapping == "Не установлена" for c in report.cards)}. '
-            'Готовые и отменённые не входят в отчёт: ни в списки, ни в показатели. Данные сохранены в Room.</p>'
-            f'<h2>Результаты за час по Room</h2><p class="oh-note">Это записи исполнителей с точным временем; '
-            f'независимое подтверждение проверяйте по ссылке на карточку.</p>{results}'
-            f'<h2>Проекты</h2><div class="oh-projects">{_projects(report)}</div>'
-            f'<h2>Карточки кроме готовых</h2><div class="oh-list">{cards}</div>'
-            '<script>setTimeout(function(){location.reload()},300000)</script>')
+
+
+KANBAN_CSS = """<style>
+.kb-head{display:flex;justify-content:space-between;align-items:end;gap:1rem;flex-wrap:wrap}
+.kb-head>*{min-width:0}.kb-head h1{margin-bottom:.25rem}.kb-sub,.kb-meta,.kb-empty{color:var(--muted);overflow-wrap:anywhere}
+.kb-board,.kb-col,.kb-card,.kb-dialog{box-sizing:border-box;max-width:100%}
+.kb-filter{display:flex;gap:.5rem;align-items:center;flex-wrap:wrap}
+.kb-filter a{display:inline-block;padding:.45rem .75rem;border:1px solid var(--line);border-radius:2rem}
+.kb-filter a[aria-current=page]{background:var(--bg-inset);color:var(--text-strong);font-weight:700}
+.kb-board{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:.8rem;align-items:start;margin:1.2rem 0;width:100%;min-width:0}
+.kb-col{min-width:0;background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-md);padding:.7rem}
+.kb-col h2{font-size:1rem;margin:.2rem 0 .8rem}.kb-col h2 span{color:var(--muted);font-size:.85rem}
+.kb-stack{display:grid;gap:.6rem}.kb-card{display:block;width:100%;text-align:left;color:var(--text-strong);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md);padding:.8rem;cursor:pointer;font:inherit}
+.kb-card:hover,.kb-card:focus-visible{border-color:var(--accent-line);outline:2px solid var(--accent-line);outline-offset:1px}
+.kb-card strong,.kb-card small{display:block}.kb-card strong{line-height:1.3}.kb-card small{margin-top:.4rem;color:var(--muted)}
+.kb-card p{margin:.55rem 0 0;font-size:.86rem;overflow-wrap:anywhere}.kb-card .kb-risk{color:var(--warn)}
+.kb-fresh{font-size:.75rem;color:var(--muted);margin-top:.4rem}.kb-info{margin:1rem 0}
+.kb-info summary{cursor:pointer}.kb-dialog{width:min(60rem,calc(100% - 2rem));max-height:min(90dvh,55rem);padding:0;border:1px solid var(--line);border-radius:var(--r-md);background:var(--surface);color:var(--text-strong);box-shadow:0 2rem 5rem #0007}
+.kb-dialog::backdrop{background:#101820b8}.kb-dialog-head{position:sticky;top:0;background:var(--surface);display:flex;align-items:center;justify-content:space-between;gap:1rem;padding:1rem 1.2rem;border-bottom:1px solid var(--line);z-index:1}
+.kb-dialog-head h2{margin:0;font-size:1.2rem}.kb-close{min-width:2.4rem;min-height:2.4rem;font-size:1.3rem;cursor:pointer}
+.kb-dialog-content{padding:1.2rem;overflow-wrap:anywhere}.kb-fields{display:grid;grid-template-columns:minmax(9rem,12rem) 1fr;gap:.55rem 1rem}.kb-fields dt{color:var(--muted)}.kb-fields dd{margin:0;white-space:pre-wrap;overflow-wrap:anywhere}
+.kb-history{display:grid;gap:.55rem;padding:0;list-style:none}.kb-history li{border-top:1px solid var(--line);padding:.5rem 0;white-space:pre-wrap;overflow-wrap:anywhere}
+body:has(.kb-dialog[open]){overflow:hidden}
+@media(max-width:1100px){.kb-board{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:650px){.kb-board{grid-template-columns:1fr}.kb-dialog{width:100%;max-width:100%;max-height:100dvh;height:100dvh;border-radius:0}.kb-fields{grid-template-columns:1fr}.kb-fields dt{margin-top:.5rem}}
+</style>"""
+
+_USER_LABELS = {"Ревью": "На проверке"}
+_FRESHNESS_LABELS = {"fresh": "свежие данные", "stale": "устаревшие данные",
+                     "unknown": "неизвестно"}
+
+
+def _user_label(status: str) -> str:
+    return _USER_LABELS.get(status, status)
+
+
+def _short(value: str | None, limit: int = 105) -> str:
+    return safe_text(" ".join((value or "").split()), limit)
+
+
+def _kanban_card(card: HourlyCard) -> str:
+    row = card.row
+    executor = (card.details.executor.name if card.details and card.details.executor else
+                row.responsible or row.lease_holder or "не назначен")
+    action = (card.question.question if card.info.open_question and card.question else
+              card.info.wait_reason if card.status == "Блокер" else row.next_action)
+    action = _short(action or card.info.dependency or "Следующий шаг не указан")
+    url = f"/office/hourly/detail/{quote(row.room, safe='')}/{quote(row.task_id, safe='')}"
+    risk = ' class="kb-risk"' if card.status == "Блокер" else ""
+    confidence = (f'<div class="kb-fresh">Основание блокера: {esc(card.info.blocker_confidence)}</div>'
+                  if card.info.blocker_confidence else '')
+    return (f'<button type="button" class="kb-card" data-detail="{esc(url)}" '
+            f'aria-label="Открыть задачу {esc(_short(row.title or row.task_id))}">'
+            f'<strong>{esc(_short(row.title or row.task_id))}</strong>'
+            f'<small>{esc(row.project or "Без проекта")} · {esc(executor)}</small>'
+            f'<p{risk}>{esc(action)}</p>'
+            f'<div class="kb-fresh">Актуальность: {esc(_FRESHNESS_LABELS.get(card.info.freshness, "неизвестно"))}</div>'
+            f'{confidence}</button>')
+
+
+def _kanban_board(report: HourlyReport, show_closed: bool) -> str:
+    columns = []
+    for status in STATUSES:
+        cards = [c for c in report.cards if c.status == status]
+        if status in (DONE, CANCELLED) and not show_closed:
+            body = '<p class="kb-empty">Скрыто фильтром</p>'
+        else:
+            body = ''.join(_kanban_card(c) for c in cards) or '<p class="kb-empty">Нет задач</p>'
+        columns.append(f'<section class="kb-col" aria-label="{esc(_user_label(status))}">'
+                       f'<h2>{esc(_user_label(status))} <span>{len(cards) if show_closed or status not in (DONE, CANCELLED) else "—"}</span></h2>'
+                       f'<div class="kb-stack">{body}</div></section>')
+    return '<div class="kb-board">' + ''.join(columns) + '</div>'
+
+
+def _scope_decisions(report: HourlyReport) -> str:
+    if not report.scope_message_id:
+        return ('<p class="kb-meta">Сверка решений владельца об отмене не загружена; '
+                'доска показывает исходные статусы Room, полнота охвата неизвестна.</p>')
+    rows = report.pending_cancellations or []
+    if not rows:
+        return (f'<p class="kb-meta">Сверка отмен по записи Room '
+                f'{esc(report.scope_message_id)}: ожидающих записи отмен нет.</p>')
+    items = []
+    for row, source in sorted(rows, key=lambda pair: pair[0].task_id):
+        url = f"/office/hourly/detail/{quote(row.room, safe='')}/{quote(row.task_id, safe='')}"
+        items.append(f'<li><button type="button" class="kb-card" data-detail="{esc(url)}">'
+                     f'<strong>{esc(_short(row.title or row.task_id))}</strong>'
+                     f'<small>{esc(row.project or "Без проекта")} · запись Room: {esc(row.status)}'
+                     f' · источник {esc(source)}</small></button></li>')
+    return (f'<details class="kb-info"><summary>Отмена владельца ожидает записи в Room: {len(rows)}</summary>'
+            f'<p class="kb-meta">По записи Room {esc(report.scope_message_id)} эти карточки исключены '
+            'из рабочей доски. Их исходный статус и история сохранены; отмену должен записать '
+            'штатный actor создателя.</p>'
+            f'<ul class="kb-history">{"".join(items)}</ul></details>')
+
+
+def report_body(report: HourlyReport, show_closed: bool = False) -> str:
+    active = ' aria-current="page"'
+    filters = (f'<nav class="kb-filter" aria-label="Фильтр задач">'
+               f'<a href="/office/hourly"{active if not show_closed else ""}>Текущие</a>'
+               f'<a href="/office/hourly?show_closed=true"{active if show_closed else ""}>С готовыми и отменёнными</a></nav>')
+    summary = (f'<details class="kb-info"><summary>Сводка и источник данных</summary>'
+               f'<p>Карточки — данные Room на {local_dt(report.as_of)}. Актуальность показана отдельно от статуса.</p>'
+               f'{scope_note(report)}{_runtime(report)}{_projects(report)}</details>')
+    js = """<script>
+(()=>{const dialog=document.getElementById('kb-detail');const content=document.getElementById('kb-detail-content');const title=document.getElementById('kb-detail-title');const close=document.getElementById('kb-detail-close');let trigger=null;let pending=null;
+document.addEventListener('click',async(event)=>{const button=event.target.closest('button[data-detail]');if(!button)return;trigger=button;title.textContent=button.querySelector('strong').textContent;content.textContent='Загрузка…';dialog.showModal();close.focus();if(pending)pending.abort();pending=new AbortController();try{const response=await fetch(button.dataset.detail,{credentials:'same-origin',signal:pending.signal});if(!response.ok)throw new Error('Детали недоступны ('+response.status+')');content.innerHTML=await response.text()}catch(error){if(error.name!=='AbortError')content.textContent=error.message}});
+close.addEventListener('click',()=>dialog.close());dialog.addEventListener('click',(event)=>{if(event.target===dialog)dialog.close()});dialog.addEventListener('close',()=>{if(pending)pending.abort();if(trigger)trigger.focus()});
+setInterval(()=>{if(!dialog.open)location.reload()},300000);
+})();</script>"""
+    return (f'{KANBAN_CSS}<div class="kb-head"><div><h1>Office · задачи</h1>'
+            f'<p class="kb-sub">Текущая координация · обновлено {local_dt(report.as_of)}</p></div>{filters}</div>'
+            f'{_scope_decisions(report)}{_kanban_board(report, show_closed)}{summary}'
+            '<dialog id="kb-detail" class="kb-dialog" aria-labelledby="kb-detail-title">'
+            '<div class="kb-dialog-head"><h2 id="kb-detail-title">Задача</h2>'
+            '<button type="button" id="kb-detail-close" class="kb-close" aria-label="Закрыть">×</button></div>'
+            '<div id="kb-detail-content" class="kb-dialog-content"></div></dialog>'
+            f'{js}')
+
+
+def modal_body(item, events, questions) -> str:
+    """Read-only detail fragment. Escape and redact every source field before injecting it."""
+    row = item.row
+    result = (f'{local_dt(row.last_progress_at)} · {esc(safe_text(row.last_progress_text, 4000))}'
+              if row.last_progress_at else 'Подтверждённого результата нет')
+    refs = ', '.join(f'{safe_text(str(ref.get("kind")), 40)}: {safe_text(str(ref.get("ref")), 300)}'
+                     for ref in (row.refs or []) if isinstance(ref, dict)) or 'не указан'
+    fields = [
+        ('Описание', row.note or 'не указано'),
+        ('Состояние записи Room', row.status),
+        ('Исполнитель', row.responsible or row.lease_holder or 'не назначен'),
+        ('Последний подтверждённый результат', result),
+        ('Следующий шаг', row.next_action or 'не указан'),
+        ('Блокер / ожидание', row.waiting_reason or 'не указан'),
+        ('Зависимости', ', '.join(map(str, row.depends_on or [])) or 'нет'),
+        ('Источник', refs),
+        ('Room ID', f'{row.room}/{row.task_id}'),
+    ]
+    field_html = ''.join(f'<dt>{esc(label)}</dt><dd>{value if label == "Последний подтверждённый результат" else esc(safe_text(value, 8000))}</dd>'
+                         for label, value in fields)
+    question_html = ''.join(f'<li>{esc(safe_text(q.question, 2000))} · {esc(q.status)}</li>'
+                            for q, _ in questions)
+    history = ''.join(f'<li><span class="kb-meta">{local_dt(e.at)} · {esc(e.kind)} · {esc(e.agent or "—")}</span><br>{esc(safe_text(e.text, 2000))}</li>'
+                      for e in reversed(events)) or '<li>Событий нет</li>'
+    return (f'<dl class="kb-fields">{field_html}</dl>'
+            f'<h3>Вопросы</h3><ul class="kb-history">{question_html or "<li>Нет открытых вопросов</li>"}</ul>'
+            f'<h3>История (последние 200 событий)</h3><ol class="kb-history">{history}</ol>')
