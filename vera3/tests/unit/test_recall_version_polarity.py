@@ -36,12 +36,20 @@ def test_polarity_rules_precede_config_and_question_in_synthesis_prompt():
     assert POLARITY_RULES in prompt
     assert prompt.index(POLARITY_RULES) < prompt.index("### Твоя конфигурация")
     assert prompt.index(POLARITY_RULES) < prompt.index("Q-UNIQUE")
+    assert prompt.index(POLARITY_RULES) < prompt.index("### Найденные события")
 
 
 def test_polarity_rules_in_agent_system_prompt():
     assert POLARITY_RULES in SYSTEM_PROMPT
     assert "NOT affected" in POLARITY_RULES
     assert "quote the exact source phrase" in POLARITY_RULES
+
+
+def test_polarity_rules_bind_polarity_to_the_subject_in_both_directions():
+    assert "Version X fixes/addresses" in POLARITY_RULES
+    assert "X contains the fix and is NOT affected" in POLARITY_RULES
+    assert "a flaw/vulnerability in X" in POLARITY_RULES
+    assert "X is vulnerable/affected\" mean X is affected" in POLARITY_RULES
 
 
 @pytest.mark.asyncio
@@ -78,11 +86,13 @@ def _long_record(middle: str) -> str:
 
 
 def test_excerpt_keeps_fix_sentence_when_version_is_a_term():
+    """Regression guard for #59 window logic; passes on master too."""
     excerpt = evidence_excerpt(_long_record(FIX_SENTENCE), terms=["8.4.27"])
     assert "fix two critical vulnerabilities" in excerpt
 
 
 def test_excerpt_keeps_fix_sentence_found_by_cve_id_from_the_question():
+    """Regression guard for #59 window logic; passes on master too."""
     middle = f"CVE-2026-109618 and CVE-2026-109619: {FIX_SENTENCE}"
     terms = excerpt_terms("What is CVE-2026-109618?")
     assert "109618" in terms

@@ -663,10 +663,12 @@ the event UTC timestamp fall on different calendar days, name the time zone.
 
 **Version polarity (Room #3920):** `POLARITY_RULES` (`brain_search/evidence.py`) sits next to
 `EVIDENCE_RULES` in the stable prefix of both `synthesis.build_prompt` and the agent
-`SYSTEM_PROMPT`. "fixes / fixed in / patched in / resolved in / addresses version X" means X
-is fixed, not affected; affected versions and exposure are stated only when a source says so,
-otherwise the answer says the source does not specify; each vulnerability, version or status
-claim quotes the exact source phrase next to its `[event:ID]`. Background: recall answered that
+`SYSTEM_PROMPT`. "Version X fixes/addresses ..." and "fixed/patched/resolved in X" mean X is fixed, not affected;
+"a flaw/vulnerability in X" and "X is vulnerable/affected" mean X is affected (polarity is bound to the
+subject, so "fixes a flaw in 8.4.26" does not make 8.4.26 fixed). Affected versions and exposure are
+stated only when a source says so, otherwise the answer says the source does not specify; each claim
+about a vulnerability's affected/fixed versions or security status quotes the exact source phrase
+next to its `[event:ID]`. Background: recall answered that
 PHP 8.5.12/8.4.27/8.3.36/8.2.35 were affected while the full source text said they fix the
 vulnerabilities. Tests: `test_recall_version_polarity.py`. Known gap: `excerpt_terms()` yields no
 term from a bare version such as "PHP 8.4.27", so such a query does not pull a dropped middle
