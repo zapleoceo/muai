@@ -9,6 +9,9 @@ history. A card opens an accessible native dialog and loads its detail through
 retains the owner gate and `Cache-Control: private, no-store`. `modal_body`
 escapes and redacts source text,
 and `load_recent_task_events` provides the latest 200 audit events for the dialog.
+Card text wraps within each column, including narrow desktop and mobile widths;
+the card rule overrides the dashboard's global `button` no-wrap style. The
+Office navigation wraps on narrow phones so it does not widen the document.
 
 `OFFICE_SCOPE_V1` is a read-side reconciliation record posted to Room `main` by
 the existing OAuth principal `dot`, addressed to `office-dashboard` with status

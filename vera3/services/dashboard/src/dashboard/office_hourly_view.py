@@ -106,7 +106,8 @@ KANBAN_CSS = """<style>
 .kb-board{display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:.8rem;align-items:start;margin:1.2rem 0;width:100%;min-width:0}
 .kb-col{min-width:0;background:var(--bg-inset);border:1px solid var(--line);border-radius:var(--r-md);padding:.7rem}
 .kb-col h2{font-size:1rem;margin:.2rem 0 .8rem}.kb-col h2 span{color:var(--muted);font-size:.85rem}
-.kb-stack{display:grid;gap:.6rem}.kb-card{display:block;width:100%;text-align:left;color:var(--text-strong);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md);padding:.8rem;cursor:pointer;font:inherit}
+.kb-stack{display:grid;grid-template-columns:minmax(0,1fr);gap:.6rem}.kb-card{display:block;min-width:0;width:100%;white-space:normal;overflow-wrap:anywhere;text-align:left;color:var(--text-strong);background:var(--surface);border:1px solid var(--line);border-radius:var(--r-md);padding:.8rem;cursor:pointer;font:inherit}
+.kb-info li{min-width:0}
 .kb-card:hover,.kb-card:focus-visible{border-color:var(--accent-line);outline:2px solid var(--accent-line);outline-offset:1px}
 .kb-card strong,.kb-card small{display:block}.kb-card strong{line-height:1.3}.kb-card small{margin-top:.4rem;color:var(--muted)}
 .kb-card p{margin:.55rem 0 0;font-size:.86rem;overflow-wrap:anywhere}.kb-card .kb-risk{color:var(--warn)}
@@ -120,8 +121,9 @@ KANBAN_CSS = """<style>
 .oh-projects article,.oh-card{border:1px solid var(--line);border-radius:var(--r-md);padding:.8rem;background:var(--surface)}
 .oh-card h3,.oh-projects h3{font-size:1rem;margin:.2rem 0}.oh-pill{display:inline-block;padding:.2rem .6rem;border-radius:1rem;background:var(--bg-inset);font-size:.75rem}
 body:has(.kb-dialog[open]){overflow:hidden}
+@media(max-width:1280px){.kb-board{grid-template-columns:repeat(3,minmax(0,1fr))}}
 @media(max-width:1100px){.kb-board{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:650px){.kb-board{grid-template-columns:1fr}.kb-dialog{width:100%;max-width:100%;max-height:100dvh;height:100dvh;border-radius:0}.kb-fields{grid-template-columns:1fr}.kb-fields dt{margin-top:.5rem}}
+@media(max-width:650px){main:has(.kb-board) nav.top,main:has(.kb-board) nav.top ul{flex-wrap:wrap;justify-content:center}.kb-board{grid-template-columns:1fr}.kb-dialog{width:100%;max-width:100%;max-height:100dvh;height:100dvh;border-radius:0}.kb-fields{grid-template-columns:1fr}.kb-fields dt{margin-top:.5rem}}
 </style>"""
 
 _USER_LABELS = {"Ревью": "На проверке"}
