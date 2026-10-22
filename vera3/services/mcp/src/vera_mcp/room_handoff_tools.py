@@ -8,9 +8,9 @@ from pydantic import Field
 from vera_shared.room import handoff
 
 from vera_mcp.auth import client_of
+from vera_mcp.room_common import check_session
 from vera_mcp.room_redact import task_view
 from vera_mcp.room_tools import MAX_LEASE_S, Agent, Ident, Room, _room
-from vera_mcp.room_common import check_session
 
 Token = Annotated[int, Field(ge=1)]
 

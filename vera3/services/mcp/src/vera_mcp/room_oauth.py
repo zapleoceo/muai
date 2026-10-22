@@ -61,10 +61,11 @@ def allowed_actors() -> frozenset[str]:
                      os.environ.get("ROOM_OAUTH_ACTORS", "dot").split(","))))
 
 
-def configured_agents() -> frozenset[str]:
-    """Имена всех сконфигурированных агентов плюс внутренние авторы vera и watchdog."""
+def configured_agents(include_internal: bool = True) -> frozenset[str]:
+    """Имена сконфигурированных агентов; внутренние авторы vera и watchdog — по флагу."""
     names = set(load_room_tokens().values()) | set(load_tokens().values())
-    return frozenset(names | set(allowed_actors()) | set(INTERNAL_AGENTS))
+    names |= set(allowed_actors())
+    return frozenset(names | set(INTERNAL_AGENTS) if include_internal else names)
 
 
 def allowed_redirect_hosts() -> frozenset[str]:

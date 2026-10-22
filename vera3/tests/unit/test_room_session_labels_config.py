@@ -76,3 +76,10 @@ async def test_historical_squat_of_never_posted_name_gets_no_mail(sqlite_db):
                                 body="legit", from_session="laptop")
     got = [m["body"] for m in (await r.room_inbox(CLAUDE))["messages"]]
     assert "to dot" not in got and "to laptop" in got
+
+
+def test_principal_authorisation_excludes_internal_names():
+    from vera_mcp.events_deliver import principal_still_authorised as ok
+    assert ok("claude", "main") is True
+    assert ok("vera", "main") is False
+    assert configured_agents(include_internal=False) == {"claude", "codex", "owner", "dot"}

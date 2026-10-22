@@ -61,7 +61,7 @@ async def _revoke_all(sub_id: str) -> None:
 
 def principal_still_authorised(principal: str, room: str) -> bool:
     """Токен/актор принципала ещё существует и комната по-прежнему разрешена."""
-    return principal in configured_agents() and room in allowed_rooms()
+    return principal in configured_agents(include_internal=False) and room in allowed_rooms()
 
 
 async def _post(sub: RoomEventSubscriptionRow, row: RoomEventOutboxRow,
