@@ -35,7 +35,8 @@ configuration (`room_oauth.configured_agents()`: `ROOM_TOKENS`, `MCP_TOKENS`,
 `ROOM_OAUTH_ACTORS` plus internal `vera` and `watchdog`), so an agent that has
 never posted is protected too. `room_post`, `room_task_claim`, `room_task_next`
 and `room_task_handoff_accept` reject a `session` equal to another configured
-agent's name, and `dispatcher:*` labels belong to `vera`. This does not change
+agent's name (`room_common.check_session`; subscription authorisation uses
+`configured_agents(include_internal=False)`, unchanged), and `dispatcher:*` labels belong to `vera`. This does not change
 Room authorization or history permissions. Numeric `in_reply_to` is resolved
 to the referenced message's `message_id` in the same room before posting.
 
