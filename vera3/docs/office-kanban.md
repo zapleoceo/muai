@@ -5,7 +5,8 @@ The six user columns derive from the existing Room status projection; freshness 
 blocker confidence are separate fields. The default view omits completed and
 cancelled task records. `?show_closed=true` includes them without changing their
 history. A card opens an accessible native dialog and loads its detail through
-`/office/hourly/detail/{room}/{task_id}`; this endpoint retains the owner gate and
+`/office/hourly/detail/{room}/{task_id}`. Its `office_hourly_detail` endpoint
+retains the owner gate and
 `Cache-Control: private, no-store`. `modal_body` escapes and redacts source text,
 and `load_recent_task_events` provides the latest 200 audit events for the dialog.
 
