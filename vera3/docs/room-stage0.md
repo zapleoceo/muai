@@ -30,7 +30,12 @@ explicitly names its `session`. Calls without `session`, including those with
 a custom `consumer`, do not receive self-authored messages. Session labels are
 addressable only when used by this agent, no other agent has used the label,
 and the label is not another agent's name. Conflicts are logged and addressed
-messages remain in history for reconciliation. This does not change
+messages remain in history for reconciliation. "Another agent's name" comes from
+configuration (`room_oauth.configured_agents()`: `ROOM_TOKENS`, `MCP_TOKENS`,
+`ROOM_OAUTH_ACTORS` plus internal `vera` and `watchdog`), so an agent that has
+never posted is protected too. `room_post`, `room_task_claim`, `room_task_next`
+and `room_task_handoff_accept` reject a `session` equal to another configured
+agent's name, and `dispatcher:*` labels belong to `vera`. This does not change
 Room authorization or history permissions. Numeric `in_reply_to` is resolved
 to the referenced message's `message_id` in the same room before posting.
 

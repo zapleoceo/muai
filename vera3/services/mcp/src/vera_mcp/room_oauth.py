@@ -48,6 +48,7 @@ ACCESS_SECONDS = 3600
 REFRESH_SECONDS = 30 * 86400
 CODE_SECONDS = 300
 PENDING_SECONDS = 600
+INTERNAL_AGENTS = ("vera", "watchdog")
 
 
 def enabled() -> bool:
@@ -58,6 +59,12 @@ def allowed_actors() -> frozenset[str]:
     # New identities require a separately approved config change.
     return frozenset(filter(None, (x.strip() for x in
                      os.environ.get("ROOM_OAUTH_ACTORS", "dot").split(","))))
+
+
+def configured_agents() -> frozenset[str]:
+    """Имена всех сконфигурированных агентов плюс внутренние авторы vera и watchdog."""
+    names = set(load_room_tokens().values()) | set(load_tokens().values())
+    return frozenset(names | set(allowed_actors()) | set(INTERNAL_AGENTS))
 
 
 def allowed_redirect_hosts() -> frozenset[str]:

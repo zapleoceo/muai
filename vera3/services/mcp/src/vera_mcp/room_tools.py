@@ -20,7 +20,9 @@ from vera_mcp.room_common import (  # noqa: F401
     Project,
     Room,
     _room,
+    check_session,
 )
+from vera_mcp.room_oauth import configured_agents
 from vera_mcp.room_redact import message_view, messages_view, tasks_view
 from vera_mcp.room_task_tools import (  # noqa: F401
     room_task_cancel,
@@ -59,7 +61,7 @@ async def room_post(
         room=_room(room), message_id=message_id or f"{me}-{uuid.uuid4().hex[:12]}",
         from_agent=me, body=body, to_agent=to, task_id=task_id,
         in_reply_to=reply_id,
-        status=status, from_session=session)
+        status=status, from_session=check_session(me, session))
     return {"ok": True, "deduped": deduped, "message": message_view(msg)}
 
 
@@ -80,7 +82,8 @@ async def room_inbox(
     items, cursor = await messages.inbox(agent=me, room=_room(room), consumer=consumer,
                                          limit=limit, since_id=since_id, after_id=after_id,
                                          to=to, kind=kind, exclude_system=exclude_system,
-                                         task_id=task_id, session=session)
+                                         task_id=task_id, session=session,
+                                         reserved=configured_agents())
     mine = await task_queue.held_by(room=_room(room), agent=me)
     viewed = messages_view(items, max_body_chars)
     safe_cursor = (since_id is None and after_id is None and to is None and
