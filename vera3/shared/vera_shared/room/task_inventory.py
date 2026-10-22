@@ -31,8 +31,7 @@ def _decode(cursor: str, room: str) -> tuple[str, str, int, int]:
                 or not isinstance(data["h"], str) or not isinstance(data["a"], str)
                 or not isinstance(data["n"], int) or isinstance(data["n"], bool)
                 or not isinstance(data["e"], int) or isinstance(data["e"], bool)
-                or not 0 <= data["n"] < data["e"]
-                or not data["a"] <= data["h"]):
+                or not 0 <= data["n"] < data["e"]):
             raise ValueError
     except (ValueError, TypeError, KeyError, UnicodeError, binascii.Error) as exc:
         raise ValueError("invalid inventory cursor") from exc

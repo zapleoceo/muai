@@ -61,3 +61,12 @@ async def test_inventory_empty_and_cross_room_cursor_rejected(sqlite_db):
         await r.room_task_inventory(room="other", cursor=cursor)
     with pytest.raises(ValueError, match="invalid inventory cursor"):
         await r.room_task_inventory(cursor="not-base64")
+
+
+def test_cursor_accepts_after_above_high_in_python_order():
+    from vera_shared.room import task_inventory as inv
+    # Postgres en_US collation orders these opposite to Python codepoint order.
+    after, high = "veranda-aibot-finance-tx", "vera-worktree-cleanup"
+    assert not after <= high
+    cursor = inv._encode("main", high, after, 1, 3)
+    assert inv._decode(cursor, "main") == (high, after, 1, 3)
