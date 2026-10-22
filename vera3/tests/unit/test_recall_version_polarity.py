@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 import pytest
 
@@ -24,7 +24,7 @@ FIX_SENTENCE = (
 def _candidate(event_id: int) -> Candidate:
     return Candidate(
         id=event_id, source="gmail", source_event_id=f"php-{event_id}",
-        occurred_at=datetime(2026, 10, 20, 9, 0, tzinfo=timezone.utc),
+        occurred_at=datetime(2026, 10, 20, 9, 0, tzinfo=UTC),
         content_text=f"Subject: PHP security release\n---\n{FIX_SENTENCE}",
         importance=70, embedding=None, rank=1.0, account="test@example.com",
     )
