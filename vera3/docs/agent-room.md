@@ -425,6 +425,10 @@ sniffer; без учёта регистра). Внутри — `<details open>` 
 = `paused`). События `paused`/`resumed` несут `data.by` (`holder` пишет `set_state`); легаси
 без `data.by` считаются паузой держателя. Предикат — `owner_block(session, row)` →
 `OwnerBlockState(question, wait, pause)`; `require_no_owner_block` бросает `OwnerBlock`.
+Составные части: `unresolved_questions` (число вопросов в `open`/`answered` без `ack`),
+`owner_wait` (ожидание с меткой из `OWNER_LABELS`), `pause_state` (свёртка событий пауз
+задачи через `fold_pauses` → `{holder, owner}`), `pause_actor` (`data.by`, легаси → `holder`).
+`tasks.clear_holder_wait` снимает только ожидание держателя и не трогает ожидание владельца.
 
 - **S1.** Продление (`claim` своей живой аренды, `update` с одним `extend_seconds`) меняет только
   аренду; `apply_claim` не трогает `status`.
