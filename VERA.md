@@ -150,7 +150,7 @@ idempotently.
 
 Monitor: `/usr/local/bin/vera3-monitor`, root cron `*/5`, 11 dimensions,
 alerts by DM to the owner. Backup: `/usr/local/bin/vera-backup.sh`, cron
-03:30.
+03:30 (DB dump of vera moved to the NAS stream 2026-10-23; secrets stay; see deploy-ops.md Backup).
 
 ---
 
