@@ -1152,8 +1152,8 @@ brain-triage (иначе процессы по кэшу обращаются к 
 `sudo vera-stream-run` → `pg_dump` базы vera, 02:00 по Вьетнаму, ежедневно,
 проверено). Старый ночной `vera-backup.sh` **больше не пишет дампы БД Vera** —
 ни daily `vera.dump`, ни weekly. Переменная `SKIP_DB_PROJECTS` (через запятую и/или пробел, дефолт
-`vera`) перечисляет проекты, у которых дамп пропускается; в логе строка
-`db dump of vera skipped (SKIP_DB_PROJECTS; DB goes to NAS stream)`.
+`vera aibroker stepan2`) перечисляет проекты, у которых дамп пропускается; в логе строка
+`db dump of <project> skipped (SKIP_DB_PROJECTS; DB goes to NAS stream)`.
 
 Серверная сторона NAS-потока (forced command `stream <project>`) обслуживает
 vera, aibroker, stepan2 и sniffer. 23.10 в 19:30–32 UTC владелец подтвердил

@@ -15,8 +15,8 @@
 # restore она дозаполняется реэмбеддингом. Всё прочее (events, граф, .env,
 # usage_log) воссоздать нельзя — бэкапим.
 #
-# Дампы БД всех четырёх проектов (vera, aibroker, stepan2, sniffer) идут только
-# через NAS-поток (forced command `stream <project>`: Vera 02:00, Broker 02:15,
+# Дампы БД всех четырёх проектов (vera, aibroker, stepan2, sniffer; sniffer этот
+# скрипт никогда не бэкапил — у него был свой cron) идут только через NAS-поток (forced command `stream <project>`: Vera 02:00, Broker 02:15,
 # Stepan2 02:30, Sniffer 02:45 VN). С 2026-10-23 это Vera, с 2026-10-24 —
 # aibroker и stepan2: SKIP_DB_PROJECTS="vera aibroker stepan2" (дефолт).
 # Сервер хранит только архивы конфигов: secrets.tar.gz + SHA256SUMS каждого
@@ -33,7 +33,7 @@ FULL_DOW=${FULL_DOW:-7}                    # ISO day-of-week: 7 = воскрес
 BACKUP_GROUP=${BACKUP_GROUP:-verabackup}   # NAS-пользователь читает через группу
 # Таблицы, ДАННЫЕ которых не бэкапим (воспроизводимы) — схема остаётся.
 VERA_EXCLUDE=${VERA_EXCLUDE:-${VERA_DAILY_EXCLUDE:-event_embeddings}}
-# Проекты (csv), чьи дампы БД здесь НЕ делаются (секреты и SHA256SUMS — делаются).
+# Проекты (через запятую и/или пробел), чьи дампы БД здесь НЕ делаются (секреты и SHA256SUMS — делаются).
 SKIP_DB_PROJECTS=${SKIP_DB_PROJECTS-vera aibroker stepan2}
 WWW_ROOT=${WWW_ROOT:-/var/www}              # корень .env проектов (тесты подменяют)
 
