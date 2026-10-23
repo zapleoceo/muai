@@ -603,6 +603,19 @@ The existing `room_post` without a task ID remains a general room capability. Th
 владельцем/Codex. У `room_tasks.status` CHECK нет (`models_room.py:53-54`), значение
 `cancelled` допустимо без правки схемы.
 
+### Миграция 060 (PR-B1m, схема единственного исполнителя)
+
+Файл `infra/migrations/060_room_single_executor.sql`, только схема, кода и флага нет:
+`room_tasks.recovery_hold BOOLEAN NOT NULL DEFAULT false` (константный DEFAULT, без
+перезаписи таблицы), таблица `room_singletons(name PK, owner_run, epoch, expires_at)`
+и расширение CHECK `ck_room_task_events_kind` видами `recovered`, `start_approved`,
+`wait_resolved`, `rebind`, `run_unverified`, `question_closed` (`NOT VALID`, затем
+`VALIDATE`; все 22 прежних вида сохранены). `lock_timeout = 5s`, идемпотентна, пишет
+`schema_migrations`. Деплой миграции не катит: накат вручную через
+`scripts/apply_migration.sh` по решению владельца. Откат ничего не удаляет: redeploy
+прежнего кода, колонка, таблица и расширенный CHECK остаются. Тест:
+`tests/integration/test_room_single_executor_migration_pg.py`.
+
 Successful task cancellation also withdraws its open and answered questions in
 the same transaction. Already acked questions and answer rows remain unchanged.
 The single `cancelled` audit event records the cancellation reason and the
