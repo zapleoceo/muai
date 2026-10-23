@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Response
 from vera_shared.db.engine import close_engine, init_engine
+from vera_shared.room.single_executor import single_executor_mode
 
 from dashboard.assets_routes import router as assets_router
 from dashboard.auth_routes import router as auth_router
@@ -40,6 +41,7 @@ from dashboard.watchdog_loop import start_watchdog, stop_watchdog
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    single_executor_mode()  # неверный ROOM_SINGLE_EXECUTOR валит старт, а не каждый проход сторожа
     await init_engine()
     watchdog = start_watchdog()  # ссылка держится: иначе задачу собирает GC
     try:

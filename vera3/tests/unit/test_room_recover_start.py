@@ -239,8 +239,9 @@ async def test_st13_answer_survives_recover_and_new_holder_acks_inherited(sqlite
     await start(tok)
     got = await claim("codex", session="sess-2")
     assert got["status"] == "blocked"
-    assert got["answered_questions"] == [{"qid": qid, "question": "что делать?",
-                                          "answers": ["делай так"]}]
+    [aq] = got["answered_questions"]
+    assert (aq["qid"], aq["question"]) == (qid, "что делать?")
+    assert [a["text"] for a in aq["answers"]] == ["делай так"]
     await questions.ack(room=R, task_id=T, qid=qid, agent="codex",
                         fencing_token=got["fencing_token"])
     [ack] = await events("ack_answer")

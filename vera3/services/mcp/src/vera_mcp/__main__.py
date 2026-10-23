@@ -5,6 +5,7 @@ import logging
 import os
 
 import uvicorn
+from vera_shared.room.single_executor import single_executor_mode
 
 from vera_mcp.auth import validate_room_tokens, validate_tokens
 from vera_mcp.room_oauth import validate_config as validate_room_oauth
@@ -20,6 +21,7 @@ GRACEFUL_SHUTDOWN_S = 25
 
 def main() -> None:
     logging.basicConfig(level=os.environ.get("LOG_LEVEL", "INFO"))
+    single_executor_mode()  # неверный/неподдерживаемый ROOM_SINGLE_EXECUTOR валит старт, не вызовы
     validate_room_oauth()
     names = sorted(set(validate_tokens().values()))
     if names:

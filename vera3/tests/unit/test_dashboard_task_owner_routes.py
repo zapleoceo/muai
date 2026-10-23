@@ -120,3 +120,13 @@ def test_start_defaults_and_marked_options():
             "auto_pickup": "on", "reason": "ок"})
         assert op.await_args.kwargs == {"status": "open", "clear_wait": True,
                                         "auto_pickup": "on", "reason": "ок"}
+
+
+@pytest.mark.parametrize("qid", [0, -1, 2**31, 2**63])
+def test_close_qid_out_of_range_is_422_not_500(qid):
+    with svc("close") as op:
+        client = TestClient(app, follow_redirects=False)
+        r = client.post(f"{BASE}/questions/{qid}/close", headers=SAME, cookies=cookie(),
+                        data={"reason": "r", "expected_fencing_token": "3"})
+        assert r.status_code == 422
+        op.assert_not_called()

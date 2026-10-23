@@ -17,7 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.models_room import RoomTaskQuestionRow, RoomTaskRow
 from vera_shared.room.owner_block import BY_HOLDER, BY_OWNER, owner_wait, pause_state
-from vera_shared.room.question_view import load_questions
+from vera_shared.room.question_view import load_questions, question_dict
 from vera_shared.room.single_executor import Mode, single_executor_mode
 
 Via = Literal["claim", "next", "accept"]
@@ -105,6 +105,7 @@ async def check_new_lease(s: AsyncSession, row: RoomTaskRow, now: datetime, *, a
 
 async def answered_questions(s: AsyncSession, row: RoomTaskRow) -> list[dict[str, Any]]:
     """Вопросы в `answered` с ответами — отдаются в выдаче `claim` (§2.8)."""
-    return [{"qid": q.qid, "question": q.question, "answers": [a.text for a in answers]}
+    return [{"qid": q.qid, "question": q.question,
+             "answers": question_dict(q, answers)["answers"]}
             for q, answers in await load_questions(s, row.room, row.task_id)
             if q.status == "answered"]

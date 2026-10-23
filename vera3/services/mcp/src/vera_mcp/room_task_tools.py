@@ -144,7 +144,7 @@ async def room_task_next(
     session: Annotated[str | None, Field(max_length=128)] = None,
     account: Annotated[str | None, Field(max_length=64)] = None,
 ) -> dict[str, Any]:
-    """Атомарно взять ОДНУ следующую задачу: open, без живой аренды, auto_pickup, все depends_on done, нет открытого вопроса владельцу, не на паузе; сперва priority (0 срочнее), затем created_at. task=null, если подходящей нет. Claim the next eligible task."""
+    """Атомарно взять ОДНУ следующую задачу: open, без живой аренды, auto_pickup, все depends_on done, нет вопроса владельцу в open и ответа без ack (answered-unacked: такую задачу берут только явным room_task_claim), нет recovery_hold после recover владельца, нет ожидания владельца, не на паузе; сперва priority (0 срочнее), затем created_at. task=null, если подходящей нет. Claim the next eligible task."""
     task = await task_queue.next_task(
         room=_room(room), agent=client_of(ctx), project=project, lease_seconds=lease_seconds,
         session=check_session(client_of(ctx), session), account=account)

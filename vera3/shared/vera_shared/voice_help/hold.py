@@ -89,7 +89,11 @@ async def lift_hold(room: str, task_id: str, action: str) -> bool:
     a = RoomTaskAnswerRow
     async with get_session() as s:
         task = await _locked(s, room, task_id)
-        if task is None or task.status in ("done", "cancelled") or is_confirmed(task.refs):
+        if task is None or task.status in ("done", "cancelled"):
+            return False
+        if is_confirmed(task.refs):
+            # удержание снято раньше: закрываем вопрос бота и у такой задачи (идемпотентно)
+            await _ack_own_questions(s, room, task_id)
             return False
         answer = (await s.execute(
             select(a.text).where(a.qid.in_(_our_question(room, task_id)),

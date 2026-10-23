@@ -169,8 +169,8 @@ async def _settle_pending() -> bool:
                                      agent=AGENT, lease_seconds=LEASE_S)
             if await _settle(task):
                 return True
-        except (tasks.StaleLease, tasks.TaskBusy):
-            log.warning("dispatcher: аренда %s потеряна — пропускаю", pending["task_id"])
+        except (tasks.StaleLease, tasks.TaskBusy) as e:  # в т.ч. отказ ворот B1 (пауза, вопрос)
+            log.warning("dispatcher: аренда %s потеряна — пропускаю (%s)", pending["task_id"], e)
     return False
 
 

@@ -58,7 +58,8 @@ def _expired(task: Any, att: Attention, now: datetime, claimed_at: datetime | No
     out: list[Action] = []
     if mode != "off":
         # режим on (§2.5): сторож только обнаруживает; reopen нет, продолжает владелец через recover
-        # последним событием после обнаружения идёт watchdog_action: по нему же дедуп
+        # TODO(C1): дедуп по «последнему событию» повторяет запись после любого позднего события
+        # с тем же fencing_token, уведомления держателю (§2.2) нет; режим on до C1 недостижим
         if last_event not in (("lease_expired", task.fencing_token),
                               ("watchdog_action", task.fencing_token)):
             out.append(Action("lease_expired", att.label_ru,

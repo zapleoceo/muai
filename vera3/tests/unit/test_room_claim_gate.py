@@ -151,7 +151,10 @@ async def test_answered_unacked_claim_passes_with_answers_next_accept_refuse(sql
     assert await gate(via="accept", sender="claude", pending_handoff_to="codex") \
         == "answer_unacked"
     got = await claim("codex")
-    assert got["answered_questions"] == [{"qid": qid, "question": "?", "answers": ["делай так"]}]
+    [aq] = got["answered_questions"]
+    assert (aq["qid"], aq["question"]) == (qid, "?")
+    assert [(a["text"], a["by"]) for a in aq["answers"]] == [("делай так", "owner")]
+    assert set(aq["answers"][0]) == {"text", "by", "at"}  # форма как у room_task_questions
     assert got["status"] == "blocked"
     claimed = [e for e in await task_progress.history(room=R, task_id=T, since_id=None, limit=50)
                if e["kind"] == "claimed"][-1]

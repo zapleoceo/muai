@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Awaitable, Callable
 from typing import Any
 
-from fastapi import APIRouter, Form, Request
+from fastapi import APIRouter, Form, Path, Request
 from fastapi.responses import HTMLResponse
 from vera_shared.room.questions import QuestionNotFound, QuestionState
 from vera_shared.room.tasks import StaleLease, TaskBusy, TaskNotFound
@@ -50,7 +50,8 @@ async def task_wait_resolve(request: Request, room: str, task_id: str,
 
 
 @router.post("/tasks/{room}/{task_id}/questions/{qid}/close", response_class=HTMLResponse)
-async def task_question_close(request: Request, room: str, task_id: str, qid: int,
+async def task_question_close(request: Request, room: str, task_id: str,
+                              qid: int = Path(..., ge=1, le=2**31 - 1),  # noqa: B008
                               reason: str = Form(...),  # noqa: B008
                               expected_fencing_token: int = Form(..., ge=0, le=2**62)):  # noqa: B008
     return await _guarded(request, room, task_id, lambda: owner_close_question(

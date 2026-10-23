@@ -11,6 +11,7 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
+from vera_shared.room.single_executor import single_executor_mode
 
 from bot_telegram import dispatcher, voice_worker
 from bot_telegram.brain import BrainError, ask_brain, save_event
@@ -162,6 +163,7 @@ async def on_help_confirmation(callback: CallbackQuery):
 async def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     log.info("Vera 3.0 bot starting, owner=%s", OWNER_ID)
+    single_executor_mode()  # неверный ROOM_SINGLE_EXECUTOR валит старт, а не каждый проход диспетчера
     from vera_shared.db.engine import init_engine
     await init_engine()
     worker = asyncio.create_task(voice_worker.run_forever(send_to_owner, OWNER_ID),
