@@ -15,7 +15,7 @@ from sqlalchemy.exc import IntegrityError
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskEventRow, RoomTaskRow
-from vera_shared.room.owner_block import OwnerBlock, owner_block, owner_wait
+from vera_shared.room.owner_block import BY_OWNER, OwnerBlock, owner_block, owner_wait, pause_state
 from vera_shared.room.task_events import record_event
 from vera_shared.room.task_fields import (
     clean_responsible,
@@ -123,6 +123,15 @@ def apply_claim(row: RoomTaskRow, *, agent: str, now: datetime, lease_seconds: i
     return live
 
 
+async def _refuse_new_lease_under_owner_pause(s: Any, row: RoomTaskRow, agent: str,
+                                              now: datetime) -> None:
+    """Под блокировкой строки: пауза владельца запрещает НОВУЮ аренду; продление своей живой — нет."""
+    own_live = bool(row.lease_holder == agent and row.lease_until and row.lease_until > now)
+    if not own_live and (await pause_state(s, row.room, row.task_id))[BY_OWNER]:
+        raise TaskBusy(f"task {row.task_id!r} is paused by the owner; "
+                       "only the owner's resume allows a new lease")
+
+
 async def claim(*, room: str, task_id: str, agent: str, lease_seconds: int,
                 title: str | None = None, paths: list[str] | None = None,
                 session: str | None = None, account: str | None = None,
@@ -147,6 +156,7 @@ async def claim(*, room: str, task_id: str, agent: str, lease_seconds: int,
                 raise TaskBusy("unconfirmed voice source awaits owner answer")
             if attested and (agent != "dot" or title is not None or paths is not None):
                 raise TaskBusy("attested task may only be claimed by dot without edits")
+            await _refuse_new_lease_under_owner_pause(s, row, agent, now)
             live = apply_claim(row, agent=agent, now=now, lease_seconds=lease_seconds,
                                session=session, account=account)
             if title is not None:
