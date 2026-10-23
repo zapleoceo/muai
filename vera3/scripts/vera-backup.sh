@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Nightly backup of all project DBs + their .env secrets — per-project layout:
+# Nightly backup of project .env secrets (+ DB dumps for projects not in SKIP_DB_PROJECTS) — per-project layout:
 #
 #   $DEST/<project>/daily/YYYY-MM-DD/<db>.dump + secrets.tar.gz + SHA256SUMS
 #   (проекты из SKIP_DB_PROJECTS — без <db>.dump; weekly vera.dump при FULL_DOW
@@ -15,10 +15,12 @@
 # restore она дозаполняется реэмбеддингом. Всё прочее (events, граф, .env,
 # usage_log) воссоздать нельзя — бэкапим.
 #
-# С 2026-10-23 дампы БД Vera (daily и weekly) делает прямой NAS-поток
-# (forced-command verastream → vera-stream → pg_dump, 02:00 VN), а не этот скрипт:
-# SKIP_DB_PROJECTS=vera (дефолт). Секреты vera (secrets.tar.gz) по-прежнему
-# пишутся здесь — поток их не несёт. Вернуть дамп: SKIP_DB_PROJECTS= (пусто).
+# Дампы БД всех четырёх проектов (vera, aibroker, stepan2, sniffer) идут только
+# через NAS-поток (forced command `stream <project>`: Vera 02:00, Broker 02:15,
+# Stepan2 02:30, Sniffer 02:45 VN). С 2026-10-23 это Vera, с 2026-10-24 —
+# aibroker и stepan2: SKIP_DB_PROJECTS="vera aibroker stepan2" (дефолт).
+# Сервер хранит только архивы конфигов: secrets.tar.gz + SHA256SUMS каждого
+# проекта — поток их не несёт. Вернуть все дампы: SKIP_DB_PROJECTS= (пусто).
 #
 # Restore DB : docker exec -i <container> pg_restore -c -U <user> -d <db> < file.dump
 # Restore env: tar xzf secrets.tar.gz -C /
@@ -32,7 +34,7 @@ BACKUP_GROUP=${BACKUP_GROUP:-verabackup}   # NAS-пользователь чит
 # Таблицы, ДАННЫЕ которых не бэкапим (воспроизводимы) — схема остаётся.
 VERA_EXCLUDE=${VERA_EXCLUDE:-${VERA_DAILY_EXCLUDE:-event_embeddings}}
 # Проекты (csv), чьи дампы БД здесь НЕ делаются (секреты и SHA256SUMS — делаются).
-SKIP_DB_PROJECTS=${SKIP_DB_PROJECTS-vera}
+SKIP_DB_PROJECTS=${SKIP_DB_PROJECTS-vera aibroker stepan2}
 WWW_ROOT=${WWW_ROOT:-/var/www}              # корень .env проектов (тесты подменяют)
 
 TODAY=$(date +%F)

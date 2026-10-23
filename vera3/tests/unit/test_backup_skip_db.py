@@ -1,4 +1,4 @@
-"""vera-backup.sh: дамп БД Vera перенесён в NAS-поток, секреты и остальные проекты — как раньше."""
+"""vera-backup.sh: дампы БД vera/aibroker/stepan2 перенесены в NAS-поток, секреты остаются."""
 
 from __future__ import annotations
 
@@ -75,29 +75,25 @@ def _today(dest: Path, project: str) -> Path:
     return day
 
 
-def test_default_skips_vera_db_keeps_secrets(tmp_path: Path) -> None:
+def test_default_skips_all_dbs_keeps_secrets(tmp_path: Path) -> None:
     dest, out = _run(tmp_path)
-    assert _names(_today(dest, "vera")) == {"secrets.tar.gz", "SHA256SUMS"}
+    for project in ("vera", "aibroker", "stepan2"):
+        assert _names(_today(dest, project)) == {"secrets.tar.gz", "SHA256SUMS"}
+        assert (
+            f"db dump of {project} skipped (SKIP_DB_PROJECTS; DB goes to NAS stream)"
+            in out
+        )
     assert not (dest / "vera" / "weekly").exists()
-    assert "db dump of vera skipped (SKIP_DB_PROJECTS; DB goes to NAS stream)" in out
 
 
-def test_other_projects_unchanged(tmp_path: Path) -> None:
-    dest, _ = _run(tmp_path)
-    assert _names(_today(dest, "aibroker")) == {
-        "aibroker.dump",
-        "secrets.tar.gz",
-        "SHA256SUMS",
-    }
-    assert _names(_today(dest, "stepan2")) == {
-        "stepan2.dump",
-        "secrets.tar.gz",
-        "SHA256SUMS",
-    }
-
-
-def test_empty_skip_list_restores_vera_dump_and_weekly(tmp_path: Path) -> None:
+def test_empty_skip_list_restores_all_dumps_and_weekly(tmp_path: Path) -> None:
     dest, out = _run(tmp_path, SKIP_DB_PROJECTS="")
+    for project in ("aibroker", "stepan2"):
+        assert _names(_today(dest, project)) == {
+            f"{project}.dump",
+            "secrets.tar.gz",
+            "SHA256SUMS",
+        }
     assert _names(_today(dest, "vera")) == {"vera.dump", "secrets.tar.gz", "SHA256SUMS"}
     (week,) = (dest / "vera" / "weekly").iterdir()
     assert _names(week) == {"vera.dump", "SHA256SUMS"}

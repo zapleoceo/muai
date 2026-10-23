@@ -1135,9 +1135,9 @@ brain-triage (иначе процессы по кэшу обращаются к 
 
 - `/var/backups/vera/<project>/daily/YYYY-MM-DD/` (project ∈ aibroker,
   stepan2, vera) — `secrets.tar.gz` (`.env` проекта — без TOKEN_SECRET дампы
-  бесполезны) + SHA256SUMS; дамп БД лежит рядом у проектов, не перечисленных в
-  `SKIP_DB_PROJECTS` (сейчас aibroker и stepan2; БД vera идёт прямым
-  NAS-потоком, см. ниже). Ротация `KEEP_DAILY_DAYS` (**2** — буфер на случай
+  бесполезны) + SHA256SUMS; дамп БД рядом лежит только у проектов, не
+  перечисленных в `SKIP_DB_PROJECTS` (дефолт `vera aibroker stepan2` — то есть
+  ни у кого: все дампы идут NAS-потоком, см. ниже). Ротация `KEEP_DAILY_DAYS` (**2** — буфер на случай
   пропуска NAS-пула, не хранилище).
 - `/var/backups/vera/vera/weekly/YYYY-MM-DD/` — раньше недельный vera.dump
   (без `event_embeddings`; `FULL_DOW`, 7 = воскресенье; `KEEP_WEEKLY_DAYS` 7).
@@ -1145,7 +1145,7 @@ brain-triage (иначе процессы по кэшу обращаются к 
 
 Все параметры — env-переменные скрипта, не правки кода.
 
-### Дамп БД Vera перенесён в прямой NAS-поток (2026-10-23)
+### Дампы БД — только через NAS-поток (Vera 2026-10-23, aibroker/stepan2 2026-10-24)
 
 Решение владельца: БД `vera` теперь бэкапится отдельным потоком NAS
 (forced-command пользователь `verastream` → `/usr/local/bin/vera-stream` →
@@ -1155,26 +1155,27 @@ brain-triage (иначе процессы по кэшу обращаются к 
 `vera`) перечисляет проекты, у которых дамп пропускается; в логе строка
 `db dump of vera skipped (SKIP_DB_PROJECTS; DB goes to NAS stream)`.
 
-С 12:23 UTC 23.10 серверная сторона NAS-потока (forced command `stream <project>`)
-обслуживает также aibroker, stepan2 и sniffer. Дефолт `SKIP_DB_PROJECTS=vera`
-не меняется, пока NAS не подтвердит ночные pull-ы остальных; после этого их
-добавляют в список (`SKIP_DB_PROJECTS=vera,aibroker,stepan2`; запятая и/или
-пробел).
+Серверная сторона NAS-потока (forced command `stream <project>`) обслуживает
+vera, aibroker, stepan2 и sniffer. 23.10 в 19:30–32 UTC владелец подтвердил
+cutover: ночные NAS-задачи включены (Vera 02:00, Broker 02:15, Stepan2 02:30,
+Sniffer 02:45 по Вьетнаму), первые pull-ы проверены (дамп + sha256 + счётчики +
+COMPLETE). Поэтому с 24.10 дефолт `SKIP_DB_PROJECTS=vera aibroker stepan2`
+(запятая и/или пробел): сервер дампы БД этих проектов больше не пишет. Sniffer
+в `vera-backup.sh` не входит и не менялся.
 
 Что где теперь:
 
 | Что | Кто делает | Где |
 |---|---|---|
-| дамп БД vera | NAS-поток `verastream` | на NAS, не на сервере |
-| `secrets.tar.gz` vera (`.env`, TOKEN_SECRET) + `SHA256SUMS` | `vera-backup.sh`, cron 03:30 UTC без изменений | `/var/backups/vera/vera/daily/…`, забирает NAS-pull |
-| дампы aibroker и stepan2 + их секреты | `vera-backup.sh`, как раньше | `/var/backups/vera/{aibroker,stepan2}/daily/…` |
+| дампы БД vera, aibroker, stepan2, sniffer | NAS-поток `stream <project>` | на NAS, не на сервере |
+| `secrets.tar.gz` (`.env`, TOKEN_SECRET) + `SHA256SUMS` каждого из vera/aibroker/stepan2 | `vera-backup.sh`, cron 03:30 UTC без изменений | `/var/backups/vera/<project>/daily/…`, забирает NAS-pull |
 
 Секреты остаются в старом скрипте намеренно: поток их не несёт, а без
 `TOKEN_SECRET` зашифрованные токены в дампе бесполезны. Существующие каталоги
 и история не удаляются; ротация (`KEEP_DAILY_DAYS`, `KEEP_WEEKLY_DAYS`)
 работает как раньше, старые `vera/weekly/*` просто дожитут срок и уйдут.
 
-Вернуть дамп БД Vera в старый скрипт: `SKIP_DB_PROJECTS=` (пусто) в окружении
+Вернуть дампы БД в старый скрипт (все проекты): `SKIP_DB_PROJECTS=` (пусто) в окружении
 cron-строки, например `30 3 * * * SKIP_DB_PROJECTS= /usr/local/bin/vera-backup.sh`.
 `WWW_ROOT` (дефолт `/var/www`) — корень `.env` проектов, нужен тестам.
 
@@ -1183,7 +1184,7 @@ rsync-ит `vera3/` из `/var/www/muai-checkout` в `/var/www/vera3/` (там g
 После мержа и деплоя — вручную:
 
 ```
-cp -a /usr/local/bin/vera-backup.sh /usr/local/bin/vera-backup.sh.bak-$(date +%F)
+cp -p /usr/local/bin/vera-backup.sh /root/vera-backup.sh.bak-$(date +%F)
 install -m 0755 /var/www/vera3/scripts/vera-backup.sh /usr/local/bin/vera-backup.sh
 sha256sum /var/www/vera3/scripts/vera-backup.sh /usr/local/bin/vera-backup.sh   # хэши должны совпасть
 ```
