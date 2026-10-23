@@ -4,7 +4,7 @@ from __future__ import annotations
 import pytest
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskRow
-from vera_shared.room import handoff, owner_actions, task_progress, tasks
+from vera_shared.room import handoff, owner_actions, questions, task_progress, tasks
 from vera_shared.room.attention import PAUSED
 from vera_shared.room.owner_block import BY_HOLDER, BY_OWNER, OwnerBlock, pause_state
 from vera_shared.room.task_attention import attention_map
@@ -134,3 +134,17 @@ async def test_st7_owner_resume_lifts_only_owner_pause(sqlite_db):
     await set_state(tok, "resumed")
     assert await pauses() == {BY_HOLDER: False, BY_OWNER: False}
     assert not await paused_attention()
+
+
+async def test_ack_keeps_blocked_under_real_owner_pause_then_holder_unblocks_after_resume(sqlite_db):
+    tok = (await claim())["fencing_token"]
+    qid = (await questions.ask(room=R, task_id=T, agent="claude", fencing_token=tok,
+                               question="?"))["qid"]
+    await questions.answer(room=R, task_id=T, qid=qid, text="да")
+    await owner_actions.pause_by_owner(room=R, task_id=T, reason="r")
+    await questions.ack(room=R, task_id=T, qid=qid, agent="claude", fencing_token=tok)
+    async with get_session() as s:
+        assert (await s.get(RoomTaskRow, (R, T))).status == "blocked"
+    assert "unblocked" not in await kinds()
+    await owner_actions.resume_by_owner(room=R, task_id=T, reason="r")
+    assert (await set_state(tok, "unblocked"))["status"] == "in_progress"
