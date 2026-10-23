@@ -458,7 +458,7 @@ pause / resume / wait-resolve / question close с причиной. Без ми�
 
 - `POST /tasks/{room}/{task_id}/pause` и `.../resume` — за `owner_post_gate` (сессия владельца +
   same-origin, как у `/answer`); форма с обязательным `reason` (1..2000 символов, иначе 422).
-  Аренда и fencing-токен не нужны. Коды: 404 задачи нет, 409 задача `done`/`cancelled`.
+  Обработчики `task_pause`/`task_resume`. Аренда и fencing-токен не нужны. Коды: 404 задачи нет, 409 задача `done`/`cancelled`.
 - `pause_by_owner` / `resume_by_owner` пишут существующие виды `paused`/`resumed` с
   `agent="owner"`, `text=reason`, `data={by:"owner", actor, reason, via:"dashboard"}`; `status`
   задачи не меняется. Повтор при уже стоящей (снятой) паузе владельца записи не делает.

@@ -7,7 +7,7 @@ from sqlalchemy import String, cast, exists, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.engine import get_session
-from vera_shared.db.models_room import RoomTaskEventRow, RoomTaskQuestionRow, RoomTaskRow
+from vera_shared.db.models_room import RoomTaskQuestionRow, RoomTaskRow
 from vera_shared.room.owner_block import pause_state
 from vera_shared.room.task_attention import tasks_with_attention
 from vera_shared.room.task_events import record_event
