@@ -204,9 +204,10 @@ async def test_waiting_decision_owner_explicit_row_field_pg(pg_db):
     await task_progress.progress(room="main", task_id="W2", agent="claude",
                                  fencing_token=token, result="решено",
                                  next_checkpoint_seconds=300)
-    cleared = cards_by_id(await load_report())["W2"].info
-    assert cleared.waiting is False
-    assert cleared.decision_owner is None
+    # S3: результат держателя не снимает ожидание владельца — его снимает только владелец
+    kept = cards_by_id(await load_report())["W2"].info
+    assert kept.waiting is True
+    assert kept.decision_owner == "owner"
 
 
 async def test_decision_owner_rejected_when_too_long_pg(pg_db):

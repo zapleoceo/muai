@@ -11,6 +11,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskRow
 from vera_shared.room import messages, questions, task_attention
 from vera_shared.room.attention import ANSWERED, NEEDS_OWNER, attention
+from vera_shared.room.owner_block import OwnerBlock
 from vera_shared.room.tasks import StaleLease
 from vera_shared.timeutil import utc_naive_now
 
@@ -183,20 +184,25 @@ async def test_ask_validates_question_length(sqlite_db):
     assert await questions.questions_of("main", "T1") == []
 
 
-async def test_ack_leaves_status_alone_unless_task_is_blocked(sqlite_db):
+async def test_ack_is_the_only_way_to_unblock_after_a_question(sqlite_db):
+    """S4/S7: пока вопрос не подтверждён, держатель сам блок не снимает."""
     tok = await held()
     qid = await ask(tok)
     await questions.answer(room="main", task_id="T1", qid=qid, text="ok")
-    await r.room_task_update("T1", tok, CLAUDE, status="in_progress")
+    with pytest.raises(OwnerBlock):
+        await r.room_task_update("T1", tok, CLAUDE, status="in_progress")
     await qt.room_task_answer_ack("T1", tok, qid, CLAUDE)
     row = await task_row()
-    assert (row.status, row.owner) == ("in_progress", "owner")
-    assert (await kinds()).count("unblocked") == 1  # от update, ack своего не добавил
+    assert (row.status, row.owner) == ("in_progress", None)
+    assert (await kinds()).count("unblocked") == 1  # событие от ack (_close)
 
 
 async def test_answer_rejected_for_finished_task(sqlite_db):
     tok = await held()
     qid = await ask(tok)
-    await r.room_task_release("T1", tok, CLAUDE, status="done")
+    with pytest.raises(OwnerBlock):  # S4: при вопросе владельцу done недоступен
+        await r.room_task_release("T1", tok, CLAUDE, status="done")
+    async with get_session() as s:
+        (await s.get(RoomTaskRow, ("main", "T1"))).status = "done"
     with pytest.raises(questions.QuestionState):
         await questions.answer(room="main", task_id="T1", qid=qid, text="поздно")

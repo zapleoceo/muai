@@ -11,13 +11,11 @@ import uuid
 from datetime import timedelta
 from typing import Any
 
-from sqlalchemy import select
-
 from vera_shared.db.engine import get_session
-from vera_shared.db.models_room import RoomTaskEventRow
 from vera_shared.room.messages import add_message
+from vera_shared.room.owner_block import pause_state
 from vera_shared.room.task_events import record_event
-from vera_shared.room.tasks import _locked, _require_lease, task_dict
+from vera_shared.room.tasks import _locked, _require_lease, clear_holder_wait, task_dict
 from vera_shared.timeutil import utc_naive_now
 from vera_shared.voice_help.attest_state import attestation_for
 
@@ -71,11 +69,7 @@ async def accept(*, room: str, task_id: str, agent: str, session: str | None = N
             raise HandoffError(f"handoff of {task_id!r} is not offered to {agent}")
         if row.status in ("done", "cancelled"):
             raise HandoffError(f"task {task_id!r} is {row.status}; handoff cannot be accepted")
-        last_state = (await s.execute(select(RoomTaskEventRow.kind).where(
-            RoomTaskEventRow.room == room, RoomTaskEventRow.task_id == task_id,
-            RoomTaskEventRow.kind.in_(("paused", "resumed")))
-            .order_by(RoomTaskEventRow.id.desc()).limit(1))).scalar_one_or_none()
-        if last_state == "paused":
+        if any((await pause_state(s, room, task_id)).values()):
             raise HandoffError(f"task {task_id!r} is paused; resume it before accepting")
         now = utc_naive_now()
         sender = row.lease_holder
@@ -83,9 +77,9 @@ async def accept(*, room: str, task_id: str, agent: str, session: str | None = N
         row.fencing_token = (row.fencing_token or 0) + 1
         row.holder_session, row.holder_account = session, account
         row.pending_handoff_to = None
-        row.status = "in_progress"
-        row.waiting_until, row.waiting_reason = None, None
-        row.waiting_decision_owner = None
+        if row.status == "open":  # blocked остаётся blocked (S6)
+            row.status = "in_progress"
+        clear_holder_wait(row)
         row.updated_at = now
         await record_event(s, room=room, task_id=task_id, kind="handoff_accept", agent=agent,
                            session=session, account=account, fencing_token=row.fencing_token,

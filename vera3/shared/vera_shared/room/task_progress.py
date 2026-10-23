@@ -5,8 +5,9 @@ from datetime import timedelta
 from typing import Any
 
 from vera_shared.db.engine import get_session
+from vera_shared.room.owner_block import BY_HOLDER, PAUSE_KINDS, OwnerBlock, owner_block
 from vera_shared.room.task_events import list_events, record_event
-from vera_shared.room.tasks import _locked, _require_lease, task_dict
+from vera_shared.room.tasks import _locked, _require_lease, clear_holder_wait, task_dict
 from vera_shared.timeutil import utc_naive_now
 from vera_shared.voice_help.attest_state import attestation_for
 
@@ -29,8 +30,7 @@ async def progress(*, room: str, task_id: str, agent: str, fencing_token: int, r
             raise ValueError("attested task permits only receipt completion")
         now = utc_naive_now()
         row.last_progress_at, row.last_progress_text, row.updated_at = now, result, now
-        row.waiting_until, row.waiting_reason = None, None  # результат закрывает ожидание
-        row.waiting_decision_owner = None
+        clear_holder_wait(row)  # результат закрывает ожидание держателя, не владельца
         if next_checkpoint_seconds is not None:
             row.next_checkpoint_at = now + timedelta(seconds=next_checkpoint_seconds)
         await record_event(s, room=room, task_id=task_id, kind="progress", agent=agent,
@@ -50,12 +50,16 @@ async def set_state(*, room: str, task_id: str, agent: str, fencing_token: int, 
                              fencing_token)
         if await attestation_for(s, room, task_id):
             raise ValueError("attested task permits only receipt completion")
+        if state in ("resumed", "unblocked") and (await owner_block(s, row)).active:
+            raise OwnerBlock(f"set_state({state}): task {task_id!r} awaits the owner; "
+                             "only the owner's resolution lifts the block")
         if state in STATE_TO_STATUS:
             row.status = STATE_TO_STATUS[state]
         row.updated_at = utc_naive_now()
         await record_event(s, room=room, task_id=task_id, kind=state, agent=agent,
                            session=row.holder_session, account=row.holder_account,
-                           fencing_token=fencing_token, text=reason)
+                           fencing_token=fencing_token, text=reason,
+                           data={"by": BY_HOLDER} if state in PAUSE_KINDS else None)
         await s.refresh(row)
         return task_dict(row)
 

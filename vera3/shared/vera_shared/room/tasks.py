@@ -15,6 +15,7 @@ from sqlalchemy.exc import IntegrityError
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskEventRow, RoomTaskRow
+from vera_shared.room.owner_block import OwnerBlock, owner_block, owner_wait
 from vera_shared.room.task_events import record_event
 from vera_shared.room.task_fields import (
     clean_responsible,
@@ -88,9 +89,20 @@ async def open_task(*, room: str, task_id: str, agent: str, title: str | None,
             return task_dict(row), False
 
 
+def clear_holder_wait(row: RoomTaskRow) -> None:
+    """Снимает только ожидание держателя; ожидание владельца может снять лишь владелец (S3)."""
+    if owner_wait(row):
+        return
+    row.waiting_until, row.waiting_reason = None, None
+    row.waiting_decision_owner = None
+
+
 def apply_claim(row: RoomTaskRow, *, agent: str, now: datetime, lease_seconds: int,
                 session: str | None, account: str | None) -> bool:
-    """Захват или продление под блокировкой строки. True — продлена своя живая аренда."""
+    """Захват или продление под блокировкой строки. True — продлена своя живая аренда.
+
+    Продление меняет только поля аренды (S1). Новая аренда: open -> in_progress,
+    blocked остаётся blocked, ожидание владельца не трогается (S2)."""
     live = bool(row.lease_holder and row.lease_until and row.lease_until > now)
     if live and row.lease_holder != agent:
         raise TaskBusy(f"task {row.task_id!r} is held by {row.lease_holder} "
@@ -99,14 +111,14 @@ def apply_claim(row: RoomTaskRow, *, agent: str, now: datetime, lease_seconds: i
         row.fencing_token = (row.fencing_token or 0) + 1
         row.lease_holder = agent
         row.holder_session, row.holder_account = session, account
-        row.waiting_until, row.waiting_reason = None, None
-        row.waiting_decision_owner = None
+        clear_holder_wait(row)
         row.pending_handoff_to = None
+        if row.status == "open":
+            row.status = "in_progress"
     else:
         row.holder_session = session or row.holder_session
         row.holder_account = account or row.holder_account
     row.lease_until = now + timedelta(seconds=lease_seconds)
-    row.status = "in_progress"
     row.updated_at = now
     return live
 
@@ -193,6 +205,9 @@ async def update(*, room: str, task_id: str, agent: str, fencing_token: int,
                 and (auto_pickup is True or (clean_refs is not None
                                              and not _unconfirmed_voice(clean_refs)))):
             raise TaskBusy("unconfirmed voice source cannot remove hold")
+        if status == "in_progress" and (await owner_block(s, row)).active:
+            raise OwnerBlock(f"update: task {task_id!r} awaits the owner; "
+                             "status in_progress needs the owner's resolution first")
         now = utc_naive_now()
         prev_status = row.status
         if status is not None:
@@ -220,8 +235,7 @@ async def update(*, room: str, task_id: str, agent: str, fencing_token: int,
             # прогресс — содержательная правка; одно продление аренды (heartbeat) его не двигает
             row.last_progress_at = now
             row.last_progress_text = note if note is not None else f"status: {status}"
-            row.waiting_until, row.waiting_reason = None, None
-            row.waiting_decision_owner = None
+            clear_holder_wait(row)
             kind = "progress"
             # переход блокировки пишется раньше progress: Гантт не рисует вспышку работы
             flip = ("blocked" if status == "blocked" and prev_status != "blocked" else
@@ -250,11 +264,14 @@ async def release(*, room: str, task_id: str, agent: str, fencing_token: int,
                              fencing_token)
         if await attestation_for(s, room, task_id) and status != "open":
             raise TaskBusy("attested task needs receipt completion or open release")
+        state = await owner_block(s, row)
+        if state.active and status != "blocked":
+            raise OwnerBlock(f"release({status}): task {task_id!r} awaits the owner "
+                             f"({', '.join(state.reasons())}); release only to blocked")
         row.status = status
         row.lease_holder = None
         row.lease_until = None
-        row.waiting_until, row.waiting_reason = None, None
-        row.waiting_decision_owner = None
+        clear_holder_wait(row)
         row.pending_handoff_to = None
         if note is not None:
             row.note = note
