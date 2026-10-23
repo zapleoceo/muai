@@ -2,7 +2,8 @@
 # Nightly backup of all project DBs + their .env secrets — per-project layout:
 #
 #   $DEST/<project>/daily/YYYY-MM-DD/<db>.dump + secrets.tar.gz + SHA256SUMS
-#   $DEST/vera/weekly/YYYY-MM-DD/vera.dump   (longer-retention checkpoint, FULL_DOW)
+#   (проекты из SKIP_DB_PROJECTS — без <db>.dump; weekly vera.dump при FULL_DOW
+#   создаётся только если vera не в SKIP_DB_PROJECTS: $DEST/vera/weekly/YYYY-MM-DD/)
 #
 # Сервер — только КОРОТКИЙ буфер (KEEP_DAILY_DAYS=2): длинную историю хранит
 # Synology NAS, который каждую ночь забирает всё дерево read-only rrsync-юзером
@@ -13,6 +14,11 @@
 # исключаем ИЗ ОБОИХ дампов (VERA_EXCLUDE), схема таблицы остаётся, на
 # restore она дозаполняется реэмбеддингом. Всё прочее (events, граф, .env,
 # usage_log) воссоздать нельзя — бэкапим.
+#
+# С 2026-10-23 дампы БД Vera (daily и weekly) делает прямой NAS-поток
+# (forced-command verastream → vera-stream → pg_dump, 02:00 VN), а не этот скрипт:
+# SKIP_DB_PROJECTS=vera (дефолт). Секреты vera (secrets.tar.gz) по-прежнему
+# пишутся здесь — поток их не несёт. Вернуть дамп: SKIP_DB_PROJECTS= (пусто).
 #
 # Restore DB : docker exec -i <container> pg_restore -c -U <user> -d <db> < file.dump
 # Restore env: tar xzf secrets.tar.gz -C /
@@ -25,6 +31,9 @@ FULL_DOW=${FULL_DOW:-7}                    # ISO day-of-week: 7 = воскрес
 BACKUP_GROUP=${BACKUP_GROUP:-verabackup}   # NAS-пользователь читает через группу
 # Таблицы, ДАННЫЕ которых не бэкапим (воспроизводимы) — схема остаётся.
 VERA_EXCLUDE=${VERA_EXCLUDE:-${VERA_DAILY_EXCLUDE:-event_embeddings}}
+# Проекты (csv), чьи дампы БД здесь НЕ делаются (секреты и SHA256SUMS — делаются).
+SKIP_DB_PROJECTS=${SKIP_DB_PROJECTS-vera}
+WWW_ROOT=${WWW_ROOT:-/var/www}              # корень .env проектов (тесты подменяют)
 
 TODAY=$(date +%F)
 
@@ -39,6 +48,14 @@ dump() {  # container db user outdir [pg_dump extra args...]
   fi
 }
 
+skip_db() {  # project → 0, если дамп БД проекта перенесён в NAS-поток
+  local -a items=()
+  local p
+  IFS=', ' read -ra items <<< "$SKIP_DB_PROJECTS" || true   # без glob-раскрытия
+  for p in "${items[@]}"; do [ "$p" = "$1" ] && return 0; done
+  return 1
+}
+
 exclude_args() {  # csv table list → --exclude-table-data flags
   local IFS=,
   for t in $1; do printf -- '--exclude-table-data=%s ' "$t"; done
@@ -48,7 +65,11 @@ backup_project() {  # project container db user env_path [pg_dump extra...]
   local project=$1 container=$2 db=$3 user=$4 env_path=$5; shift 5
   local out="$DEST/$project/daily/$TODAY"
   mkdir -p "$out"
-  dump "$container" "$db" "$user" "$out" "$@"
+  if skip_db "$project"; then
+    echo "  db dump of $project skipped (SKIP_DB_PROJECTS; DB goes to NAS stream)"
+  else
+    dump "$container" "$db" "$user" "$out" "$@"
+  fi
   # Секреты проекта: без TOKEN_SECRET зашифрованные токены в дампе — мусор.
   if [ -f "$env_path" ]; then
     tar -czf "$out/secrets.tar.gz" -C / "${env_path#/}" \
@@ -58,13 +79,13 @@ backup_project() {  # project container db user env_path [pg_dump extra...]
 }
 
 echo "[$(date)] backup -> $DEST (per-project)"
-backup_project aibroker aibroker-postgres aibroker aibroker /var/www/aibroker/.env
-backup_project stepan2  stepan2-postgres  stepan2  stepan2  /var/www/stepan2/infra/.env
+backup_project aibroker aibroker-postgres aibroker aibroker "$WWW_ROOT/aibroker/.env"
+backup_project stepan2  stepan2-postgres  stepan2  stepan2  "$WWW_ROOT/stepan2/infra/.env"
 # shellcheck disable=SC2046
-backup_project vera     vera3-postgres    vera     vera     /var/www/vera3/infra/.env \
+backup_project vera     vera3-postgres    vera     vera     "$WWW_ROOT/vera3/infra/.env" \
   $(exclude_args "$VERA_EXCLUDE")
 
-if [ "$(date +%u)" = "$FULL_DOW" ]; then
+if [ "$(date +%u)" = "$FULL_DOW" ] && ! skip_db vera; then
   WEEKLY="$DEST/vera/weekly/$TODAY"
   mkdir -p "$WEEKLY"
   echo "[$(date)] weekly vera dump -> $WEEKLY"
