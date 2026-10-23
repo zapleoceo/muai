@@ -320,21 +320,8 @@ else
     recover "disk_runway" "Disk runway ${runway_days} days."
 fi
 
-# ─── 3a2. Неподтверждённые бэкапы на диске ───────────────────────────────────
-# vera-backup-prune.sh удаляет дамп только по явному подтверждению NAS; пока его
-# нет, дампы копятся до ротации. Алерт — когда их объём выше порога.
-BACKUP_ROOT="${BACKUP_ROOT:-/var/backups/vera}"
-BACKUP_PENDING_ALERT_GB="${BACKUP_PENDING_ALERT_GB:-3}"
-if [ -d "$BACKUP_ROOT" ]; then
-    pending_bytes=$(find "$BACKUP_ROOT" -type f \( -name '*.dump' -o -name '*.tar.gz' \) -printf '%s\n' 2>/dev/null | awk '{s+=$1} END {printf "%d", s}')
-    pending_gb=$(( pending_bytes / 1073741824 ))
-    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) backup_pending bytes=${pending_bytes} threshold_gb=${BACKUP_PENDING_ALERT_GB}"
-    if [ "$pending_bytes" -gt $(( BACKUP_PENDING_ALERT_GB * 1073741824 )) ]; then
-        alert "backup_pending" "Backups on disk: <b>${pending_gb} GB</b> in ${BACKUP_ROOT} (threshold ${BACKUP_PENDING_ALERT_GB} GB). Prune removes only NAS-confirmed files."
-    else
-        recover "backup_pending" "Backups on disk ${pending_gb} GB, below threshold."
-    fi
-fi
+# Объём хранящихся бэкапов сам по себе не авария (решение владельца 20.10.2026).
+# Реальную угрозу свободному месту проверяют disk_* и disk_runway выше.
 
 # ─── 3b. Память хоста ────────────────────────────────────────────────────────
 # Бокс — 3.7 ГиБ на ТРИ стека (vera3, aibroker, stepan2). До 2026-09-01 у
