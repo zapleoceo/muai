@@ -468,7 +468,12 @@ pause / resume / wait-resolve / question close с причиной. Без ми�
   `fold_pauses`/`pause_state`, а не «последнее событие».
 - Отложено (CHECK `ck_room_task_events_kind` после 058 не содержит `wait_resolved` и
   `question_closed`; нужна миграция 060 из PR-B1m/B1): `wait/resolve` (ST9) и
-  `questions/{qid}/close` (ST14, ST15). Шлюз `claim` по паузе — B1.
+  `questions/{qid}/close` (ST14, ST15).
+- `tasks.claim` под тем же замком строки, до `apply_claim`, отказывает (`TaskBusy`) в НОВОЙ
+  аренде при активной паузе владельца: захват открытой задачи и повторный захват после истечения
+  аренды (в т.ч. тем же агентом). Продление своей живой аренды разрешено, статус не меняет. Это
+  не останавливает уже запущенный внешний процесс держателя. Пауза держателя в `claim` не
+  проверяется (шлюзы по паузе держателя — B1).
 
 Тесты: `tests/unit/test_room_owner_pause.py` (ST5–ST7), `tests/unit/test_dashboard_task_pause.py`.
 

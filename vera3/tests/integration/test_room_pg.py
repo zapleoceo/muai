@@ -273,3 +273,25 @@ async def test_handoff_and_watchdog_round_trip_on_postgres(pg_db):
     reopened = await tasks.claim(room="main", task_id="PGH", agent="gemini",
                                  lease_seconds=600)
     assert reopened["fencing_token"] == 3
+
+
+async def test_owner_pause_and_claim_are_serialized_by_the_row_lock(pg_db):
+    from vera_shared.room import owner_actions, task_progress, tasks
+    from vera_shared.room.tasks import TaskBusy
+
+    await tasks.open_task(room="main", task_id="PZ", agent="claude", title="t", paths=None)
+    res = await asyncio.gather(
+        tasks.claim(room="main", task_id="PZ", agent="codex", lease_seconds=60),
+        owner_actions.pause_by_owner(room="main", task_id="PZ", reason="r"),
+        return_exceptions=True)
+    kinds = [e["kind"] for e in await task_progress.history(
+        room="main", task_id="PZ", since_id=None, limit=50)]
+    assert isinstance(res[1], dict)
+    if isinstance(res[0], TaskBusy):  # пауза взяла замок первой: аренды нет
+        assert "claimed" not in kinds
+    else:  # захват первым: аренда выдана до паузы, порядок событий это показывает
+        assert kinds.index("claimed") < kinds.index("paused")
+    again = await asyncio.gather(
+        tasks.claim(room="main", task_id="PZ", agent="gem", lease_seconds=60),
+        return_exceptions=True)
+    assert isinstance(again[0], TaskBusy)

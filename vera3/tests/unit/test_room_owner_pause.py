@@ -1,6 +1,8 @@
 """Пауза владельца (PR-B0b, дизайн §2.7 S5): ST5-ST7 и свойства pause_by_owner/resume_by_owner."""
 from __future__ import annotations
 
+from datetime import timedelta
+
 import pytest
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskRow
@@ -148,3 +150,51 @@ async def test_ack_keeps_blocked_under_real_owner_pause_then_holder_unblocks_aft
     assert "unblocked" not in await kinds()
     await owner_actions.resume_by_owner(room=R, task_id=T, reason="r")
     assert (await set_state(tok, "unblocked"))["status"] == "in_progress"
+
+
+async def snapshot() -> tuple:
+    async with get_session() as s:
+        r = await s.get(RoomTaskRow, (R, T))
+        return (r.status, r.fencing_token, r.lease_holder, r.lease_until)
+
+
+async def test_claim_of_open_owner_paused_task_is_refused_and_changes_nothing(sqlite_db):
+    await tasks.open_task(room=R, task_id=T, agent="claude", title="t", paths=None)
+    await owner_actions.pause_by_owner(room=R, task_id=T, reason="r")
+    before, events = await snapshot(), await kinds()
+    with pytest.raises(tasks.TaskBusy, match="paused by the owner"):
+        await claim("codex")
+    assert await snapshot() == before and await kinds() == events
+    assert before[0] == "open" and before[2] is None
+
+
+async def test_claim_after_expiry_is_refused_even_for_the_same_agent(sqlite_db):
+    await claim()
+    await owner_actions.pause_by_owner(room=R, task_id=T, reason="r")
+    async with get_session() as s:
+        (await s.get(RoomTaskRow, (R, T))).lease_until = utc_naive_now() - timedelta(seconds=5)
+    before, events = await snapshot(), await kinds()
+    for agent in ("claude", "codex"):
+        with pytest.raises(tasks.TaskBusy, match="paused by the owner"):
+            await claim(agent)
+    assert await snapshot() == before and await kinds() == events
+
+
+async def test_claim_is_allowed_again_after_owner_resume(sqlite_db):
+    await tasks.open_task(room=R, task_id=T, agent="claude", title="t", paths=None)
+    await owner_actions.pause_by_owner(room=R, task_id=T, reason="r")
+    await owner_actions.resume_by_owner(room=R, task_id=T, reason="r")
+    got = await claim("codex")
+    assert got["status"] == "in_progress" and got["fencing_token"] == 1
+
+
+async def test_live_holder_extension_during_owner_pause_keeps_fencing_and_status(sqlite_db):
+    first = await claim()
+    await owner_actions.pause_by_owner(room=R, task_id=T, reason="r")
+    again = await claim()
+    assert again["fencing_token"] == first["fencing_token"]
+    assert again["status"] == first["status"] == "in_progress"
+    assert again["lease_until"] >= first["lease_until"]
+    assert (await kinds())[-1] == "heartbeat"
+    with pytest.raises(tasks.TaskBusy):  # чужой живой держатель по-прежнему получает отказ
+        await claim("codex")
