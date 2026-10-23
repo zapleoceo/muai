@@ -79,7 +79,7 @@ def test_default_skips_vera_db_keeps_secrets(tmp_path: Path) -> None:
     dest, out = _run(tmp_path)
     assert _names(_today(dest, "vera")) == {"secrets.tar.gz", "SHA256SUMS"}
     assert not (dest / "vera" / "weekly").exists()
-    assert "db dump of vera moved to NAS stream (vera-stream), skipped" in out
+    assert "db dump of vera skipped (SKIP_DB_PROJECTS; DB goes to NAS stream)" in out
 
 
 def test_other_projects_unchanged(tmp_path: Path) -> None:
@@ -102,3 +102,14 @@ def test_empty_skip_list_restores_vera_dump_and_weekly(tmp_path: Path) -> None:
     (week,) = (dest / "vera" / "weekly").iterdir()
     assert _names(week) == {"vera.dump", "SHA256SUMS"}
     assert "skipped" not in out
+
+
+def test_skip_list_accepts_comma_and_spaces(tmp_path: Path) -> None:
+    dest, _ = _run(tmp_path, SKIP_DB_PROJECTS="vera, stepan2")
+    assert _names(_today(dest, "vera")) == {"secrets.tar.gz", "SHA256SUMS"}
+    assert _names(_today(dest, "stepan2")) == {"secrets.tar.gz", "SHA256SUMS"}
+    assert _names(_today(dest, "aibroker")) == {
+        "aibroker.dump",
+        "secrets.tar.gz",
+        "SHA256SUMS",
+    }

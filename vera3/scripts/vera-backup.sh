@@ -2,7 +2,8 @@
 # Nightly backup of all project DBs + their .env secrets — per-project layout:
 #
 #   $DEST/<project>/daily/YYYY-MM-DD/<db>.dump + secrets.tar.gz + SHA256SUMS
-#   $DEST/vera/weekly/YYYY-MM-DD/vera.dump   (longer-retention checkpoint, FULL_DOW)
+#   (проекты из SKIP_DB_PROJECTS — без <db>.dump; weekly vera.dump при FULL_DOW
+#   создаётся только если vera не в SKIP_DB_PROJECTS: $DEST/vera/weekly/YYYY-MM-DD/)
 #
 # Сервер — только КОРОТКИЙ буфер (KEEP_DAILY_DAYS=2): длинную историю хранит
 # Synology NAS, который каждую ночь забирает всё дерево read-only rrsync-юзером
@@ -48,8 +49,10 @@ dump() {  # container db user outdir [pg_dump extra args...]
 }
 
 skip_db() {  # project → 0, если дамп БД проекта перенесён в NAS-поток
-  local IFS=, p
-  for p in $SKIP_DB_PROJECTS; do [ "$p" = "$1" ] && return 0; done
+  local -a items=()
+  local p
+  IFS=', ' read -ra items <<< "$SKIP_DB_PROJECTS" || true   # без glob-раскрытия
+  for p in "${items[@]}"; do [ "$p" = "$1" ] && return 0; done
   return 1
 }
 
@@ -63,7 +66,7 @@ backup_project() {  # project container db user env_path [pg_dump extra...]
   local out="$DEST/$project/daily/$TODAY"
   mkdir -p "$out"
   if skip_db "$project"; then
-    echo "  db dump of $project moved to NAS stream (vera-stream), skipped"
+    echo "  db dump of $project skipped (SKIP_DB_PROJECTS; DB goes to NAS stream)"
   else
     dump "$container" "$db" "$user" "$out" "$@"
   fi

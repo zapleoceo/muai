@@ -1134,12 +1134,14 @@ brain-triage (иначе процессы по кэшу обращаются к 
 `events`, граф, `usage_log`, `.env` — воссоздать нельзя, бэкапим.
 
 - `/var/backups/vera/<project>/daily/YYYY-MM-DD/` (project ∈ aibroker,
-  stepan2, vera) — дамп БД + `secrets.tar.gz` (`.env` проекта — без
-  TOKEN_SECRET дампы бесполезны) + SHA256SUMS. Ротация `KEEP_DAILY_DAYS`
-  (**2** — буфер на случай пропуска NAS-пула, не хранилище).
-- `/var/backups/vera/vera/weekly/YYYY-MM-DD/` — тот же лёгкий vera.dump
-  (тоже без `event_embeddings`), но дольше живёт: чекпоинт с бóльшим
-  окном восстановления (`FULL_DOW`, 7 = воскресенье; `KEEP_WEEKLY_DAYS` 7).
+  stepan2, vera) — `secrets.tar.gz` (`.env` проекта — без TOKEN_SECRET дампы
+  бесполезны) + SHA256SUMS; дамп БД лежит рядом у проектов, не перечисленных в
+  `SKIP_DB_PROJECTS` (сейчас aibroker и stepan2; БД vera идёт прямым
+  NAS-потоком, см. ниже). Ротация `KEEP_DAILY_DAYS` (**2** — буфер на случай
+  пропуска NAS-пула, не хранилище).
+- `/var/backups/vera/vera/weekly/YYYY-MM-DD/` — раньше недельный vera.dump
+  (без `event_embeddings`; `FULL_DOW`, 7 = воскресенье; `KEEP_WEEKLY_DAYS` 7).
+  Скрипт его больше не создаёт; уже лежащие каталоги ротируются как обычно.
 
 Все параметры — env-переменные скрипта, не правки кода.
 
@@ -1149,9 +1151,15 @@ brain-triage (иначе процессы по кэшу обращаются к 
 (forced-command пользователь `verastream` → `/usr/local/bin/vera-stream` →
 `sudo vera-stream-run` → `pg_dump` базы vera, 02:00 по Вьетнаму, ежедневно,
 проверено). Старый ночной `vera-backup.sh` **больше не пишет дампы БД Vera** —
-ни daily `vera.dump`, ни weekly. Переменная `SKIP_DB_PROJECTS` (csv, дефолт
+ни daily `vera.dump`, ни weekly. Переменная `SKIP_DB_PROJECTS` (через запятую и/или пробел, дефолт
 `vera`) перечисляет проекты, у которых дамп пропускается; в логе строка
-`db dump of vera moved to NAS stream (vera-stream), skipped`.
+`db dump of vera skipped (SKIP_DB_PROJECTS; DB goes to NAS stream)`.
+
+С 12:23 UTC 23.10 серверная сторона NAS-потока (forced command `stream <project>`)
+обслуживает также aibroker, stepan2 и sniffer. Дефолт `SKIP_DB_PROJECTS=vera`
+не меняется, пока NAS не подтвердит ночные pull-ы остальных; после этого их
+добавляют в список (`SKIP_DB_PROJECTS=vera,aibroker,stepan2`; запятая и/или
+пробел).
 
 Что где теперь:
 
@@ -1170,14 +1178,14 @@ brain-triage (иначе процессы по кэшу обращаются к 
 cron-строки, например `30 3 * * * SKIP_DB_PROJECTS= /usr/local/bin/vera-backup.sh`.
 `WWW_ROOT` (дефолт `/var/www`) — корень `.env` проектов, нужен тестам.
 
-Деплой (`deploy.yml`) скрипт на сервер **не ставит** — как и prune, копируется
-вручную после мержа:
+Деплой (`deploy.yml`) скрипт в `/usr/local/bin` **не ставит**: `deploy.sh` лишь
+rsync-ит `vera3/` из `/var/www/muai-checkout` в `/var/www/vera3/` (там git нет).
+После мержа и деплоя — вручную:
 
 ```
-cd /var/www/vera3 && git pull
 cp -a /usr/local/bin/vera-backup.sh /usr/local/bin/vera-backup.sh.bak-$(date +%F)
-install -m 0755 vera3/scripts/vera-backup.sh /usr/local/bin/vera-backup.sh
-sha256sum vera3/scripts/vera-backup.sh /usr/local/bin/vera-backup.sh   # хэши должны совпасть
+install -m 0755 /var/www/vera3/scripts/vera-backup.sh /usr/local/bin/vera-backup.sh
+sha256sum /var/www/vera3/scripts/vera-backup.sh /usr/local/bin/vera-backup.sh   # хэши должны совпасть
 ```
 
 Тест: `vera3/tests/unit/test_backup_skip_db.py` (заглушка `docker`, временный
@@ -1259,14 +1267,13 @@ NAS и не меняют `rrsync -ro`:
 **Гейты владельца (здесь не проектируются):** запись подтверждения самим NAS
 назад (второй ключ с записью или смена `rrsync -ro`) — это новый доступ.
 
-Установка (вручную на сервере, из чекаута репозитория; cron-строка prune
+Установка (вручную на сервере, после деплоя — `deploy.sh` rsync-ит `vera3/` в `/var/www/vera3/`, git там нет; cron-строка prune
 сейчас закомментирована, бэкап `/root/crontab.bak-20261013T234031Z`):
 
 ```
-cd /var/www/vera3 && git pull
 cp -a /usr/local/bin/vera-backup-prune.sh /usr/local/bin/vera-backup-prune.sh.bak-$(date +%F)
-install -m 0755 vera3/scripts/vera-backup-prune.sh /usr/local/bin/vera-backup-prune.sh
-sha256sum vera3/scripts/vera-backup-prune.sh /usr/local/bin/vera-backup-prune.sh   # хэши должны совпасть
+install -m 0755 /var/www/vera3/scripts/vera-backup-prune.sh /usr/local/bin/vera-backup-prune.sh
+sha256sum /var/www/vera3/scripts/vera-backup-prune.sh /usr/local/bin/vera-backup-prune.sh   # хэши должны совпасть
 ```
 
 Только после совпадения хэшей вернуть прежнюю строку cron
