@@ -444,10 +444,33 @@ sniffer; без учёта регистра). Внутри — `<details open>` 
 - **S7.** `blocked` остаётся `blocked` до явного события: `ack` (`_close` снимает `blocked`
   при 0 незакрытых вопросов), либо `set_state(unblocked)`/`update(status=in_progress)`
   держателя, когда OB нет.
-- **S5 (события разрешения владельца: пауза/resume/wait-resolve)** — PR-B0b; здесь только
-  предикаты и тестовая фикстура паузы владельца.
+- **S5 (события разрешения владельца)** — пауза/resume реализованы в PR-B0b (раздел ниже);
+  `wait/resolve` и `questions/{qid}/close` — в PR-B1m/B1 (нужны виды событий, которых нет в CHECK).
 
 Тесты: `tests/unit/test_room_state_rule.py` (ST1–ST4, ST8, ST11, ST12 + предикат OB).
+
+## Трекер задач — защищённые действия владельца (PR-B0b)
+
+Решение владельца 23.10 08:03 UTC (Room #4132, п.2): защищённые действия владельца
+pause / resume / wait-resolve / question close с причиной. Без миграций, флагов и новых прав
+агентам; MCP-инструменты агентов не менялись. Код — `vera_shared/room/owner_actions.py`,
+сервис дашборда `tasks_service.owner_pause`, маршруты в `dashboard/tasks_routes.py`.
+
+- `POST /tasks/{room}/{task_id}/pause` и `.../resume` — за `owner_post_gate` (сессия владельца +
+  same-origin, как у `/answer`); форма с обязательным `reason` (1..2000 символов, иначе 422).
+  Аренда и fencing-токен не нужны. Коды: 404 задачи нет, 409 задача `done`/`cancelled`.
+- `pause_by_owner` / `resume_by_owner` пишут существующие виды `paused`/`resumed` с
+  `agent="owner"`, `text=reason`, `data={by:"owner", actor, reason, via:"dashboard"}`; `status`
+  задачи не меняется. Повтор при уже стоящей (снятой) паузе владельца записи не делает.
+- Снимает паузу владельца только `resume_by_owner`: `set_state(resumed)` держателя при ней даёт
+  `OwnerBlock` (ST5), пауза держателя и владельца независимы (ST6, ST7). `next` и `accept`
+  отказывают при любой из пауз; `attention_map` и `_is_paused` считают паузу через
+  `fold_pauses`/`pause_state`, а не «последнее событие».
+- Отложено (CHECK `ck_room_task_events_kind` после 058 не содержит `wait_resolved` и
+  `question_closed`; нужна миграция 060 из PR-B1m/B1): `wait/resolve` (ST9) и
+  `questions/{qid}/close` (ST14, ST15). Шлюз `claim` по паузе — B1.
+
+Тесты: `tests/unit/test_room_owner_pause.py` (ST5–ST7), `tests/unit/test_dashboard_task_pause.py`.
 
 ## Трекер задач — шаг 4 — handoff
 

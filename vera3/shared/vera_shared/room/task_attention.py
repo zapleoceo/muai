@@ -14,6 +14,7 @@ from vera_shared.db.models_room import (
     RoomTaskRow,
 )
 from vera_shared.room.attention import Attention, attention, attention_dict
+from vera_shared.room.owner_block import fold_pauses
 from vera_shared.room.task_view import task_dict
 
 
@@ -40,17 +41,18 @@ async def attention_map(s: AsyncSession, rows: list[RoomTaskRow],
     answered = {(room, tid): at for room, tid, at in answered_rows}
     events = (await s.execute(
         select(RoomTaskEventRow.room, RoomTaskEventRow.task_id, RoomTaskEventRow.kind,
-               RoomTaskEventRow.at)
+               RoomTaskEventRow.at, RoomTaskEventRow.data)
         .where(RoomTaskEventRow.room.in_(rooms), RoomTaskEventRow.task_id.in_(ids),
                RoomTaskEventRow.kind.in_(("paused", "resumed", "claimed")))
         .order_by(RoomTaskEventRow.id))).all()
-    paused: dict[tuple[str, str], bool] = {}
+    pauses: dict[tuple[str, str], list[tuple[str, dict[str, Any] | None]]] = {}
     claimed: dict[tuple[str, str], datetime] = {}
-    for room, tid, kind, at in events:
+    for room, tid, kind, at, data in events:
         if kind == "claimed":
             claimed[(room, tid)] = at
         else:
-            paused[(room, tid)] = kind == "paused"
+            pauses.setdefault((room, tid), []).append((kind, data))
+    paused = {key: any(fold_pauses(evs).values()) for key, evs in pauses.items()}
     return {(r.room, r.task_id): attention(
         r, now, open_question_at=asked.get((r.room, r.task_id)),
         paused=paused.get((r.room, r.task_id), False),

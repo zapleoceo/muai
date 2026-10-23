@@ -8,6 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskEventRow, RoomTaskQuestionRow, RoomTaskRow
+from vera_shared.room.owner_block import pause_state
 from vera_shared.room.task_attention import tasks_with_attention
 from vera_shared.room.task_events import record_event
 from vera_shared.room.task_view import task_dict
@@ -59,12 +60,8 @@ async def held_by(*, room: str, agent: str, limit: int = 50) -> list[dict[str, A
 
 
 async def _is_paused(s: AsyncSession, row: RoomTaskRow) -> bool:
-    last = (await s.execute(
-        select(RoomTaskEventRow.kind)
-        .where(RoomTaskEventRow.room == row.room, RoomTaskEventRow.task_id == row.task_id,
-               RoomTaskEventRow.kind.in_(("paused", "resumed")))
-        .order_by(RoomTaskEventRow.id.desc()).limit(1))).scalar_one_or_none()
-    return last == "paused"
+    """Любая пауза: держателя или владельца (снятие одной не снимает другую)."""
+    return any((await pause_state(s, row.room, row.task_id)).values())
 
 
 async def _deps_done(s: AsyncSession, row: RoomTaskRow) -> bool:

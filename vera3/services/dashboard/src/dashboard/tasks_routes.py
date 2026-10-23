@@ -1,9 +1,10 @@
-"""`/tasks` — задачи комнаты, `/tasks/{room}/{task_id}` — карточка для htmx, `/answer` — ответ владельца."""
+"""`/tasks`: список, карточка для htmx, `/answer` и пауза владельца (`/pause`, `/resume`)."""
 from __future__ import annotations
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
 from vera_shared.room.questions import QuestionNotFound, QuestionState
+from vera_shared.room.tasks import TaskBusy, TaskNotFound
 from vera_shared.timeutil import utc_naive_now
 
 from dashboard.csrf import owner_post_gate
@@ -14,6 +15,7 @@ from dashboard.tasks_service import (
     load_detail,
     load_gantt_rows,
     load_tabs,
+    owner_pause,
     submit_answer,
 )
 from dashboard.tasks_view import task_detail, tasks_body
@@ -68,3 +70,30 @@ async def task_answer(request: Request, room: str, task_id: str,
     except ValueError as e:
         return _problem(str(e), 422)
     return await _fragment(room, task_id)
+
+
+async def _owner_pause(request: Request, room: str, task_id: str, reason: str,
+                       *, paused: bool) -> HTMLResponse:
+    if (denied := owner_post_gate(request)) is not None:
+        return denied
+    try:
+        await owner_pause(room, task_id, reason, paused=paused)
+    except TaskNotFound as e:
+        return _problem(str(e), 404)
+    except TaskBusy as e:
+        return _problem(str(e), 409)
+    except ValueError as e:
+        return _problem(str(e), 422)
+    return await _fragment(room, task_id)
+
+
+@router.post("/tasks/{room}/{task_id}/pause", response_class=HTMLResponse)
+async def task_pause(request: Request, room: str, task_id: str,
+                     reason: str = Form(...)):  # noqa: B008
+    return await _owner_pause(request, room, task_id, reason, paused=True)
+
+
+@router.post("/tasks/{room}/{task_id}/resume", response_class=HTMLResponse)
+async def task_resume(request: Request, room: str, task_id: str,
+                      reason: str = Form(...)):  # noqa: B008
+    return await _owner_pause(request, room, task_id, reason, paused=False)
