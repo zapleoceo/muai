@@ -444,8 +444,8 @@ sniffer; без учёта регистра). Внутри — `<details open>` 
 - **S7.** `blocked` остаётся `blocked` до явного события: `ack` (`_close` снимает `blocked`
   только когда исчез весь блок владельца: 0 незакрытых вопросов, нет ожидания и паузы владельца), либо `set_state(unblocked)`/`update(status=in_progress)`
   держателя, когда OB нет.
-- **S5 (события разрешения владельца)** — пауза/resume реализованы в PR-B0b (раздел ниже);
-  `wait/resolve` и `questions/{qid}/close` — в PR-B1m/B1 (нужны виды событий, которых нет в CHECK).
+- **S5 (события разрешения владельца)** — пауза/resume реализованы в PR-B0b, `wait/resolve`,
+  `questions/{qid}/close`, `recover` и `start` — в PR-B1 (разделы ниже).
 
 Тесты: `tests/unit/test_room_state_rule.py` (ST1–ST4, ST8, ST11, ST12 + предикат OB).
 
@@ -466,16 +466,112 @@ pause / resume / wait-resolve / question close с причиной. Без ми�
   `OwnerBlock` (ST5), пауза держателя и владельца независимы (ST6, ST7). `next` и `accept`
   отказывают при любой из пауз; `attention_map` и `_is_paused` считают паузу через
   `fold_pauses`/`pause_state`, а не «последнее событие».
-- Отложено (CHECK `ck_room_task_events_kind` после 058 не содержит `wait_resolved` и
-  `question_closed`; нужна миграция 060 из PR-B1m/B1): `wait/resolve` (ST9) и
-  `questions/{qid}/close` (ST14, ST15).
+- `wait/resolve` и `questions/{qid}/close` реализованы в PR-B1 (раздел «ворота новой аренды»).
 - `tasks.claim` под тем же замком строки, до `apply_claim`, отказывает (`TaskBusy`) в НОВОЙ
   аренде при активной паузе владельца: захват открытой задачи и повторный захват после истечения
   аренды (в т.ч. тем же агентом). Продление своей живой аренды разрешено, статус не меняет. Это
-  не останавливает уже запущенный внешний процесс держателя. Пауза держателя в `claim` не
-  проверяется (шлюзы по паузе держателя — B1).
+  не останавливает уже запущенный внешний процесс держателя. С B1 эта проверка живёт в общих
+  воротах `check_new_lease` (раздел ниже); пауза держателя в `claim` при `off` по-прежнему не
+  проверяется.
 
 Тесты: `tests/unit/test_room_owner_pause.py` (ST5–ST7), `tests/unit/test_dashboard_task_pause.py`.
+
+## Трекер задач — ворота новой аренды, recover/start, закрытие вопроса (PR-B1)
+
+Дизайн `room-stage1b-design-v10` §2.3–2.8, §3, §8. Код: `vera_shared/room/claim_gate.py`,
+`recovery.py`, `owner_actions.py`, `single_executor.py`; маршруты — `dashboard/tasks_owner_routes.py`.
+Схема — миграция 060 (применена на проде): `room_tasks.recovery_hold`, таблица `room_singletons`
+(модель `RoomSingletonRow`, в B1 не пишется), 6 новых видов событий (`EVENT_KINDS` = 28).
+Решения владельца 23.10: правило состояния; защищённые действия `pause`/`resume`/`wait/resolve`/
+закрытие вопроса с причиной/`recover`/`start`; наследование `ack` нового держателя
+(`ack_answer{inherited}`); `OWNER_LABELS={"owner"}`; ручное восстановление при смене запуска.
+**Не одобрено и не включено:** флаг `ROOM_SINGLE_EXECUTOR=on`, ключи аренды и прокси (C1/C2),
+лидерство диспетчера (B2).
+
+### Флаг ROOM_SINGLE_EXECUTOR
+
+`single_executor_mode()` читает окружение один раз за процесс (`off` по умолчанию, значения
+`off|on|freeze`, разбор — `parse_mode`). В B1 достижим только `off`: `on` и `freeze` требуют ключа K
+и прокси (PR-C1/C2), поэтому любое значение, кроме `off`, при первом чтении поднимает
+`SingleExecutorUnsupported` (`NotImplementedError`): `claim`, `next`, `accept` и проход сторожа
+падают громко, а не работают в полурежиме. Чистая логика для `on` (ворота `check_new_lease(mode=)`,
+`watchdog_rules.decide(mode=)`) принимает режим аргументом и покрыта тестами; поведение
+`freeze` («новые аренды и recover строк без хеша отклоняются») и все проверки по `lease_key_hash`
+(столбца ещё нет) относятся к C1.
+
+### Ворота `check_new_lease(session, row, now, agent=, via=claim|next|accept, sender=)`
+
+Под блокировкой строки; первый отказ возвращается как `GateRefusal(code, detail)`, вызывающий
+превращает его в `TaskBusy` (claim), `HandoffError` (accept) или пропускает кандидата (next).
+Продление своей живой аренды ворота не проходит (S1). Что действует при `off` (прод сейчас) и `on`:
+
+| Код | Условие | claim | next | accept | `off` | `on` |
+|---|---|---|---|---|---|---|
+| `final` | `done`/`cancelled` | отказ | отказ | отказ | как раньше | да |
+| `held` | живая аренда другого / предложено не этому агенту | отказ | отказ | отказ | как раньше | да |
+| `held_expired` | истёкшая аренда с хешем (accept: аренда отправителя истекла) | отказ | отказ | отказ | **нет** (F2/F7: истёкшая аренда выдаётся сразу) | да |
+| `recovery_pending` | истёкшая аренда без хеша | отказ | отказ | — | **нет** | да |
+| `recovery_hold` | после `recover`, до `start` | отказ | отказ | отказ | **да** (возникает только по действию владельца) | да |
+| `paused` (владелец) | последнее `paused{by:owner}` | отказ | отказ | отказ | **да** (B0b) | да |
+| `paused` (держатель) | последнее `paused{by:holder}` | нет | отказ | отказ | как раньше (claim не проверял) | да |
+| `owner_question` | вопрос в `open` | отказ | отказ | отказ | **да** | да |
+| `answer_unacked` | вопрос в `answered` без `ack` | **проходит** | отказ | отказ | **да** | да |
+| `owner_wait` | `waiting_decision_owner` из `OWNER_LABELS` | отказ | отказ | отказ | **да** | да |
+| `attested`, `voice_hold` | как раньше | как раньше | как раньше | как раньше | как раньше | как раньше |
+
+«**да**» в колонке `off` — новое поведение, одобренное владельцем; «**нет**» — статус-кво, не
+меняется до `on`. Сторож при `off` по-прежнему переоткрывает задачу после двух длин аренды (F8);
+`watchdog_rules.decide(mode="on")` вместо reopen пишет `lease_expired` и
+`watchdog_action{action: recovery_pending}` один раз на (задача, `fencing_token`).
+
+`claim` при ответе без `ack`: аренда выдаётся, статус остаётся `blocked`, в ответе
+`answered_questions: [{qid, question, answers}]` (функция `answered_questions`), событие `claimed`
+несёт `data.answered_qids`. `next` не берёт задачи с вопросом `open`/`answered` (SQL-фильтр
+`_unresolved_question` + перепроверка в `_still_eligible`) и с `recovery_hold`. `accept` отказывает
+при любом незакрытом вопросе. `ack` нового держателя пишет `ack_answer` с `data.inherited=true` и
+`asked_by` (`ack` не требует, чтобы подтверждал задавший). Вопрос бота `vera` (удержание
+голосового источника, `voice_help.hold`) закрывается самим `lift_hold`: иначе `answered` без `ack`
+навсегда вывел бы подтверждённую задачу из `next`.
+
+### Маршруты владельца (все за `owner_post_gate`, форма, без аренды)
+
+| Маршрут | Поля | Действие |
+|---|---|---|
+| `POST /tasks/{room}/{task_id}/wait/resolve` (`task_wait_resolve`) | `reason` | `resolve_wait_by_owner`: снимает ожидание владельца, `wait_resolved{by:owner}`, статус не меняется; нет ожидания владельца — записи нет |
+| `POST …/questions/{qid}/close` (`task_question_close`) | `reason`, `expected_fencing_token` | `close_question_by_owner`: вопрос `withdrawn`, `ack_by=owner`, событие `question_closed`; текст и ответы целы, статус задачи не меняется; живая аренда любого держателя — 409; повтор — без записи |
+| `POST …/recover` (`task_recover`) | `expected_fencing_token`, `stop_source`, `effects`, `residual_risk_ack`, `run_ref?`, `stop_ref?` | `recovery.recover`: только для истёкшей аренды, `fencing+1`, `lease_*`/`holder_*`/`pending_handoff_to` обнуляются, `recovery_hold=true`, событие `recovered` (`source=manual_override`, `proof=owner_attested`, `external_effects_unverified`); статус, ожидание, вопросы, паузы и поля очереди не трогаются |
+| `POST …/start` (`task_start`) | `expected_fencing_token`, `status` keep/open, `clear_wait`, `auto_pickup` keep/on/off, `reason?` | `recovery.start`: снимает `recovery_hold`, меняет только отмеченное; события `start_approved` (+`wait_resolved` при `clear_wait` и наличии ожидания); `status=open` при вопросе `open`/`answered` — 422 `unresolved_question` (`UnresolvedQuestion`) |
+
+Сервис дашборда (`tasks_service`): `owner_resolve_wait`, `owner_close_question`, `owner_recover`,
+`owner_start` — тонкие обёртки над функциями выше; `clear_all_wait` (`owner_block.py`) обнуляет
+поля ожидания целиком и вызывается только событиями владельца (`wait/resolve`, `start`).
+
+Коды: 404 нет задачи/вопроса; 409 состояние (`RecoverRefused`: `held`, `final`, `not_recoverable`,
+`not_in_recovery_hold`), устаревший fencing (`StaleLease`), живая аренда, вопрос не в `open`/`answered`;
+422 неверные поля. `recover` требует поля ручного override (§2.6): `stop_source` из
+`host_rebooted_observed`, `session_closed_observed`, `process_absent_observed`,
+`job_cancel_receipt`, `other`; `effects` (сверенные внешние эффекты или `none_known`);
+`residual_risk_ack` (Room не может проверить, что прежний запуск остановлен). `run_ref=unknown` с
+`other` отвергается, `other` требует `stop_ref`. Путь без тупика: `recover → start → claim нового
+агента → ack`.
+
+### attention
+
+`paused` различает владельца и держателя в подписи («на паузе владельца» / «на паузе
+исполнителя»); новое состояние `RECOVERY_HOLD` («после recover: ждёт решения владельца о старте»)
+входит в `NEEDS_ATTENTION` и во вкладку «Нужен я» (`ME_STATES`); `task_dict` отдаёт `recovery_hold`.
+
+### Остаток до C1
+
+Столбца `lease_key_hash` и журнала K нет: `recover` их не трогает, «no-reopen для хеша» в сторожe и
+`held_expired` по настоящему хешу — C1 (в тесте хеш подставлен атрибутом). Кнопок в `/tasks` нет,
+в B1 только маршруты.
+
+Тесты: `tests/unit/test_room_claim_gate.py` (G1, G2, ST16–ST19, ST21, флаг),
+`tests/unit/test_room_recover_start.py` (G3–G5, ST9, ST10, ST13–ST15, ST20, ST22),
+`tests/unit/test_dashboard_task_owner_routes.py`, `tests/unit/test_dashboard_task_owner_flow.py`
+(реальные запросы без моков), `tests/unit/test_room_watchdog.py` (G6),
+`tests/integration/test_room_gates_pg.py`.
 
 ## Трекер задач — шаг 4 — handoff
 
@@ -488,8 +584,9 @@ pause / resume / wait-resolve / question close с причиной. Без ми�
   транзакции сообщение получателю (`add_message`, статус `request`). Аренда и токен остаются
   у отправителя. Второе предложение при висящем — `HandoffError`; себе передать нельзя.
 - `room_task_handoff_accept(task_id, lease_seconds, session, account)` → `handoff.accept`:
-  принять может только `pending_handoff_to`, и только если задача не `done`/`cancelled` и не
-  на паузе (иначе `HandoffError`). Аренда переходит получателю на
+  принять может только `pending_handoff_to`, и только если проходят ворота `check_new_lease`
+  (не `done`/`cancelled`, нет паузы, вопроса `open`/`answered`, ожидания владельца и
+  `recovery_hold`; иначе `HandoffError` с кодом). Аренда переходит получателю на
   `lease_seconds` (по умолчанию `DEFAULT_HANDOFF_LEASE_S` = 900), `fencing_token` растёт на 1
   (токен отправителя сразу устаревает — `StaleLease`), `holder_session`/`holder_account`
   берутся из приёма, `pending_handoff_to` сбрасывается, событие `handoff_accept`.
@@ -526,7 +623,8 @@ watchdog.py`): кандидаты — задачи `in_progress`/`blocked` с д
   (`data.checkpoint` — метка точки) и одно сообщение от `watchdog` исполнителю (а без
   держателя — ответственному) на каждую точку.
 - Пауза, открытый вопрос владельцу, `done`, `cancelled`, ожидание (`waiting`) в правила не
-  попадают, ничего не удаляется.
+  попадают, ничего не удаляется. Строка после `recover` (держателя нет) не кандидат сторожа.
+  Режим `on` (недоступен до C1) не переоткрывает задачу, а пишет `recovery_pending`.
 
 `run_once` каждый раз пишет `watchdog_state('room', last_run_at, last_error)`
 (`write_state`, имя — `STATE_NAME`). Ошибка по задаче пишется в `last_error`, логируется

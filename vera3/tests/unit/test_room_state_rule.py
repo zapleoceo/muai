@@ -106,13 +106,14 @@ async def test_st1_extension_keeps_blocked_owner_and_open_question(sqlite_db):
 
 async def test_st1_new_lease_after_expiry_keeps_blocked_and_question(sqlite_db):
     tok = (await claim())["fencing_token"]
-    await ask(tok)
+    qid = await ask(tok)
+    await questions.answer(room=R, task_id=T, qid=qid, text="да")  # open claim — owner_question (B1)
     await expire()
     got = await claim()
     assert got["fencing_token"] == tok + 1  # истёкшая аренда — новая (ключ K вне B0a)
     after = await row()
     assert (after.status, after.owner) == ("blocked", "owner")
-    assert await ob() == ["owner_question"]
+    assert await ob() == ["owner_question"]  # answered без ack
 
 
 async def test_s2_new_lease_moves_open_to_in_progress_only(sqlite_db):
@@ -140,12 +141,15 @@ async def test_st2_owner_wait_survives_extension_and_progress(sqlite_db):
     assert await ob() == ["owner_wait"]
 
 
-async def test_st2_owner_wait_survives_new_lease(sqlite_db):
+async def test_st2_owner_wait_blocks_new_lease_and_stays(sqlite_db):
     tok = (await claim())["fencing_token"]
     await wait_owner(tok)
     await expire()
-    got = await claim("codex")
-    assert got["waiting_decision_owner"] == "owner" and got["waiting_until"]
+    with pytest.raises(tasks.TaskBusy, match="owner_wait"):  # ворота B1
+        await claim("codex")
+    after = await row()
+    assert after.waiting_decision_owner == "owner" and after.waiting_until
+    assert after.fencing_token == tok
 
 
 async def test_st11_holder_wait_is_cleared_by_progress(sqlite_db):
@@ -220,15 +224,14 @@ async def test_st4_owner_wait_and_owner_pause_also_block(sqlite_db):
     await wait_owner(tok)
     with pytest.raises(OwnerBlock):
         await update(tok, status="in_progress")
-    await release(tok, "blocked")
-    tok = (await claim())["fencing_token"]
-    assert await ob() == ["owner_wait"]  # ожидание владельца пережило release(blocked)
     await owner_pause_event()
     assert await ob() == ["owner_wait", "owner_pause"]
     with pytest.raises(OwnerBlock):
         await set_state(tok, "resumed")
     with pytest.raises(OwnerBlock):
         await release(tok, "done")
+    await release(tok, "blocked")
+    assert await ob() == ["owner_wait", "owner_pause"]  # OB пережил release(blocked)
 
 
 async def test_no_ob_holder_flow_is_unchanged(sqlite_db):
@@ -255,15 +258,17 @@ async def test_st8_answer_then_ack_lifts_question_block(sqlite_db):
 
 # ---- S6: accept ---------------------------------------------------------------------
 
-async def test_accept_does_not_unblock_and_keeps_owner_wait(sqlite_db):
+async def test_accept_refuses_owner_wait_and_leaves_state_untouched(sqlite_db):
     tok = (await claim())["fencing_token"]
     await wait_owner(tok)
     await set_state(tok, "blocked")
     await handoff.offer(room=R, task_id=T, agent="claude", fencing_token=tok,
                         to_agent="codex")
-    got = await handoff.accept(room=R, task_id=T, agent="codex")
-    assert got["status"] == "blocked"
-    assert got["waiting_decision_owner"] == "owner" and got["waiting_until"]
+    with pytest.raises(handoff.HandoffError, match="owner_wait"):  # ворота B1
+        await handoff.accept(room=R, task_id=T, agent="codex")
+    after = await row()
+    assert after.status == "blocked" and after.lease_holder == "claude"
+    assert after.waiting_decision_owner == "owner" and after.pending_handoff_to == "codex"
 
 
 async def test_accept_without_ob_clears_holder_wait(sqlite_db):

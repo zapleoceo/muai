@@ -89,3 +89,18 @@ def test_terminal_and_explicit_states():
     assert attention(task(status="blocked"), NOW).state == att.BLOCKED
     asked = attention(task(), NOW, open_question_at=NOW - 2 * H)
     assert (asked.state, asked.since) == (att.NEEDS_OWNER, NOW - 2 * H)
+
+
+def test_owner_pause_and_holder_pause_have_different_labels():
+    assert attention(task(), NOW, paused=True, owner_paused=True).label_ru == "на паузе владельца"
+    assert attention(task(), NOW, paused=True).label_ru == "на паузе исполнителя"
+    assert attention(task(), NOW, paused=True).state == att.PAUSED
+
+
+def test_recovery_hold_needs_the_owner_and_outranks_pause_and_answer():
+    row = task(lease_holder=None, lease_until=None, recovery_hold=True, updated_at=NOW - 2 * H)
+    a = attention(row, NOW, paused=True, owner_paused=True, answered_at=NOW - H)
+    assert a.state == att.RECOVERY_HOLD and att.RECOVERY_HOLD in att.NEEDS_ATTENTION
+    assert "recover" in a.label_ru
+    open_q = attention(row, NOW, open_question_at=NOW - H)
+    assert open_q.state == att.NEEDS_OWNER  # вопрос владельцу важнее

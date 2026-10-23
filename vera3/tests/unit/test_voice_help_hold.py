@@ -107,6 +107,9 @@ async def test_uncertain_holds_until_owner_answers():
     assert task.next_action.startswith(CONFIRMED_NOTE)
     assert UNCERTAIN_HOLD not in task.next_action
     assert task.auto_pickup is True
+    # B1: ответ обработан — вопрос бота закрыт, иначе answered без ack выводит задачу из next
+    [q] = await questions.questions_of(ROOM, "help-vc-h")
+    assert (q["status"], q["ack_by"]) == ("acked", "vera")
     assert (await _pick())["task_id"] == "help-vc-h"
 
 

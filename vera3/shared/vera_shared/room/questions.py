@@ -146,7 +146,10 @@ async def ack(*, room: str, task_id: str, qid: int, agent: str, fencing_token: i
         if q.status != "answered":
             raise QuestionState(f"question {qid} is {q.status}; only an answered one is acked")
         q.status, q.acked_at, q.ack_by = "acked", utc_naive_now(), agent
-        await _close(s, task, q, agent, fencing_token, {"qid": qid})
+        # §2.8: ответ подтверждает текущий держатель, не обязательно задавший (после recover)
+        data = {"qid": qid, **({"inherited": True, "asked_by": q.asked_by}
+                               if q.asked_by != agent else {})}
+        await _close(s, task, q, agent, fencing_token, data)
         return question_dict(q, await _answers_of(s, q))
 
 

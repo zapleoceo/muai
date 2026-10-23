@@ -87,6 +87,19 @@ class RoomTaskRow(Base):
     waiting_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
     waiting_decision_owner: Mapped[str | None] = mapped_column(String(64), nullable=True)
     responsible: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    # после recover никто не берёт задачу, пока владелец не одобрит старт (миграция 060)
+    recovery_hold: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False, server_default=text("false"))
+
+
+class RoomSingletonRow(Base):
+    """Строка лидерства диспетчера (миграция 060). B1 только описывает таблицу: писать её начнёт B2."""
+    __tablename__ = "room_singletons"
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    owner_run: Mapped[str] = mapped_column(String(64), nullable=False)
+    epoch: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    expires_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
 class RoomCursorRow(Base):
@@ -105,6 +118,10 @@ EVENT_KINDS = (
     "unblocked", "question", "answered", "ack_answer", "handoff_offer", "handoff_accept",
     "released", "done", "lease_expired", "watchdog_action", "waiting",
     "delegated_attestation", "metadata_updated", "cancelled",
+    # миграция 060: recovered/start_approved/wait_resolved/question_closed пишет B1;
+    # rebind и run_unverified зарезервированы за PR-C1
+    "recovered", "start_approved", "wait_resolved", "rebind", "run_unverified",
+    "question_closed",
 )
 _KINDS_SQL = ", ".join(f"'{k}'" for k in EVENT_KINDS)
 

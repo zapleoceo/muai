@@ -29,4 +29,5 @@ def task_dict(r: RoomTaskRow) -> dict[str, Any]:
             "waiting_until": _iso(r.waiting_until), "waiting_reason": r.waiting_reason,
             "waiting_decision_owner": r.waiting_decision_owner,
             "responsible": r.responsible,
-            "pending_handoff_to": r.pending_handoff_to}
+            "pending_handoff_to": r.pending_handoff_to,
+            "recovery_hold": bool(r.recovery_hold)}

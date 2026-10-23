@@ -6,12 +6,13 @@ from datetime import datetime
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskEventRow, RoomTaskRow
-from vera_shared.room import owner_actions, questions
+from vera_shared.room import owner_actions, questions, recovery
 from vera_shared.room.attention import (
     CANCELLED,
     DONE,
     LEASE_EXPIRED,
     NEEDS_OWNER,
+    RECOVERY_HOLD,
     STALE_PROGRESS,
     Attention,
 )
@@ -25,7 +26,7 @@ from dashboard.tasks_gantt import GanttRow
 from dashboard.tasks_questions_view import Questions
 
 TABS = ("work", "me", "done")
-ME_STATES = (NEEDS_OWNER, LEASE_EXPIRED, STALE_PROGRESS)
+ME_STATES = (NEEDS_OWNER, RECOVERY_HOLD, LEASE_EXPIRED, STALE_PROGRESS)
 _FAR_PAST = datetime(1970, 1, 1)
 # Личный блок /tasks; всё остальное — «Рабочие проекты». Сравнение без учёта регистра.
 PERSONAL_PROJECTS = frozenset({"личное", "личные проекты", "личные интеграции", "устройства",
@@ -129,6 +130,35 @@ async def submit_answer(room: str, task_id: str, qid: int, text: str) -> None:
 async def owner_pause(room: str, task_id: str, reason: str, *, paused: bool) -> None:
     act = owner_actions.pause_by_owner if paused else owner_actions.resume_by_owner
     await act(room=room, task_id=task_id, reason=reason)
+
+
+async def owner_resolve_wait(room: str, task_id: str, reason: str) -> None:
+    await owner_actions.resolve_wait_by_owner(room=room, task_id=task_id, reason=reason)
+
+
+async def owner_close_question(room: str, task_id: str, qid: int, reason: str,
+                               expected_fencing_token: int) -> None:
+    await owner_actions.close_question_by_owner(
+        room=room, task_id=task_id, qid=qid, reason=reason,
+        expected_fencing_token=expected_fencing_token)
+
+
+async def owner_recover(room: str, task_id: str, expected_fencing_token: int, *,
+                        stop_source: str, effects: str, residual_risk_ack: bool,
+                        run_ref: str | None, stop_ref: str | None) -> None:
+    await recovery.recover(room=room, task_id=task_id,
+                           expected_fencing_token=expected_fencing_token,
+                           stop_source=stop_source, effects=effects,
+                           residual_risk_ack=residual_risk_ack, run_ref=run_ref,
+                           stop_ref=stop_ref)
+
+
+async def owner_start(room: str, task_id: str, expected_fencing_token: int, *, status: str,
+                      clear_wait: bool, auto_pickup: str, reason: str | None) -> None:
+    await recovery.start(room=room, task_id=task_id,
+                         expected_fencing_token=expected_fencing_token,
+                         status=status, clear_wait=clear_wait,  # type: ignore[arg-type]
+                         auto_pickup=auto_pickup, reason=reason)  # type: ignore[arg-type]
 
 
 def plan_of(row: RoomTaskRow) -> tuple[datetime, datetime] | None:

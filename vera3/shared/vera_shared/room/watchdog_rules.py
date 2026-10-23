@@ -38,24 +38,35 @@ def lease_length(lease_until: datetime, claimed_at: datetime | None) -> timedelt
 
 def decide(task: Any, att: Attention, *, now: datetime, claimed_at: datetime | None,
            last_event: tuple[str, int | None] | None,
-           seen_checkpoints: frozenset[str]) -> list[Action]:
+           seen_checkpoints: frozenset[str], mode: str = "off") -> list[Action]:
     """last_event — (вид, fencing_token) последнего события задачи; seen_checkpoints —
     метки контрольных точек, по которым сторож уже действовал."""
     if att.state == LEASE_EXPIRED and task.lease_until is not None:
-        return _expired(task, att, now, claimed_at, last_event)
+        return _expired(task, att, now, claimed_at, last_event, mode)
     if att.state == STALE_PROGRESS:
         return _checkpoint(task, now, seen_checkpoints)
     return []
 
 
 def _expired(task: Any, att: Attention, now: datetime, claimed_at: datetime | None,
-             last_event: tuple[str, int | None] | None) -> list[Action]:
+             last_event: tuple[str, int | None] | None, mode: str = "off") -> list[Action]:
     marks = [t for t in (task.last_progress_at, claimed_at) if t is not None]
     base = max(marks) if marks else task.lease_until
     idle = now - base
     limit = RECOVERY_FACTOR * lease_length(task.lease_until, claimed_at)
     reopen = idle >= limit
     out: list[Action] = []
+    if mode != "off":
+        # режим on (§2.5): сторож только обнаруживает; reopen нет, продолжает владелец через recover
+        # последним событием после обнаружения идёт watchdog_action: по нему же дедуп
+        if last_event not in (("lease_expired", task.fencing_token),
+                              ("watchdog_action", task.fencing_token)):
+            out.append(Action("lease_expired", att.label_ru,
+                              {"holder": task.lease_holder, "escalated": True}))
+            out.append(Action("watchdog_action",
+                              f"аренда {task.lease_holder} истекла: нужен recover владельца",
+                              {"action": "recovery_pending", "holder": task.lease_holder}))
+        return out
     if last_event != ("lease_expired", task.fencing_token):
         out.append(Action("lease_expired", att.label_ru,
                           {"holder": task.lease_holder, "escalated": not reopen}))

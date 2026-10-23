@@ -44,6 +44,11 @@ def owner_wait(row: RoomTaskRow) -> bool:
     return (row.waiting_decision_owner or "") in OWNER_LABELS
 
 
+def clear_all_wait(row: RoomTaskRow) -> None:
+    """Обнуляет поля ожидания целиком; зовут только события владельца (wait/resolve, start)."""
+    row.waiting_until, row.waiting_reason, row.waiting_decision_owner = None, None, None
+
+
 def pause_actor(data: dict[str, Any] | None) -> str:
     """Легаси paused/resumed без data.by пишет только set_state под арендой — это держатель."""
     by = (data or {}).get("by")
