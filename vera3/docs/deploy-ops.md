@@ -1143,6 +1143,46 @@ brain-triage (иначе процессы по кэшу обращаются к 
 
 Все параметры — env-переменные скрипта, не правки кода.
 
+### Дамп БД Vera перенесён в прямой NAS-поток (2026-10-23)
+
+Решение владельца: БД `vera` теперь бэкапится отдельным потоком NAS
+(forced-command пользователь `verastream` → `/usr/local/bin/vera-stream` →
+`sudo vera-stream-run` → `pg_dump` базы vera, 02:00 по Вьетнаму, ежедневно,
+проверено). Старый ночной `vera-backup.sh` **больше не пишет дампы БД Vera** —
+ни daily `vera.dump`, ни weekly. Переменная `SKIP_DB_PROJECTS` (csv, дефолт
+`vera`) перечисляет проекты, у которых дамп пропускается; в логе строка
+`db dump of vera moved to NAS stream (vera-stream), skipped`.
+
+Что где теперь:
+
+| Что | Кто делает | Где |
+|---|---|---|
+| дамп БД vera | NAS-поток `verastream` | на NAS, не на сервере |
+| `secrets.tar.gz` vera (`.env`, TOKEN_SECRET) + `SHA256SUMS` | `vera-backup.sh`, cron 03:30 UTC без изменений | `/var/backups/vera/vera/daily/…`, забирает NAS-pull |
+| дампы aibroker и stepan2 + их секреты | `vera-backup.sh`, как раньше | `/var/backups/vera/{aibroker,stepan2}/daily/…` |
+
+Секреты остаются в старом скрипте намеренно: поток их не несёт, а без
+`TOKEN_SECRET` зашифрованные токены в дампе бесполезны. Существующие каталоги
+и история не удаляются; ротация (`KEEP_DAILY_DAYS`, `KEEP_WEEKLY_DAYS`)
+работает как раньше, старые `vera/weekly/*` просто дожитут срок и уйдут.
+
+Вернуть дамп БД Vera в старый скрипт: `SKIP_DB_PROJECTS=` (пусто) в окружении
+cron-строки, например `30 3 * * * SKIP_DB_PROJECTS= /usr/local/bin/vera-backup.sh`.
+`WWW_ROOT` (дефолт `/var/www`) — корень `.env` проектов, нужен тестам.
+
+Деплой (`deploy.yml`) скрипт на сервер **не ставит** — как и prune, копируется
+вручную после мержа:
+
+```
+cd /var/www/vera3 && git pull
+cp -a /usr/local/bin/vera-backup.sh /usr/local/bin/vera-backup.sh.bak-$(date +%F)
+install -m 0755 vera3/scripts/vera-backup.sh /usr/local/bin/vera-backup.sh
+sha256sum vera3/scripts/vera-backup.sh /usr/local/bin/vera-backup.sh   # хэши должны совпасть
+```
+
+Тест: `vera3/tests/unit/test_backup_skip_db.py` (заглушка `docker`, временный
+`DEST`).
+
 ### Backups → Synology NAS (за NAT) — настроено 2026-07-14
 
 NAS сам **забирает** дерево бэкапов (исходящее соединение — NAT не
