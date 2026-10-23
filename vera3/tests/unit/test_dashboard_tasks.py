@@ -150,3 +150,9 @@ def test_span_fit_bounds_and_default():
     assert resolve_span(None, rows, NOW) == "fit" and resolve_span("7d", rows, NOW) == "7d"
     old = [GanttRow("t", [Segment(start=NOW - timedelta(hours=9), end=NOW, kind=WORK, agent="a", session="")])]
     assert resolve_span(None, old, NOW) == "24h" and "по данным" in tasks_gantt(rows, NOW, "fit", "work")
+
+
+def test_recovery_hold_lands_in_the_owner_tab():
+    from dashboard.tasks_service import ME_STATES
+    from vera_shared.room.attention import RECOVERY_HOLD
+    assert RECOVERY_HOLD in ME_STATES

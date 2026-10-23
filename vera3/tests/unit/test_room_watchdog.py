@@ -184,3 +184,41 @@ async def test_failing_task_is_logged_by_id(sqlite_db, monkeypatch, caplog):
     with caplog.at_level("WARNING"):
         await watchdog.run_once(utc_naive_now())
     assert "main/L1" in caplog.text and "bad row" in caplog.text
+
+
+# ---- B1 (G6): режим on — только обнаружение; off — прежний reopen ----------------------------
+
+async def test_g6_mode_on_detects_without_reopen_and_dedups(sqlite_db, monkeypatch):
+    monkeypatch.setattr(watchdog, "single_executor_mode", lambda: "on")
+    await claimed("W7")
+    late = utc_naive_now() + timedelta(hours=3)  # порог reopen в off давно пройден
+    first = await watchdog.run_once(late)
+    assert first["actions"] == [("main", "W7", "lease_expired"),
+                                ("main", "W7", "watchdog_action")]
+    r = await row_of("W7")
+    assert (r.status, r.lease_holder, r.fencing_token) == ("in_progress", "claude", 1)
+    evs = await task_progress.history(room="main", task_id="W7", since_id=None, limit=50)
+    [wa] = [e for e in evs if e["kind"] == "watchdog_action"]
+    assert wa["data"]["action"] == "recovery_pending"
+    assert (await watchdog.run_once(late + timedelta(minutes=1)))["actions"] == []
+
+
+async def test_mode_off_still_reopens_exactly_as_before(sqlite_db):
+    await claimed("W8")
+    late = utc_naive_now() + timedelta(hours=3)
+    await watchdog.run_once(late)
+    r = await row_of("W8")
+    assert (r.status, r.lease_holder, r.recovery_hold) == ("open", None, False)
+
+
+async def test_recovered_row_is_not_a_watchdog_candidate(sqlite_db):
+    from vera_shared.room import recovery
+    await claimed("W9")
+    async with get_session() as s:
+        (await s.get(RoomTaskRow, ("main", "W9"))).lease_until = utc_naive_now() \
+            - timedelta(seconds=1)
+    await recovery.recover(room="main", task_id="W9", expected_fencing_token=1,
+                           stop_source="process_absent_observed", effects="none_known",
+                           residual_risk_ack=True, run_ref="r")
+    assert (await watchdog.run_once(utc_naive_now() + timedelta(hours=5)))["actions"] == []
+    assert (await row_of("W9")).status == "in_progress"

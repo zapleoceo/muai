@@ -18,6 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskEventRow, RoomTaskRow, WatchdogStateRow
 from vera_shared.room.messages import add_message
+from vera_shared.room.single_executor import single_executor_mode
 from vera_shared.room.task_attention import attention_map
 from vera_shared.room.task_events import record_event
 from vera_shared.room.watchdog_rules import Action, decide
@@ -74,7 +75,7 @@ async def check_task(room: str, task_id: str, now: datetime) -> list[Action]:
         att = (await attention_map(s, [row], now))[(room, task_id)]
         claimed, last, seen = await _context(s, room, task_id)
         actions = decide(row, att, now=now, claimed_at=claimed, last_event=last,
-                         seen_checkpoints=seen)
+                         seen_checkpoints=seen, mode=single_executor_mode())
         for a in actions:
             await _apply(s, row, a, now)
         return actions

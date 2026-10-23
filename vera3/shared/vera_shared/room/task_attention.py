@@ -14,7 +14,7 @@ from vera_shared.db.models_room import (
     RoomTaskRow,
 )
 from vera_shared.room.attention import Attention, attention, attention_dict
-from vera_shared.room.owner_block import fold_pauses
+from vera_shared.room.owner_block import BY_OWNER, fold_pauses
 from vera_shared.room.task_view import task_dict
 
 
@@ -52,10 +52,12 @@ async def attention_map(s: AsyncSession, rows: list[RoomTaskRow],
             claimed[(room, tid)] = at
         else:
             pauses.setdefault((room, tid), []).append((kind, data))
-    paused = {key: any(fold_pauses(evs).values()) for key, evs in pauses.items()}
+    folded = {key: fold_pauses(evs) for key, evs in pauses.items()}
+    paused = {key: any(st.values()) for key, st in folded.items()}
     return {(r.room, r.task_id): attention(
         r, now, open_question_at=asked.get((r.room, r.task_id)),
         paused=paused.get((r.room, r.task_id), False),
+        owner_paused=folded.get((r.room, r.task_id), {}).get(BY_OWNER, False),
         claimed_at=claimed.get((r.room, r.task_id)),
         answered_at=answered.get((r.room, r.task_id))) for r in rows}
 

@@ -107,6 +107,9 @@ async def test_uncertain_holds_until_owner_answers():
     assert task.next_action.startswith(CONFIRMED_NOTE)
     assert UNCERTAIN_HOLD not in task.next_action
     assert task.auto_pickup is True
+    # B1: ответ обработан — вопрос бота закрыт, иначе answered без ack выводит задачу из next
+    [q] = await questions.questions_of(ROOM, "help-vc-h")
+    assert (q["status"], q["ack_by"]) == ("acked", "vera")
     assert (await _pick())["task_id"] == "help-vc-h"
 
 
@@ -234,3 +237,22 @@ async def test_uncertain_task_cannot_auto_pick_before_question_exists():
     [task] = await tasks_in(ROOM)
     assert task.auto_pickup is False
     assert await _pick() is None
+
+
+@uses_db
+async def test_already_confirmed_task_gets_its_bot_question_acked_idempotently():
+    """Легаси: source_confirmed уже стоит, вопрос бота остался answered (регресс B1: next не брал)."""
+    from vera_shared.voice_help.hold import lift_hold
+    await _open(doubts=["blind"])
+    [q] = await questions.questions_of(ROOM, "help-vc-h")
+    await questions.answer(room=ROOM, task_id="help-vc-h", qid=q["qid"], text="да")
+    async with get_session() as s:
+        row = await s.get(RoomTaskRow, (ROOM, "help-vc-h"))
+        row.refs = [*row.refs, {"kind": "source", "ref": SOURCE_CONFIRMED}]
+        row.auto_pickup = True
+    assert await _pick() is None  # answered без ack — не кандидат
+    assert await lift_hold(ROOM, "help-vc-h", "act") is False  # уже подтверждена
+    [q] = await questions.questions_of(ROOM, "help-vc-h")
+    assert (q["status"], q["ack_by"]) == ("acked", "vera")
+    assert await lift_hold(ROOM, "help-vc-h", "act") is False  # повтор безвреден
+    assert (await _pick())["task_id"] == "help-vc-h"

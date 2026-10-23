@@ -11,6 +11,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, Response
 from vera_shared.db.engine import close_engine, init_engine
+from vera_shared.room.single_executor import single_executor_mode
 
 from dashboard.assets_routes import router as assets_router
 from dashboard.auth_routes import router as auth_router
@@ -32,6 +33,7 @@ from dashboard.settings_routes import router as settings_router
 from dashboard.slack_connect import router as slack_connect_router
 from dashboard.source_actions import router as source_actions_router
 from dashboard.sources_routes import router as sources_router
+from dashboard.tasks_owner_routes import router as tasks_owner_router
 from dashboard.tasks_routes import router as tasks_router
 from dashboard.telegram_login import router as telegram_login_router
 from dashboard.watchdog_loop import start_watchdog, stop_watchdog
@@ -39,6 +41,7 @@ from dashboard.watchdog_loop import start_watchdog, stop_watchdog
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    single_executor_mode()  # неверный ROOM_SINGLE_EXECUTOR валит старт, а не каждый проход сторожа
     await init_engine()
     watchdog = start_watchdog()  # ссылка держится: иначе задачу собирает GC
     try:
@@ -56,7 +59,7 @@ for router in (
     graph_router, gmail_oauth_router, instagram_login_router,
     telegram_login_router, slack_connect_router, source_actions_router,
     assets_router, connection_router, journal_router, merge_router,
-    room_oauth_router, tasks_router, office_hourly_router,
+    room_oauth_router, tasks_router, tasks_owner_router, office_hourly_router,
 ):
     app.include_router(router)
 

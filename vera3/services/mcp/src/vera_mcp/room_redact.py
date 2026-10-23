@@ -45,6 +45,8 @@ def task_view(t: dict[str, Any] | None) -> dict[str, Any] | None:
     out = _mask(t, _TASK_TEXT)
     if "refs" in t:
         out["refs"] = _refs(t["refs"])
+    if "answered_questions" in t:  # выдача claim: текст вопроса и ответов владельца
+        out["answered_questions"] = questions_view(t["answered_questions"] or [])
     return out
 
 

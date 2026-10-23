@@ -8,7 +8,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskQuestionRow, RoomTaskRow
-from vera_shared.room.owner_block import pause_state
+from vera_shared.room.claim_gate import check_new_lease
 from vera_shared.room.task_attention import tasks_with_attention
 from vera_shared.room.task_events import record_event
 from vera_shared.room.task_view import task_dict
@@ -27,10 +27,11 @@ def _no_live_lease(now: Any) -> Any:
 FINAL_STATUSES = ("done", "cancelled")
 
 
-def _open_question() -> Any:
+def _unresolved_question() -> Any:
+    """Вопрос в open (ждёт владельца) или answered (ждёт ack): такую задачу `next` не берёт."""
     return exists().where(RoomTaskQuestionRow.room == RoomTaskRow.room,
                           RoomTaskQuestionRow.task_id == RoomTaskRow.task_id,
-                          RoomTaskQuestionRow.status == "open")
+                          RoomTaskQuestionRow.status.in_(("open", "answered")))
 
 
 async def list_tasks(*, room: str, status: str | None, limit: int,
@@ -59,11 +60,6 @@ async def held_by(*, room: str, agent: str, limit: int = 50) -> list[dict[str, A
         return await tasks_with_attention(s, list(rows), utc_naive_now())
 
 
-async def _is_paused(s: AsyncSession, row: RoomTaskRow) -> bool:
-    """Любая пауза: держателя или владельца (снятие одной не снимает другую)."""
-    return any((await pause_state(s, row.room, row.task_id)).values())
-
-
 async def _deps_done(s: AsyncSession, row: RoomTaskRow) -> bool:
     deps = set(row.depends_on or [])
     if not deps:
@@ -74,7 +70,7 @@ async def _deps_done(s: AsyncSession, row: RoomTaskRow) -> bool:
     return len(set(done)) == len(deps)
 
 
-async def _still_eligible(s: AsyncSession, row: RoomTaskRow, now: Any) -> bool:
+async def _still_eligible(s: AsyncSession, row: RoomTaskRow, now: Any, agent: str) -> bool:
     if await attestation_for(s, row.room, row.task_id):
         return False
     if _unconfirmed_voice(row.refs):
@@ -82,10 +78,10 @@ async def _still_eligible(s: AsyncSession, row: RoomTaskRow, now: Any) -> bool:
     if (row.status != "open" or not row.auto_pickup
             or (row.lease_holder and row.lease_until and row.lease_until > now)):
         return False
-    has_question = (await s.execute(select(RoomTaskQuestionRow.qid).where(
-        RoomTaskQuestionRow.room == row.room, RoomTaskQuestionRow.task_id == row.task_id,
-        RoomTaskQuestionRow.status == "open").limit(1))).first()
-    return has_question is None and await _deps_done(s, row) and not await _is_paused(s, row)
+    if not await _deps_done(s, row):
+        return False
+    # ворота §3 под блокировкой: recovery_hold, паузы, вопрос open/answered, ожидание владельца
+    return await check_new_lease(s, row, now, agent=agent, via="next") is None
 
 
 async def next_task(*, room: str, agent: str, project: str | None, lease_seconds: int,
@@ -98,7 +94,7 @@ async def next_task(*, room: str, agent: str, project: str | None, lease_seconds
     q = (select(RoomTaskRow.task_id).where(
         RoomTaskRow.room == room, RoomTaskRow.status == "open",
         RoomTaskRow.auto_pickup.is_(True), _no_live_lease(utc_naive_now()),
-        ~_open_question())
+        RoomTaskRow.recovery_hold.is_(False), ~_unresolved_question())
         .order_by(RoomTaskRow.priority, RoomTaskRow.created_at).limit(CANDIDATES))
     if project is not None:
         q = q.where(RoomTaskRow.project == project)
@@ -119,7 +115,7 @@ async def next_task(*, room: str, agent: str, project: str | None, lease_seconds
                                           RoomTaskRow.task_id == task_id)
                 .with_for_update(skip_locked=True))).scalar_one_or_none()
             now = utc_naive_now()  # после блокировки: ожидание могло занять время
-            if row is None or not await _still_eligible(s, row, now):
+            if row is None or not await _still_eligible(s, row, now, agent):
                 continue
             if skip_ref_prefix and any(str(r.get("ref", "")).startswith(skip_ref_prefix)
                                        for r in row.refs or []):

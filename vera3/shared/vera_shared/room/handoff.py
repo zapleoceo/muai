@@ -12,8 +12,8 @@ from datetime import timedelta
 from typing import Any
 
 from vera_shared.db.engine import get_session
+from vera_shared.room.claim_gate import check_new_lease
 from vera_shared.room.messages import add_message
-from vera_shared.room.owner_block import pause_state
 from vera_shared.room.task_events import record_event
 from vera_shared.room.tasks import _locked, _require_lease, clear_holder_wait, task_dict
 from vera_shared.timeutil import utc_naive_now
@@ -67,12 +67,12 @@ async def accept(*, room: str, task_id: str, agent: str, session: str | None = N
             raise HandoffError("attested task cannot be handed off")
         if _pending(row, task_id) != agent:
             raise HandoffError(f"handoff of {task_id!r} is not offered to {agent}")
-        if row.status in ("done", "cancelled"):
-            raise HandoffError(f"task {task_id!r} is {row.status}; handoff cannot be accepted")
-        if any((await pause_state(s, room, task_id)).values()):
-            raise HandoffError(f"task {task_id!r} is paused; resume it before accepting")
         now = utc_naive_now()
         sender = row.lease_holder
+        # ворота §3: final, пауза любого вида, вопрос open/answered, ожидание владельца, recovery_hold
+        if (refusal := await check_new_lease(s, row, now, agent=agent, via="accept",
+                                             sender=sender)) is not None:
+            raise HandoffError(refusal.message)
         row.lease_holder, row.lease_until = agent, now + timedelta(seconds=lease_seconds)
         row.fencing_token = (row.fencing_token or 0) + 1
         row.holder_session, row.holder_account = session, account

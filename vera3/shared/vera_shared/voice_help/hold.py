@@ -73,12 +73,27 @@ def _answer_decision(text: str) -> str | None:
     return None
 
 
+async def _ack_own_questions(s: AsyncSession, room: str, task_id: str) -> None:
+    """Вопрос бота отвечен и обработан: закрываем его, иначе `answered` без `ack` навсегда
+    выведет подтверждённую задачу из `next` и accept (B1, дизайн §2.8). Событие ack_answer
+    не пишется: у бота нет аренды, а `progress` ниже уже фиксирует снятие удержания."""
+    q = RoomTaskQuestionRow
+    for row in (await s.execute(select(q).where(
+            q.room == room, q.task_id == task_id, q.asked_by == AGENT,
+            q.status == "answered").with_for_update())).scalars().all():
+        row.status, row.acked_at, row.ack_by = "acked", utc_naive_now(), AGENT
+
+
 async def lift_hold(room: str, task_id: str, action: str) -> bool:
     """Ответ владельца есть, а пометки ещё нет → снять удержание. → сняли ли сейчас."""
     a = RoomTaskAnswerRow
     async with get_session() as s:
         task = await _locked(s, room, task_id)
-        if task is None or task.status in ("done", "cancelled") or is_confirmed(task.refs):
+        if task is None or task.status in ("done", "cancelled"):
+            return False
+        if is_confirmed(task.refs):
+            # удержание снято раньше: закрываем вопрос бота и у такой задачи (идемпотентно)
+            await _ack_own_questions(s, room, task_id)
             return False
         answer = (await s.execute(
             select(a.text).where(a.qid.in_(_our_question(room, task_id)),
@@ -104,6 +119,7 @@ async def lift_hold(room: str, task_id: str, action: str) -> bool:
             return False
         if decision != "confirmed":
             return False
+        await _ack_own_questions(s, room, task_id)
         task.refs = validate_refs([*(task.refs or []),
                                    {"kind": "source", "ref": SOURCE_CONFIRMED}])
         task.next_action = f"{CONFIRMED_NOTE}\n{action}"[:2000]
