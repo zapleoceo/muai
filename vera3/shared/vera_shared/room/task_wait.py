@@ -5,6 +5,7 @@ from datetime import timedelta
 from typing import Any
 
 from vera_shared.db.engine import get_session
+from vera_shared.room.owner_block import OWNER_LABELS, OwnerBlock, owner_wait
 from vera_shared.room.task_events import record_event
 from vera_shared.room.task_fields import clean_decision_owner
 from vera_shared.room.tasks import _locked, _require_lease, task_dict
@@ -25,6 +26,9 @@ async def wait(*, room: str, task_id: str, agent: str, fencing_token: int,
                              fencing_token)
         if await attestation_for(s, room, task_id):
             raise ValueError("attested task permits only receipt completion")
+        if owner_wait(row) and owner not in OWNER_LABELS:
+            raise OwnerBlock(f"wait: task {task_id!r} has an owner wait; "
+                             "a holder wait must not replace it")
         now = utc_naive_now()
         row.waiting_until, row.waiting_reason = now + timedelta(seconds=until_seconds), reason
         row.waiting_decision_owner = owner

@@ -410,6 +410,41 @@ sniffer; без учёта регистра). Внутри — `<details open>` 
 `room_task_state`, inbox) и показывается на `/tasks`: «отв.: …» в строке и «Ответственный»
 в карточке. Тесты: `tests/unit/test_room_responsible.py`.
 
+## Трекер задач — правило состояния S1–S7 (PR-B0a)
+
+Дизайн: `room-stage1b-design-v10` §2.7. Это исправление текущего поведения (без флага,
+без миграции, без новых маршрутов); решение владельца п.1 получено 23.10. Код —
+`vera_shared/room/owner_block.py`, правки в `tasks.py`, `task_progress.py`, `task_wait.py`,
+`handoff.py`.
+
+**Домены полей.** Аренда: `lease_*`, `holder_*`, `fencing_token`. Работа держателя: `status`
+(`in_progress`/`blocked` без блока владельца), `note`, `next_action`, `last_progress_*`,
+`next_checkpoint_at`, ожидание держателя, пауза держателя. **Блок владельца (OB)** — любое из:
+вопрос в `open`/`answered` (до `ack`), ожидание владельца (`waiting_decision_owner` ∈
+`OWNER_LABELS` = `{"owner"}`), пауза владельца (последнее из `paused`/`resumed` с `data.by=owner`
+= `paused`). События `paused`/`resumed` несут `data.by` (`holder` пишет `set_state`); легаси
+без `data.by` считаются паузой держателя. Предикат — `owner_block(session, row)` →
+`OwnerBlockState(question, wait, pause)`; `require_no_owner_block` бросает `OwnerBlock`.
+
+- **S1.** Продление (`claim` своей живой аренды, `update` с одним `extend_seconds`) меняет только
+  аренду; `apply_claim` не трогает `status`.
+- **S2/S6.** Новая аренда (`claim`, `next`, `accept`): `open → in_progress`, `blocked` остаётся
+  `blocked`; ожидание держателя очищается, ожидание владельца — нет. Сторож, `recover`, `accept`
+  OB не трогают.
+- **S3.** `progress`, `update` (note/status), `wait` снимают только ожидание держателя;
+  `last_progress_*` пишутся всегда. `wait` держателя не может заменить ожидание владельца
+  (`OwnerBlock`); продлить его меткой владельца можно.
+- **S4.** При активном OB: `update(status=in_progress)` и `set_state(resumed|unblocked)` —
+  `OwnerBlock`; `release` только в `blocked` (поля ожидания и вопросы сохраняются),
+  `release(open|done)` — `OwnerBlock`. `set_state(paused)` и передача разрешены.
+- **S7.** `blocked` остаётся `blocked` до явного события: `ack` (`_close` снимает `blocked`
+  при 0 незакрытых вопросов), либо `set_state(unblocked)`/`update(status=in_progress)`
+  держателя, когда OB нет.
+- **S5 (события разрешения владельца: пауза/resume/wait-resolve)** — PR-B0b; здесь только
+  предикаты и тестовая фикстура паузы владельца.
+
+Тесты: `tests/unit/test_room_state_rule.py` (ST1–ST4, ST8, ST11, ST12 + предикат OB).
+
 ## Трекер задач — шаг 4 — handoff
 
 Передача задачи другому агенту с подтверждением получателя. Миграции нет: колонка

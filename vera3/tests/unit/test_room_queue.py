@@ -59,6 +59,8 @@ async def test_open_question_marks_needs_owner_and_pause_comes_from_events(sqlit
         (await s.get(RoomTaskQuestionRow, 1)).status = "answered"
     await r.room_task_state("T", 1, CLAUDE, "paused", "later")
     assert (await by_id())["T"]["attention"]["state"] == "paused"
+    async with get_session() as s:
+        (await s.get(RoomTaskQuestionRow, 1)).status = "acked"  # S4: до ack resume запрещён
     await r.room_task_state("T", 1, CLAUDE, "resumed", "go")
     assert (await by_id())["T"]["attention"]["state"] == "in_progress"
 

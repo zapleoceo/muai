@@ -8,12 +8,12 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskAnswerRow, RoomTaskQuestionRow, RoomTaskRow
 from vera_shared.room.messages import add_message
+from vera_shared.room.owner_block import unresolved_questions
 from vera_shared.room.question_view import list_questions, load_questions, question_dict
 from vera_shared.room.task_events import record_event
 from vera_shared.room.task_refs import validate_refs
@@ -47,9 +47,7 @@ async def _question(s: AsyncSession, room: str, task_id: str, qid: int) -> RoomT
 
 
 async def _unresolved(s: AsyncSession, room: str, task_id: str) -> int:
-    return (await s.execute(select(func.count()).select_from(RoomTaskQuestionRow).where(
-        RoomTaskQuestionRow.room == room, RoomTaskQuestionRow.task_id == task_id,
-        RoomTaskQuestionRow.status.in_(("open", "answered"))))).scalar() or 0
+    return await unresolved_questions(s, room, task_id)
 
 
 async def _answers_of(s: AsyncSession, q: RoomTaskQuestionRow) -> list[RoomTaskAnswerRow]:
