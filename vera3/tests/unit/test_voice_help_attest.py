@@ -19,6 +19,7 @@ from vera_shared.room import (
     task_wait,
     tasks,
 )
+from vera_shared.room.owner_block import OwnerBlock
 from vera_shared.room.task_queue import next_task
 from vera_shared.room.task_view import task_dict
 from vera_shared.room.tasks import apply_claim
@@ -149,8 +150,11 @@ async def test_answered_question_invalid_scope():
 async def test_closed_task_invalid_scope():
     qid = await _open()
     claimed = await _legacy_claim("codex")
-    await tasks.release(room=ROOM, task_id=TID, agent="codex",
-                        fencing_token=claimed["fencing_token"], status="done")
+    with pytest.raises(OwnerBlock):  # S4: при открытом вопросе владельцу done недоступен
+        await tasks.release(room=ROOM, task_id=TID, agent="codex",
+                            fencing_token=claimed["fencing_token"], status="done")
+    async with get_session() as s:  # закрытая задача с неотвеченным вопросом (напр. отмена)
+        (await s.get(RoomTaskRow, (ROOM, TID))).status = "done"
     with pytest.raises(svc.InvalidScope):
         await _call(qid)
 
