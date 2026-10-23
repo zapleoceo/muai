@@ -51,6 +51,7 @@ async def engine(pg_schema_reset):
         await conn.execute(sa_text(
             "CREATE TABLE IF NOT EXISTS schema_migrations ("
             "version text PRIMARY KEY, note text, applied_at timestamp DEFAULT now())"))
+        await conn.execute(sa_text("DELETE FROM schema_migrations WHERE version = :v"), {"v": VERSION})
         await _establish_previous_state(conn)
     yield eng
     await eng.dispose()
@@ -117,7 +118,9 @@ async def test_double_apply_is_idempotent_and_recorded(engine):
     assert len(OLD_KINDS) == 22
     async with engine.begin() as c:
         await c.execute(sa_text(
-            "INSERT INTO room_tasks (room, task_id, created_by) VALUES ('r', 't', 'dot')"))
+            "INSERT INTO room_tasks (room, task_id, created_by, status, fencing_token, paths, priority, "
+            "refs, depends_on, auto_pickup) VALUES ('r', 't', 'dot', 'open', 0, '[]', 2, "
+            "'[]', '[]', false)"))
         await _insert_event(c, "created")
     await _apply(engine)
     await _apply(engine)
