@@ -34,7 +34,7 @@ pytestmark = [
 def _steps() -> list[list[str]]:
     """Транзакции файла миграции (BEGIN … COMMIT) → списки операторов без BEGIN/COMMIT."""
     body = "\n".join(ln for ln in MIGRATION.read_text(encoding="utf-8").splitlines()
-                     if not ln.lstrip().startswith("--"))
+                     if not ln.lstrip().startswith(("--", "\\")))
     steps = []
     for chunk in body.split("COMMIT;")[:-1]:
         stmts = [s.strip() for s in chunk.split(";") if s.strip()]
@@ -183,49 +183,83 @@ async def test_lock_modes_and_timing_observed(engine, capsys):
         await c.execute(sa_text(
             "INSERT INTO room_task_events (room, task_id, kind) "
             "SELECT 'r', 't' || g, 'created' FROM generate_series(1, 900) g"))
-    add, validate = _steps()
-    async with engine.connect() as c:
-        trans = await c.begin()
-        t0 = time.perf_counter()
-        await _run(c, add)
-        add_ms = (time.perf_counter() - t0) * 1000
-        tasks_modes = await _lock_modes(c, "room_tasks")
-        events_modes = await _lock_modes(c, "room_task_events")
-        await trans.commit()
-    async with engine.connect() as c:
-        trans = await c.begin()
-        t0 = time.perf_counter()
-        await _run(c, validate)
-        validate_ms = (time.perf_counter() - t0) * 1000
-        validate_modes = await _lock_modes(c, "room_task_events")
-        await trans.commit()
+    tasks_step, check_step, validate_step = _steps()
+    modes: dict[str, set[str]] = {}
+    ms: dict[str, float] = {}
+    for name, step, table in (("tasks", tasks_step, "room_tasks"),
+                              ("check", check_step, "room_task_events"),
+                              ("validate", validate_step, "room_task_events")):
+        async with engine.connect() as c:
+            trans = await c.begin()
+            t0 = time.perf_counter()
+            await _run(c, step)
+            ms[name] = (time.perf_counter() - t0) * 1000
+            modes[name] = await _lock_modes(c, table)
+            if name == "tasks":
+                assert "room_task_events" not in await _locked_tables(c)
+            if name == "check":
+                assert "room_tasks" not in await _locked_tables(c)
+            await trans.commit()
     with capsys.disabled():
-        print(f"\n::notice::060 locks: room_tasks={sorted(tasks_modes)} "
-              f"room_task_events(DROP/ADD NOT VALID)={sorted(events_modes)} "
-              f"VALIDATE={sorted(validate_modes)}; 900 rows: add={add_ms:.0f}ms "
-              f"validate={validate_ms:.0f}ms")
-    assert "AccessExclusiveLock" in tasks_modes
-    assert "AccessExclusiveLock" in events_modes
-    assert "ShareUpdateExclusiveLock" in validate_modes
-    assert "AccessExclusiveLock" not in validate_modes
+        print(f"\n::notice::060 locks: room_tasks(ADD COLUMN)={sorted(modes['tasks'])} "
+              f"room_task_events(DROP/ADD NOT VALID)={sorted(modes['check'])} "
+              f"VALIDATE={sorted(modes['validate'])}; 900 rows: "
+              + " ".join(f"{k}={v:.0f}ms" for k, v in ms.items()))
+    assert "AccessExclusiveLock" in modes["tasks"]
+    assert "AccessExclusiveLock" in modes["check"]
+    assert "ShareUpdateExclusiveLock" in modes["validate"]
+    assert "AccessExclusiveLock" not in modes["validate"]
 
 
-async def test_lock_timeout_fails_and_rolls_back_fully(engine):
-    add, _ = _steps()
+async def _locked_tables(conn) -> set[str]:
+    rows = await conn.execute(sa_text(
+        "SELECT c.relname FROM pg_locks l JOIN pg_class c ON c.oid = l.relation "
+        "WHERE l.pid = pg_backend_pid() AND l.granted"))
+    return {r[0] for r in rows}
+
+
+async def _hold_and_fail(engine, table: str, step: list[str]) -> None:
     async with engine.connect() as holder:
         htrans = await holder.begin()
-        await holder.exec_driver_sql("LOCK TABLE room_task_events IN ACCESS SHARE MODE")
+        await holder.exec_driver_sql(f"LOCK TABLE {table} IN ACCESS SHARE MODE")
         async with engine.connect() as mig:
             mtrans = await mig.begin()
             with pytest.raises(DBAPIError) as err:
-                await _run(mig, add)
+                await _run(mig, step)
             assert "lock" in str(err.value).lower()
             await mtrans.rollback()
         await htrans.rollback()
+
+
+async def _recorded(conn) -> int:
+    return (await conn.execute(sa_text(
+        "SELECT count(*) FROM schema_migrations WHERE version = :v"), {"v": VERSION})).scalar_one()
+
+
+async def test_tasks_step_lock_timeout_rolls_back_column_and_table(engine):
+    tasks_step, _, _ = _steps()
+    await _hold_and_fail(engine, "room_tasks", tasks_step)
     async with engine.connect() as c:
-        assert await _kinds_in_constraint(c) == set(OLD_KINDS)
         assert not await _has_column(c, "room_tasks", "recovery_hold")
         assert not await _table_exists(c, "room_singletons")
-        recorded = (await c.execute(sa_text(
-            "SELECT count(*) FROM schema_migrations WHERE version = :v"), {"v": VERSION})).scalar_one()
-        assert recorded == 0
+        assert await _kinds_in_constraint(c) == set(OLD_KINDS)
+        assert await _recorded(c) == 0
+
+
+async def test_check_step_failure_leaves_no_applied_state(engine):
+    """Симуляция psql -f с ON_ERROR_STOP: упала транзакция 2, транзакция 3 не запускается."""
+    tasks_step, check_step, _ = _steps()
+    async with engine.begin() as c:
+        await _run(c, tasks_step)
+    await _hold_and_fail(engine, "room_task_events", check_step)
+    async with engine.connect() as c:
+        assert await _kinds_in_constraint(c) == set(OLD_KINDS)
+        assert await _validated(c)
+        assert await _recorded(c) == 0
+
+
+def test_migration_stops_on_error_and_splitter_skips_meta_commands():
+    text = MIGRATION.read_text(encoding="utf-8")
+    assert "\\set ON_ERROR_STOP on" in text
+    assert len(_steps()) == 3
+    assert all(not s.startswith("\\") for step in _steps() for s in step)

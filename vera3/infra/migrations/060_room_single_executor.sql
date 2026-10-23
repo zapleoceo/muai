@@ -10,6 +10,12 @@
 -- Применять ДО выкладки кода B1, который пишет эти значения; сам по себе старый код
 -- новые колонку/таблицу игнорирует. Деплой миграции не катит: scripts/apply_migration.sh.
 
+\set ON_ERROR_STOP on
+
+-- Три транзакции: блокировки room_tasks и room_task_events не держатся одновременно.
+-- ON_ERROR_STOP: при падении (lock_timeout) прогон psql -f останавливается и следующая
+-- транзакция (в т.ч. запись в schema_migrations) не коммитится. Повторный накат безопасен.
+
 BEGIN;
 SET LOCAL lock_timeout = '5s';
 
@@ -21,6 +27,11 @@ CREATE TABLE IF NOT EXISTS room_singletons (
     epoch      BIGINT      NOT NULL DEFAULT 0,
     expires_at TIMESTAMP   NOT NULL
 );
+
+COMMIT;
+
+BEGIN;
+SET LOCAL lock_timeout = '5s';
 
 ALTER TABLE room_task_events DROP CONSTRAINT IF EXISTS ck_room_task_events_kind;
 ALTER TABLE room_task_events ADD CONSTRAINT ck_room_task_events_kind
