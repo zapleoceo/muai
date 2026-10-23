@@ -442,7 +442,7 @@ sniffer; без учёта регистра). Внутри — `<details open>` 
   `OwnerBlock`; `release` только в `blocked` (поля ожидания и вопросы сохраняются),
   `release(open|done)` — `OwnerBlock`. `set_state(paused)` и передача разрешены.
 - **S7.** `blocked` остаётся `blocked` до явного события: `ack` (`_close` снимает `blocked`
-  при 0 незакрытых вопросов), либо `set_state(unblocked)`/`update(status=in_progress)`
+  только когда исчез весь блок владельца: 0 незакрытых вопросов, нет ожидания и паузы владельца), либо `set_state(unblocked)`/`update(status=in_progress)`
   держателя, когда OB нет.
 - **S5 (события разрешения владельца)** — пауза/resume реализованы в PR-B0b (раздел ниже);
   `wait/resolve` и `questions/{qid}/close` — в PR-B1m/B1 (нужны виды событий, которых нет в CHECK).

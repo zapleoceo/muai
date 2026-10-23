@@ -333,3 +333,62 @@ def test_fold_pauses_pure():
     assert fold_pauses([("progress", {"by": o})]) == {h: False, o: False}
     assert pause_actor({"by": "owner"}) == o
     assert pause_actor({"by": "garbage"}) == h and pause_actor({}) == h
+
+
+# ---- S5/S7: ack закрывает вопрос, но не чужие блоки владельца --------------------------
+
+async def answered_question(tok: int) -> int:
+    qid = await ask(tok)
+    await questions.answer(room=R, task_id=T, qid=qid, text="да")
+    return qid
+
+
+async def ack(tok: int, qid: int) -> None:
+    await questions.ack(room=R, task_id=T, qid=qid, agent="claude", fencing_token=tok)
+
+
+async def test_ack_with_owner_wait_keeps_blocked_and_writes_no_unblocked(sqlite_db):
+    tok = (await claim())["fencing_token"]
+    await wait_owner(tok)
+    qid = await answered_question(tok)
+    await ack(tok, qid)
+    after = await row()
+    assert after.status == "blocked" and after.waiting_decision_owner == "owner"
+    assert await ob() == ["owner_wait"]
+    assert "unblocked" not in await kinds()
+
+
+async def test_ack_with_owner_pause_keeps_blocked_and_writes_no_unblocked(sqlite_db):
+    tok = (await claim())["fencing_token"]
+    qid = await answered_question(tok)
+    await owner_pause_event()
+    await ack(tok, qid)
+    assert (await row()).status == "blocked"
+    assert await ob() == ["owner_pause"]
+    assert "unblocked" not in await kinds()
+
+
+async def test_withdraw_with_owner_wait_keeps_blocked(sqlite_db):
+    tok = (await claim())["fencing_token"]
+    await wait_owner(tok)
+    qid = await ask(tok)
+    await questions.withdraw(room=R, task_id=T, qid=qid, agent="claude", fencing_token=tok)
+    assert (await row()).status == "blocked"
+    assert "unblocked" not in await kinds()
+
+
+async def test_ack_unblocks_when_the_question_was_the_only_block(sqlite_db):
+    tok = (await claim())["fencing_token"]
+    qid = await answered_question(tok)
+    await ack(tok, qid)
+    assert (await row()).status == "in_progress"
+    assert (await kinds()).count("unblocked") == 1
+
+
+async def test_ack_unblocks_after_owner_pause_is_resumed(sqlite_db):
+    tok = (await claim())["fencing_token"]
+    qid = await answered_question(tok)
+    await owner_pause_event()
+    await owner_pause_event("resumed")
+    await ack(tok, qid)
+    assert (await row()).status == "in_progress"

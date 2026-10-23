@@ -13,7 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskAnswerRow, RoomTaskQuestionRow, RoomTaskRow
 from vera_shared.room.messages import add_message
-from vera_shared.room.owner_block import unresolved_questions
+from vera_shared.room.owner_block import owner_block, unresolved_questions
 from vera_shared.room.question_view import list_questions, load_questions, question_dict
 from vera_shared.room.task_events import record_event
 from vera_shared.room.task_refs import validate_refs
@@ -127,7 +127,8 @@ async def _close(s: AsyncSession, task: RoomTaskRow, q: RoomTaskQuestionRow, age
     await record_event(s, room=q.room, task_id=q.task_id, kind="ack_answer", agent=agent,
                        session=task.holder_session, account=task.holder_account,
                        fencing_token=token, text=text, data=data)
-    if task.status == "blocked" and await _unresolved(s, q.room, q.task_id) == 0:
+    # S5/S7: статус снимается, только когда исчез ВЕСЬ блок владельца, не один вопрос
+    if task.status == "blocked" and not (await owner_block(s, task)).active:
         task.status, task.owner, task.updated_at = "in_progress", None, utc_naive_now()
         await record_event(s, room=q.room, task_id=q.task_id, kind="unblocked", agent=agent,
                            session=task.holder_session, account=task.holder_account,
