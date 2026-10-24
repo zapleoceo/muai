@@ -53,6 +53,7 @@ def _no_open_fd_fuser(root: Path) -> str:
 
 def _run(root: Path, **extra: str) -> str:
     extra.setdefault("FUSER", _no_open_fd_fuser(root))
+    extra.setdefault("RETAINED_REQUIRED", "0")  # манифеста в этих тестах нет
     env = dict(os.environ, ROOT=str(root), SETTLE_MIN="30", **extra)
     r = subprocess.run(["bash", str(SCRIPT)], capture_output=True, text=True, encoding="utf-8",
                        env=env, timeout=60, check=True)

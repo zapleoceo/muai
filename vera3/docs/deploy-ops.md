@@ -1304,17 +1304,24 @@ streak-фильтром. Проверки диска и запаса (`disk_warn
 этих отметок не создаёт никто, то есть удаляет он 0 файлов. Но удерживаемый файл мог бы
 получить отметку вручную (вариант A подтверждения), поэтому prune теперь **пропускает любой
 файл из манифеста** (причина `retained` в строке лога) и при существующем, но невалидном
-манифесте (или без утилиты) не удаляет ничего (`PRUNE SKIPPED`). Манифеста нет — поведение прежнее,
-у удаления остаётся независимый гейт NAS-подтверждения. Семантика подтверждения не менялась.
+манифесте (или без утилиты) не удаляет ничего (`PRUNE SKIPPED`). Защищённый режим тот же,
+что у ротации: `RETAINED_REQUIRED=1` по умолчанию, **манифеста нет — prune не удаляет
+ничего** (`ERROR ... ОТСУТСТВУЕТ`); прежнее поведение — только явным `RETAINED_REQUIRED=0`.
+Если манифест или утилита пропали уже ПОСЛЕ стартовой проверки, ответ `listed` — ошибка,
+а не «не в списке»: весь прогон прекращается (`PRUNE ABORTED`), пустые каталоги не чистятся.
+Так же ротация: ошибка `holds` останавливает её целиком (`ROTATION ABORTED`). Семантика подтверждения не менялась.
 
 **Установка. Порядок: СНАЧАЛА защитный скрипт, ПОТОМ манифест.**
 
 ```
-# 1. Защитный vera-backup.sh (fail-closed без манифеста + HOLD_DATES): ротация
-#    сразу ничего не удаляет, пока манифеста нет. Дерево /var/www/vera3/scripts уже обновлено деплоем.
-cp -p /usr/local/bin/vera-backup.sh /root/vera-backup.sh.bak-$(date +%F)
-install -m 0755 /var/www/vera3/scripts/vera-backup.sh /usr/local/bin/vera-backup.sh
-sha256sum /var/www/vera3/scripts/vera-backup.sh /usr/local/bin/vera-backup.sh   # хэши совпадают
+# 1. Оба защитных скрипта (fail-closed без манифеста, HOLD_DATES у ротации) — ДО их ближайших окон
+#    cron: ротация 03:30 UTC, prune каждый час в :20. Пока манифеста нет, ни один ничего не удаляет.
+#    Дерево /var/www/vera3/scripts уже обновлено деплоем.
+for f in vera-backup.sh vera-backup-prune.sh; do
+  cp -p /usr/local/bin/$f /root/$f.bak-$(date +%F)
+  install -m 0755 /var/www/vera3/scripts/$f /usr/local/bin/$f
+  sha256sum /var/www/vera3/scripts/$f /usr/local/bin/$f      # хэши совпадают
+done
 # 2. Манифест: во временный файл -> validate -> install (блокировка + атомарный mv) -> verify (кэш)
 T=/var/www/vera3/scripts/vera-retained-manifest.sh
 cd /var/backups/vera
@@ -1329,8 +1336,8 @@ bash $T pending                                  # status=ok cache=ok, changed/u
 Монитор запускается из развёрнутого дерева, поэтому после деплоя и до шага 2 он будет сообщать
 `manifest=error` («manifest MISSING») — это ожидаемо; после шагов 2 он замолкает.
 
-**Откат:** вернуть `/root/vera-backup.sh.bak-<дата>` в `/usr/local/bin/vera-backup.sh` (в нём
-хотфикс `HOLD_DATES`); манифест старому скрипту не мешает, удалять его не нужно. При
+**Откат:** вернуть `/root/vera-backup.sh.bak-<дата>` и `/root/vera-backup-prune.sh.bak-<дата>`
+в `/usr/local/bin/` (в первом хотфикс `HOLD_DATES`); манифест старому скрипту не мешает, удалять его не нужно. При
 `RETAINED_REQUIRED=1` пропажа манифеста останавливает ротацию и поднимает алерт.
 
 Тесты: `vera3/tests/unit/test_backup_retained.py` (временное дерево, `touch -d`, подставные

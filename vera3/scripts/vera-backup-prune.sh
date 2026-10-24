@@ -28,8 +28,12 @@ FUSER=${FUSER:-fuser}
 
 # Удерживаемый архив (RETAINED.manifest, см. vera-retained-manifest.sh): файл из манифеста
 # prune не удаляет НИКОГДА, даже при валидном .nas-confirmed (владелец: старые локальные
-# копии не удалять до решения). Манифест есть, но невалиден / нет утилиты -> не удаляем
-# ничего. Манифеста нет -> как раньше: удалению и так нужна независимая отметка NAS.
+# копии не удалять до решения). Защищённый режим RETAINED_REQUIRED=1 (ДЕФОЛТ, как у
+# ротации vera-backup.sh): манифест отсутствует, нечитаем, невалиден или нет утилиты ->
+# не удаляется НИЧЕГО, в лог ERROR. Прежнее поведение — только явным RETAINED_REQUIRED=0.
+# Если манифест/утилита пропали ПОСЛЕ стартовой проверки, ответ `listed` не «нет», а
+# ошибка — тогда весь прогон прекращается немедленно (ошибка не равна «не в списке»).
+RETAINED_REQUIRED=${RETAINED_REQUIRED:-1}
 RETAINED_MANIFEST=${RETAINED_MANIFEST:-$ROOT/RETAINED.manifest}
 RETAINED_TOOL=${RETAINED_TOOL:-$(dirname "$0")/vera-retained-manifest.sh}
 export RETAINED_MANIFEST
@@ -40,9 +44,13 @@ if [ -e "$RETAINED_MANIFEST" ] || [ -L "$RETAINED_MANIFEST" ]; then
     echo "$(date +%F_%T) ERROR: манифест $RETAINED_MANIFEST нечитаем/невалиден или нет утилиты — PRUNE SKIPPED, ничего не удалено"
     exit 0
   fi
+elif [ "$RETAINED_REQUIRED" != 0 ]; then
+  echo "$(date +%F_%T) ERROR: манифест $RETAINED_MANIFEST ОТСУТСТВУЕТ при RETAINED_REQUIRED=$RETAINED_REQUIRED — PRUNE SKIPPED, ничего не удалено"
+  exit 0
 fi
 
 freed=0
+aborted=0
 kept=0
 unconf_bytes=0
 now=$(date +%s)
@@ -58,8 +66,13 @@ while IFS= read -r -d '' f; do
   sz=$(stat -c %s "$f" 2>/dev/null) || continue
   mt=$(stat -c %Y "$f" 2>/dev/null) || continue
   dir=$(dirname "$f"); name=$(basename "$f")
-  if [ "$have_manifest" = 1 ] && bash "$RETAINED_TOOL" listed --root "$ROOT" --manifest "$RETAINED_MANIFEST" "${f#"$ROOT"/}"; then
-    keep retained "$sz"; continue
+  if [ "$have_manifest" = 1 ]; then
+    if bash "$RETAINED_TOOL" listed --root "$ROOT" --manifest "$RETAINED_MANIFEST" "${f#"$ROOT"/}"; then lrc=0; else lrc=$?; fi
+    case $lrc in
+      0) keep retained "$sz"; continue ;;
+      1) ;;
+      *) aborted=1; echo "$(date +%F_%T) ERROR: проверка манифеста упала (rc=$lrc) на $f — PRUNE ABORTED, дальше ничего не удаляется"; break ;;
+    esac
   fi
   sums="$dir/SHA256SUMS"
   [ -f "$sums" ] || { keep no_sums "$sz"; continue; }
@@ -82,6 +95,7 @@ while IFS= read -r -d '' f; do
   if rm -f "$f"; then freed=$((freed+sz)); else keep rm_failed "$sz"; fi
 done < <(find "$ROOT" -type f \( -name '*.dump' -o -name '*.tar.gz' \) -print0)
 
+[ "$aborted" = 0 ] || exit 0
 find "$ROOT" -mindepth 1 -type d -empty -delete 2>/dev/null || true
 
 summary=""

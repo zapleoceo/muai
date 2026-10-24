@@ -328,11 +328,24 @@ def _rotation_tree(root: Path) -> None:
         _age(root / d)
 
 
-def _rotate(tmp: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _patched(tmp: Path, script: Path, anchor: str, inject: str, *, after: bool = False) -> Path:
+    """Тестовая копия скрипта с впрыском команды рядом с anchor (в поставляемом скрипте шва нет)."""
+    text = script.read_text(encoding="utf-8")
+    assert text.count(anchor) == 1, anchor
+    new = anchor + "\n" + inject if after else inject + "\n" + anchor
+    copy = tmp / f"patched-{script.name}"
+    copy.write_text(text.replace(anchor, new), encoding="utf-8")
+    return copy
+
+
+ROT_ANCHOR = '      if [ -L "$RETAINED_MANIFEST" ] || [ ! -f "$RETAINED_MANIFEST" ]'
+
+
+def _rotate(tmp: Path, env: dict[str, str], script: Path = BACKUP) -> subprocess.CompletedProcess[str]:
     www = tmp / "www"
     for rel in ("aibroker/.env", "stepan2/infra/.env", "vera3/infra/.env"):
         _file(www, rel, b"TOKEN_SECRET=x\n")
-    return _sh(["bash", str(BACKUP)], env=env, check=True)
+    return _sh(["bash", str(script)], env=env, check=True)
 
 
 def test_rotation_keeps_held_dirs_removes_unheld(tmp_path: Path) -> None:
@@ -528,12 +541,29 @@ def test_rotation_race_manifest_changes_between_decision_and_rm(tmp_path: Path, 
     manifest = root / "RETAINED.manifest"
     if swap == "replace":
         alt = _alt_manifest(tmp_path, env)
-        env["ROTATE_RACE_HOOK"] = f'mv -f "{alt.as_posix()}" "{manifest.as_posix()}"'
+        inject = f'mv -f "{alt.as_posix()}" "{manifest.as_posix()}" 2>/dev/null || true'
     else:
-        env["ROTATE_RACE_HOOK"] = f'rm -f "{manifest.as_posix()}"'
-    r = _rotate(tmp_path, env)
+        inject = f'rm -f "{manifest.as_posix()}"'
+    script = _patched(tmp_path, BACKUP, ROT_ANCHOR, inject)
+    r = _rotate(tmp_path, env, script)
     assert "манифест изменился/пропал после решения" in r.stdout
     for keep in (*HELD_FILES, "aibroker/daily/2026-09-01/secrets.tar.gz", "stepan2/daily/2026-09-02/secrets.tar.gz"):
+        assert (root / keep).exists(), keep
+
+
+def test_rotation_helper_removed_mid_walk_aborts_and_deletes_nothing(tmp_path: Path) -> None:
+    root = tmp_path / "root"
+    _rotation_tree(root)
+    tool = tmp_path / "tool-copy.sh"
+    shutil.copy(TOOL, tool)
+    env = _env(tmp_path, RETAINED_TOOL=str(tool))
+    assert _generate(tmp_path, env, tmp_path / "paths.txt").returncode == 0
+    anchor = '      if bash "$RETAINED_TOOL" holds'
+    script = _patched(tmp_path, BACKUP, anchor, f'rm -f "{tool.as_posix()}"')
+    r = _rotate(tmp_path, env, script)
+    assert "ROTATION ABORTED" in r.stdout
+    for keep in (*HELD_FILES, "aibroker/daily/2026-09-01/secrets.tar.gz", "stepan2/daily/2026-09-02/secrets.tar.gz",
+                 "vera/weekly/2026-08-30/vera.dump"):
         assert (root / keep).exists(), keep
 
 
@@ -570,50 +600,83 @@ def test_install_validates_then_moves_atomically(tmp_path: Path) -> None:
 # ─── vera-backup-prune.sh: файл из манифеста не удаляется ───────────────────
 
 PRUNE = SCRIPTS / "vera-backup-prune.sh"
+PRUNE_NAMES = ("aibroker.dump", "b.dump")
 
 
-def _prune_setup(tmp: Path) -> tuple[Path, str]:
-    """Удаляемый по старым правилам дамп: SHA256SUMS + .nas-confirmed + старый mtime."""
+def _prune_setup(tmp: Path) -> list[Path]:
+    """Удаляемые по старым правилам дампы: SHA256SUMS + .nas-confirmed + старый mtime."""
     import hashlib
 
     root = tmp / "root"
-    f = _file(root, f"aibroker/daily/{OLD}/aibroker.dump", b"payload")
-    sha = hashlib.sha256(b"payload").hexdigest()
-    (f.parent / "SHA256SUMS").write_text(f"{sha}  ./aibroker.dump\n", encoding="utf-8")
-    Path(str(f) + ".nas-confirmed").write_text(sha + "\n", encoding="utf-8")
-    _age(f, "2026-01-01")
-    return f, sha
+    files = []
+    for name in PRUNE_NAMES:
+        data = b"payload-" + name.encode()
+        f = _file(root, f"aibroker/daily/{OLD}/{name}", data)
+        sha = hashlib.sha256(data).hexdigest()
+        with (f.parent / "SHA256SUMS").open("a", encoding="utf-8") as sums:
+            sums.write(f"{sha}  ./{name}\n")
+        Path(str(f) + ".nas-confirmed").write_text(sha + "\n", encoding="utf-8")
+        _age(f, "2026-01-01")
+        files.append(f)
+    return files
 
 
-def _prune(tmp: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+def _prune(tmp: Path, env: dict[str, str], script: Path = PRUNE) -> subprocess.CompletedProcess[str]:
     fuser = tmp / "fake-fuser"
     fuser.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
     fuser.chmod(0o755)
     env = dict(env, ROOT=env["BACKUP_ROOT"], FUSER=str(fuser), SETTLE_MIN="1")
-    return _sh(["bash", str(PRUNE)], env=env, check=True)
+    return _sh(["bash", str(script)], env=env, check=True)
 
 
-def test_prune_control_deletes_confirmed_file_without_manifest(tmp_path: Path) -> None:
-    f, _ = _prune_setup(tmp_path)
-    _prune(tmp_path, _env(tmp_path))
-    assert not f.exists()  # контроль: без манифеста поведение прежнее
+def _list_all(tmp: Path) -> Path:
+    lst = tmp / "paths.txt"
+    lst.write_text("".join(f"aibroker/daily/{OLD}/{n}\n" for n in PRUNE_NAMES[:1]), encoding="utf-8")
+    return lst
+
+
+def test_prune_control_deletes_confirmed_file_only_when_not_required(tmp_path: Path) -> None:
+    files = _prune_setup(tmp_path)
+    _prune(tmp_path, _env(tmp_path, RETAINED_REQUIRED="0"))
+    assert not any(f.exists() for f in files)  # контроль: явный RETAINED_REQUIRED=0 — прежнее поведение
+
+
+def test_prune_protected_mode_missing_manifest_deletes_nothing(tmp_path: Path) -> None:
+    files = _prune_setup(tmp_path)
+    r = _prune(tmp_path, _env(tmp_path))  # дефолт RETAINED_REQUIRED=1, манифеста нет
+    assert all(f.exists() for f in files)
+    assert "ERROR" in r.stdout and "ОТСУТСТВУЕТ" in r.stdout and "PRUNE SKIPPED" in r.stdout
 
 
 def test_prune_never_deletes_manifest_listed_file_even_if_confirmed(tmp_path: Path) -> None:
-    f, _ = _prune_setup(tmp_path)
+    listed, other = _prune_setup(tmp_path)
     env = _env(tmp_path)
-    lst = tmp_path / "paths.txt"
-    lst.write_text(f"aibroker/daily/{OLD}/aibroker.dump\n", encoding="utf-8")
-    assert _generate(tmp_path, env, lst).returncode == 0
+    assert _generate(tmp_path, env, _list_all(tmp_path)).returncode == 0
     r = _prune(tmp_path, env)
-    assert f.exists() and "retained=1" in r.stdout
+    assert listed.exists() and "retained=1" in r.stdout
+    assert not other.exists()  # не из манифеста и подтверждён — удаляется, как раньше
 
 
 def test_prune_invalid_manifest_deletes_nothing(tmp_path: Path) -> None:
-    f, _ = _prune_setup(tmp_path)
+    files = _prune_setup(tmp_path)
     (tmp_path / "root" / "RETAINED.manifest").write_text("мусор\n", encoding="utf-8")
     r = _prune(tmp_path, _env(tmp_path))
-    assert f.exists() and "PRUNE SKIPPED" in r.stdout
+    assert all(f.exists() for f in files) and "PRUNE SKIPPED" in r.stdout
+
+
+@pytest.mark.parametrize("what", ["manifest", "helper"])
+def test_prune_manifest_or_helper_removed_mid_walk_stops_everything(tmp_path: Path, what: str) -> None:
+    files = _prune_setup(tmp_path)
+    tool = tmp_path / "tool-copy.sh"
+    shutil.copy(TOOL, tool)
+    env = _env(tmp_path, RETAINED_TOOL=str(tool))
+    assert _generate(tmp_path, env, _list_all(tmp_path)).returncode == 0  # архив — не те файлы, что удаляем
+    victim = tmp_path / "root" / "RETAINED.manifest" if what == "manifest" else tool
+    anchor = '  dir=$(dirname "$f"); name=$(basename "$f")'
+    script = _patched(tmp_path, PRUNE, anchor, f'rm -f "{victim.as_posix()}"', after=True)
+    r = _prune(tmp_path, env, script)
+    assert all(f.exists() for f in files)  # ошибка проверки != «не в списке»: ничего не удалено
+    assert "PRUNE ABORTED" in r.stdout and "ERROR" in r.stdout
 
 
 # ─── nightly chgrp/chmod: не трогать уже верные записи (ctime) ──────────────

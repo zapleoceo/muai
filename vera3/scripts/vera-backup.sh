@@ -131,6 +131,7 @@ have_manifest=0
 rotate=1
 snap=""
 snap_sha=""
+rotate_aborted=0
 manifest_sha() { sha256sum < "$RETAINED_MANIFEST" 2>/dev/null | cut -d' ' -f1; }
 if [ -e "$RETAINED_MANIFEST" ] || [ -L "$RETAINED_MANIFEST" ]; then
   have_manifest=1
@@ -176,12 +177,11 @@ rotate_old() {  # parent days
     done
     if [ "$have_manifest" = 1 ]; then
       if bash "$RETAINED_TOOL" holds --root "$DEST" --manifest "$snap" "${d#"$DEST"/}"; then rc=0; else rc=$?; fi
+      if [ "$rc" = 0 ]; then echo "  удерживаю $d (файл манифеста внутри)"; continue; fi
       if [ "$rc" != 1 ]; then
-        echo "  удерживаю $d (rc=$rc: файл манифеста внутри или снимок не прочитан)"
-        continue
+        echo "ERROR: holds упал (rc=$rc) на $d — ROTATION ABORTED, дальше ничего не удаляется"
+        rotate_aborted=1; return 0
       fi
-      # тестовый шов гонки: выполняется между решением и финальной сверкой
-      [ -z "${ROTATE_RACE_HOOK:-}" ] || bash -c "$ROTATE_RACE_HOOK" _ "$d" || true
       if [ -L "$RETAINED_MANIFEST" ] || [ ! -f "$RETAINED_MANIFEST" ] || [ "$(manifest_sha)" != "$snap_sha" ]; then
         echo "  удерживаю $d (манифест изменился/пропал после решения — пропуск)"
         continue
@@ -194,7 +194,9 @@ rotate_old() {  # parent days
 if [ "$rotate" = 1 ]; then
   for p in aibroker stepan2 vera; do
     rotate_old "$DEST/$p/daily"  "$KEEP_DAILY_DAYS"
+    [ "$rotate_aborted" = 0 ] || break
     rotate_old "$DEST/$p/weekly" "$KEEP_WEEKLY_DAYS"
+    [ "$rotate_aborted" = 0 ] || break
   done
 fi
 echo "[$(date)] done: total=$(du -sh "$DEST" | cut -f1)"
