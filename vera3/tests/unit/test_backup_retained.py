@@ -58,6 +58,10 @@ def _env(tmp: Path, **extra: str) -> dict[str, str]:
         path = bindir / name
         path.write_bytes(f"#!/bin/bash\n{body}".encode())
         path.chmod(0o755)
+    if shutil.which("flock") is None:  # git-bash без util-linux: заглушка, блокировки здесь не проверяются
+        shim = bindir / "flock"
+        shim.write_bytes(b"#!/bin/bash\nexit 0\n")
+        shim.chmod(0o755)
     envf = tmp / "env"
     envf.write_text("TELEGRAM_BOT_TOKEN=t\nOWNER_TELEGRAM_ID=1\n", encoding="utf-8")
     env = dict(
@@ -65,6 +69,8 @@ def _env(tmp: Path, **extra: str) -> dict[str, str]:
         PATH=f"{bindir.as_posix()}{os.pathsep}{os.environ['PATH']}",
         ENV_FILE=str(envf),
         STATE_DIR=str(tmp / "state"),
+        RETAINED_CACHE=str(tmp / "state" / "retained.verified"),
+        RETAINED_LOCK=str(tmp / "retained.lock"),
         BACKUP_ROOT=str(tmp / "root"),
         DEST=str(tmp / "root"),
         WWW_ROOT=str(tmp / "www"),
@@ -106,6 +112,16 @@ def _archive(root: Path) -> Path:
 
 def _generate(tmp: Path, env: dict[str, str], lst: Path) -> subprocess.CompletedProcess[str]:
     return _sh(["bash", str(TOOL), "generate", str(lst)], env=env)
+
+
+def _verified(tmp: Path, env: dict[str, str], lst: Path) -> None:
+    """Манифест + полный verify (кэш): штатное состояние после установки."""
+    root = tmp / "root"
+    assert _generate(tmp, env, lst).returncode == 0
+    v = _sh(["bash", str(TOOL), "verify"], env=env)
+    assert v.returncode == 0, v.stdout + v.stderr
+    assert (tmp / "state" / "retained.verified").exists()
+    assert root.exists()
 
 
 def _monitor(tmp: Path, env: dict[str, str], runs: int = 2) -> tuple[str, str]:
@@ -210,7 +226,7 @@ def test_holds_matches_directory_prefix_only(tmp_path: Path) -> None:
 def test_monitor_unchanged_archive_no_alert_and_reports_retained(tmp_path: Path) -> None:
     env = _env(tmp_path)
     root = tmp_path / "root"
-    _generate(tmp_path, env, _archive(root))
+    _verified(tmp_path, env, _archive(root))
     out, sent = _monitor(tmp_path, env)
     assert "bytes=0 " in out and "manifest=ok" in out
     retained = sum((root / rel).stat().st_size for rel in HELD_FILES)
@@ -221,7 +237,7 @@ def test_monitor_unchanged_archive_no_alert_and_reports_retained(tmp_path: Path)
 def test_monitor_new_file_is_counted(tmp_path: Path) -> None:
     env = _env(tmp_path)
     root = tmp_path / "root"
-    _generate(tmp_path, env, _archive(root))
+    _verified(tmp_path, env, _archive(root))
     _file(root, "vera/daily/2026-10-25/secrets.tar.gz", b"12345")
     out, sent = _monitor(tmp_path, env)
     assert "bytes=5 " in out and "Backups on disk" in sent
@@ -231,7 +247,7 @@ def test_monitor_new_file_is_counted(tmp_path: Path) -> None:
 def test_monitor_modified_archive_file_is_counted(tmp_path: Path, how: str) -> None:
     env = _env(tmp_path)
     root = tmp_path / "root"
-    _generate(tmp_path, env, _archive(root))
+    _verified(tmp_path, env, _archive(root))
     victim = root / HELD_FILES[0]
     size = victim.stat().st_size
     if how == "grow":
@@ -257,7 +273,7 @@ def test_monitor_garbled_manifest_alerts_unknown_not_healthy(tmp_path: Path) -> 
 def test_monitor_missing_archive_file_alerts(tmp_path: Path) -> None:
     env = _env(tmp_path, BACKUP_PENDING_ALERT_GB="3")
     root = tmp_path / "root"
-    _generate(tmp_path, env, _archive(root))
+    _verified(tmp_path, env, _archive(root))
     (root / HELD_FILES[1]).unlink()
     out, sent = _monitor(tmp_path, env)
     assert "missing_files=1" in out and "missing on disk" in sent
@@ -284,7 +300,7 @@ def test_monitor_missing_manifest_in_protected_mode_is_error(tmp_path: Path) -> 
 def test_monitor_reports_retained_file_changed_explicitly_with_path(tmp_path: Path) -> None:
     env = _env(tmp_path, BACKUP_PENDING_ALERT_GB="3")
     root = tmp_path / "root"
-    _generate(tmp_path, env, _archive(root))
+    _verified(tmp_path, env, _archive(root))
     _age(root / HELD_FILES[0], "2026-10-22 09:00")
     out, sent = _monitor(tmp_path, env)
     assert "changed_files=1" in out
@@ -294,7 +310,7 @@ def test_monitor_reports_retained_file_changed_explicitly_with_path(tmp_path: Pa
 def test_monitor_changed_alert_is_throttled(tmp_path: Path) -> None:
     env = _env(tmp_path, BACKUP_PENDING_ALERT_GB="3")
     root = tmp_path / "root"
-    _generate(tmp_path, env, _archive(root))
+    _verified(tmp_path, env, _archive(root))
     _age(root / HELD_FILES[0], "2026-10-22 09:00")
     _, sent = _monitor(tmp_path, env, runs=6)
     assert sent.count("Retained file changed") == 1
@@ -397,3 +413,204 @@ def test_rotation_hold_dates_adds_to_valid_manifest(tmp_path: Path) -> None:
 
 def test_default_hold_dates_present_in_script() -> None:
     assert "2026-10-18 2026-10-21 2026-10-22 2026-10-23" in BACKUP.read_text(encoding="utf-8")
+
+
+# ─── целостность: идентичность из кэша verify ───────────────────────────────
+
+def test_monitor_same_size_restored_mtime_is_detected(tmp_path: Path) -> None:
+    env = _env(tmp_path, BACKUP_PENDING_ALERT_GB="3")
+    root = tmp_path / "root"
+    _verified(tmp_path, env, _archive(root))
+    victim = root / HELD_FILES[0]
+    victim.write_bytes(b"X" * victim.stat().st_size)  # тот же размер, другое содержимое
+    _age(victim, "2026-10-21 03:00")  # mtime возвращён; ctime вернуть нельзя
+    out, sent = _monitor(tmp_path, env)
+    assert "unverified_files=1" in out and "retained_bytes=" in out
+    assert "Retained file changed/unverified" in sent and HELD_FILES[0] in sent
+
+
+def test_monitor_never_verified_archive_is_counted_as_pending(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    root = tmp_path / "root"
+    assert _generate(tmp_path, env, _archive(root)).returncode == 0  # verify не запускали
+    total = sum((root / rel).stat().st_size for rel in HELD_FILES)
+    out, sent = _monitor(tmp_path, env)
+    assert f"bytes={total} " in out and "retained_bytes=0 " in out and "unverified_files=2" in out
+    assert "not verified by full sha256" in sent
+
+
+def test_monitor_stale_cache_header_means_unverified(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    _verified(tmp_path, env, _archive(tmp_path / "root"))
+    cache = tmp_path / "state" / "retained.verified"
+    cache.write_text("# vera-retained-cache v1 manifest=" + "0" * 64 + "\n" + "".join(cache.read_text().splitlines(True)[1:]))
+    out, _ = _monitor(tmp_path, env)
+    assert "unverified_files=2" in out and "cache=stale" in out
+
+
+def test_verify_failure_is_not_cached(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    root = tmp_path / "root"
+    _generate(tmp_path, env, _archive(root))
+    victim = root / HELD_FILES[0]
+    victim.write_bytes(b"X" * victim.stat().st_size)
+    _age(victim, "2026-10-21 03:00")
+    assert _sh(["bash", str(TOOL), "verify"], env=env).returncode == 1
+    cached = (tmp_path / "state" / "retained.verified").read_text()
+    assert HELD_FILES[0] not in cached and HELD_FILES[1] in cached
+
+
+# ─── симлинки ───────────────────────────────────────────────────────────────
+
+def _symlink_or_skip(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=target.is_dir())
+    except (OSError, NotImplementedError):
+        pytest.skip("симлинки недоступны на этой платформе/правах")
+
+
+def test_generate_rejects_symlinked_parent_dir(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    root = tmp_path / "root"
+    outside = tmp_path / "outside" / "d"
+    _file(outside.parent, "d/x.dump", b"escape")
+    _symlink_or_skip(root / "linked", outside.parent)
+    lst = tmp_path / "paths.txt"
+    lst.write_text("linked/d/x.dump\n", encoding="utf-8")
+    r = _generate(tmp_path, env, lst)
+    assert r.returncode == 1 and "СИМЛИНК В ПУТИ: linked/d/x.dump" in r.stderr
+    assert not (root / "RETAINED.manifest").exists()
+
+
+def test_generate_rejects_symlinked_file(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    root = tmp_path / "root"
+    real = _file(tmp_path / "outside", "real.dump", b"x")
+    (root / "a").mkdir(parents=True)
+    _symlink_or_skip(root / "a" / "l.dump", real)
+    lst = tmp_path / "paths.txt"
+    lst.write_text("a/l.dump\n", encoding="utf-8")
+    r = _generate(tmp_path, env, lst)
+    assert r.returncode == 1 and "a/l.dump" in r.stderr
+
+
+def test_manifest_with_symlinked_parent_is_invalid_everywhere(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    root = tmp_path / "root"
+    _generate(tmp_path, env, _archive(root))
+    # после установки каталог подменили симлинком наружу
+    moved = tmp_path / "moved"
+    (root / "aibroker").rename(moved)
+    _symlink_or_skip(root / "aibroker", moved)
+    for args in (["validate"], ["verify"], ["holds", f"aibroker/daily/{OLD}"], ["pending"]):
+        r = _sh(["bash", str(TOOL), *args], env=env)
+        assert r.returncode == 2 and "симлинк в пути" in r.stderr, (args, r.stdout, r.stderr)
+
+
+# ─── гонка ротации и блокировка ─────────────────────────────────────────────
+
+def _alt_manifest(tmp: Path, env: dict[str, str]) -> Path:
+    """Манифест, который (в отличие от исходного) держит ещё и старый каталог X."""
+    alt_list = tmp / "paths-alt.txt"
+    alt_list.write_text("\n".join((*HELD_FILES, "aibroker/daily/2026-09-01/secrets.tar.gz")) + "\n", encoding="utf-8")
+    alt = tmp / "root" / "RETAINED.alt"
+    r = _sh(["bash", str(TOOL), "generate", str(alt_list), "--out", str(alt)], env=env)
+    assert r.returncode == 0, r.stderr
+    return alt
+
+
+@pytest.mark.parametrize("swap", ["replace", "remove"])
+def test_rotation_race_manifest_changes_between_decision_and_rm(tmp_path: Path, swap: str) -> None:
+    root = tmp_path / "root"
+    _rotation_tree(root)
+    env = _env(tmp_path)
+    assert _generate(tmp_path, env, tmp_path / "paths.txt").returncode == 0
+    manifest = root / "RETAINED.manifest"
+    if swap == "replace":
+        alt = _alt_manifest(tmp_path, env)
+        env["ROTATE_RACE_HOOK"] = f'mv -f "{alt.as_posix()}" "{manifest.as_posix()}"'
+    else:
+        env["ROTATE_RACE_HOOK"] = f'rm -f "{manifest.as_posix()}"'
+    r = _rotate(tmp_path, env)
+    assert "манифест изменился/пропал после решения" in r.stdout
+    for keep in (*HELD_FILES, "aibroker/daily/2026-09-01/secrets.tar.gz", "stepan2/daily/2026-09-02/secrets.tar.gz"):
+        assert (root / keep).exists(), keep
+
+
+@pytest.mark.skipif(shutil.which("flock") is None, reason="нужен flock (util-linux)")
+def test_rotation_skipped_when_lock_is_held(tmp_path: Path) -> None:
+    env = _env(tmp_path, RETAINED_LOCK_WAIT="1")
+    root = tmp_path / "root"
+    _rotation_tree(root)
+    assert _generate(tmp_path, env, tmp_path / "paths.txt").returncode == 0
+    holder = subprocess.Popen(["bash", "-c", f'exec 9>"{env["RETAINED_LOCK"]}"; flock -x 9; sleep 20'], env=env)
+    try:
+        time.sleep(1)
+        r = _rotate(tmp_path, env)
+    finally:
+        holder.kill()
+    assert "не взята блокировка" in r.stdout
+    assert (root / "aibroker/daily/2026-09-01").exists()
+
+
+def test_install_validates_then_moves_atomically(tmp_path: Path) -> None:
+    env = _env(tmp_path)
+    root = tmp_path / "root"
+    lst = _archive(root)
+    new = root / "RETAINED.manifest.new"
+    assert _sh(["bash", str(TOOL), "generate", str(lst), "--out", str(new)], env=env).returncode == 0
+    r = _sh(["bash", str(TOOL), "install", str(new)], env=env)
+    assert r.returncode == 0 and (root / "RETAINED.manifest").exists() and not new.exists(), r.stderr
+    bad = root / "RETAINED.manifest.new"
+    bad.write_text("мусор\n", encoding="utf-8")
+    assert _sh(["bash", str(TOOL), "install", str(bad)], env=env).returncode == 2
+    assert _sh(["bash", str(TOOL), "validate"], env=env).returncode == 0  # прежний манифест цел
+
+
+# ─── vera-backup-prune.sh: файл из манифеста не удаляется ───────────────────
+
+PRUNE = SCRIPTS / "vera-backup-prune.sh"
+
+
+def _prune_setup(tmp: Path) -> tuple[Path, str]:
+    """Удаляемый по старым правилам дамп: SHA256SUMS + .nas-confirmed + старый mtime."""
+    import hashlib
+
+    root = tmp / "root"
+    f = _file(root, f"aibroker/daily/{OLD}/aibroker.dump", b"payload")
+    sha = hashlib.sha256(b"payload").hexdigest()
+    (f.parent / "SHA256SUMS").write_text(f"{sha}  ./aibroker.dump\n", encoding="utf-8")
+    Path(str(f) + ".nas-confirmed").write_text(sha + "\n", encoding="utf-8")
+    _age(f, "2026-01-01")
+    return f, sha
+
+
+def _prune(tmp: Path, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    fuser = tmp / "fake-fuser"
+    fuser.write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8")
+    fuser.chmod(0o755)
+    env = dict(env, ROOT=env["BACKUP_ROOT"], FUSER=str(fuser), SETTLE_MIN="1")
+    return _sh(["bash", str(PRUNE)], env=env, check=True)
+
+
+def test_prune_control_deletes_confirmed_file_without_manifest(tmp_path: Path) -> None:
+    f, _ = _prune_setup(tmp_path)
+    _prune(tmp_path, _env(tmp_path))
+    assert not f.exists()  # контроль: без манифеста поведение прежнее
+
+
+def test_prune_never_deletes_manifest_listed_file_even_if_confirmed(tmp_path: Path) -> None:
+    f, _ = _prune_setup(tmp_path)
+    env = _env(tmp_path)
+    lst = tmp_path / "paths.txt"
+    lst.write_text(f"aibroker/daily/{OLD}/aibroker.dump\n", encoding="utf-8")
+    assert _generate(tmp_path, env, lst).returncode == 0
+    r = _prune(tmp_path, env)
+    assert f.exists() and "retained=1" in r.stdout
+
+
+def test_prune_invalid_manifest_deletes_nothing(tmp_path: Path) -> None:
+    f, _ = _prune_setup(tmp_path)
+    (tmp_path / "root" / "RETAINED.manifest").write_text("мусор\n", encoding="utf-8")
+    r = _prune(tmp_path, _env(tmp_path))
+    assert f.exists() and "PRUNE SKIPPED" in r.stdout

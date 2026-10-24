@@ -104,33 +104,60 @@ chmod -R g+rX,o-rwx "$DEST"
 # vera-retained-manifest.sh, docs/deploy-ops.md «Удерживаемый архив»). Датированный
 # каталог, в котором лежит хоть один файл манифеста, ротация не трогает.
 # Защищённый режим RETAINED_REQUIRED=1 (ДЕФОЛТ): манифест обязан быть. Нет файла,
-# нет утилиты или он невалиден (потерян, плохо поставлен, повреждён) -> за этот
-# прогон НИЧЕГО не удаляется и в лог идёт ERROR; тихого отката к старой ротации
-# нет. Старое поведение — только явным RETAINED_REQUIRED=0 (хосты без архива).
+# нет утилиты, он невалиден или не взялась блокировка -> за этот прогон НИЧЕГО не
+# удаляется и в лог идёт ERROR; тихого отката к старой ротации нет. Старое
+# поведение — только явным RETAINED_REQUIRED=0 (хосты без архива).
+# Гонка: ротация держит блокировку RETAINED_LOCK (её же берёт `install` манифеста),
+# читает манифест ОДИН раз в снимок и непосредственно перед каждым rm сверяет, что
+# живой манифест всё ещё тот же (sha256) и каталог по-прежнему не держится; иначе
+# каталог пропускается. Окно между последней сверкой и rm — микросекунды и только
+# для писателя, обходящего блокировку.
 # HOLD_DATES — временная страховка поверх манифеста: каталог с такой датой в имени
-# не удаляется; убирается отдельным изменением после атомарной установки и
-# проверки манифеста.
+# не удаляется; живёт весь переходный период, убирается отдельным изменением.
 RETAINED_REQUIRED=${RETAINED_REQUIRED:-1}
 HOLD_DATES=${HOLD_DATES-2026-10-18 2026-10-21 2026-10-22 2026-10-23}
 RETAINED_MANIFEST=${RETAINED_MANIFEST:-$DEST/RETAINED.manifest}
 RETAINED_TOOL=${RETAINED_TOOL:-$WWW_ROOT/vera3/scripts/vera-retained-manifest.sh}
-export RETAINED_MANIFEST
+RETAINED_LOCK=${RETAINED_LOCK:-/var/lock/vera-retained.lock}
+export RETAINED_MANIFEST RETAINED_LOCK
 have_manifest=0
 rotate=1
+snap=""
+snap_sha=""
+manifest_sha() { sha256sum < "$RETAINED_MANIFEST" 2>/dev/null | cut -d' ' -f1; }
 if [ -e "$RETAINED_MANIFEST" ] || [ -L "$RETAINED_MANIFEST" ]; then
   have_manifest=1
   if [ ! -f "$RETAINED_TOOL" ]; then
     rotate=0
     echo "ERROR: манифест $RETAINED_MANIFEST есть, а утилиты $RETAINED_TOOL нет — ROTATION SKIPPED, ничего не удалено"
-  elif ! bash "$RETAINED_TOOL" validate --root "$DEST" --manifest "$RETAINED_MANIFEST"; then
-    rotate=0
-    echo "ERROR: манифест $RETAINED_MANIFEST нечитаем/невалиден — ROTATION SKIPPED, ничего не удалено"
   fi
 elif [ "$RETAINED_REQUIRED" != 0 ]; then
   rotate=0
   echo "ERROR: манифест $RETAINED_MANIFEST ОТСУТСТВУЕТ при RETAINED_REQUIRED=$RETAINED_REQUIRED — ROTATION SKIPPED, ничего не удалено"
 else
   echo "манифеста нет ($RETAINED_MANIFEST), RETAINED_REQUIRED=0 — ротация без защиты"
+fi
+
+if [ "$rotate" = 1 ] && { [ "$have_manifest" = 1 ] || [ "$RETAINED_REQUIRED" != 0 ]; }; then
+  if ! command -v flock >/dev/null 2>&1; then
+    rotate=0; echo "ERROR: нет flock — ROTATION SKIPPED, ничего не удалено"
+  elif ! { exec 9>"$RETAINED_LOCK"; } 2>/dev/null || ! flock -x -w "${RETAINED_LOCK_WAIT:-60}" 9; then
+    rotate=0; echo "ERROR: не взята блокировка $RETAINED_LOCK — ROTATION SKIPPED, ничего не удалено"
+  fi
+fi
+
+if [ "$rotate" = 1 ] && [ "$have_manifest" = 1 ]; then
+  snap=$(mktemp)
+  trap 'rm -f "$snap"' EXIT
+  if ! bash "$RETAINED_TOOL" validate --root "$DEST" --manifest "$RETAINED_MANIFEST" \
+     || ! cp -- "$RETAINED_MANIFEST" "$snap" || ! chmod 600 "$snap"; then
+    rotate=0; echo "ERROR: манифест $RETAINED_MANIFEST нечитаем/невалиден — ROTATION SKIPPED, ничего не удалено"
+  else
+    snap_sha=$(sha256sum < "$snap" | cut -d' ' -f1)
+    if [ "$snap_sha" != "$(manifest_sha)" ] || ! bash "$RETAINED_TOOL" validate --root "$DEST" --manifest "$snap"; then
+      rotate=0; echo "ERROR: манифест изменился при снятии снимка или снимок невалиден — ROTATION SKIPPED, ничего не удалено"
+    fi
+  fi
 fi
 
 rotate_old() {  # parent days
@@ -141,9 +168,15 @@ rotate_old() {  # parent days
       case ${d##*/} in "$hd") echo "  удерживаю $d (HOLD_DATES)"; continue 2 ;; esac
     done
     if [ "$have_manifest" = 1 ]; then
-      if bash "$RETAINED_TOOL" holds --root "$DEST" --manifest "$RETAINED_MANIFEST" "${d#"$DEST"/}"; then rc=0; else rc=$?; fi
+      if bash "$RETAINED_TOOL" holds --root "$DEST" --manifest "$snap" "${d#"$DEST"/}"; then rc=0; else rc=$?; fi
       if [ "$rc" != 1 ]; then
-        echo "  удерживаю $d (rc=$rc: файл манифеста внутри или манифест не прочитан)"
+        echo "  удерживаю $d (rc=$rc: файл манифеста внутри или снимок не прочитан)"
+        continue
+      fi
+      # тестовый шов гонки: выполняется между решением и финальной сверкой
+      [ -z "${ROTATE_RACE_HOOK:-}" ] || bash -c "$ROTATE_RACE_HOOK" _ "$d" || true
+      if [ -L "$RETAINED_MANIFEST" ] || [ ! -f "$RETAINED_MANIFEST" ] || [ "$(manifest_sha)" != "$snap_sha" ]; then
+        echo "  удерживаю $d (манифест изменился/пропал после решения — пропуск)"
         continue
       fi
     fi

@@ -26,6 +26,22 @@ SETTLE_MIN=${SETTLE_MIN:-30}
 FUSER=${FUSER:-fuser}
 [ -d "$ROOT" ] || { echo "$(date +%F_%T) нет каталога $ROOT"; exit 0; }
 
+# Удерживаемый архив (RETAINED.manifest, см. vera-retained-manifest.sh): файл из манифеста
+# prune не удаляет НИКОГДА, даже при валидном .nas-confirmed (владелец: старые локальные
+# копии не удалять до решения). Манифест есть, но невалиден / нет утилиты -> не удаляем
+# ничего. Манифеста нет -> как раньше: удалению и так нужна независимая отметка NAS.
+RETAINED_MANIFEST=${RETAINED_MANIFEST:-$ROOT/RETAINED.manifest}
+RETAINED_TOOL=${RETAINED_TOOL:-$(dirname "$0")/vera-retained-manifest.sh}
+export RETAINED_MANIFEST
+have_manifest=0
+if [ -e "$RETAINED_MANIFEST" ] || [ -L "$RETAINED_MANIFEST" ]; then
+  have_manifest=1
+  if [ ! -f "$RETAINED_TOOL" ] || ! bash "$RETAINED_TOOL" validate --root "$ROOT" --manifest "$RETAINED_MANIFEST"; then
+    echo "$(date +%F_%T) ERROR: манифест $RETAINED_MANIFEST нечитаем/невалиден или нет утилиты — PRUNE SKIPPED, ничего не удалено"
+    exit 0
+  fi
+fi
+
 freed=0
 kept=0
 unconf_bytes=0
@@ -42,6 +58,9 @@ while IFS= read -r -d '' f; do
   sz=$(stat -c %s "$f" 2>/dev/null) || continue
   mt=$(stat -c %Y "$f" 2>/dev/null) || continue
   dir=$(dirname "$f"); name=$(basename "$f")
+  if [ "$have_manifest" = 1 ] && bash "$RETAINED_TOOL" listed --root "$ROOT" --manifest "$RETAINED_MANIFEST" "${f#"$ROOT"/}"; then
+    keep retained "$sz"; continue
+  fi
   sums="$dir/SHA256SUMS"
   [ -f "$sums" ] || { keep no_sums "$sz"; continue; }
   # имя — всё после разделителя "<sha>  " или "<sha> *", без "./"; пробелы в имени допустимы

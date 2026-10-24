@@ -241,8 +241,10 @@ fi
 # Удерживаемый архив (RETAINED.manifest, см. vera-retained-manifest.sh) — ожидаемый
 # объём: файл из манифеста с тем же размером и mtime в порог не входит, но в лог
 # идёт отдельным retained_bytes. Новые файлы и изменившиеся файлы манифеста
-# считаются как обычно. sha256 здесь НЕ считается (5 ГБ каждые 5 минут) — для
-# этого `vera-retained-manifest.sh verify`. Манифест есть, но невалиден — это
+# считаются как обычно. sha256 здесь НЕ считается (5 ГБ каждые 5 минут): файл
+# архива — только если его текущая идентичность (dev:inode:size:mtime_ns:ctime_ns)
+# есть в кэше, который пишет полный `vera-retained-manifest.sh verify` (ежедневно).
+# Нет в кэше / не совпало — файл идёт в объём и в алерт «changed/unverified». Манифест есть, но невалиден — это
 # «неизвестно», а не «норма»: алерт, объём считается целиком. Защищённый режим
 # RETAINED_REQUIRED=1 (дефолт): отсутствие манифеста — тоже «неизвестно» (потерян
 # или не поставлен), а не откат к старому счёту; прежнее поведение — только при
@@ -255,7 +257,8 @@ RETAINED_MANIFEST="${RETAINED_MANIFEST:-$BACKUP_ROOT/RETAINED.manifest}"
 RETAINED_TOOL="${RETAINED_TOOL:-$(dirname "$0")/vera-retained-manifest.sh}"
 RETAINED_REQUIRED="${RETAINED_REQUIRED:-1}"
 RETAINED_ALERT_THROTTLE_MIN="${RETAINED_ALERT_THROTTLE_MIN:-720}"
-export RETAINED_MANIFEST
+RETAINED_CACHE="${RETAINED_CACHE:-$STATE_DIR/retained.verified}"
+export RETAINED_MANIFEST RETAINED_CACHE
 
 backup_scan_total() {
     find "$BACKUP_ROOT" -type f \( -name '*.dump' -o -name '*.tar.gz' \) -printf '%s\n' 2>/dev/null | awk '{s+=$1} END {printf "%d", s}'
@@ -265,14 +268,17 @@ paths_of() { printf '%s\n' "$2" | sed -n "s/^$1"$'\t'"//p" | head -n5 | tr '\n' 
 
 check_backup_pending() {
     [ -d "$BACKUP_ROOT" ] || return 0
-    local pending_bytes retained_bytes=0 missing=0 changed=0 mstate=none out="" err="" pending_gb changed_list="" missing_list=""
+    local pending_bytes retained_bytes=0 missing=0 changed=0 unverified=0 cstate=none mstate=none out="" err="" pending_gb
+    local changed_list="" missing_list="" unverified_list=""
     if [ -e "$RETAINED_MANIFEST" ] || [ -L "$RETAINED_MANIFEST" ]; then
         if [ -f "$RETAINED_TOOL" ] && out=$(bash "$RETAINED_TOOL" pending --root "$BACKUP_ROOT" --manifest "$RETAINED_MANIFEST" 2>&1) \
            && [ "$(kv status "$out")" = ok ]; then
             mstate=ok
             pending_bytes=$(kv other_bytes "$out"); retained_bytes=$(kv retained_bytes "$out")
             missing=$(kv missing_files "$out"); changed=$(kv changed_files "$out")
+            unverified=$(kv unverified_files "$out"); cstate=$(kv cache "$out")
             changed_list=$(paths_of CHANGED "$out"); missing_list=$(paths_of MISSING "$out")
+            unverified_list=$(paths_of UNVERIFIED "$out")
         else
             mstate=error
             if [ -f "$RETAINED_TOOL" ]; then err=$(printf '%s' "$out" | head -c 200); else err="нет утилиты $RETAINED_TOOL"; fi
@@ -287,7 +293,7 @@ check_backup_pending() {
         pending_bytes=$(backup_scan_total)
     fi
     pending_gb=$(( pending_bytes / 1073741824 ))
-    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) backup_pending bytes=${pending_bytes} threshold_gb=${BACKUP_PENDING_ALERT_GB} retained_bytes=${retained_bytes} changed_files=${changed} missing_files=${missing} manifest=${mstate}"
+    echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) backup_pending bytes=${pending_bytes} threshold_gb=${BACKUP_PENDING_ALERT_GB} retained_bytes=${retained_bytes} changed_files=${changed} unverified_files=${unverified} missing_files=${missing} manifest=${mstate} cache=${cstate}"
     if [ "$mstate" = error ]; then
         alert "backup_pending" "Backup manifest <b>unreadable/invalid</b> (${RETAINED_MANIFEST}: ${err}). Pending volume UNKNOWN, retained archive not verified; all files on disk: ${pending_gb} GB in ${BACKUP_ROOT}."
     elif [ "$pending_bytes" -gt $(( BACKUP_PENDING_ALERT_GB * 1073741824 )) ]; then
@@ -300,8 +306,8 @@ check_backup_pending() {
     else
         recover "backup_retained_missing" "Retained archive: no missing files."
     fi
-    if [ "$mstate" = ok ] && [ "$changed" -gt 0 ]; then
-        alert "backup_retained_changed" "Retained file changed: <b>${changed}</b> archive file(s) differ from ${RETAINED_MANIFEST} in size/mtime: ${changed_list}" "$RETAINED_ALERT_THROTTLE_MIN"
+    if [ "$mstate" = ok ] && [ $(( changed + unverified )) -gt 0 ]; then
+        alert "backup_retained_changed" "Retained file changed/unverified: <b>${changed}</b> differ from ${RETAINED_MANIFEST} in size/mtime (${changed_list}); <b>${unverified}</b> not verified by full sha256 (${unverified_list}; verify cache: ${cstate}). Counted as pending until <code>vera-retained-manifest.sh verify</code> passes." "$RETAINED_ALERT_THROTTLE_MIN"
     else
         recover "backup_retained_changed" "Retained archive: no changed files."
     fi
