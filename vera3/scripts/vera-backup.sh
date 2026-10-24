@@ -97,11 +97,106 @@ if [ "$(date +%u)" = "$FULL_DOW" ] && ! skip_db vera; then
 fi
 
 # Секреты внутри — только root на запись, группа NAS-пула читает.
-chgrp -R "$BACKUP_GROUP" "$DEST" 2>/dev/null || true
-chmod -R g+rX,o-rwx "$DEST"
+# Только записи, которым правка реально нужна: chgrp/chmod -R меняют ctime и у уже
+# верных файлов (проверено на сервере 2026-10-24), а ctime удерживаемого архива —
+# часть идентичности в кэше verify (vera-retained-manifest.sh). Предикаты эквивалентны
+# прежним chgrp -R / chmod -R g+rX,o-rwx для файлов и каталогов (симлинки, как и у -R, не трогаем):
+#   g+r: нет g+r; g+X: (каталог или есть любой x-бит) и нет g+x; o-rwx: есть любой o-бит.
+find "$DEST" ! -type l ! -group "$BACKUP_GROUP" -exec chgrp "$BACKUP_GROUP" {} + 2>/dev/null || true
+find "$DEST" \( -type f -o -type d \) \
+  \( ! -perm -g+r -o \( \( -type d -o -perm /111 \) ! -perm -g+x \) -o -perm /o+rwx \) \
+  -exec chmod g+rX,o-rwx {} +
 
-for p in aibroker stepan2 vera; do
-  find "$DEST/$p/daily"  -maxdepth 1 -type d -name '20*' -mtime +"$KEEP_DAILY_DAYS"  -exec rm -rf {} \; 2>/dev/null || true
-  find "$DEST/$p/weekly" -maxdepth 1 -type d -name '20*' -mtime +"$KEEP_WEEKLY_DAYS" -exec rm -rf {} \; 2>/dev/null || true
-done
+# Удерживаемый архив: точный список файлов в манифесте (формат и команды —
+# vera-retained-manifest.sh, docs/deploy-ops.md «Удерживаемый архив»). Датированный
+# каталог, в котором лежит хоть один файл манифеста, ротация не трогает.
+# Защищённый режим RETAINED_REQUIRED=1 (ДЕФОЛТ): манифест обязан быть. Нет файла,
+# нет утилиты, он невалиден или не взялась блокировка -> за этот прогон НИЧЕГО не
+# удаляется и в лог идёт ERROR; тихого отката к старой ротации нет. Старое
+# поведение — только явным RETAINED_REQUIRED=0 (хосты без архива).
+# Гонка: ротация держит блокировку RETAINED_LOCK (её же берёт `install` манифеста),
+# читает манифест ОДИН раз в снимок и непосредственно перед каждым rm сверяет, что
+# живой манифест всё ещё тот же (sha256) и каталог по-прежнему не держится; иначе
+# каталог пропускается. Окно между последней сверкой и rm — микросекунды и только
+# для писателя, обходящего блокировку.
+# HOLD_DATES — временная страховка поверх манифеста: каталог с такой датой в имени
+# не удаляется; живёт весь переходный период, убирается отдельным изменением.
+RETAINED_REQUIRED=${RETAINED_REQUIRED:-1}
+HOLD_DATES=${HOLD_DATES-2026-10-18 2026-10-21 2026-10-22 2026-10-23}
+RETAINED_MANIFEST=${RETAINED_MANIFEST:-$DEST/RETAINED.manifest}
+RETAINED_TOOL=${RETAINED_TOOL:-$WWW_ROOT/vera3/scripts/vera-retained-manifest.sh}
+RETAINED_LOCK=${RETAINED_LOCK:-/var/lock/vera-retained.lock}
+export RETAINED_MANIFEST RETAINED_LOCK
+have_manifest=0
+rotate=1
+snap=""
+snap_sha=""
+rotate_aborted=0
+manifest_sha() { sha256sum < "$RETAINED_MANIFEST" 2>/dev/null | cut -d' ' -f1; }
+if [ -e "$RETAINED_MANIFEST" ] || [ -L "$RETAINED_MANIFEST" ]; then
+  have_manifest=1
+  if [ ! -f "$RETAINED_TOOL" ]; then
+    rotate=0
+    echo "ERROR: манифест $RETAINED_MANIFEST есть, а утилиты $RETAINED_TOOL нет — ROTATION SKIPPED, ничего не удалено"
+  fi
+elif [ "$RETAINED_REQUIRED" != 0 ]; then
+  rotate=0
+  echo "ERROR: манифест $RETAINED_MANIFEST ОТСУТСТВУЕТ при RETAINED_REQUIRED=$RETAINED_REQUIRED — ROTATION SKIPPED, ничего не удалено"
+else
+  echo "манифеста нет ($RETAINED_MANIFEST), RETAINED_REQUIRED=0 — ротация без защиты"
+fi
+
+if [ "$rotate" = 1 ] && { [ "$have_manifest" = 1 ] || [ "$RETAINED_REQUIRED" != 0 ]; }; then
+  if ! command -v flock >/dev/null 2>&1; then
+    rotate=0; echo "ERROR: нет flock — ROTATION SKIPPED, ничего не удалено"
+  elif ! { exec 9>"$RETAINED_LOCK"; } 2>/dev/null || ! flock -x -w "${RETAINED_LOCK_WAIT:-60}" 9; then
+    rotate=0; echo "ERROR: не взята блокировка $RETAINED_LOCK — ROTATION SKIPPED, ничего не удалено"
+  fi
+fi
+
+if [ "$rotate" = 1 ] && [ "$have_manifest" = 1 ]; then
+  snap=$(mktemp)
+  trap 'rm -f "$snap"' EXIT
+  if ! bash "$RETAINED_TOOL" validate --root "$DEST" --manifest "$RETAINED_MANIFEST" \
+     || ! cp -- "$RETAINED_MANIFEST" "$snap" || ! chmod 600 "$snap"; then
+    rotate=0; echo "ERROR: манифест $RETAINED_MANIFEST нечитаем/невалиден — ROTATION SKIPPED, ничего не удалено"
+  else
+    snap_sha=$(sha256sum < "$snap" | cut -d' ' -f1)
+    if [ "$snap_sha" != "$(manifest_sha)" ] || ! bash "$RETAINED_TOOL" validate --root "$DEST" --manifest "$snap"; then
+      rotate=0; echo "ERROR: манифест изменился при снятии снимка или снимок невалиден — ROTATION SKIPPED, ничего не удалено"
+    fi
+  fi
+fi
+
+rotate_old() {  # parent days
+  local parent=$1 days=$2 d rc hd
+  [ -d "$parent" ] || return 0
+  while IFS= read -r -d '' d; do
+    for hd in $HOLD_DATES; do
+      case ${d##*/} in "$hd") echo "  удерживаю $d (HOLD_DATES)"; continue 2 ;; esac
+    done
+    if [ "$have_manifest" = 1 ]; then
+      if bash "$RETAINED_TOOL" holds --root "$DEST" --manifest "$snap" "${d#"$DEST"/}"; then rc=0; else rc=$?; fi
+      if [ "$rc" = 0 ]; then echo "  удерживаю $d (файл манифеста внутри)"; continue; fi
+      if [ "$rc" != 1 ]; then
+        echo "ERROR: holds упал (rc=$rc) на $d — ROTATION ABORTED, дальше ничего не удаляется"
+        rotate_aborted=1; return 0
+      fi
+      if [ -L "$RETAINED_MANIFEST" ] || [ ! -f "$RETAINED_MANIFEST" ] || [ "$(manifest_sha)" != "$snap_sha" ]; then
+        echo "  удерживаю $d (манифест изменился/пропал после решения — пропуск)"
+        continue
+      fi
+    fi
+    rm -rf -- "$d"
+  done < <(find "$parent" -maxdepth 1 -type d -name '20*' -mtime +"$days" -print0 2>/dev/null || true)
+}
+
+if [ "$rotate" = 1 ]; then
+  for p in aibroker stepan2 vera; do
+    rotate_old "$DEST/$p/daily"  "$KEEP_DAILY_DAYS"
+    [ "$rotate_aborted" = 0 ] || break
+    rotate_old "$DEST/$p/weekly" "$KEEP_WEEKLY_DAYS"
+    [ "$rotate_aborted" = 0 ] || break
+  done
+fi
 echo "[$(date)] done: total=$(du -sh "$DEST" | cut -f1)"
