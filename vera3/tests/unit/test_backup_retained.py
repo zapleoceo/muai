@@ -614,3 +614,53 @@ def test_prune_invalid_manifest_deletes_nothing(tmp_path: Path) -> None:
     (tmp_path / "root" / "RETAINED.manifest").write_text("мусор\n", encoding="utf-8")
     r = _prune(tmp_path, _env(tmp_path))
     assert f.exists() and "PRUNE SKIPPED" in r.stdout
+
+
+# ─── nightly chgrp/chmod: не трогать уже верные записи (ctime) ──────────────
+
+def _modes_faithful(tmp: Path) -> bool:
+    probe = tmp / "probe"
+    probe.write_text("x", encoding="utf-8")
+    probe.chmod(0o640)
+    return (probe.stat().st_mode & 0o777) == 0o640
+
+
+def _ctime_ns(path: Path) -> str:
+    return _sh(["bash", "-c", f'stat -c %.9Z "{path.as_posix()}"'], check=True).stdout.strip()
+
+
+def test_nightly_perm_step_leaves_correct_entries_untouched_and_fixes_wrong(tmp_path: Path) -> None:
+    if not _modes_faithful(tmp_path):
+        pytest.skip("ФС не хранит POSIX-режимы (Git-Bash/NTFS): ctime/mode не проверить")
+    env = _env(tmp_path)
+    root = tmp_path / "root"
+    _rotation_tree(root)
+    good = root / "vera/daily/2026-10-24/secrets.tar.gz"
+    bad = root / "stepan2/daily/2026-09-02/secrets.tar.gz"
+    good.chmod(0o640)
+    bad.chmod(0o644)  # o+r — должно быть снято
+    (root / "RETAINED.manifest").write_text("x", encoding="utf-8")  # ротация пропущена, шаг прав выполняется
+    _sh(["bash", str(BACKUP)], env=env, check=True)  # первый прогон нормализует всё дерево
+    first = _ctime_ns(good)
+    assert (bad.stat().st_mode & 0o007) == 0
+    time.sleep(1.1)
+    _sh(["bash", str(BACKUP)], env=env, check=True)
+    assert _ctime_ns(good) == first  # уже верный файл: ctime не сдвинулся
+
+
+def test_nightly_perm_predicate_equals_chmod_semantics(tmp_path: Path) -> None:
+    if not _modes_faithful(tmp_path):
+        pytest.skip("ФС не хранит POSIX-режимы (Git-Bash/NTFS)")
+    script = BACKUP.read_text(encoding="utf-8")
+    start = script.index('find "$DEST" \\( -type f -o -type d \\)')
+    end = script.index("-exec chmod", start)
+    predicate = script[start:end].replace('"$DEST"', '"$1"').replace("\\\n", " ")
+    for kind in ("f", "d"):
+        for mode in (0o600, 0o640, 0o644, 0o700, 0o750, 0o755, 0o710, 0o604, 0o444, 0o070, 0o001, 0o777, 0o000):
+            ref, got = tmp_path / f"ref{kind}{mode:o}", tmp_path / f"got{kind}{mode:o}"
+            for p in (ref, got):
+                p.mkdir() if kind == "d" else p.write_text("x", encoding="utf-8")
+                p.chmod(mode)
+            _sh(["bash", "-c", f'chmod g+rX,o-rwx "{ref.as_posix()}"'], check=True)
+            _sh(["bash", "-c", f"{predicate} -exec chmod g+rX,o-rwx {{}} + ; true", "_", got.as_posix()], check=True)
+            assert (got.stat().st_mode & 0o777) == (ref.stat().st_mode & 0o777), (kind, oct(mode))

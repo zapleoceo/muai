@@ -97,8 +97,15 @@ if [ "$(date +%u)" = "$FULL_DOW" ] && ! skip_db vera; then
 fi
 
 # Секреты внутри — только root на запись, группа NAS-пула читает.
-chgrp -R "$BACKUP_GROUP" "$DEST" 2>/dev/null || true
-chmod -R g+rX,o-rwx "$DEST"
+# Только записи, которым правка реально нужна: chgrp/chmod -R меняют ctime и у уже
+# верных файлов (проверено на сервере 2026-10-24), а ctime удерживаемого архива —
+# часть идентичности в кэше verify (vera-retained-manifest.sh). Предикаты эквивалентны
+# прежним chgrp -R / chmod -R g+rX,o-rwx для файлов и каталогов (симлинки, как и у -R, не трогаем):
+#   g+r: нет g+r; g+X: (каталог или есть любой x-бит) и нет g+x; o-rwx: есть любой o-бит.
+find "$DEST" ! -type l ! -group "$BACKUP_GROUP" -exec chgrp "$BACKUP_GROUP" {} + 2>/dev/null || true
+find "$DEST" \( -type f -o -type d \) \
+  \( ! -perm -g+r -o \( \( -type d -o -perm /111 \) ! -perm -g+x \) -o -perm /o+rwx \) \
+  -exec chmod g+rX,o-rwx {} +
 
 # Удерживаемый архив: точный список файлов в манифесте (формат и команды —
 # vera-retained-manifest.sh, docs/deploy-ops.md «Удерживаемый архив»). Датированный
