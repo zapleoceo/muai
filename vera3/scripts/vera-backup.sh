@@ -100,8 +100,61 @@ fi
 chgrp -R "$BACKUP_GROUP" "$DEST" 2>/dev/null || true
 chmod -R g+rX,o-rwx "$DEST"
 
-for p in aibroker stepan2 vera; do
-  find "$DEST/$p/daily"  -maxdepth 1 -type d -name '20*' -mtime +"$KEEP_DAILY_DAYS"  -exec rm -rf {} \; 2>/dev/null || true
-  find "$DEST/$p/weekly" -maxdepth 1 -type d -name '20*' -mtime +"$KEEP_WEEKLY_DAYS" -exec rm -rf {} \; 2>/dev/null || true
-done
+# Удерживаемый архив: точный список файлов в манифесте (формат и команды —
+# vera-retained-manifest.sh, docs/deploy-ops.md «Удерживаемый архив»). Датированный
+# каталог, в котором лежит хоть один файл манифеста, ротация не трогает.
+# Защищённый режим RETAINED_REQUIRED=1 (ДЕФОЛТ): манифест обязан быть. Нет файла,
+# нет утилиты или он невалиден (потерян, плохо поставлен, повреждён) -> за этот
+# прогон НИЧЕГО не удаляется и в лог идёт ERROR; тихого отката к старой ротации
+# нет. Старое поведение — только явным RETAINED_REQUIRED=0 (хосты без архива).
+# HOLD_DATES — временная страховка поверх манифеста: каталог с такой датой в имени
+# не удаляется; убирается отдельным изменением после атомарной установки и
+# проверки манифеста.
+RETAINED_REQUIRED=${RETAINED_REQUIRED:-1}
+HOLD_DATES=${HOLD_DATES-2026-10-18 2026-10-21 2026-10-22 2026-10-23}
+RETAINED_MANIFEST=${RETAINED_MANIFEST:-$DEST/RETAINED.manifest}
+RETAINED_TOOL=${RETAINED_TOOL:-$WWW_ROOT/vera3/scripts/vera-retained-manifest.sh}
+export RETAINED_MANIFEST
+have_manifest=0
+rotate=1
+if [ -e "$RETAINED_MANIFEST" ] || [ -L "$RETAINED_MANIFEST" ]; then
+  have_manifest=1
+  if [ ! -f "$RETAINED_TOOL" ]; then
+    rotate=0
+    echo "ERROR: манифест $RETAINED_MANIFEST есть, а утилиты $RETAINED_TOOL нет — ROTATION SKIPPED, ничего не удалено"
+  elif ! bash "$RETAINED_TOOL" validate --root "$DEST" --manifest "$RETAINED_MANIFEST"; then
+    rotate=0
+    echo "ERROR: манифест $RETAINED_MANIFEST нечитаем/невалиден — ROTATION SKIPPED, ничего не удалено"
+  fi
+elif [ "$RETAINED_REQUIRED" != 0 ]; then
+  rotate=0
+  echo "ERROR: манифест $RETAINED_MANIFEST ОТСУТСТВУЕТ при RETAINED_REQUIRED=$RETAINED_REQUIRED — ROTATION SKIPPED, ничего не удалено"
+else
+  echo "манифеста нет ($RETAINED_MANIFEST), RETAINED_REQUIRED=0 — ротация без защиты"
+fi
+
+rotate_old() {  # parent days
+  local parent=$1 days=$2 d rc hd
+  [ -d "$parent" ] || return 0
+  while IFS= read -r -d '' d; do
+    for hd in $HOLD_DATES; do
+      case ${d##*/} in "$hd") echo "  удерживаю $d (HOLD_DATES)"; continue 2 ;; esac
+    done
+    if [ "$have_manifest" = 1 ]; then
+      if bash "$RETAINED_TOOL" holds --root "$DEST" --manifest "$RETAINED_MANIFEST" "${d#"$DEST"/}"; then rc=0; else rc=$?; fi
+      if [ "$rc" != 1 ]; then
+        echo "  удерживаю $d (rc=$rc: файл манифеста внутри или манифест не прочитан)"
+        continue
+      fi
+    fi
+    rm -rf -- "$d"
+  done < <(find "$parent" -maxdepth 1 -type d -name '20*' -mtime +"$days" -print0 2>/dev/null || true)
+}
+
+if [ "$rotate" = 1 ]; then
+  for p in aibroker stepan2 vera; do
+    rotate_old "$DEST/$p/daily"  "$KEEP_DAILY_DAYS"
+    rotate_old "$DEST/$p/weekly" "$KEEP_WEEKLY_DAYS"
+  done
+fi
 echo "[$(date)] done: total=$(du -sh "$DEST" | cut -f1)"

@@ -1138,7 +1138,7 @@ brain-triage (иначе процессы по кэшу обращаются к 
   бесполезны) + SHA256SUMS; дамп БД рядом лежит только у проектов, не
   перечисленных в `SKIP_DB_PROJECTS` (дефолт `vera aibroker stepan2` — то есть
   ни у кого: все дампы идут NAS-потоком, см. ниже). Ротация `KEEP_DAILY_DAYS` (**2** — буфер на случай
-  пропуска NAS-пула, не хранилище).
+  пропуска NAS-пула, не хранилище). Каталоги из манифеста удерживаемого архива ротация не трогает (см. «Удерживаемый архив»).
 - `/var/backups/vera/vera/weekly/YYYY-MM-DD/` — раньше недельный vera.dump
   (без `event_embeddings`; `FULL_DOW`, 7 = воскресенье; `KEEP_WEEKLY_DAYS` 7).
   Скрипт его больше не создаёт; уже лежащие каталоги ротируются как обычно.
@@ -1191,6 +1191,115 @@ sha256sum /var/www/vera3/scripts/vera-backup.sh /usr/local/bin/vera-backup.sh   
 
 Тест: `vera3/tests/unit/test_backup_skip_db.py` (заглушка `docker`, временный
 `DEST`).
+
+### Удерживаемый архив (retained archive) — манифест (2026-10-24)
+
+Контекст. После cutover на NAS-поток (23–24.10) на сервере остались исторические
+локальные копии, сделанные ДО cutover: `aibroker|stepan2|vera/daily/2026-10-21..23`
+(дамп + `secrets.tar.gz` + `SHA256SUMS`), `vera/weekly/2026-10-18`,
+`sniffer/sniffer-202610{17..23}-0300.dump` и четыре разовых `kb_*`/`product_*` `.sql.gz`
+(июль) в корне. Решение владельца: **сейчас не удалять**; вопрос об удалении — после
+напоминания **23.12.2026**. Это напоминание владельцу, а не автоматическая чистка: ни один
+скрипт ничего по этой дате не удаляет.
+
+Архив задаётся **точным списком файлов**, а не исключением деревьев по дате. Список —
+манифест `/var/backups/vera/RETAINED.manifest`, владелец **root:root**, режим `0444`
+(`validate` отвергает файл с другим владельцем или доступный на запись группе/остальным).
+Утилита — `vera3/scripts/vera-retained-manifest.sh` (на сервере `/var/www/vera3/scripts/`,
+её зовут оба скрипта; в `/usr/local/bin` не копируется).
+
+Формат (UTF-8, LF, поля через TAB):
+
+```
+# vera-retained-manifest v1
+# generated 2026-10-25T10:00:00Z root=/var/backups/vera
+<sha256, 64 hex><TAB><размер, байт><TAB><mtime, epoch, секунды><TAB><путь от /var/backups/vera>
+# end entries=<N>
+```
+
+Хвост `# end entries=N` обязателен: усечённый файл невалиден. Невалидно и всё прочее
+(заголовок, число полей, не-hex sha256, дубль, `..`/абсолютный путь, строки после хвоста).
+
+Команды (от root на сервере; `--root` по умолчанию `/var/backups/vera`):
+
+```
+T=/var/www/vera3/scripts/vera-retained-manifest.sh
+bash $T generate /root/retained-paths.txt --out /var/backups/vera/RETAINED.manifest.new   # список -> манифест (разово, оператор)
+bash $T validate --manifest /var/backups/vera/RETAINED.manifest.new                        # 0 = валиден
+bash $T verify   --manifest /var/backups/vera/RETAINED.manifest.new                        # размер + mtime + sha256 каждого файла
+bash $T holds aibroker/daily/2026-10-21                                                    # 0 = каталог удерживается
+bash $T pending                                                                            # объёмы, как их видит монитор
+```
+
+`generate` берёт только явный список путей (по одному относительно `--root`, `#` —
+комментарий), проверяет, что каждый — обычный файл (не симлинк), считает размер, mtime и
+sha256 и **не пишет ничего**, если хоть один путь плохой. Существующий файл не
+перезаписывает без `--force`. Список для архива 23.10 подготовлен вместе с изменением
+(`retained-paths.txt`); имена четырёх июльских `.sql.gz` оператор дописывает из
+`ls /var/backups/vera/*.sql.gz`.
+
+**Ротация `vera-backup.sh`.** Каталог `daily|weekly/YYYY-MM-DD` не удаляется, если в нём есть
+хоть один файл манифеста. Режим **защищённый по умолчанию** (`RETAINED_REQUIRED=1`; выбран
+потому, что потеря или неверная установка манифеста иначе молча вернула бы удаление
+защищённого архива): манифест отсутствует, нечитаем, невалиден или нет утилиты — за этот
+прогон **не удаляется ничего**, в лог `ERROR: ... ROTATION SKIPPED`. Прежнее поведение
+«без манифеста ротировать» — только явным `RETAINED_REQUIRED=0` (хост без архива). Проверка
+`holds` повторяется на каждый каталог; любой ответ, кроме «нет», = держим.
+
+Страховка `HOLD_DATES` (дефолт `2026-10-18 2026-10-21 2026-10-22 2026-10-23`: каталог с такой
+датой не удаляется) **остаётся поверх манифеста**. Убрать её — отдельным изменением, когда
+манифест атомарно установлен и проверен (`verify`). До тех пор те же даты в других проектах
+тоже не ротируются.
+
+**Монитор (`vera3-monitor.sh`, секция 3a2; порог 3 ГБ не менялся).** Файл манифеста с тем же
+размером и mtime считается ожидаемым архивом и в порог `backup_pending` не входит; в лог
+идёт `retained_bytes`. Всё остальное (новые файлы, `secrets.tar.gz` нового дня) — в порог как
+раньше. sha256 на тике не считается (5 ГБ каждые 5 минут) — это работа `verify`.
+
+| Состояние | Лог / алерт |
+|---|---|
+| манифест валиден, архив не менялся | `manifest=ok retained_bytes=N`, молчит |
+| файл архива изменился (размер/mtime) | `changed_files=K`; его байты идут в порог **и** отдельный алерт `backup_retained_changed` («Retained file changed», с путями) |
+| файл архива пропал | `missing_files=K`, алерт `backup_retained_missing` с путями |
+| манифеста нет (при `RETAINED_REQUIRED=1`), он нечитаем или невалиден | `manifest=error`, алерт `backup_pending` «unreadable/invalid ... UNKNOWN»; объём считается целиком, не как «норма» |
+| манифеста нет и `RETAINED_REQUIRED=0` | `manifest=none`, прежнее поведение |
+
+Алерты `backup_retained_*` идут с throttle 720 мин (`RETAINED_ALERT_THROTTLE_MIN`) и общим
+streak-фильтром монитора, чтобы не спамить. Проверки диска и запаса (`disk_warn`,
+`disk_critical`, `disk_runway`) не затронуты. Монитор учитывает `*.dump`, `*.tar.gz` и любые
+файлы из манифеста (в т.ч. `.sql.gz`).
+
+**Установка (порядок важен: манифест раньше нового скрипта).**
+
+```
+# 0. после деплоя /var/www/vera3/scripts уже обновлён (deploy.sh)
+T=/var/www/vera3/scripts/vera-retained-manifest.sh
+cd /var/backups/vera
+# 1. манифест во временный файл -> проверка -> атомарный mv (та же ФС)
+bash $T generate /root/retained-paths.txt --out RETAINED.manifest.new
+bash $T validate --manifest RETAINED.manifest.new && bash $T verify --manifest RETAINED.manifest.new
+chown root:root RETAINED.manifest.new && mv -f RETAINED.manifest.new RETAINED.manifest
+bash $T validate && bash $T pending      # status=ok, changed_files=0, missing_files=0
+# 2. только теперь новый vera-backup.sh (заменяет аварийный хотфикс HOLD_DATES)
+cp -p /usr/local/bin/vera-backup.sh /root/vera-backup.sh.bak-$(date +%F)
+install -m 0755 /var/www/vera3/scripts/vera-backup.sh /usr/local/bin/vera-backup.sh
+sha256sum /var/www/vera3/scripts/vera-backup.sh /usr/local/bin/vera-backup.sh   # хэши совпадают
+```
+
+Ночной `chmod -R g+rX,o-rwx` скрипта бэкапа оставляет владельца root; группа `verabackup`
+получит чтение манифеста вместе с деревом (NAS заберёт его при pull).
+
+**Откат:** вернуть `/root/vera-backup.sh.bak-<дата>` в `/usr/local/bin/vera-backup.sh`
+(в нём хотфикс `HOLD_DATES`); манифест старому скрипту не мешает и удалять его не нужно. При
+`RETAINED_REQUIRED=1` пропажа манифеста останавливает ротацию и поднимает алерт.
+
+Тесты: `vera3/tests/unit/test_backup_retained.py` (временное дерево, `touch -d`, подставные
+`curl`/`logger`/`docker`; реальные пути не затрагиваются).
+
+**Открыто:** статус «NAS получил» в Broker — отдельный вопрос; здесь он НЕ реализован,
+`rc=0` сервера не считается подтверждением NAS, `vera-backup-prune.sh` не менялся (по-прежнему
+только `*.nas-confirmed`). Если появится механизм `.nas-confirmed`, prune придётся научить не
+трогать файлы манифеста — сейчас маркеров не создаёт никто.
 
 ### Backups → Synology NAS (за NAT) — настроено 2026-07-14
 
@@ -1309,8 +1418,10 @@ sha256sum /var/www/vera3/scripts/vera-backup-prune.sh /usr/local/bin/vera-backup
   против текущего при разбросе >= 1 суток и росте > 0), иначе фиксированный
   `DISK_GROWTH_GB_DAY` (0.45);
 - `backup_pending`: сумма `*.dump` + `*.tar.gz` под `BACKUP_ROOT`
-  (`/var/backups/vera`) > `BACKUP_PENDING_ALERT_GB` (3, решение владельца: срабатывает раньше disk_warn). Пока подтверждений
-  нет, это всё, что лежит на диске.
+  (`/var/backups/vera`) > `BACKUP_PENDING_ALERT_GB` (3, решение владельца: срабатывает раньше disk_warn),
+  **кроме неизменённого удерживаемого архива** из `RETAINED.manifest` (см. «Удерживаемый архив»):
+  он идёт в лог как `retained_bytes`. Изменённые и пропавшие файлы архива, а также потерянный или
+  сломанный манифест — отдельные алерты.
 
 Ручной снапшот по-прежнему:
 
