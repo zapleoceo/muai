@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import errno
 import os
 import shutil
 import subprocess
@@ -478,8 +479,13 @@ def test_verify_failure_is_not_cached(tmp_path: Path) -> None:
 def _symlink_or_skip(link: Path, target: Path) -> None:
     try:
         link.symlink_to(target, target_is_directory=target.is_dir())
-    except (OSError, NotImplementedError):
-        pytest.skip("симлинки недоступны на этой платформе/правах")
+    except NotImplementedError:
+        pytest.skip("симлинки не поддерживаются платформой")
+    except OSError as exc:
+        # только «нет права/не поддержано»; FileNotFoundError и прочее — ошибка теста
+        if getattr(exc, "winerror", None) == 1314 or exc.errno in (errno.EPERM, errno.ENOTSUP):
+            pytest.skip("симлинки не разрешены на этой платформе/правах")
+        raise
 
 
 def test_generate_rejects_symlinked_parent_dir(tmp_path: Path) -> None:
@@ -487,6 +493,7 @@ def test_generate_rejects_symlinked_parent_dir(tmp_path: Path) -> None:
     root = tmp_path / "root"
     outside = tmp_path / "outside" / "d"
     _file(outside.parent, "d/x.dump", b"escape")
+    root.mkdir(parents=True, exist_ok=True)
     _symlink_or_skip(root / "linked", outside.parent)
     lst = tmp_path / "paths.txt"
     lst.write_text("linked/d/x.dump\n", encoding="utf-8")
