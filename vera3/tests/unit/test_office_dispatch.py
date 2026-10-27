@@ -13,7 +13,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskRow
 from vera_shared.office import intake
 from vera_shared.office.acl import OfficePrincipal
-from vera_shared.room import tasks
+from vera_shared.room import handoff, tasks
 from vera_shared.room.messages import post_message
 from vera_shared.room.task_queue import next_task
 from vera_shared.timeutil import utc_naive_now
@@ -172,13 +172,16 @@ async def test_post_success_is_not_receipt_task_stays_claimed_waiting():
 
 
 @uses_db
-async def test_receipt_releases_open_and_no_more_posts():
+async def test_receipt_offers_handoff_keeps_vera_lease_and_no_more_posts():
     await _open()
     await dispatch_one()
     await _ack()
     assert await dispatch_one() is True
     (row,) = await tasks_in(ROOM)
-    assert row.status == "open" and row.lease_holder is None
+    assert row.status == "in_progress" and row.lease_holder == "vera"
+    assert row.pending_handoff_to == "dot"
+    assert any(r["ref"] == "handoff_offered: dot" for r in row.refs)
+    assert row.lease_until > utc_naive_now() + timedelta(seconds=dispatcher.LEASE_S)
     assert await dispatch_one() is False
     assert len(_dispatch_msgs(await messages_in(ROOM))) == 1
 
@@ -211,7 +214,7 @@ async def test_no_receipt_retries_after_backoff_same_message_id(clock):
     await _ack()
     assert await dispatch_one() is True
     (row,) = await tasks_in(ROOM)
-    assert row.status == "open" and row.lease_holder is None
+    assert row.pending_handoff_to == "dot" and row.lease_holder == "vera"
 
 
 @uses_db
@@ -240,7 +243,8 @@ async def test_restart_with_expired_lease_continues_without_duplicate():
         row.lease_until = utc_naive_now() - timedelta(seconds=5)
     assert await dispatch_one() is True
     (row,) = await tasks_in(ROOM)
-    assert row.status == "open" and len(_dispatch_msgs(await messages_in(ROOM))) == 1
+    assert row.pending_handoff_to == "dot" and row.lease_holder == "vera"
+    assert len(_dispatch_msgs(await messages_in(ROOM))) == 1
 
 
 @uses_db
@@ -360,11 +364,128 @@ async def test_vera_claim_sends_no_taken_to_owner():
     await _ack("help-vc-help1")
     assert await dispatch_one() is True
 
-    assert await task_holder(ROOM, "help-vc-help1") == (None, "open")
+    assert await task_holder(ROOM, "help-vc-help1") == (None, "in_progress")
     assert await help_worker.track_help(rec, utc_naive_now()) == 0
     assert not any("Взял" in s for s in rec.sent)
-    # реальный исполнитель берёт задачу после диспетчера — «Взял: codex»
-    await tasks.claim(room=ROOM, task_id="help-vc-help1", agent="codex", lease_seconds=600)
+    # получатель принял передачу — «Взял: dot», один раз
+    await handoff.accept(room=ROOM, task_id="help-vc-help1", agent="dot")
+    assert await task_holder(ROOM, "help-vc-help1") == ("dot", "in_progress")
     later = utc_naive_now() + timedelta(seconds=1)
     await help_worker.track_help(rec, later)
-    assert rec.sent == ["Взял: codex"]
+    await help_worker.track_help(rec, later + timedelta(seconds=1))
+    assert rec.sent == ["Взял: dot"]
+
+
+async def _offered(task_id: str = "T1") -> None:
+    await _open(task_id)
+    await dispatch_one()
+    await _ack(task_id)
+    assert await dispatch_one() is True
+
+
+async def _events(task_id: str, kind: str) -> list:
+    from vera_shared.room import task_progress
+    return [e for e in await task_progress.history(room=ROOM, task_id=task_id,
+                                                   since_id=None, limit=100)
+            if e["kind"] == kind]
+
+
+@uses_db
+async def test_ack_without_accept_is_not_taken():
+    await _offered()
+    assert await task_holder(ROOM, "T1") == (None, "in_progress")
+    assert len(await _events("T1", "handoff_offer")) == 1
+
+
+@uses_db
+async def test_claim_without_handoff_accept_is_not_taken():
+    await _offered()
+    await handoff.cancel(room=ROOM, task_id="T1", agent="vera", fencing_token=1)
+    await tasks.release(room=ROOM, task_id="T1", agent="vera", fencing_token=1, status="open")
+    await tasks.claim(room=ROOM, task_id="T1", agent="dot", lease_seconds=600)
+    assert await task_holder(ROOM, "T1") == (None, "in_progress")
+
+
+@uses_db
+async def test_accepted_holder_is_taken_but_expired_lease_is_not():
+    await _offered()
+    await handoff.accept(room=ROOM, task_id="T1", agent="dot")
+    assert await task_holder(ROOM, "T1") == ("dot", "in_progress")
+    async with get_session() as s:
+        row = await s.get(RoomTaskRow, (ROOM, "T1"))
+        row.lease_until = utc_naive_now() - timedelta(seconds=5)
+    assert await task_holder(ROOM, "T1") == (None, "in_progress")
+
+
+@uses_db
+async def test_untrusted_held_task_is_never_offered():
+    await _open()
+    await ask_owner_once(ROOM, "T1")
+    assert await dispatch_one() is False
+    assert await _events("T1", "handoff_offer") == []
+    assert await task_holder(ROOM, "T1") == (None, "open")
+
+
+@uses_db
+async def test_offer_not_accepted_in_time_is_cancelled_retried_then_blocked(clock):
+    await _offered()
+    for attempt in (2, 3):
+        clock.advance(dispatcher.RECEIPT_WAIT_S * 2 ** attempt + 1)
+        assert await dispatch_one() is True  # снять предложение, пауза
+        (row,) = await tasks_in(ROOM)
+        assert row.pending_handoff_to is None and row.lease_holder == "vera"
+        assert any(r["ref"] == f"dispatch_attempts: {attempt}" for r in row.refs)
+        assert await dispatch_one() is False  # пауза: сразу не предлагаем
+        clock.advance(dispatcher.RECEIPT_WAIT_S * 2 ** attempt + 1)
+        assert await dispatch_one() is True  # новое предложение
+        (row,) = await tasks_in(ROOM)
+        assert row.pending_handoff_to == "dot"
+    clock.advance(dispatcher.RECEIPT_WAIT_S + 1)
+    assert await dispatch_one() is True
+    (row,) = await tasks_in(ROOM)
+    assert row.status == "blocked" and row.note == dispatcher.OFFER_BLOCKED_NOTE
+    assert len(_dispatch_msgs(await messages_in(ROOM))) == 1
+
+
+@uses_db
+async def test_declined_offer_stays_with_vera_and_retries():
+    await _offered()
+    await handoff.decline(room=ROOM, task_id="T1", agent="dot", reason="занят")
+    assert await dispatch_one() is True
+    (row,) = await tasks_in(ROOM)
+    assert row.lease_holder == "vera" and row.pending_handoff_to is None
+    assert await task_holder(ROOM, "T1") == (None, "in_progress")
+
+
+@uses_db
+async def test_restart_while_offer_pending_makes_single_offer():
+    await _offered()
+    for _ in range(3):  # «рестарты»: проходы с живым предложением
+        assert await dispatch_one() is False
+    async with get_session() as s:  # упали между offer и ref
+        row = await s.get(RoomTaskRow, (ROOM, "T1"))
+        row.refs = [r for r in row.refs if not r["ref"].startswith(
+            "handoff_offered")]
+    assert await dispatch_one() is True
+    assert len(await _events("T1", "handoff_offer")) == 1
+    assert len(_dispatch_msgs(await messages_in(ROOM))) == 1
+
+
+@uses_db
+async def test_accept_after_expiry_cancel_is_refused_by_fencing(clock):
+    await _offered()
+    clock.advance(dispatcher.RECEIPT_WAIT_S * 2 + 1)
+    await dispatch_one()  # предложение снято
+    with pytest.raises(handoff.HandoffError):
+        await handoff.accept(room=ROOM, task_id="T1", agent="dot")
+    assert await task_holder(ROOM, "T1") == (None, "in_progress")
+
+
+@uses_db
+async def test_accept_before_lapse_wins_and_dispatcher_steps_aside(clock):
+    await _offered()
+    await handoff.accept(room=ROOM, task_id="T1", agent="dot")
+    clock.advance(dispatcher.RECEIPT_WAIT_S * 2)
+    assert await dispatch_one() is False  # аренда у dot, vera не вмешивается
+    (row,) = await tasks_in(ROOM)
+    assert row.lease_holder == "dot" and row.fencing_token == 2

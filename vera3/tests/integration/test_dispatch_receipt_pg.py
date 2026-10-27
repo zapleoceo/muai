@@ -76,8 +76,32 @@ async def test_receipt_releases_open_and_no_ack_keeps_waiting():
                        task_id="T1", status="ack", in_reply_to="dispatch-T1", body="ок")
     assert await dispatch_one() is True
     row = await _row("T1")
-    assert row["status"] == "open" and row["lease_holder"] is None
+    assert row["status"] == "in_progress" and row["lease_holder"] == "vera"
+    assert row["pending_handoff_to"] == "dot" and row["fencing_token"] == 1
     assert await _dispatch_ids() == ["dispatch-T1"]
+
+
+@pytest.mark.usefixtures("pg_db")
+async def test_offer_accept_bumps_token_and_concurrent_accept_has_one_winner():
+    from bot_telegram.dispatcher import dispatch_one
+    from vera_shared.room import handoff
+    from vera_shared.room.messages import post_message
+    from vera_shared.voice_help.tracking import task_holder
+
+    await _open("T1")
+    await dispatch_one()
+    await post_message(room=ROOM, message_id="ack-T1", from_agent="dot", to_agent="vera",
+                       task_id="T1", status="ack", in_reply_to="dispatch-T1", body="ок")
+    await dispatch_one()
+    assert await task_holder(ROOM, "T1") == (None, "in_progress")
+    results = await asyncio.gather(
+        *(handoff.accept(room=ROOM, task_id="T1", agent="dot") for _ in range(2)),
+        return_exceptions=True)
+    assert len([r for r in results if isinstance(r, dict)]) == 1
+    assert all(isinstance(r, handoff.HandoffError) for r in results if not isinstance(r, dict))
+    row = await _row("T1")
+    assert (row["lease_holder"], row["fencing_token"]) == ("dot", 2)
+    assert await task_holder(ROOM, "T1") == ("dot", "in_progress")
 
 
 @pytest.mark.usefixtures("pg_db")

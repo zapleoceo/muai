@@ -20,6 +20,7 @@ from voice_help_kit import (
     SECRET,
     Recorder,
     answer,
+    hand_to,
     help_cmd,
     messages_in,
     queue_row,
@@ -62,7 +63,7 @@ async def test_escalation_and_reminder_by_the_clock():
     assert await help_worker.track_help(rec, opened + timedelta(minutes=40)) == 0
     row = await queue_row("vc-help1")
     assert row.escalated_at and row.reminded_at and row.help_state == "reminded"
-    await tasks.claim(room=ROOM, task_id=TASK, agent="codex", lease_seconds=900)
+    await hand_to(ROOM, TASK, "codex")
     assert await help_worker.track_help(rec, opened + timedelta(minutes=41)) == 1
     assert rec.sent[-1] == help_worker.taken_text("codex")
 
@@ -70,7 +71,7 @@ async def test_escalation_and_reminder_by_the_clock():
 @uses_db
 async def test_taken_is_reported_once_and_no_escalation():
     rec, opened = await _opened()
-    await tasks.claim(room=ROOM, task_id=TASK, agent="claude", lease_seconds=900)
+    await hand_to(ROOM, TASK, "claude")
     assert await help_worker.track_help(rec, opened + timedelta(minutes=1)) == 1
     assert await help_worker.track_help(rec, opened + timedelta(minutes=30)) == 0
     assert rec.sent == [help_worker.taken_text("claude")]
