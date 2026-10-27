@@ -11,10 +11,18 @@ from gateway.voice_command import accept_voice_command
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_voice import VoiceCommandRow
 from vera_shared.room import tasks
-from vera_shared.voice_help import delivery_claim
-from vera_shared.voice_help import result_state
+from vera_shared.voice_help import delivery_claim, result_state
 from vera_shared.voice_help.result_state import PENDING, RESULT_MAX_ERRORS
-from voice_help_kit import OWNER, ROOM, SECRET, Recorder, answer, hand_to, help_cmd, queue_row
+from voice_help_kit import (
+    OWNER,
+    ROOM,
+    SECRET,
+    Recorder,
+    answer,
+    hand_to,
+    help_cmd,
+    queue_row,
+)
 
 TASK = "help-vc-help1"
 
