@@ -11,6 +11,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskEventRow, RoomTaskRow
@@ -28,20 +29,26 @@ def _is_offer(data: object) -> bool:
 
 async def task_holder(room: str, task_id: str) -> tuple[str | None, str | None]:
     """→ (живой держатель, принявший передачу, или None; статус задачи или None, если нет)."""
-    ev = RoomTaskEventRow
     async with get_session() as s:
         row = await s.get(RoomTaskRow, (room, task_id))
-        if row is None:
-            return None, None
-        holder = row.lease_holder
-        if (not holder or holder == AGENT or row.lease_until is None
-                or row.lease_until <= utc_naive_now()):
-            return None, row.status
-        attested = await attestation_for(s, room, task_id) is not None
-        events = (await s.execute(
-            select(ev.id, ev.kind, ev.agent, ev.fencing_token, ev.data).where(
-                ev.room == room, ev.task_id == task_id,
-                ev.kind.in_(("handoff_offer", "handoff_accept", "claimed"))).order_by(ev.id))).all()
+        return await holder_of(s, room, task_id, row)
+
+
+async def holder_of(s: AsyncSession, room: str, task_id: str,
+                    row: RoomTaskRow | None) -> tuple[str | None, str | None]:
+    """То же в чужой сессии (строка задачи уже прочитана, возможно под блокировкой)."""
+    ev = RoomTaskEventRow
+    if row is None:
+        return None, None
+    holder = row.lease_holder
+    if (not holder or holder == AGENT or row.lease_until is None
+            or row.lease_until <= utc_naive_now()):
+        return None, row.status
+    attested = await attestation_for(s, room, task_id) is not None
+    events = (await s.execute(
+        select(ev.id, ev.kind, ev.agent, ev.fencing_token, ev.data).where(
+            ev.room == room, ev.task_id == task_id,
+            ev.kind.in_(("handoff_offer", "handoff_accept", "claimed"))).order_by(ev.id))).all()
     if attested:  # передача запрещена: dot берёт обычным claim на текущем токене
         claimed = any(e.kind == "claimed" and e.agent == holder
                       and e.fencing_token == row.fencing_token for e in events)
