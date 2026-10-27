@@ -238,21 +238,22 @@ class TestGuardVerdictInPayload:
             t += 0.5
         return watch, sent
 
-    def test_blind_command_payload_says_blind(self):
+    def test_blind_command_payload_says_own(self):
         watch, sent = self._blind_watch()
         watch.on_segment("mic", 10.0, 13.0,
                          "Вера, мне нужна помощь, срочно напиши мне в телеграм")
         watch.close()
         [command] = sent
         assert command["kind"] == "command"
-        assert command["guard"] == "blind" and "blind" in command["doubts"]
+        assert command["guard"] == "own" and "blind" not in command["doubts"]
+        assert command["confidence"] >= 0.75
 
-    def test_blind_reprompt_payload_says_blind(self):
+    def test_blind_reprompt_payload_says_own(self):
         watch, sent = self._blind_watch()
         watch.on_segment("mic", 10.0, 12.0, "Вера, мне нужна помощь")
         watch.close()
         [command] = sent
-        assert command["kind"] == "reprompt" and command["guard"] == "blind"
+        assert command["kind"] == "reprompt" and command["guard"] == "own"
 
     def test_own_command_payload_says_own(self):
         watch, sent = _watch()

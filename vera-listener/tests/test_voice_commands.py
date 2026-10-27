@@ -120,7 +120,7 @@ class TestDeadLoopback:
         watch.on_segment("mic", 5.0, 9.0, PHRASE)
         watch.close()
         assert len(sent) == 1
-        assert "blind" in sent[0]["doubts"]
+        assert "blind" not in sent[0]["doubts"]
 
     def test_gap_in_system_frames_inside_window_needs_confirmation(self):
         watch, sent = _watch()
@@ -133,7 +133,7 @@ class TestDeadLoopback:
         watch.on_segment("mic", 5.0, 9.0, PHRASE)
         watch.close()
         assert len(sent) == 1
-        assert "blind" in sent[0]["doubts"]
+        assert "blind" not in sent[0]["doubts"]
 
 
 class TestInstructionInNextLine:
@@ -217,7 +217,7 @@ class TestCaptureJitter:
         watch.on_segment("mic", 5.0, 9.0, PHRASE)
         watch.close()
         assert len(sent) == 1
-        assert "blind" in sent[0]["doubts"]
+        assert "blind" not in sent[0]["doubts"]
 
     def test_command_in_first_seconds_of_session(self):
         """Loopback открылся за полсекунды до фразы — окна ±6 с никто не
@@ -227,7 +227,8 @@ class TestCaptureJitter:
         watch.on_segment("mic", 1.0, 4.0, PHRASE)
         watch.close()
         [command] = sent
-        assert command["guard"] == "blind" and "blind" in command["doubts"]
+        assert command["guard"] == "own" and "blind" not in command["doubts"]
+        assert command["confidence"] >= 0.75
 
     @pytest.mark.parametrize("started_before", [0.0, 2.0, 4.9])
     def test_capture_started_less_than_slack_before_phrase_is_blind(
@@ -237,7 +238,7 @@ class TestCaptureJitter:
         watch.on_segment("mic", 10.0, 13.0, PHRASE)
         watch.close()
         [command] = sent
-        assert command["guard"] == "blind"
+        assert command["guard"] == "own"
 
     def test_full_window_coverage_is_own(self):
         watch, sent = _watch()
@@ -254,7 +255,7 @@ class TestCaptureJitter:
         watch.on_segment("mic", 10.0, 13.0, PHRASE)
         watch.close()
         [command] = sent
-        assert command["guard"] == "blind"
+        assert command["guard"] == "own"
 
     def test_system_that_appears_after_the_phrase_needs_confirmation(self):
         """Loopback заработал только через 30 с — фразу на 2-й секунде никто
@@ -265,7 +266,7 @@ class TestCaptureJitter:
         watch.on_segment("mic", 2.0, 5.0, PHRASE)
         watch.close()
         assert len(sent) == 1
-        assert "blind" in sent[0]["doubts"]
+        assert "blind" not in sent[0]["doubts"]
 
     def test_phrase_that_opened_the_session_goes_to_owner_confirmation(self):
         """Прод 11.10: фраза на 0.0 с открыла сессию, первый кадр loopback —
@@ -276,8 +277,8 @@ class TestCaptureJitter:
         watch.chunk_done("mic", 6.0)
         assert len(sent) == 1
         assert sent[0]["instruction"] == "срочно напиши мне что-то в телеграм"
-        assert "blind" in sent[0]["doubts"]
-        assert sent[0]["confidence"] < 0.75
+        assert "blind" not in sent[0]["doubts"]
+        assert sent[0]["confidence"] >= 0.75
 
     def test_echo_is_dropped_even_when_blind_elsewhere(self):
         watch, sent = _watch()
