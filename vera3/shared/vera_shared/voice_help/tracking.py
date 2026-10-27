@@ -2,7 +2,8 @@
 
 «Взял» — только про ТЕКУЩЕГО держателя: `room_tasks.lease_holder` не `vera`, аренда
 жива (`lease_until` > сейчас), и он получил задачу через `handoff_accept` на текущем
-`fencing_token` после последнего предложения. Квитанция доставки (ack), старый
+`fencing_token` после последнего предложения (аттестованная задача не передаётся: там
+хватает живого `claimed` держателя на текущем токене). Квитанция доставки (ack), старый
 `claimed` агента с истёкшей арендой и сам диспетчер («Взял: vera» не бывает) — не в счёт.
 """
 from __future__ import annotations
@@ -14,6 +15,7 @@ from sqlalchemy import select
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskEventRow, RoomTaskRow
 from vera_shared.timeutil import utc_naive_now
+from vera_shared.voice_help.attest_state import attestation_for
 from vera_shared.voice_help.policy import AGENT, ESCALATE_AFTER, REMIND_AFTER
 
 TAKEN, ESCALATE, REMIND, CLOSED = "taken", "escalate", "remind", "closed"
@@ -35,10 +37,15 @@ async def task_holder(room: str, task_id: str) -> tuple[str | None, str | None]:
         if (not holder or holder == AGENT or row.lease_until is None
                 or row.lease_until <= utc_naive_now()):
             return None, row.status
+        attested = await attestation_for(s, room, task_id) is not None
         events = (await s.execute(
             select(ev.id, ev.kind, ev.agent, ev.fencing_token, ev.data).where(
                 ev.room == room, ev.task_id == task_id,
-                ev.kind.in_(("handoff_offer", "handoff_accept"))).order_by(ev.id))).all()
+                ev.kind.in_(("handoff_offer", "handoff_accept", "claimed"))).order_by(ev.id))).all()
+    if attested:  # передача запрещена: dot берёт обычным claim на текущем токене
+        claimed = any(e.kind == "claimed" and e.agent == holder
+                      and e.fencing_token == row.fencing_token for e in events)
+        return (holder if claimed else None), row.status
     last_offer = max((e.id for e in events
                       if e.kind == "handoff_offer" and _is_offer(e.data)), default=0)
     accepted = any(e.kind == "handoff_accept" and e.agent == holder and e.id > last_offer

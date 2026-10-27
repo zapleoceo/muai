@@ -79,6 +79,51 @@ async def test_taken_is_reported_once_and_no_escalation():
     assert (await queue_row("vc-help1")).taken_by == "claude"
 
 
+async def _attest(task_id: str) -> None:
+    from vera_shared.db.engine import get_session
+    from vera_shared.room.task_events import record_event
+
+    async with get_session() as s:
+        await record_event(s, room=ROOM, task_id=task_id, kind="delegated_attestation",
+                           agent="dot")
+
+
+@uses_db
+async def test_attested_live_claim_by_dot_is_taken_once_without_escalation():
+    rec, opened = await _opened()
+    await _attest(TASK)
+    await tasks.claim(room=ROOM, task_id=TASK, agent="dot", lease_seconds=900)
+    assert await help_worker.track_help(rec, opened + timedelta(minutes=6)) == 1
+    assert await help_worker.track_help(rec, opened + timedelta(minutes=30)) == 0
+    assert rec.sent == [help_worker.taken_text("dot")]
+    assert [m for m in await messages_in(ROOM) if m.to_agent == "dot"] == []
+
+
+@uses_db
+async def test_attested_expired_claim_is_not_taken():
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models_room import RoomTaskRow
+    from vera_shared.timeutil import utc_naive_now
+    from vera_shared.voice_help.tracking import task_holder
+
+    await _opened()
+    await _attest(TASK)
+    await tasks.claim(room=ROOM, task_id=TASK, agent="dot", lease_seconds=900)
+    async with get_session() as s:
+        row = await s.get(RoomTaskRow, (ROOM, TASK))
+        row.lease_until = utc_naive_now() - timedelta(seconds=5)
+    assert (await task_holder(ROOM, TASK))[0] is None
+
+
+@uses_db
+async def test_non_attested_claim_without_accept_is_not_taken():
+    from vera_shared.voice_help.tracking import task_holder
+
+    await _opened()
+    await tasks.claim(room=ROOM, task_id=TASK, agent="dot", lease_seconds=900)
+    assert (await task_holder(ROOM, TASK))[0] is None
+
+
 @uses_db
 async def test_second_executor_is_refused():
     """Одновременный захват — в tests/integration/test_voice_help_pg.py: на SQLite

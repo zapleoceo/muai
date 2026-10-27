@@ -183,7 +183,7 @@ title, next_action, refs (`source_ref`, сомнения) и пост. Собы�
 **Кто взял** (`voice_help/tracking.py`): `task_holder` — только
 ТЕКУЩИЙ держатель: `room_tasks.lease_holder` не `vera`, `lease_until` в будущем и в
 `room_task_events` есть его `handoff_accept` на текущем `fencing_token` после последнего
-`handoff_offer`. Квитанция (ack), старый `claimed` и истёкшая аренда — не «Взял»; `next_step` — чистая функция, сроки
+`handoff_offer`. Для аттестованной задачи (передача запрещена) достаточно живого `claimed` держателя на текущем токене. Квитанция (ack), старый `claimed` и истёкшая аренда — не «Взял»; `next_step` — чистая функция, сроки
 `ESCALATE_AFTER` = 5 мин и `REMIND_AFTER` = 20 мин. Двух исполнителей
 исключает `claim` с `fencing_token` под `FOR UPDATE` — проверяется на
 Postgres (`tests/integration/test_voice_help_pg.py`): на SQLite `FOR UPDATE`
