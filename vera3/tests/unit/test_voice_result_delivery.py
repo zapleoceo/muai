@@ -315,3 +315,89 @@ def test_startup_log(monkeypatch, caplog, raw, level, text):
         result_state.log_delivery_mode(logging.getLogger("t"))
     rec = caplog.records[-1]
     assert rec.levelno == level and text in rec.getMessage()
+
+
+async def _brain_failed() -> None:
+    """Мозг трижды не ответил: строка в error, владелец ещё не уведомлён."""
+    async with get_session() as s:
+        row = await s.get(VoiceCommandRow, "vc-help1")
+        row.status, row.answered_at, row.notified_at = "error", None, None
+        row.source = {k: v for k, v in (row.source or {}).items() if k != "delivery"}
+
+
+@uses_db
+async def test_failed_brain_with_live_holder_sends_status_once():
+    await _opened()
+    await hand_to(ROOM, TASK, "dot")
+    await _brain_failed()
+    rec = Recorder()
+    assert await voice_worker.notify_failed(rec) == 1
+    assert await voice_worker.notify_failed(rec) == 0
+    assert rec.sent == [help_worker.assigned_text("dot")]
+    row = await queue_row("vc-help1")
+    assert row.notified_at is not None and row.source["notice"]["message_id"] == 1
+
+
+@uses_db
+async def test_failed_brain_pending_offer_counts_as_assigned():
+    from vera_shared.room import handoff
+    await _opened()
+    held = await tasks.claim(room=ROOM, task_id=TASK, agent="vera", lease_seconds=900)
+    await handoff.offer(room=ROOM, task_id=TASK, agent="vera",
+                        fencing_token=held["fencing_token"], to_agent="codex")
+    await _brain_failed()
+    rec = Recorder()
+    await voice_worker.notify_failed(rec)
+    assert rec.sent == [help_worker.assigned_text("codex")]
+
+
+@uses_db
+async def test_failed_brain_without_taker_escalates_instead_of_failure():
+    from voice_help_kit import messages_in
+    await _opened()
+    await _brain_failed()
+    rec = Recorder()
+    await voice_worker.notify_failed(rec)
+    await voice_worker.notify_failed(rec)
+    assert rec.sent == [help_worker.NO_TAKER_TEXT]
+    esc = [m for m in await messages_in(ROOM) if m.to_agent == "dot"]
+    assert len(esc) == 1
+    assert (await queue_row("vc-help1")).help_state == "escalated"
+
+
+@uses_db
+async def test_failed_brain_blocked_task_keeps_honest_failure():
+    await _opened()
+    held = await tasks.claim(room=ROOM, task_id=TASK, agent="vera", lease_seconds=900)
+    await tasks.release(room=ROOM, task_id=TASK, agent="vera",
+                        fencing_token=held["fencing_token"], status="blocked",
+                        note="нужен доступ")
+    await _brain_failed()
+    rec = Recorder()
+    await voice_worker.notify_failed(rec)
+    assert len(rec.sent) == 1 and rec.sent[0].startswith("Не смогла")
+
+
+@uses_db
+async def test_failed_brain_no_authority_keeps_honest_failure():
+    await accept_voice_command(help_cmd(confidence=0.3), x_internal_secret=SECRET)
+    with patch.object(voice_worker, "ask_brain", AsyncMock(return_value=answer())), \
+         patch.object(voice_worker, "save_event", AsyncMock()):
+        await voice_worker.process_one(Recorder(), OWNER)
+    await _brain_failed()
+    rec = Recorder()
+    await voice_worker.notify_failed(rec)
+    assert len(rec.sent) == 1 and rec.sent[0].startswith("Не смогла")
+
+
+@uses_db
+async def test_failed_status_send_error_is_retried_once():
+    await _opened()
+    await hand_to(ROOM, TASK, "dot")
+    await _brain_failed()
+    rec = Flaky(fail=1)
+    await voice_worker.notify_failed(rec)
+    assert (await queue_row("vc-help1")).notified_at is None
+    await voice_worker.notify_failed(rec)
+    await voice_worker.notify_failed(rec)
+    assert rec.sent == [help_worker.assigned_text("dot")]

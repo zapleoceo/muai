@@ -30,6 +30,7 @@ from vera_shared.voice_commands import (
     claim_command,
     fail_command,
     finish_command,
+    get_command,
     mark_acked,
     mark_answered,
     mark_notified,
@@ -38,12 +39,24 @@ from vera_shared.voice_commands import (
 )
 from vera_shared.voice_help.delivery_claim import claim, settle
 from vera_shared.voice_help.policy import source_uncertain
-from vera_shared.voice_help.queue_state import WATCHED, hold_command, mark_opened
-from vera_shared.voice_help.room_intake import open_help_task
+from vera_shared.voice_help.queue_state import WATCHED, hold_command, mark_escalated, mark_opened
+from vera_shared.voice_help.room_intake import escalate, open_help_task
 
 from bot_telegram.brain import BrainError, ask_brain, save_event
 from bot_telegram.formatting import format_reply, plain_fallback
-from bot_telegram.help_worker import REPROMPT_TEXT, opened_text, say, track_help
+from bot_telegram.help_worker import (
+    ASSIGNED,
+    ESCALATING,
+    FAILED,
+    NO_TAKER_TEXT,
+    NOTICE_KEY,
+    REPROMPT_TEXT,
+    assigned_text,
+    failure_route,
+    opened_text,
+    say,
+    track_help,
+)
 
 log = logging.getLogger(__name__)
 
@@ -180,6 +193,41 @@ def _reason(e: Exception) -> str:
     return f"BrainError {e}" if isinstance(e, BrainError) else type(e).__name__
 
 
+async def _route_failed(command_id: str) -> tuple[str, str]:
+    row = await get_command(command_id)
+    if row is None or row.help_state is None:
+        return FAILED, ""  # не срочная просьба: как раньше
+    return await failure_route(row)
+
+
+async def _status_notice(send: Send, command_id: str, route: str, agent: str) -> int:
+    """Вместо «не смогла»: задача жива. Один раз, квитанция — message_id заявки notice."""
+    now = utc_naive_now()
+    lost = await claim(command_id, "notice", now, NOTICE_KEY)
+    if lost is not None:
+        log.info("voice-worker: %s — статус уже в заявке (%s), не повторяю",
+                 command_id, lost["state"])
+        if lost["state"] != "error":
+            await mark_notified(command_id)
+        return 0
+    row = await get_command(command_id)
+    text = assigned_text(agent) if route == ASSIGNED else NO_TAKER_TEXT
+    try:
+        if route == ESCALATING:
+            await escalate(task_id=row.task_id)
+        msg_id = await send(escape(text, quote=False), text)
+    except Exception as e:
+        await settle(command_id, "notice", "error", key=NOTICE_KEY)
+        log.warning("voice-worker: статус по %s не отправлен (%s) — повторю",
+                    command_id, type(e).__name__)
+        return 0
+    await settle(command_id, "notice", "sent", msg_id, key=NOTICE_KEY)
+    if route == ESCALATING and row.help_state == "opened":
+        await mark_escalated(command_id, now)
+    await mark_notified(command_id)
+    return 1
+
+
 async def notify_failed(send: Send) -> int:
     """Сообщить владельцу о поручениях, выполнить которые не вышло. → сколько.
 
@@ -192,6 +240,10 @@ async def notify_failed(send: Send) -> int:
             # Ответ уже ушёл, а упало что-то после (запись события, finish).
             # «Не смогла» поверх полученного ответа — ложь владельцу.
             await mark_notified(command_id)
+            continue
+        route, agent = await _route_failed(command_id)
+        if route != FAILED:
+            done += await _status_notice(send, command_id, route, agent)
             continue
         text = failed_text(instruction)
         try:

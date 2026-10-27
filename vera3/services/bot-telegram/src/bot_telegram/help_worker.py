@@ -20,11 +20,13 @@ from datetime import datetime
 from html import escape
 
 from bot_telegram.formatting import TELEGRAM_MAX_CHARS
+from vera_shared.db.engine import get_session
+from vera_shared.db.models_room import RoomTaskRow
 from vera_shared.db.models_voice import VoiceCommandRow
 from vera_shared.redact import redact_secrets
 from vera_shared.voice_help.delivery_claim import claim, settle
-from vera_shared.voice_help.hold import lift_hold
-from vera_shared.voice_help.policy import help_room
+from vera_shared.voice_help.hold import is_confirmed, lift_hold
+from vera_shared.voice_help.policy import help_room, source_uncertain
 from vera_shared.voice_help.queue_state import (
     mark_closed,
     mark_escalated,
@@ -50,6 +52,7 @@ from vera_shared.voice_help.tracking import (
     CLOSED,
     ESCALATE,
     REMIND,
+    FINAL_TASK_STATUSES,
     TAKEN,
     next_step,
     task_holder,
@@ -179,3 +182,39 @@ async def _track_one(send: Send, row: VoiceCommandRow, now: datetime) -> str | N
         await mark_closed(row.command_id, now)
         await release_held(row.command_id, now)
     return step
+
+
+ASSIGNED, ESCALATING, FAILED = "assigned", "escalating", "failed"
+NOTICE_KEY = "notice"
+
+
+def assigned_text(agent: str) -> str:
+    return f"Мозг не ответил; задача передана {agent}, в работе."
+
+
+NO_TAKER_TEXT = "Мозг не ответил; никто не взял задачу, эскалировала dot."
+
+
+async def failure_route(row: VoiceCommandRow) -> tuple[str, str]:
+    """Что сказать владельцу, когда мозг не ответил. → (маршрут, агент).
+
+    Честное «не смогла» — только когда задачи нет, она закрыта/заблокирована или
+    держится без подтверждённого источника (полномочий нет).
+    """
+    if not row.task_id:
+        return FAILED, ""
+    holder, status = await task_holder(help_room(), row.task_id)
+    if status is None or status in FINAL_TASK_STATUSES or status == "blocked":
+        return FAILED, ""
+    async with get_session() as s:
+        task = await s.get(RoomTaskRow, (help_room(), row.task_id))
+    source = row.source or {}
+    uncertain = (source.get("guard") != "own"
+                 or source_uncertain(row.confidence, source.get("doubts") or []))
+    if task is None or (uncertain and not is_confirmed(task.refs)):
+        return FAILED, ""
+    if holder:
+        return ASSIGNED, holder
+    if task.pending_handoff_to:
+        return ASSIGNED, task.pending_handoff_to
+    return ESCALATING, ""

@@ -24,7 +24,7 @@ KEY = "delivery"
 CAS_TRIES = 8
 
 
-async def _swap(command_id: str, mutate: Any) -> dict[str, Any] | None:
+async def _swap(command_id: str, mutate: Any, key: str = KEY) -> dict[str, Any] | None:
     """mutate(delivery|None) → новый delivery или None (отказ). → итоговый delivery."""
     for _ in range(CAS_TRIES):
         async with get_session() as s:
@@ -32,7 +32,7 @@ async def _swap(command_id: str, mutate: Any) -> dict[str, Any] | None:
             if row is None:
                 return None
             old = row.source
-            current = (old or {}).get(KEY)
+            current = (old or {}).get(key)
         new = mutate(current)
         if new is None:
             return None
@@ -41,13 +41,14 @@ async def _swap(command_id: str, mutate: Any) -> dict[str, Any] | None:
         async with get_session() as s:
             res = await s.execute(update(VoiceCommandRow)
                                   .where(VoiceCommandRow.command_id == command_id, guard)
-                                  .values(source={**(old or {}), KEY: new}))
+                                  .values(source={**(old or {}), key: new}))
             if res.rowcount == 1:
                 return new
     return None
 
 
-async def claim(command_id: str, owner: str, now: datetime) -> dict[str, Any] | None:
+async def claim(command_id: str, owner: str, now: datetime,
+                key: str = KEY) -> dict[str, Any] | None:
     """→ None, если заявку взяли мы (отправляем); иначе текущая заявка (не отправляем)."""
     seen: dict[str, Any] = {}
 
@@ -57,18 +58,19 @@ async def claim(command_id: str, owner: str, now: datetime) -> dict[str, Any] | 
             return None
         return {"owner": owner, "state": "claimed", "at": now.isoformat()}
 
-    won = await _swap(command_id, take)
+    won = await _swap(command_id, take, key)
     return None if won is not None else (seen or {"owner": "?", "state": "unknown"})
 
 
-async def settle(command_id: str, owner: str, state: str, message_id: int | None = None) -> None:
+async def settle(command_id: str, owner: str, state: str, message_id: int | None = None,
+                 key: str = KEY) -> None:
     def put(current: dict[str, Any] | None) -> dict[str, Any] | None:
         if current is None or current["owner"] != owner:
             return None
         return {**current, "state": state,
                 **({"message_id": message_id} if message_id else {})}
 
-    await _swap(command_id, put)
+    await _swap(command_id, put, key)
 
 
 async def update_source(command_id: str, extra: dict[str, Any], *, only_state: str,

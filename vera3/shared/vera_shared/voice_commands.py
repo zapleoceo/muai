@@ -236,3 +236,8 @@ async def pending_notifications() -> list[tuple[str, str, bool]]:
 async def mark_notified(command_id: str) -> None:
     # Сообщили — текст поручения в очереди больше не нужен (он есть в событии).
     await _set(command_id, notified_at=utc_naive_now(), instruction="")
+
+
+async def get_command(command_id: str) -> VoiceCommandRow | None:
+    async with get_session() as s:
+        return await s.get(VoiceCommandRow, command_id)
