@@ -68,3 +68,13 @@ async def messages_in(room: str) -> list[RoomMessageRow]:
 async def queue_row(command_id: str) -> VoiceCommandRow:
     async with get_session() as s:
         return await s.get(VoiceCommandRow, command_id)
+
+
+async def hand_to(room: str, task_id: str, agent: str) -> None:
+    """Задача доходит до исполнителя штатно: vera держит, предлагает, агент принимает."""
+    from vera_shared.room import handoff, tasks
+
+    held = await tasks.claim(room=room, task_id=task_id, agent="vera", lease_seconds=900)
+    await handoff.offer(room=room, task_id=task_id, agent="vera",
+                        fencing_token=held["fencing_token"], to_agent=agent)
+    await handoff.accept(room=room, task_id=task_id, agent=agent)

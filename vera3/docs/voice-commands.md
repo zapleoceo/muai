@@ -180,9 +180,10 @@ title, next_action, refs (`source_ref`, сомнения) и пост. Собы�
 прежней версии бот открывает как `ready`; `asked` (ждали «Да») остаются в
 `waiting` и не исполняются.
 
-**Кто взял** (`voice_help/tracking.py`): `task_holder` — первый
-`claimed`/`handoff_accept` в `room_task_events` (а не текущий держатель:
-мог взять и уже отпустить); `next_step` — чистая функция, сроки
+**Кто взял** (`voice_help/tracking.py`): `task_holder` — только
+ТЕКУЩИЙ держатель: `room_tasks.lease_holder` не `vera`, `lease_until` в будущем и в
+`room_task_events` есть его `handoff_accept` на текущем `fencing_token` после последнего
+`handoff_offer`. Для аттестованной задачи (передача запрещена) достаточно живого `claimed` держателя на текущем токене. Квитанция (ack), старый `claimed` и истёкшая аренда — не «Взял»; `next_step` — чистая функция, сроки
 `ESCALATE_AFTER` = 5 мин и `REMIND_AFTER` = 20 мин. Двух исполнителей
 исключает `claim` с `fencing_token` под `FOR UPDATE` — проверяется на
 Postgres (`tests/integration/test_voice_help_pg.py`): на SQLite `FOR UPDATE`
@@ -225,7 +226,16 @@ skip_ref_prefix=DISPATCHED_PREFIX)` берёт от имени `AGENT` (`vera`) 
 `dispatched: dispatch-<id>`, `dispatch_attempts: N`, `dispatch_next_at: <iso>`.
 Квитанция доставки — ответ именно получателя на именно это сообщение:
 `room_post(status="ack", in_reply_to="dispatch-<task_id>")`. Только она ведёт к
-release в `open`, после чего реальный исполнитель берёт задачу. Это отдельно от
+штатной передаче `handoff.offer(vera → получатель)` (`dispatcher._offer`, ref
+`handoff_offered: <агент>`): аренда `vera` живёт, пока получатель не сделает
+`handoff_accept` (токен+1, «Взял» только тогда). Предложение не принято за
+`RECEIPT_WAIT_S` или отклонено — `dispatcher._offer_lapsed`: `handoff.cancel`,
+ref `offer_retry`, пауза `backoff_s`, новое предложение; общий счётчик с доставкой,
+после `MAX_ATTEMPTS` — `blocked` с `OFFER_BLOCKED_NOTE`. Рестарт при висящем
+предложении второго не шлёт (`pending_handoff_to`); accept после cancel отвергается
+(`HandoffError`), cancel после accept — `StaleLease`/`HandoffError`, диспетчер
+отступает. Задача под аттестацией передаче не подлежит — для неё прежний release в
+`open`. Неподтверждённые/удержанные задачи `next_task` пропускает — их не предлагают. Это отдельно от
 квитанции исполнения (`done`/`blocked` по задаче, другое сообщение): такой ответ,
 ack от другого агента или ack на другое сообщение доставкой не считаются.
 
@@ -235,9 +245,8 @@ ack от другого агента или ack на другое сообщен
 `MAX_ATTEMPTS` (3) без квитанции — release `blocked` с `BLOCKED_NOTE` («получатель
 не подтвердил получение»): задача видна, не потеряна. Аренда продлевается на
 паузу; истекла (процесс лежал) — следующий проход берёт её заново и продолжает без
-дублей. Потерянная аренда (`StaleLease`) — пропуск. `task_holder` игнорирует claim
-от `AGENT`, поэтому `track_help` не шлёт владельцу «Взял: vera»: «Взял» приходит
-только про настоящего исполнителя. Тесты: `tests/unit/test_office_dispatch.py`.
+дублей. Потерянная аренда (`StaleLease`) — пропуск. `task_holder` не считает
+`AGENT` держателем, поэтому «Взял: vera» не бывает. Тесты: `tests/unit/test_office_dispatch.py`.
 
 **Тесты** — комната `voice-test` (фикстура ставит `VOICE_HELP_ROOM`), боевая
 `main` не появляется: `tests/unit/test_voice_help_intake.py`,

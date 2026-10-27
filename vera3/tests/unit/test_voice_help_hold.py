@@ -36,6 +36,7 @@ from voice_help_kit import (
     SECRET,
     Recorder,
     answer,
+    hand_to,
     help_cmd,
     queue_row,
     tasks_in,
@@ -74,8 +75,7 @@ async def test_queue_row_waits_for_claim_then_closes():
     now = row.task_opened_at
     assert await help_worker.track_help(rec, now + timedelta(minutes=1)) == 0
     assert (await queue_row("vc-h")).status == "opened"
-    picked = await _pick()
-    assert picked is not None and picked["task_id"] == "help-vc-h"
+    await hand_to(ROOM, "help-vc-h", "claude")
     assert await help_worker.track_help(rec, now + timedelta(minutes=2)) == 1
     assert rec.sent[-1] == help_worker.taken_text("claude")
     row = await queue_row("vc-h")
@@ -201,7 +201,7 @@ async def test_owner_answer_lifts_then_claims():
                           lease_seconds=900)
     now = (await queue_row("vc-h")).task_opened_at
     assert await help_worker.track_help(rec, now + timedelta(seconds=30)) == 0
-    await tasks.claim(room=ROOM, task_id="help-vc-h", agent="codex", lease_seconds=900)
+    await hand_to(ROOM, "help-vc-h", "codex")
     assert await help_worker.track_help(rec, now + timedelta(minutes=1)) == 1
     [task] = await tasks_in(ROOM)
     assert SOURCE_CONFIRMED in [r["ref"] for r in task.refs]
