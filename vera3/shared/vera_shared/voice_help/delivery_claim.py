@@ -116,3 +116,31 @@ def classify_send_error(exc: BaseException) -> str:
     if isinstance(exc, RuntimeError) and "OWNER_TELEGRAM_ID not set" in str(exc):
         return "error"  # отказ до обращения к Telegram
     return "unknown"
+
+
+async def claim_unless_accepted(command_id: str, room: str, task_id: str, owner: str,
+                                now: datetime) -> tuple[str, Any]:
+    """Заявка на финал мозга, пока исполнитель не принял задачу — одной транзакцией.
+
+    Блокируем строку задачи (её же блокирует `handoff.accept`) и строку очереди,
+    перепроверяем держателя и заявку, и только потом берём заявку. → ("won", None) |
+    ("executor", агент) — приняли до нас | ("lost", заявка) — финал уже занят.
+    """
+    from vera_shared.db.models_room import RoomTaskRow
+    from vera_shared.voice_help.tracking import holder_of
+
+    async with get_session() as s:
+        task = await s.get(RoomTaskRow, (room, task_id), with_for_update=True)
+        holder, _ = await holder_of(s, room, task_id, task)
+        if holder:
+            return "executor", holder
+        row = await s.get(VoiceCommandRow, command_id, with_for_update=True)
+        if row is None:
+            return "lost", {"owner": "?", "state": "unknown"}
+        current = (row.source or {}).get(KEY)
+        if current is not None and not (current["owner"] == owner
+                                        and current["state"] == "error"):
+            return "lost", current
+        row.source = {**(row.source or {}),
+                      KEY: {"owner": owner, "state": "claimed", "at": now.isoformat()}}
+        return "won", None

@@ -52,12 +52,15 @@ from bot_telegram.brain import BrainError, ask_brain, save_event
 from bot_telegram.help_worker import (
     ASSIGNED,
     ESCALATING,
+    EXECUTOR_FINAL,
     FAILED,
     NO_TAKER_TEXT,
     NOTICE_KEY,
+    OFFERED,
     REPROMPT_TEXT,
     assigned_text,
     failure_route,
+    offered_text,
     opened_text,
     say,
     track_help,
@@ -201,7 +204,7 @@ async def _status_notice(send: Send, command_id: str, route: str, agent: str) ->
             await mark_notified(command_id)
         return 0
     row = await get_command(command_id)
-    text = assigned_text(agent) if route == ASSIGNED else NO_TAKER_TEXT
+    text = {ASSIGNED: assigned_text, OFFERED: offered_text}.get(route, lambda _a: NO_TAKER_TEXT)(agent)
     try:
         if route == ESCALATING:
             await escalate(task_id=row.task_id)
@@ -236,6 +239,10 @@ async def notify_failed(send: Send) -> int:
             await mark_notified(command_id)
             continue
         route, agent = await _route_failed(command_id)
+        if route == EXECUTOR_FINAL:
+            log.info("voice-worker: %s — финал за исполнителем, «не смогла» не шлю", command_id)
+            await mark_notified(command_id)
+            continue
         if route != FAILED:
             done += await _status_notice(send, command_id, route, agent)
             continue

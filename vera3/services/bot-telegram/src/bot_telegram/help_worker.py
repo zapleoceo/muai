@@ -193,12 +193,17 @@ async def _track_one(send: Send, row: VoiceCommandRow, now: datetime) -> str | N
     return step
 
 
-ASSIGNED, ESCALATING, FAILED = "assigned", "escalating", "failed"
+ASSIGNED, OFFERED, ESCALATING, FAILED, EXECUTOR_FINAL = (
+    "assigned", "offered", "escalating", "failed", "executor_final")
 NOTICE_KEY = "notice"
 
 
 def assigned_text(agent: str) -> str:
-    return f"Мозг не ответил; задача передана {agent}, в работе."
+    return f"Мозг не ответил; задача у {agent}, в работе."
+
+
+def offered_text(agent: str) -> str:
+    return f"Мозг не ответил. Передаю задачу {agent}, жду принятия."
 
 
 NO_TAKER_TEXT = "Мозг не ответил; никто не взял задачу, эскалировала dot."
@@ -213,6 +218,11 @@ async def failure_route(row: VoiceCommandRow) -> tuple[str, str]:
     if not row.task_id:
         return FAILED, ""
     holder, status = await task_holder(help_room(), row.task_id)
+    if status == "done" or (row.source or {}).get("delivery", {}).get("owner") == "executor" \
+            or row.help_state in (PENDING, UNKNOWN, ERROR):
+        # исполнитель довёл задачу: его финал зарезервирован, в пути, доставлен или
+        # неясен — «не смогла» было бы ложью
+        return EXECUTOR_FINAL, ""
     if status is None or status in FINAL_TASK_STATUSES or status == "blocked":
         return FAILED, ""
     async with get_session() as s:
@@ -225,5 +235,5 @@ async def failure_route(row: VoiceCommandRow) -> tuple[str, str]:
     if holder:
         return ASSIGNED, holder
     if task.pending_handoff_to:
-        return ASSIGNED, task.pending_handoff_to
+        return OFFERED, task.pending_handoff_to
     return ESCALATING, ""

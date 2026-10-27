@@ -12,9 +12,13 @@ from html import escape
 
 from vera_shared.db.models_voice import VoiceCommandRow
 from vera_shared.timeutil import utc_naive_now
-from vera_shared.voice_help.delivery_claim import claim, classify_send_error, settle
+from vera_shared.voice_help.delivery_claim import (
+    claim,
+    claim_unless_accepted,
+    classify_send_error,
+    settle,
+)
 from vera_shared.voice_help.policy import help_room, help_task_id
-from vera_shared.voice_help.tracking import task_holder
 
 from bot_telegram.brain import BrainAnswer
 from bot_telegram.formatting import format_reply, plain_fallback
@@ -57,12 +61,17 @@ async def _status_only(send, row: VoiceCommandRow, agent: str) -> None:
 
 async def deliver_answer(send, row: VoiceCommandRow, answer: BrainAnswer) -> int | None:
     """→ message_id, если финальный ответ ушёл и это подтверждено; иначе None."""
+    lost = None
     if row.help_state:  # строка могла открыть задачу только что — task_id в ней ещё пуст
-        holder, _ = await task_holder(help_room(), row.task_id or help_task_id(row.command_id))
-        if holder:
-            await _status_only(send, row, holder)
+        verdict, info = await claim_unless_accepted(
+            row.command_id, help_room(), row.task_id or help_task_id(row.command_id),
+            "brain", utc_naive_now())
+        if verdict == "executor":
+            await _status_only(send, row, info)
             return None
-    lost = await claim(row.command_id, "brain", utc_naive_now())
+        lost = info
+    else:
+        lost = await claim(row.command_id, "brain", utc_naive_now())
     if lost is not None:
         log.info("voice-worker: %s — заявка у %s (%s), ответ мозга не шлю",
                  row.command_id, lost["owner"], lost["state"])

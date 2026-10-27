@@ -355,7 +355,7 @@ async def test_failed_brain_with_live_holder_sends_status_once():
 
 
 @uses_db
-async def test_failed_brain_pending_offer_counts_as_assigned():
+async def test_failed_brain_pending_offer_is_offered_not_working():
     from vera_shared.room import handoff
     await _opened()
     held = await tasks.claim(room=ROOM, task_id=TASK, agent="vera", lease_seconds=900)
@@ -364,7 +364,8 @@ async def test_failed_brain_pending_offer_counts_as_assigned():
     await _brain_failed()
     rec = Recorder()
     await voice_worker.notify_failed(rec)
-    assert rec.sent == [help_worker.assigned_text("codex")]
+    assert rec.sent == [help_worker.offered_text("codex")]
+    assert "жду принятия" in rec.sent[0] and "в работе" not in rec.sent[0]
 
 
 @uses_db
@@ -548,3 +549,84 @@ def test_compose_has_result_since_in_bot_telegram_only():
     holders = [n for n, svc in compose["services"].items()
                if "VOICE_RESULT_DELIVERY_SINCE" in (svc.get("environment") or {})]
     assert holders == ["bot-telegram"]
+
+
+async def _set_delivery(state_row_help: str | None = None, **source) -> None:
+    async with get_session() as s:
+        row = await s.get(VoiceCommandRow, "vc-help1")
+        row.source = {**(row.source or {}), **source}
+        if state_row_help:
+            row.help_state = state_row_help
+
+
+@uses_db
+@pytest.mark.parametrize("help_state,source", [
+    ("closed", {"delivery": {"owner": "executor", "state": "sent", "message_id": 5}}),
+    ("result_pending", {"delivery": {"owner": "executor", "state": "claimed"}}),
+    ("result_unknown", {"delivery": {"owner": "executor", "state": "unknown"}}),
+    ("result_error", {"delivery": {"owner": "executor", "state": "error"}}),
+])
+async def test_done_task_with_executor_final_gets_no_failure(help_state, source):
+    await _opened()
+    await _finish("итог")
+    await _brain_failed()
+    await _set_delivery(help_state, **source)
+    rec = Recorder()
+    await voice_worker.notify_failed(rec)
+    assert rec.sent == []
+    assert (await queue_row("vc-help1")).notified_at is not None
+
+
+@uses_db
+async def test_done_task_without_row_final_yet_gets_no_failure():
+    await _opened()
+    await _finish("итог")
+    await _brain_failed()
+    rec = Recorder()
+    await voice_worker.notify_failed(rec)
+    assert rec.sent == []
+
+
+@uses_db
+async def test_cancelled_task_without_final_keeps_failure():
+    await _opened()
+    held = await tasks.claim(room=ROOM, task_id=TASK, agent="vera", lease_seconds=900)
+    from vera_shared.room import task_cancel
+    await task_cancel.cancel(room=ROOM, task_id=TASK, agent="vera",
+                             fencing_token=held["fencing_token"], reason="не нужно")
+    await _brain_failed()
+    rec = Recorder()
+    await voice_worker.notify_failed(rec)
+    assert len(rec.sent) == 1 and rec.sent[0].startswith("Не смогла")
+
+
+@uses_db
+async def test_accept_before_brain_claim_gives_executor_verdict():
+    from vera_shared.room import handoff
+    await _opened()
+    held = await tasks.claim(room=ROOM, task_id=TASK, agent="vera", lease_seconds=900)
+    await handoff.offer(room=ROOM, task_id=TASK, agent="vera",
+                        fencing_token=held["fencing_token"], to_agent="codex")
+    await handoff.accept(room=ROOM, task_id=TASK, agent="codex")
+    verdict = await delivery_claim.claim_unless_accepted(
+        "vc-help1", ROOM, TASK, "brain", datetime(2026, 1, 1))
+    assert verdict == ("executor", "codex")
+    assert "delivery" not in ((await queue_row("vc-help1")).source or {})
+
+
+@uses_db
+async def test_brain_claim_before_accept_wins_and_executor_then_sends_nothing():
+    from vera_shared.room import handoff
+    opened, _ = await _opened()
+    verdict = await delivery_claim.claim_unless_accepted(
+        "vc-help1", ROOM, TASK, "brain", datetime(2026, 1, 1))
+    assert verdict == ("won", None)
+    held = await tasks.claim(room=ROOM, task_id=TASK, agent="vera", lease_seconds=900)
+    await handoff.offer(room=ROOM, task_id=TASK, agent="vera",
+                        fencing_token=held["fencing_token"], to_agent="codex")
+    await handoff.accept(room=ROOM, task_id=TASK, agent="codex")
+    await delivery_claim.settle("vc-help1", "brain", "sent", 9)
+    await _finish("итог")
+    out = Recorder()
+    await help_worker.track_help(out, opened + timedelta(minutes=1))
+    assert _results(out) == []
