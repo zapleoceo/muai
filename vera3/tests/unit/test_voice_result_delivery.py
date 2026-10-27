@@ -218,7 +218,7 @@ async def test_late_brain_after_executor_sent_does_not_send():
     with patch.object(voice_worker, "ask_brain", AsyncMock(return_value=answer())), \
          patch.object(voice_worker, "save_event", AsyncMock()):
         await voice_worker.process_one(late, OWNER)
-    assert late.sent == []
+    assert not any("Смотрю логи." in m for m in late.sent)  # финала нет; статус допустим
 
 
 @uses_db
@@ -630,3 +630,63 @@ async def test_brain_claim_before_accept_wins_and_executor_then_sends_nothing():
     out = Recorder()
     await help_worker.track_help(out, opened + timedelta(minutes=1))
     assert _results(out) == []
+
+
+async def _offer_accept_done(note: str = "итог исполнителя") -> None:
+    from vera_shared.room import handoff
+    held = await tasks.claim(room=ROOM, task_id=TASK, agent="vera", lease_seconds=900)
+    await handoff.offer(room=ROOM, task_id=TASK, agent="vera",
+                        fencing_token=held["fencing_token"], to_agent="codex")
+    await handoff.accept(room=ROOM, task_id=TASK, agent="codex")
+    await _finish(note, agent="codex")
+
+
+@uses_db
+async def test_after_done_lease_released_brain_still_loses_to_executor():
+    await _opened()
+    await _offer_accept_done()
+    verdict = await delivery_claim.claim_unless_accepted(
+        "vc-help1", ROOM, TASK, "brain", datetime(2026, 1, 1))
+    assert verdict == ("executor", "codex")
+    assert "delivery" not in ((await queue_row("vc-help1")).source or {})
+
+
+@uses_db
+async def test_executor_result_sent_once_after_done_and_late_brain():
+    opened, _ = await _opened()
+    await _offer_accept_done("текст исполнителя")
+    late = Recorder()
+    with patch.object(voice_worker, "ask_brain", AsyncMock(return_value=answer())), \
+         patch.object(voice_worker, "save_event", AsyncMock()):
+        async with get_session() as s:
+            row = await s.get(VoiceCommandRow, "vc-help1")
+            row.status, row.answered_at = "pending", None
+            row.source = {k: v for k, v in (row.source or {}).items() if k != "delivery"}
+        await voice_worker.process_one(late, OWNER)
+    assert not any("Смотрю логи." in m for m in late.sent)
+    out = Recorder()
+    await help_worker.track_help(out, opened + timedelta(minutes=1))
+    await help_worker.track_help(out, opened + timedelta(minutes=2))
+    assert _results(out) == [f"Результат по задаче {TASK} (codex): текст исполнителя"]
+
+
+@uses_db
+async def test_lost_claim_does_not_move_row_to_pending():
+    opened, _ = await _opened()
+    await _finish("итог")
+    await delivery_claim.claim("vc-help1", "brain", opened)  # claimed, исход неизвестен
+    out = Recorder()
+    await help_worker.track_help(out, opened + timedelta(minutes=1))
+    row = await queue_row("vc-help1")
+    assert out.sent == [] and row.help_state == "opened"
+
+
+@uses_db
+async def test_executor_takes_over_definite_brain_error():
+    opened, _ = await _opened()
+    await _finish("итог")
+    await delivery_claim.claim("vc-help1", "brain", opened)
+    await delivery_claim.settle("vc-help1", "brain", "error")
+    out = Recorder()
+    await help_worker.track_help(out, opened + timedelta(minutes=1))
+    assert len(_results(out)) == 1

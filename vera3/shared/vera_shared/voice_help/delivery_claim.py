@@ -15,7 +15,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import update
+from sqlalchemy import select, update
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_voice import VoiceCommandRow
@@ -53,7 +53,7 @@ async def claim(command_id: str, owner: str, now: datetime,
     seen: dict[str, Any] = {}
 
     def take(current: dict[str, Any] | None) -> dict[str, Any] | None:
-        if current is not None and not (current["owner"] == owner and current["state"] == "error"):
+        if current is not None and current["state"] != "error":
             seen.update(current)
             return None
         return {"owner": owner, "state": "claimed", "at": now.isoformat()}
@@ -126,7 +126,7 @@ async def claim_unless_accepted(command_id: str, room: str, task_id: str, owner:
     перепроверяем держателя и заявку, и только потом берём заявку. → ("won", None) |
     ("executor", агент) — приняли до нас | ("lost", заявка) — финал уже занят.
     """
-    from vera_shared.db.models_room import RoomTaskRow
+    from vera_shared.db.models_room import RoomTaskEventRow, RoomTaskRow
     from vera_shared.voice_help.tracking import holder_of
 
     async with get_session() as s:
@@ -134,12 +134,19 @@ async def claim_unless_accepted(command_id: str, room: str, task_id: str, owner:
         holder, _ = await holder_of(s, room, task_id, task)
         if holder:
             return "executor", holder
+        # держатель исчез (done/release), но задачу вёл исполнитель: финал его
+        accepted = (await s.execute(
+            select(RoomTaskEventRow.agent).where(
+                RoomTaskEventRow.room == room, RoomTaskEventRow.task_id == task_id,
+                RoomTaskEventRow.kind == "handoff_accept")
+            .order_by(RoomTaskEventRow.id.desc()).limit(1))).scalar_one_or_none()
+        if accepted or (task is not None and task.status == "done"):
+            return "executor", accepted or "исполнитель"
         row = await s.get(VoiceCommandRow, command_id, with_for_update=True)
         if row is None:
             return "lost", {"owner": "?", "state": "unknown"}
         current = (row.source or {}).get(KEY)
-        if current is not None and not (current["owner"] == owner
-                                        and current["state"] == "error"):
+        if current is not None and current["state"] != "error":
             return "lost", current
         row.source = {**(row.source or {}),
                       KEY: {"owner": owner, "state": "claimed", "at": now.isoformat()}}

@@ -112,15 +112,17 @@ async def deliver_result(send: Send, row: VoiceCommandRow, now: datetime) -> boo
     if found is None:
         return True
     errors = result_errors(row)
-    if errors >= RESULT_MAX_ERRORS or not await move(
-            row.command_id, (row.help_state,), PENDING, now):
+    if errors >= RESULT_MAX_ERRORS:
         return False
-    held = await claim(row.command_id, "executor", now)
+    held = await claim(row.command_id, "executor", now)  # раньше намерения: проигрыш не трогает этап
     if held is not None:
         # Ответ мозга (или чужая заявка) уже считается доставкой: второго сообщения нет.
         log.info("help-worker: %s — заявка у %s (%s), результат не шлю",
                  row.command_id, held["owner"], held["state"])
         return held["owner"] == "brain" and held["state"] == "sent"
+    if not await move(row.command_id, (row.help_state,), PENDING, now):
+        await settle(row.command_id, "executor", "error")  # отправки не было — заявку отпускаем
+        return False
     text = result_text(row.task_id, *found)
     try:
         message_id = await send(escape(text, quote=False), text)
