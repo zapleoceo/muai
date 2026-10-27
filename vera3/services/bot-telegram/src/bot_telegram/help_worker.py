@@ -19,12 +19,11 @@ from collections.abc import Awaitable, Callable
 from datetime import datetime
 from html import escape
 
-from bot_telegram.formatting import TELEGRAM_MAX_CHARS
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskRow
 from vera_shared.db.models_voice import VoiceCommandRow
 from vera_shared.redact import redact_secrets
-from vera_shared.voice_help.delivery_claim import claim, settle
+from vera_shared.voice_help.delivery_claim import claim, classify_send_error, settle
 from vera_shared.voice_help.hold import is_confirmed, lift_hold
 from vera_shared.voice_help.policy import help_room, source_uncertain
 from vera_shared.voice_help.queue_state import (
@@ -51,12 +50,14 @@ from vera_shared.voice_help.room_intake import escalate, normal_action
 from vera_shared.voice_help.tracking import (
     CLOSED,
     ESCALATE,
-    REMIND,
     FINAL_TASK_STATUSES,
+    REMIND,
     TAKEN,
     next_step,
     task_holder,
 )
+
+from bot_telegram.formatting import TELEGRAM_MAX_CHARS
 
 log = logging.getLogger(__name__)
 
@@ -90,6 +91,14 @@ def result_text(task_id: str, agent: str, text: str) -> str:
     return head + (body if len(body) <= room_left else body[:room_left - 1] + "…")
 
 
+async def _result_unknown(command_id: str, why: str, now: datetime) -> None:
+    """Исход отправки неизвестен: не повторяем, строка не закрывается."""
+    await settle(command_id, "executor", "unknown")
+    await move(command_id, (PENDING,), UNKNOWN, now)
+    log.warning("help-worker: результат %s — исход неизвестен (%s), автоповтора нет",
+                command_id, why)
+
+
 async def deliver_result(send: Send, row: VoiceCommandRow, now: datetime) -> bool:
     """Результат исполнителя → владельцу. → True, если строку можно закрывать.
 
@@ -116,17 +125,17 @@ async def deliver_result(send: Send, row: VoiceCommandRow, now: datetime) -> boo
     try:
         message_id = await send(escape(text, quote=False), text)
     except Exception as e:
-        await settle(row.command_id, "executor", "error")
         # send_to_owner без OWNER_TELEGRAM_ID бросает — это и есть fail-closed.
-        log.warning("help-worker: результат %s не отправлен (%s), ошибка %d/%d",
-                    row.command_id, type(e).__name__, errors + 1, RESULT_MAX_ERRORS)
-        await record_error(row.command_id, errors + 1, now)
+        if classify_send_error(e) == "error":
+            await settle(row.command_id, "executor", "error")
+            log.warning("help-worker: результат %s не доставлен (%s), ошибка %d/%d",
+                        row.command_id, type(e).__name__, errors + 1, RESULT_MAX_ERRORS)
+            await record_error(row.command_id, errors + 1, now)
+        else:
+            await _result_unknown(row.command_id, type(e).__name__, now)
         return False
     if not message_id:
-        await settle(row.command_id, "executor", "error")
-        log.warning("help-worker: результат %s без message_id, ошибка %d/%d",
-                    row.command_id, errors + 1, RESULT_MAX_ERRORS)
-        await record_error(row.command_id, errors + 1, now)
+        await _result_unknown(row.command_id, "no message_id", now)
         return False
     await settle(row.command_id, "executor", "sent", message_id)
     return await record_receipt(row.command_id, message_id, now)

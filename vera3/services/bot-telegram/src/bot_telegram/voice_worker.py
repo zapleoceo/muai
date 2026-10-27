@@ -37,13 +37,18 @@ from vera_shared.voice_commands import (
     pending_notifications,
     revive_stale,
 )
-from vera_shared.voice_help.delivery_claim import claim, settle
+from vera_shared.voice_help.delivery_claim import claim, classify_send_error, settle
 from vera_shared.voice_help.policy import source_uncertain
-from vera_shared.voice_help.queue_state import WATCHED, hold_command, mark_escalated, mark_opened
+from vera_shared.voice_help.queue_state import (
+    WATCHED,
+    hold_command,
+    mark_escalated,
+    mark_opened,
+)
 from vera_shared.voice_help.room_intake import escalate, open_help_task
 
+from bot_telegram.answer_delivery import deliver_answer
 from bot_telegram.brain import BrainError, ask_brain, save_event
-from bot_telegram.formatting import format_reply, plain_fallback
 from bot_telegram.help_worker import (
     ASSIGNED,
     ESCALATING,
@@ -156,23 +161,8 @@ async def process_one(send: Send, owner_id: int) -> bool:
                 await say(send, ack_text(row.instruction))
                 await mark_acked(row.command_id)
             answer = await ask_brain(row.instruction, owner_id, owner_id)
-            lost = await claim(row.command_id, "brain", utc_naive_now())
-            if lost is not None:
-                # Результат исполнителя (или прошлая отправка с неясным исходом) уже
-                # занял доставку по этой команде: второе сообщение не шлём.
-                log.info("voice-worker: %s — заявка у %s (%s), ответ мозга не шлю",
-                         row.command_id, lost["owner"], lost["state"])
-                await mark_answered(row.command_id)
-            else:
-                try:
-                    msg_id = await send(
-                        format_reply(answer.raw, answer.provider, answer.cost_usd,
-                                     answer.n_results, answer.n_history),
-                        plain_fallback(answer.raw, answer.provider))
-                except Exception:
-                    await settle(row.command_id, "brain", "error")
-                    raise
-                await settle(row.command_id, "brain", "sent", msg_id)
+            msg_id = await deliver_answer(send, row, answer)
+            if msg_id:
                 await mark_answered(row.command_id)
                 await save_event(owner_id, msg_id, "vera", answer.raw)
         if held:
@@ -217,9 +207,13 @@ async def _status_notice(send: Send, command_id: str, route: str, agent: str) ->
             await escalate(task_id=row.task_id)
         msg_id = await send(escape(text, quote=False), text)
     except Exception as e:
-        await settle(command_id, "notice", "error", key=NOTICE_KEY)
-        log.warning("voice-worker: статус по %s не отправлен (%s) — повторю",
-                    command_id, type(e).__name__)
+        state = classify_send_error(e)
+        await settle(command_id, "notice", state, key=NOTICE_KEY)
+        log.warning("voice-worker: статус по %s не отправлен (%s), %s", command_id,
+                    type(e).__name__, "повторю" if state == "error" else "исход неизвестен")
+        return 0
+    if not msg_id:
+        await settle(command_id, "notice", "unknown", key=NOTICE_KEY)
         return 0
     await settle(command_id, "notice", "sent", msg_id, key=NOTICE_KEY)
     if route == ESCALATING and row.help_state == "opened":

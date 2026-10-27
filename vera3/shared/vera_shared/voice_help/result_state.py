@@ -16,14 +16,13 @@ from __future__ import annotations
 
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from sqlalchemy import select, update
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskEventRow
 from vera_shared.db.models_voice import VoiceCommandRow
-from vera_shared.voice_help.delivery_claim import update_source
 from vera_shared.voice_help.delivery_claim import update_source
 
 PENDING, ERROR, UNKNOWN = "result_pending", "result_error", "result_unknown"
@@ -42,7 +41,7 @@ def parse_since(raw: str) -> datetime | None:
     except ValueError:
         return None
     if parsed.tzinfo is not None:
-        parsed = parsed.astimezone(timezone.utc).replace(tzinfo=None)
+        parsed = parsed.astimezone(UTC).replace(tzinfo=None)
     return parsed
 
 

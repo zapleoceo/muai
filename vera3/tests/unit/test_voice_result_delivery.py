@@ -29,15 +29,20 @@ def _test_room(monkeypatch):
     monkeypatch.setenv(result_state.SINCE_ENV, "2000-01-01T00:00:00Z")
 
 
+class TelegramBadRequest(Exception):  # имя класса = признак точного отказа Telegram
+    pass
+
+
 class Flaky(Recorder):
-    def __init__(self, fail: int = 0, ret: int | None = None) -> None:
+    def __init__(self, fail: int = 0, ret: int | None = None,
+                 exc: type[Exception] = TelegramBadRequest) -> None:
         super().__init__()
-        self.fail, self.ret, self.calls = fail, ret, 0
+        self.fail, self.ret, self.calls, self.exc = fail, ret, 0, exc
 
     async def __call__(self, html: str, plain: str) -> int:
         self.calls += 1
         if self.calls <= self.fail:
-            raise RuntimeError("telegram down")
+            raise self.exc("telegram down")
         if self.ret is not None:
             return self.ret
         return await super().__call__(html, plain)
@@ -114,9 +119,12 @@ async def test_no_receipt_means_not_closed():
     opened, _ = await _opened()
     await _finish("итог")
     rec = Flaky(ret=0)
-    await help_worker.track_help(rec, opened + timedelta(minutes=1))
+    for i in range(1, 4):
+        await help_worker.track_help(rec, opened + timedelta(minutes=i))
     row = await queue_row("vc-help1")
-    assert row.help_state in ("result_error", "result_pending") and not (row.source or {}).get("result_message_id")
+    # пустой message_id — не доказательство недоставки: unknown, без автоповтора
+    assert row.help_state == "result_unknown" and rec.calls == 1
+    assert "result_message_id" not in (row.source or {})
 
 
 @uses_db
@@ -401,3 +409,134 @@ async def test_failed_status_send_error_is_retried_once():
     await voice_worker.notify_failed(rec)
     await voice_worker.notify_failed(rec)
     assert rec.sent == [help_worker.assigned_text("dot")]
+
+
+class ReadTimeout(Exception):
+    pass
+
+
+@uses_db
+async def test_ambiguous_timeout_on_result_is_unknown_not_retried():
+    opened, _ = await _opened()
+    await _finish("итог")
+    rec = Flaky(fail=99, exc=ReadTimeout)
+    for i in range(1, 4):
+        await help_worker.track_help(rec, opened + timedelta(minutes=i))
+    row = await queue_row("vc-help1")
+    assert rec.calls == 1 and row.help_state == "result_unknown"
+    assert row.source["delivery"]["state"] == "unknown"
+
+
+@uses_db
+async def test_classification():
+    from vera_shared.voice_help.delivery_claim import classify_send_error as c
+    assert c(TelegramBadRequest()) == "error" and c(ConnectionRefusedError()) == "error"
+    assert c(RuntimeError("OWNER_TELEGRAM_ID not set — refusing to send")) == "error"
+    assert c(ReadTimeout()) == "unknown" and c(TimeoutError()) == "unknown"
+    assert c(RuntimeError("boom")) == "unknown"
+
+
+async def _open_with(side_effect=None):
+    await accept_voice_command(help_cmd(), x_internal_secret=SECRET)
+    rec = Recorder()
+    brain = AsyncMock(return_value=answer(), side_effect=side_effect)
+    with patch.object(voice_worker, "ask_brain", brain), \
+         patch.object(voice_worker, "save_event", AsyncMock()):
+        await voice_worker.process_one(rec, OWNER)
+    return rec
+
+
+@uses_db
+async def test_before_accept_brain_final_then_executor_sends_nothing():
+    rec = await _open_with()
+    assert any("Смотрю логи." in m for m in rec.sent)
+    row = await queue_row("vc-help1")
+    assert row.answered_at is not None and row.source["delivery"]["state"] == "sent"
+    await _finish("итог")
+    out = Recorder()
+    opened = row.task_opened_at
+    await help_worker.track_help(out, opened + timedelta(minutes=1))
+    assert out.sent == []
+
+
+@uses_db
+async def test_after_accept_brain_is_status_only_and_executor_owns_final():
+    async def accept_during_brain(*_a, **_k):
+        await hand_to(ROOM, TASK, "codex")
+        return answer()
+
+    rec = await _open_with(side_effect=accept_during_brain)
+    assert not any("Смотрю логи." in m for m in rec.sent)
+    assert rec.sent[-1] == "Мозг ответил, задачу ведёт codex."
+    row = await queue_row("vc-help1")
+    assert row.answered_at is None
+    assert "delivery" not in row.source and row.source["progress"]["state"] == "sent"
+    await _finish("итог")
+    out = Recorder()
+    await help_worker.track_help(out, row.task_opened_at + timedelta(minutes=1))
+    await help_worker.track_help(out, row.task_opened_at + timedelta(minutes=2))
+    assert len(_results(out)) == 1
+
+
+@uses_db
+async def test_executor_reserved_final_brain_does_not_send_or_mark_answered():
+    async def executor_reserves(*_a, **_k):
+        await delivery_claim.claim("vc-help1", "executor", datetime(2026, 1, 1))
+        return answer()
+
+    rec = await _open_with(side_effect=executor_reserves)
+    assert not any("Смотрю логи." in m for m in rec.sent)
+    row = await queue_row("vc-help1")
+    assert row.answered_at is None and row.source["delivery"]["owner"] == "executor"
+
+
+@uses_db
+async def test_brain_ambiguous_send_is_unknown_without_answered_or_retry():
+    await accept_voice_command(help_cmd(), x_internal_secret=SECRET)
+
+    async def timeout_send(_h, _p):
+        if "Открыл задачу" in _p or "Услышала" in _p:
+            return 1
+        raise ReadTimeout("after request")
+
+    sends = []
+
+    async def spy(h, p):
+        sends.append(p)
+        return await timeout_send(h, p)
+
+    with patch.object(voice_worker, "ask_brain", AsyncMock(return_value=answer())), \
+         patch.object(voice_worker, "save_event", AsyncMock()):
+        await voice_worker.process_one(spy, OWNER)
+        await voice_worker.process_one(spy, OWNER)
+    row = await queue_row("vc-help1")
+    assert row.answered_at is None and row.source["delivery"]["state"] == "unknown"
+    assert row.status != "pending"
+    assert len([p for p in sends if "Смотрю логи" in p]) == 1
+
+
+@uses_db
+async def test_brain_definite_failure_is_error_and_retryable():
+    await accept_voice_command(help_cmd(), x_internal_secret=SECRET)
+
+    async def refuse(_h, p):
+        if "Смотрю логи" in p:
+            raise TelegramBadRequest("bad")
+        return 1
+
+    with patch.object(voice_worker, "ask_brain", AsyncMock(return_value=answer())), \
+         patch.object(voice_worker, "save_event", AsyncMock()):
+        await voice_worker.process_one(refuse, OWNER)
+    row = await queue_row("vc-help1")
+    assert row.source["delivery"]["state"] == "error" and row.status == "pending"
+
+
+def test_compose_has_result_since_in_bot_telegram_only():
+    from pathlib import Path
+
+    import yaml
+    compose = yaml.safe_load(
+        (Path(__file__).parents[2] / "infra" / "docker-compose.yml").read_text(encoding="utf-8"))
+    holders = [n for n, svc in compose["services"].items()
+               if "VOICE_RESULT_DELIVERY_SINCE" in (svc.get("environment") or {})]
+    assert holders == ["bot-telegram"]

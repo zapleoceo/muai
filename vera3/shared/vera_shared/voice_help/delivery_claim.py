@@ -95,3 +95,24 @@ async def update_source(command_id: str, extra: dict[str, Any], *, only_state: s
             if res.rowcount == 1:
                 return True
     return False
+
+
+DEFINITE_FAILURES = frozenset({
+    "TelegramBadRequest", "TelegramForbiddenError", "TelegramUnauthorized",
+    "TelegramNotFound", "TelegramRetryAfter", "TelegramConflictError",
+    "TelegramEntityTooLarge", "TelegramMigrateToChat",
+})
+
+
+def classify_send_error(exc: BaseException) -> str:
+    """`error` — Telegram точно не доставил (безопасно повторить); иначе `unknown`.
+
+    Таймаут после отправки запроса, 5xx, обрыв соединения — исход неизвестен:
+    сообщение могло дойти, автоповтора нет.
+    """
+    names = {c.__name__ for c in type(exc).__mro__}
+    if names & DEFINITE_FAILURES or isinstance(exc, ConnectionRefusedError):
+        return "error"
+    if isinstance(exc, RuntimeError) and "OWNER_TELEGRAM_ID not set" in str(exc):
+        return "error"  # отказ до обращения к Telegram
+    return "unknown"

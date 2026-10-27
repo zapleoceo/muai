@@ -222,6 +222,21 @@ Postgres (`tests/integration/test_voice_help_pg.py`): на SQLite `FOR UPDATE`
 ответ мозга считается доставкой, поэтому после него результат отдельным сообщением
 не уходит. Неясный исход (упали после отправки) не повторяется.
 
+**Одна срочная задача — одно финальное сообщение** (`bot_telegram/answer_delivery.py`:
+`deliver_answer`, `status_only_text`; `delivery_claim.claim`/`settle`/`update_source`,
+`result_state.move`/`record_error`/`record_receipt`/`executor_result`/`parse_since`/
+`delivery_since`/`log_delivery_mode`, `voice_commands.get_command`,
+`help_worker.failure_route`/`assigned_text`/`result_text`/`deliver_result`). Финал — заявка
+`delivery`. После `handoff_accept` финал за исполнителем, мозг шлёт только статус «Мозг
+ответил, задачу ведёт <агент>» (заявка `progress`, финал не расходует) и `answered_at`
+не ставит. До приёма мозг заканчивает через заявку `delivery`; если её занял исполнитель —
+не шлёт, `answered_at` не ставится: ответ считается доставленным только при квитанции
+самого мозга. Сбои отправки делит `classify_send_error`: точный отказ Telegram
+(`TelegramBadRequest`/`Forbidden`/`Unauthorized`, отказ соединения, `OWNER_TELEGRAM_ID`
+не задан) — `error`, повтор допустим; всё остальное (таймаут после запроса, 5xx, пустой
+message_id) — `unknown`, автоповтора нет. `VOICE_RESULT_DELIVERY_SINCE` — в окружении
+`bot-telegram` (docker-compose).
+
 **Мозг не ответил, а задача жива** (`voice_worker.notify_failed`,
 `help_worker.failure_route`): для срочной просьбы с задачей комнаты вместо
 «Не смогла выполнить…» — живой держатель или ожидающее предложение передачи →
