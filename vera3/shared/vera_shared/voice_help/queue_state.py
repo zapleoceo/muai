@@ -17,6 +17,7 @@ from sqlalchemy import select, update
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_voice import VoiceCommandRow
+from vera_shared.voice_help.result_state import ERROR, PENDING
 
 WATCHED = ("opened", "escalated", "reminded")
 #: `status` строки очереди, пока задачу никто не взял: не `pending` (бот взял
@@ -52,7 +53,7 @@ async def watched_help() -> list[VoiceCommandRow]:
     async with get_session() as s:
         return list((await s.execute(
             select(VoiceCommandRow)
-            .where(VoiceCommandRow.help_state.in_(WATCHED),
+            .where(VoiceCommandRow.help_state.in_(WATCHED + ("taken", PENDING, ERROR)),
                    VoiceCommandRow.task_id.is_not(None))
             .order_by(VoiceCommandRow.created_at)
         )).scalars())

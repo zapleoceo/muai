@@ -203,6 +203,20 @@ Postgres (`tests/integration/test_voice_help_pg.py`): на SQLite `FOR UPDATE`
 и снимает кнопки, чужому — пустой ответ; ничего не меняет. Каждый шаг —
 сначала сообщение, потом отметка: at-least-once, как у ответа.
 
+**Результат исполнителя** (`help_worker.deliver_result`, `result_text`,
+`vera_shared.voice_help.result_state`): когда задача закрыта со статусом done и в
+событии `done` есть текст, бот шлёт владельцу «Результат по задаче <id> (<агент>): …»
+через тот же `send_to_owner` (при `OWNER_TELEGRAM_ID=0` он бросает — fail-closed,
+отправки нет). Ответ мозга уже ушёл раньше и не повторяется. Без миграции: этап — в
+`voice_command_queue.help_state` (`result_pending` → `closed`; `result_error`,
+`result_unknown`), квитанция (`result_message_id`, `result_sent_at`,
+`result_errors`) — в `source`. Намерение (`result_pending`) пишется до отправки;
+исключение отправки или пустой message_id → `result_error`, повтор до
+`RESULT_MAX_ERRORS`; намерение без квитанции на следующем проходе (падение между
+отправкой и записью) → `result_unknown`, автоповтора нет. Строка закрывается только
+после квитанции; пустой результат закрывает как раньше. Результаты старше
+`RESULT_DELIVERY_SINCE` не досылаются.
+
 **Диспетчер** (`bot_telegram/dispatcher.py`, `dispatch_one()`; отдельный цикл
 `run_forever` в том же процессе бота, без LLM). Он не ждёт `ask_brain` в
 голосовом цикле: ожидание ответа не задерживает доставку новых задач. Один
