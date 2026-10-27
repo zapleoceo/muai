@@ -36,6 +36,7 @@ from vera_shared.voice_commands import (
     pending_notifications,
     revive_stale,
 )
+from vera_shared.voice_help.delivery_claim import claim, settle
 from vera_shared.voice_help.policy import source_uncertain
 from vera_shared.voice_help.queue_state import WATCHED, hold_command, mark_opened
 from vera_shared.voice_help.room_intake import open_help_task
@@ -142,12 +143,25 @@ async def process_one(send: Send, owner_id: int) -> bool:
                 await say(send, ack_text(row.instruction))
                 await mark_acked(row.command_id)
             answer = await ask_brain(row.instruction, owner_id, owner_id)
-            msg_id = await send(
-                format_reply(answer.raw, answer.provider, answer.cost_usd,
-                             answer.n_results, answer.n_history),
-                plain_fallback(answer.raw, answer.provider))
-            await mark_answered(row.command_id)
-            await save_event(owner_id, msg_id, "vera", answer.raw)
+            lost = await claim(row.command_id, "brain", utc_naive_now())
+            if lost is not None:
+                # Результат исполнителя (или прошлая отправка с неясным исходом) уже
+                # занял доставку по этой команде: второе сообщение не шлём.
+                log.info("voice-worker: %s — заявка у %s (%s), ответ мозга не шлю",
+                         row.command_id, lost["owner"], lost["state"])
+                await mark_answered(row.command_id)
+            else:
+                try:
+                    msg_id = await send(
+                        format_reply(answer.raw, answer.provider, answer.cost_usd,
+                                     answer.n_results, answer.n_history),
+                        plain_fallback(answer.raw, answer.provider))
+                except Exception:
+                    await settle(row.command_id, "brain", "error")
+                    raise
+                await settle(row.command_id, "brain", "sent", msg_id)
+                await mark_answered(row.command_id)
+                await save_event(owner_id, msg_id, "vera", answer.raw)
         if held:
             # Строку закроет help_worker, когда задачу возьмут.
             await hold_command(row.command_id, now)

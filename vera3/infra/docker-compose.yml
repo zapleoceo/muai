@@ -129,6 +129,7 @@ services:
       OFFICE_AUTO_PICKUP: ${OFFICE_AUTO_PICKUP:-0}
       OWNER_TELEGRAM_ID: ${OWNER_TELEGRAM_ID:-0}
       OFFICE_OWNER_DISPATCH_CHATS: ${OFFICE_OWNER_DISPATCH_CHATS:--1002884053196}
+      VOICE_RESULT_DELIVERY_SINCE: ${VOICE_RESULT_DELIVERY_SINCE:-}
       # sql_query: роль vera_ro (миграция 037), НЕ суперпользователь vera.
       # Пусто = sql_query отказывает (остальные инструменты работают).
       MCP_RO_DATABASE_URL: ${MCP_RO_DATABASE_URL:-}

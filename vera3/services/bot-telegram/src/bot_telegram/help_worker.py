@@ -22,6 +22,7 @@ from html import escape
 from bot_telegram.formatting import TELEGRAM_MAX_CHARS
 from vera_shared.db.models_voice import VoiceCommandRow
 from vera_shared.redact import redact_secrets
+from vera_shared.voice_help.delivery_claim import claim, settle
 from vera_shared.voice_help.hold import lift_hold
 from vera_shared.voice_help.policy import help_room
 from vera_shared.voice_help.queue_state import (
@@ -37,6 +38,7 @@ from vera_shared.voice_help.result_state import (
     PENDING,
     RESULT_MAX_ERRORS,
     UNKNOWN,
+    delivery_since,
     executor_result,
     move,
     record_error,
@@ -91,6 +93,9 @@ async def deliver_result(send: Send, row: VoiceCommandRow, now: datetime) -> boo
     Двухфазно (см. result_state): намерение пишется ДО отправки; квитанция — после.
     Нет текста (или он старше выкатки) — слать нечего, закрываем как раньше.
     """
+    since = delivery_since()
+    if since is None or row.created_at < since:
+        return True  # выключено или команда старше выкатки: закрываем как раньше
     found = await executor_result(help_room(), row.task_id)
     if found is None:
         return True
@@ -98,20 +103,29 @@ async def deliver_result(send: Send, row: VoiceCommandRow, now: datetime) -> boo
     if errors >= RESULT_MAX_ERRORS or not await move(
             row.command_id, (row.help_state,), PENDING, now):
         return False
+    held = await claim(row.command_id, "executor", now)
+    if held is not None:
+        # Ответ мозга (или чужая заявка) уже считается доставкой: второго сообщения нет.
+        log.info("help-worker: %s — заявка у %s (%s), результат не шлю",
+                 row.command_id, held["owner"], held["state"])
+        return held["owner"] == "brain" and held["state"] == "sent"
     text = result_text(row.task_id, *found)
     try:
         message_id = await send(escape(text, quote=False), text)
     except Exception as e:
+        await settle(row.command_id, "executor", "error")
         # send_to_owner без OWNER_TELEGRAM_ID бросает — это и есть fail-closed.
         log.warning("help-worker: результат %s не отправлен (%s), ошибка %d/%d",
                     row.command_id, type(e).__name__, errors + 1, RESULT_MAX_ERRORS)
         await record_error(row.command_id, errors + 1, now)
         return False
     if not message_id:
+        await settle(row.command_id, "executor", "error")
         log.warning("help-worker: результат %s без message_id, ошибка %d/%d",
                     row.command_id, errors + 1, RESULT_MAX_ERRORS)
         await record_error(row.command_id, errors + 1, now)
         return False
+    await settle(row.command_id, "executor", "sent", message_id)
     return await record_receipt(row.command_id, message_id, now)
 
 
