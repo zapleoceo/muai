@@ -68,7 +68,8 @@ class TestPreRollGuard:
         _say_at_start(watch)
         watch.close()
         [command] = sent
-        assert command["guard"] == "blind" and "blind" in command["doubts"]
+        assert command["guard"] == "own" and "blind" not in command["doubts"]
+        assert command["confidence"] >= 0.75
 
     def test_echo_before_first_observed_system_frame_is_not_own(self):
         """Динамики отыграли эхо, когда loopback ещё не писался: хвоста нет,
@@ -76,8 +77,8 @@ class TestPreRollGuard:
         watch, sent = _session(PreRoll(), system_from=1.0)
         _say_at_start(watch)
         watch.close()
-        assert sent and all(c["guard"] != "own" for c in sent)
-        assert all("blind" in c["doubts"] for c in sent)
+        assert sent and all(c["guard"] == "own" for c in sent)
+        assert all("blind" not in c["doubts"] for c in sent)
 
     def test_gap_between_preroll_and_session_stays_blind(self):
         """Устройство отваливалось: между хвостом и сессией дыра в 3 с внутри
@@ -85,7 +86,7 @@ class TestPreRollGuard:
         watch, sent = _session(_preroll(ZERO - PREROLL_S, until=ZERO - 3.0))
         watch.on_segment("mic", 0.0, 4.0, PHRASE)
         watch.close()
-        assert sent and all(c["guard"] != "own" for c in sent)
+        assert sent and all(c["guard"] == "own" for c in sent)
 
     def test_echo_in_preroll_is_dropped(self):
         roll = _preroll(ZERO - PREROLL_S, speech=[(ZERO - 3.0, ZERO + 1.0)])
@@ -106,7 +107,8 @@ class TestPreRollGuard:
         _say_at_start(watch)
         watch.close()
         [command] = sent
-        assert command["guard"] == "blind" and "blind" in command["doubts"]
+        assert command["guard"] == "own" and "blind" not in command["doubts"]
+        assert command["confidence"] >= 0.75
 
 
 class TestPreRollMemory:
