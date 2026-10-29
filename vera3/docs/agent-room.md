@@ -1,5 +1,10 @@
 # Комната агентов (room MCP)
 
+Рабочий порядок «один ответственный, один исполнитель, точные result/decision refs
+и подтверждённая отправка»: [coordination-protocol.md](coordination-protocol.md).
+`room_message_get(id, room, task_id=None)` читает полное сообщение; заданный task_id
+отклоняет чужую/непривязанную задачу как не найденную. Курсор не меняется.
+
 ## Metadata-only correction proposal (disabled by default)
 
 `room_task_metadata_correct` is a proposed, default-off coordination tool.

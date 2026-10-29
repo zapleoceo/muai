@@ -151,6 +151,32 @@ async def test_compact_inbox_full_get_and_safe_cursor(sqlite_db):
         await r.room_inbox(CODEX, since_id=0, after_id=0)
 
 
+async def test_full_get_binds_result_to_expected_task_without_moving_cursor(sqlite_db):
+    result = (await r.room_post("verified artifact", CLAUDE, task_id="T-1",
+                               status="done"))["message"]
+    got = await r.room_message_get(result["id"], task_id="T-1")
+    assert got["message"]["message_id"] == result["message_id"]
+    assert got["message"]["body"] == "verified artifact"
+    assert (await r.room_inbox(CODEX))["cursor"] == 0
+    assert (await r.room_message_get(result["id"]))["message"] == got["message"]
+
+
+@pytest.mark.parametrize("actual_task", ["T-2", None])
+async def test_full_get_rejects_result_from_another_or_unbound_task(sqlite_db, actual_task):
+    result = (await r.room_post("unrelated result", CLAUDE, task_id=actual_task,
+                               status="done"))["message"]
+    with pytest.raises(ValueError, match="not found"):
+        await r.room_message_get(result["id"], task_id="T-1")
+
+
+async def test_bound_full_get_keeps_room_and_missing_id_boundaries(sqlite_db, monkeypatch):
+    monkeypatch.setenv("ROOM_NAMES", "main,other")
+    result = (await r.room_post("result", CLAUDE, task_id="T-1"))["message"]
+    for room, id_ in [("other", result["id"]), ("main", result["id"] + 100)]:
+        with pytest.raises(ValueError, match="not found"):
+            await r.room_message_get(id_, room=room, task_id="T-1")
+
+
 async def test_cross_session_delivery_and_addressed_labels(sqlite_db):
     await r.room_post("same session", CODEX, session="office")
     await r.room_post("other session", CODEX, session="orchestra")

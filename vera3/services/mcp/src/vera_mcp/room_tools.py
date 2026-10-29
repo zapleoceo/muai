@@ -129,10 +129,10 @@ async def room_history(
 
 
 async def room_message_get(
-    id: Annotated[int, Field(ge=1)], room: Room = "main",
+    id: Annotated[int, Field(ge=1)], room: Room = "main", task_id: Ident | None = None,
 ) -> dict[str, Any]:
-    """Fetch one full Room message by numeric id within an allowed room."""
-    item = await messages.get_message(room=_room(room), id=id)
+    """Fetch full text by numeric id; optional task_id rejects an unrelated result."""
+    item = await messages.get_message(room=_room(room), id=id, task_id=task_id)
     if item is None:
         raise ValueError(f"message {id} not found in room {room}")
     return {"room": room, "message": message_view(item)}
