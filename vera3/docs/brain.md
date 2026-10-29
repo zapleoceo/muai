@@ -689,8 +689,16 @@ unreturned event does not exist.
 For one explicitly requested quotation (`phrase "…"`, `quote "…"`, `фразу «…»`,
 `цитату “…”`), `split_quoted_query()` separates the quoted search text from the
 surrounding scope and answer instructions. A query consisting entirely of one
-quotation uses the same path. The quotation supplies FTS terms and the embedding;
-surrounding words cannot introduce an inferred account ranking bonus. Quoted dates,
+quotation uses the same path. The quotation uses indexed PostgreSQL phrase
+matching (`phraseto_tsquery`) on `content_text` and `transcript_text`;
+only contiguous lexical matches enter the bounded candidate set. For a
+transcript-only hit, the candidate carries a bounded excerpt around the phrase
+into the synthesis context instead of an unrelated call summary. Matched
+phrases are ordered by event recency, including bot-authored events, before
+synthesis. This path does not request an embedding or run the agent's broader
+search loop. Ordinary unquoted queries keep their FTS OR terms, ANN candidates,
+and existing scoring. Surrounding words in a quoted request cannot introduce
+an inferred account ranking bonus. Quoted dates,
 project names, summary/report words and event-ID markers do not set search scope,
 report mode, or a direct event read; dates,
 projects, and summary/report intent outside the quotation still apply. Inferred
@@ -708,10 +716,10 @@ delimiters, escaped/newline quotations, quotations longer than 500 characters, a
 recognized negative wording outside the quotation retain the previous search
 semantics. Exclusion predicates are not implemented; fallback does not guarantee
 an exclusion search. A leading quotation followed by prose without a phrase/quote
-marker also uses the previous path. Ordinary FTS still uses
-OR prefixes, ANN still contributes its bounded pool, and numeric scoring/topK are
-unchanged. This removes demonstrated context pollution; it does not guarantee that
-every exact phrase in the database is retrieved or that quoted words match contiguously.
+marker also uses the previous path. The phrase path uses PostgreSQL lexemes and
+stemming rather than byte-for-byte substring equality; matches beyond its
+200-row recency window are not returned. It cannot establish that an absent
+phrase never appeared in the original source.
 The regression tests reproduce a quote lost at topK 3/10 through an inferred account
 bonus in an otherwise identical semantic pool, and quote content incorrectly setting
 date/project scope. PostgreSQL FTS/rank and production performance need separate
@@ -721,11 +729,10 @@ while excluding another source/account, hidden rows and out-of-window rows. It p
 no schema reset or permanent-table writes. Local absence of PostgreSQL is a skipped test,
 not a successful SQL verification.
 
-For a recognized quotation with no selected candidates and `use_agent=false`, the
-response is deterministic: search returned no accessible records, and this bounded
-selection does not prove that the quotation is absent from original messages.
-No LLM call is made for that empty result. Agent mode retains further tool search;
-its answer remains governed by the limited-selection evidence rules.
+For a recognized quotation with no selected candidates, the response is
+deterministic for both agent and direct modes: search returned no accessible
+records, and this bounded selection does not prove that the quotation is absent
+from original messages. No LLM call is made for that empty result.
 
 ### Monthly reports (`reports.py`) — exact aggregation, no LLM
 

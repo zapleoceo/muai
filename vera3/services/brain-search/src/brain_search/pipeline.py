@@ -80,7 +80,9 @@ async def search_ranked(
     exact_ids = explicit_event_ids(question)
     title = explicit_title(question)
     identifiers = exact_identifiers(question)
-    q_vec = await embed_query(question) if question.strip() and not exact_ids else None
+    focus, _scope = split_quoted_query(question)
+    phrase = focus if focus != question else None
+    q_vec = await embed_query(question) if question.strip() and not (exact_ids or phrase) else None
     ts, acc_words = query_terms(question, project)
     found = await fetch_candidates(
         ts_query=ts, acc_words=acc_words,
@@ -88,7 +90,7 @@ async def search_ranked(
         project=None if exact_ids else project,
         q_vec=q_vec, limit=limit, source=source, links=links,
         exact_event_ids=exact_ids, tickets=identifiers,
-        title=title)
+        title=title, phrase=phrase)
     if title and time_range and not exact_ids and not found.title_found:
         return found, []
     if is_identifier_only(question, identifiers) and not has_exact_rows(found.rows):

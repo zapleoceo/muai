@@ -18,8 +18,12 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.vectors import as_pg_vector
 
 from brain_search.ann import fetch_ann_rows, merge_candidates, vec_sim_column
-from brain_search.fts import fts_match_sql, fts_rank_sql
-from brain_search.identifier_rows import fetch_identifier_rows, merge_identifier_rows
+from brain_search.fts import fts_match_sql, fts_phrase_match_sql, fts_rank_sql
+from brain_search.identifier_rows import (
+    IDENTIFIER_RANK,
+    fetch_identifier_rows,
+    merge_identifier_rows,
+)
 from brain_search.retrieval_filters import (
     NOT_A_WORLD_EVENT,
     LinkScope,
@@ -43,7 +47,8 @@ CANDIDATE_POOL = 200
 #: Ветка «ни слов, ни времени, ни вектора» — показать просто свежее.
 RECENT_FALLBACK = 30
 
-_BASE_COLUMNS = "id, source, source_event_id, occurred_at, content_text, importance"
+_BASE_COLUMNS = ("id, source, source_event_id, occurred_at, "
+                 "{content_expr} AS content_text, importance")
 _PLAIN = "0.0 AS rank, account"
 
 
@@ -57,13 +62,15 @@ class Candidates:
 
 
 def _select(*, extra_cols: str, join: str, where: str, order: str,
-            limit_sql: str, with_vec: bool = False) -> Any:
+            limit_sql: str, with_vec: bool = False,
+            content_expr: str = "content_text") -> Any:
     # первые девять колонок — по позициям (rows.Candidate), остальные по именам;
     # седьмая (embedding) зарезервирована и всегда NULL: вектор не покидает БД
     sim = vec_sim_column() if with_vec else ""
     join_sql = f"{join} event_embeddings ee ON ee.event_id = events.id" if with_vec else ""
     return text(f"""
-        SELECT {_BASE_COLUMNS}, NULL AS embedding, {extra_cols}{sim}, {META_COLUMNS}
+        SELECT {_BASE_COLUMNS.format(content_expr=content_expr)}, NULL AS embedding,
+               {extra_cols}{sim}, {META_COLUMNS}
         FROM events
         {join_sql}
         WHERE {where}
@@ -96,6 +103,7 @@ async def fetch_candidates(
     exact_event_ids: list[int] | None = None,
     tickets: list[str] | None = None,
     title: str | None = None,
+    phrase: str | None = None,
 ) -> Candidates:
     """Кандидаты для скоринга: основной режим + смысловые из ANN."""
     async with get_session() as s:
@@ -103,6 +111,10 @@ async def fetch_candidates(
             rows = await _exact_rows(s, exact_event_ids[:limit], source, links,
                                      time_range=time_range, project=project)
             return Candidates([Candidate.of(row) for row in rows], "exact_id")
+        if phrase:
+            rows = await _phrase_rows(s, phrase, source, links,
+                                      time_range=time_range, project=project)
+            return Candidates([Candidate.of(row) for row in rows], "phrase")
         found, with_vec = await _primary_with_degrade(
             s, ts_query=ts_query, acc_words=acc_words, time_range=time_range,
             project=project, q_vec=q_vec, limit=limit, source=source, links=links)
@@ -143,6 +155,38 @@ async def _exact_rows(s, event_ids: list[int], source: str | None,
     rows = list((await s.execute(stmt, binds | scope_params)).all())
     by_id = {Candidate.of(row).id: row for row in rows}
     return [by_id[event_id] for event_id in event_ids if event_id in by_id]
+
+
+async def _phrase_rows(s, phrase: str, source: str | None,
+                       links: LinkScope | None, *, time_range=None, project=None) -> list[Any]:
+    """Return contiguous quoted matches within the same access and scope filters."""
+    scope_sql, scope_params = semantic_filter(project, time_range, source, links)
+    content_match = " OR ".join(
+        f"to_tsvector('{cfg}', content_text) @@ phraseto_tsquery('{cfg}', :phrase)"
+        for cfg in ("russian", "indonesian")
+    )
+    phrase_at = "strpos(lower(transcript_text), lower(:phrase))"
+    transcript_excerpt = (
+        f"CASE WHEN {phrase_at} > 0 THEN "
+        f"substring(transcript_text FROM greatest({phrase_at} - 200, 1) "
+        "FOR char_length(:phrase) + 400) "
+        "WHEN to_tsvector('russian', transcript_text) "
+        "@@ phraseto_tsquery('russian', :phrase) THEN "
+        "ts_headline('russian', transcript_text, phraseto_tsquery('russian', :phrase), "
+        "'MaxWords=80, MinWords=30, StartSel=[, StopSel=]') "
+        "ELSE ts_headline('indonesian', transcript_text, "
+        "phraseto_tsquery('indonesian', :phrase), "
+        "'MaxWords=80, MinWords=30, StartSel=[, StopSel=]') END"
+    )
+    content_expr = (f"CASE WHEN ({content_match}) THEN content_text "
+                    f"ELSE 'Transcript: ' || ({transcript_excerpt}) END")
+    stmt = _select(
+        extra_cols=f"{IDENTIFIER_RANK}.0 AS rank, account", join="LEFT JOIN",
+        where=f"({scope_sql}) AND {fts_phrase_match_sql('phrase')}",
+        order="occurred_at DESC", limit_sql=str(CANDIDATE_POOL),
+        content_expr=content_expr,
+    )
+    return list((await s.execute(stmt, {**scope_params, "phrase": phrase})).all())
 
 
 async def _run(s, stmt, params: dict[str, Any], mode: str,

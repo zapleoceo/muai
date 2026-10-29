@@ -140,7 +140,9 @@ async def search(
     if report is not None:
         return report
 
-    q_vec = await embed_query(query.q) if not exact_ids else None
+    focus, _scope = split_quoted_query(query.q)
+    phrase = focus if focus != query.q else None
+    q_vec = await embed_query(query.q) if not (exact_ids or phrase) else None
     time_range = parse_time_range(query.q)
     if time_range:
         # DEBUG, не INFO — query.q содержит текст вопроса Димы (может нести
@@ -161,7 +163,7 @@ async def search(
         project=None if exact_ids else project,
         q_vec=q_vec, limit=eff_limit, links=await _link_scope(query),
         exact_event_ids=exact_ids, tickets=identifiers,
-        title=title,
+        title=title, phrase=phrase,
     )
 
     if is_identifier_only(query.q, identifiers) and not has_exact_rows(found.rows):
@@ -179,15 +181,15 @@ async def search(
             results=[], provider=None, cost_usd=0,
         )
 
-    focus, _scope = split_quoted_query(query.q)
-    if focus != query.q and not found.rows and not query.use_agent:
+    if phrase and not found.rows:
         return AnswerResponse(
             answer="Поиск по указанной цитате не вернул доступных записей. Это ограниченная поисковая выборка; она не доказывает отсутствие цитаты в исходных сообщениях.",
             results=[], provider=None, cost_usd=0,
         )
 
     return await synthesize(
-        query, found.rows, q_vec,
+        query.model_copy(update={"use_agent": False}) if phrase else query,
+        found.rows, q_vec,
         acc_words=found.acc_words, summary=summary, eff_limit=eff_limit,
         project=project.name if project and not exact_ids else None,
     )
