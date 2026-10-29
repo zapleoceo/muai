@@ -183,11 +183,14 @@ async def history(*, room: str, limit: int, before_id: int | None = None,
     return [message_dict(r) for r in reversed(rows)]
 
 
-async def get_message(*, room: str, id: int) -> dict[str, Any] | None:
-    """Read one full message in the requested room without changing any cursor."""
+async def get_message(*, room: str, id: int, task_id: str | None = None,
+                      ) -> dict[str, Any] | None:
+    """Read one full message, optionally bound to a task, without moving a cursor."""
     async with get_session() as s:
         row = await s.get(RoomMessageRow, id)
-        return message_dict(row) if row is not None and row.room == room else None
+        if row is None or row.room != room or (task_id is not None and row.task_id != task_id):
+            return None
+        return message_dict(row)
 
 
 async def has_reply(*, room: str, in_reply_to: str, from_agent: str, status: str) -> bool:
