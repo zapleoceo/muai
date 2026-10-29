@@ -181,7 +181,7 @@ async def _phrase_rows(s, phrase: str, source: str | None,
     content_expr = (f"CASE WHEN ({content_match}) THEN content_text "
                     f"ELSE 'Transcript: ' || ({transcript_excerpt}) END")
     stmt = _select(
-        extra_cols=f"{IDENTIFIER_RANK}.0 AS rank, account", join="LEFT JOIN",
+        extra_cols=f"{IDENTIFIER_RANK} AS rank, account", join="LEFT JOIN",
         where=f"({scope_sql}) AND {fts_phrase_match_sql('phrase')}",
         order="occurred_at DESC", limit_sql=str(CANDIDATE_POOL),
         content_expr=content_expr,
