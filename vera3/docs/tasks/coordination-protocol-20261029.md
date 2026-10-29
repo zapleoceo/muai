@@ -2,7 +2,7 @@
 
 ## Стан
 
-- Время: 2026-10-29 19:30, Asia/Saigon.
+- Время: 2026-10-29 19:44, Asia/Saigon.
 - Canonical task: main / vera-coordination-protocol-20261029, fencing_token 1;
   responsible dot; исполнитель — локальная сессия Codex codex-local-protocol-20261029.
 - Worktree: C:/Users/work_zaporozhets/.codex/worktrees/vera-coordination-protocol/myAI;
@@ -13,9 +13,18 @@
 - Доказательства: 4 новых теста task binding сначала упали на отсутствующем аргументе,
   после изменения прошли. MCP-набор: 32 passed. Сценарный набор из протокола:
   205 passed, 2 прежних предупреждения pytest о sync-тестах с asyncio mark.
-  Ruff, Vulture, git diff --check прошли. SQLite и транспортные заглушки;
-  PostgreSQL/CI и живая доставка пока не проверены.
-- Следующий шаг: независимое ревью, draft PR и CI.
+  Ruff, Vulture, git diff --check, secret scan и docs name-sync прошли.
+  Локально SQLite и транспортные заглушки; CI 40874075600 на code head 55a9b112:
+  4714 passed, включая PostgreSQL integration, quality/docs и все builds success.
+  Живая доставка этим изменением не проверялась.
+- Независимое ревью: Codex protocol_review, PASS на diff 29321e60..55a9b112
+  и rollout note. Первый reviewer проверил документы, но не имел доступа к коду;
+  его вывод не считается завершённым code review.
+- Результат: draft PR https://github.com/zapleoceo/muai/pull/79.
+  Последующая правка только документации; актуальные проверки финального head
+  читать в Checks этого PR, подтверждение передачи — в истории canonical Room task.
+- Следующий шаг: после проверки финального PR получить отдельное решение владельца
+  о merge/deploy. Этот task подготавливает изменение, не выпускает его.
 - Блокер Claude: Room main #6110, message_id claude-5e015e1824e2,
   2026-10-29T09:32:17.668751: лимит исчерпан. Более поздние сверки не подтверждают
   восстановление квоты. Новых вызовов Claude 0; обхода/пробного запроса нет.
