@@ -174,6 +174,7 @@ async def test_quote_search_keeps_structured_source_account_and_date_filters(mon
                              "synthetic-test-secret")
     args = fetch.await_args.kwargs
     assert args["ts_query"] == "today:* | amber:*"
+    assert args["phrase"] == "today amber" and args["q_vec"] is None
     assert args["acc_words"] == [] and args["limit"] == 3
     assert args["time_range"] == (datetime(2026, 10, 3, 17), datetime(2026, 10, 4, 17))
     assert args["links"].flt == EventFilter(source="gmail", account="test-account",
@@ -196,7 +197,8 @@ async def test_agent_search_preserves_explicit_source_and_day_window(monkeypatch
     assert args["source"] == "gmail" and args["limit"] == 3
     assert args["time_range"] == (datetime(2026, 10, 3, 17), datetime(2026, 10, 4, 17))
     assert args["ts_query"] == "amber:* | otter:* | lantern:*"
-    embed.assert_awaited_once_with(["amber otter lantern"])
+    embed.assert_not_awaited()
+    assert args["phrase"] == "amber otter lantern"
 
 
 @pytest.mark.parametrize("use_agent", [False, True])
@@ -214,10 +216,41 @@ async def test_empty_quote_selection_does_not_claim_source_absence(monkeypatch, 
     monkeypatch.setattr(search_app, "synthesize", synthesis)
     result = await search_app.search(SearchQuery(q=SHORT, use_agent=use_agent),
                                      "synthetic-test-secret")
-    if use_agent:
-        synthesis.assert_awaited_once()
-    else:
-        synthesis.assert_not_awaited()
-        assert result.results == [] and result.provider is None and result.cost_usd == 0
-        assert "ограниченная поисковая выборка" in result.answer
-        assert "не доказывает отсутствие" in result.answer
+    synthesis.assert_not_awaited()
+    assert result.results == [] and result.provider is None and result.cost_usd == 0
+    assert "ограниченная поисковая выборка" in result.answer
+    assert "не доказывает отсутствие" in result.answer
+
+
+@pytest.mark.asyncio
+async def test_quote_with_hits_disables_broad_agent_search(monkeypatch):
+    from brain_search import app as search_app
+    from brain_search.models import AnswerResponse, SearchQuery
+    from brain_search.retrieval import Candidates
+
+    monkeypatch.setenv("INTERNAL_SECRET", "synthetic-test-secret")
+    monkeypatch.setattr(search_app, "fetch_candidates", AsyncMock(
+        return_value=Candidates([_candidate(900101, body="amber otter lantern",
+                                              account="test-account", importance=50)], "phrase")))
+    monkeypatch.setattr(search_app, "embed_query", AsyncMock(
+        side_effect=AssertionError("explicit phrase must not call embeddings")))
+    synthesis = AsyncMock(return_value=AnswerResponse(
+        answer="Found", results=[], provider=None, cost_usd=0))
+    monkeypatch.setattr(search_app, "synthesize", synthesis)
+    await search_app.search(SearchQuery(q=SHORT, use_agent=True), "synthetic-test-secret")
+    assert synthesis.await_args.args[0].use_agent is False
+    assert synthesis.await_args.args[2] is None
+
+
+@pytest.mark.asyncio
+async def test_ordinary_multiterm_query_keeps_semantic_path(monkeypatch):
+    from brain_search.retrieval import Candidates
+
+    fetch = AsyncMock(return_value=Candidates([], "fts"))
+    embed = AsyncMock(return_value=[[0.6]])
+    monkeypatch.setattr(pipeline, "fetch_candidates", fetch)
+    monkeypatch.setattr(pipeline, "embed", embed)
+    await pipeline.search_ranked("amber otter lantern", limit=3)
+    embed.assert_awaited_once_with(["amber otter lantern"])
+    assert fetch.await_args.kwargs["phrase"] is None
+    assert fetch.await_args.kwargs["q_vec"] == [0.6]

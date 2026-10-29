@@ -47,13 +47,29 @@ async def quote_pg_events(monkeypatch):
                      {"id": 900302, "source": "gmail"},
                      {"id": 900303, "status": "hidden"},
                      {"id": 900304, "at": datetime(2026, 10, 5, 12)}]
+            rows += [
+                {"id": 900401, "body": "Перебудувати чергу дзвінків менеджерів",
+                 "at": datetime(2026, 10, 4, 12, 30)},
+                {"id": 900402, "body": "Перебудувати іншу чергу дзвінків менеджерів"},
+                {"id": 900403, "source": "gmail", "account": "mail-account",
+                 "body": "Your assessment is still open"},
+                {"id": 900404, "source": "gmail", "account": "other-account",
+                 "body": "Your assessment is still open"},
+                {"id": 900405, "body": "Unrelated call summary",
+                 "transcript": "other words " * 500
+                               + "Then the cobalt heron lantern appeared after lunch"},
+                {"id": 900406, "body": "Another unrelated summary",
+                 "transcript": "The managers called clients"},
+            ]
             await conn.execute(text("""
                 INSERT INTO events
                     (id, source, source_event_id, occurred_at, content_text,
-                     importance, account, triage_status, metadata)
+                     transcript_text, importance, account, triage_status, metadata)
                 VALUES (:id, :source, :external_id, :at, :body,
-                        50, :account, :status, '{}')
-            """), [base | row | {"external_id": str(row["id"])} for row in rows])
+                        :transcript, 50, :account, :status, '{}')
+            """), [base | row | {"external_id": str(row["id"]),
+                                   "transcript": row.get("transcript")}
+                   for row in rows])
 
             @asynccontextmanager
             async def session():
@@ -94,3 +110,50 @@ async def test_context_preserves_quote_with_source_account_day_scope(quote_pg_ev
                               "candidates": [row.id for row in found.rows]}
     assert results["short"] == [900101], diagnostics
     assert results["long"] == results["short"], diagnostics
+
+
+@pytest.mark.parametrize(("question", "source", "account", "expected"), [
+    ('Найди фразу «Перебудувати чергу дзвінків менеджерів»',
+     "telegram", "test-account", [900401]),
+    ('Find phrase "assessment is still open"', "gmail", "mail-account", [900403]),
+    ('Find phrase "phrase absent from messages"', "telegram", "test-account", []),
+])
+@pytest.mark.asyncio
+async def test_explicit_phrase_is_contiguous_and_scoped(
+    quote_pg_events, question, source, account, expected,
+):
+    from brain_search.pipeline import search_ranked
+    from brain_search.retrieval import LinkScope
+    from vera_shared.links.filters import EventFilter
+
+    scope = LinkScope(EventFilter(source=source, account=account,
+                                 start=datetime(2026, 10, 3, 17),
+                                 end=datetime(2026, 10, 4, 17)))
+    found, ranked = await search_ranked(question, limit=3, source=source, links=scope)
+    assert found.mode == "phrase"
+    assert [row.id for _, row in ranked] == expected
+
+
+@pytest.mark.asyncio
+async def test_transcript_only_phrase_reaches_synthesis_context(quote_pg_events):
+    from brain_search.models import SearchResult
+    from brain_search.pipeline import search_ranked
+    from brain_search.retrieval import LinkScope
+    from brain_search.scoring import score_rows
+    from brain_search.synthesis import build_context
+    from vera_shared.links.filters import EventFilter
+
+    scope = LinkScope(EventFilter(source="telegram", account="test-account"))
+    found, ranked = await search_ranked('Find phrase "cobalt heron lantern"',
+                                        limit=3, source="telegram", links=scope)
+    assert found.mode == "phrase" and [row.id for _, row in ranked] == [900405]
+    assert "cobalt heron lantern" in ranked[0][1].content_text
+    scored = score_rows(found.rows, None, [])
+    result = SearchResult(score=scored[0][0], **scored[0][1])
+    context = build_context([result], {row.id: row for row in found.rows})
+    assert "cobalt heron lantern" in context
+
+    fallback, fallback_ranked = await search_ranked('Find phrase "manager called"',
+                                                    limit=3, source="telegram", links=scope)
+    assert fallback.mode == "phrase" and [row.id for _, row in fallback_ranked] == [900406]
+    assert "[managers] [called]" in fallback_ranked[0][1].content_text
