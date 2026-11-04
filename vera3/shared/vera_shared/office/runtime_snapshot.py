@@ -202,10 +202,12 @@ def snapshot_error(row: RoomMessageRow, now: datetime) -> str | None:
         return "invalid JSON or timestamp"
 
 
-def validate_runtime_publication(body: str, now: datetime) -> None:
+def validate_runtime_publication(body: str, now: datetime,
+                                 created_at: datetime | None = None) -> None:
     """Fail a malformed addressed runtime post before Room acknowledges persistence."""
     row = RoomMessageRow(room="main", from_agent="dot", to_agent=RECIPIENT,
-                         task_id=None, status="info", body=body, created_at=now,
+                         task_id=None, status="info", body=body,
+                         created_at=created_at or now,
                          message_id="preflight")
     if (reason := snapshot_error(row, now)) is not None:
         raise ValueError(f"OFFICE_RUNTIME_V1 rejected: {reason}")

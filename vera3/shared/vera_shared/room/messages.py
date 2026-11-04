@@ -5,7 +5,7 @@ Posting takes a per-room transaction lock before INSERT to preserve commit order
 """
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Callable, Iterable
 from typing import Any
 
 from sqlalchemy import and_, func, or_, select, text
@@ -73,7 +73,9 @@ def _same_payload(r: RoomMessageRow, payload: dict[str, Any]) -> bool:
 async def post_message(*, room: str, message_id: str, from_agent: str, body: str,
                        to_agent: str | None = None, task_id: str | None = None,
                        in_reply_to: str | None = None, status: str = "info",
-                       from_session: str | None = None) -> tuple[dict[str, Any], bool]:
+                       from_session: str | None = None,
+                       validate_row: Callable[[RoomMessageRow], None] | None = None,
+                       ) -> tuple[dict[str, Any], bool]:
     """(сообщение, deduped). Повтор того же message_id с тем же содержимым — дубль, не ошибка."""
     if status not in MESSAGE_STATUSES:
         raise ValueError(f"status must be one of {', '.join(MESSAGE_STATUSES)}")
@@ -91,6 +93,8 @@ async def post_message(*, room: str, message_id: str, from_agent: str, body: str
             s.add(row)
             await s.flush()
             await s.refresh(row)
+            if validate_row is not None:
+                validate_row(row)
             return message_dict(row), False
     except IntegrityError:
         prior = await _existing(room, message_id)
