@@ -156,3 +156,19 @@ def test_late_invalid_older_check_does_not_hide_newer_valid_check() -> None:
     late.created_at = NOW.replace(minute=1)
     picked = latest_runtime_snapshot([late, current], NOW)
     assert picked is not None and picked.message_id == "current"
+
+
+def test_future_invalid_check_does_not_hide_later_valid_correction() -> None:
+    from dashboard.office_runtime_service import latest_runtime_snapshot
+
+    future_invalid = message([entry(thread_id=UUID, state="in_progress")])
+    future_invalid.message_id = "future-invalid"
+    future_invalid.body = future_invalid.body.replace(
+        "2026-10-14T12:00:00+00:00", "2099-01-01T00:00:00+00:00")
+    corrected = message([entry(thread_id=UUID)])
+    corrected.message_id = "corrected"
+    corrected.created_at = NOW.replace(minute=5)
+    corrected.body = corrected.body.replace(
+        "2026-10-14T12:00:00+00:00", "2026-10-14T12:05:00+00:00")
+    picked = latest_runtime_snapshot([future_invalid, corrected], corrected.created_at)
+    assert picked is not None and picked.message_id == "corrected"

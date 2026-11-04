@@ -152,6 +152,9 @@ def latest_runtime_snapshot(rows: list[RoomMessageRow], now: datetime) -> Runtim
                     checked = utc_naive(checked)
             except (KeyError, TypeError, ValueError, AttributeError):
                 checked = utc_naive(row.created_at)
+            # A rejected payload has no trusted observation time. In particular,
+            # a future timestamp must not outrank a later valid correction.
+            checked = min(checked, utc_naive(row.created_at), utc_naive(now))
         ranked.append((checked, utc_naive(row.created_at), row.message_id, snapshot))
     return max(ranked, default=(None, None, None, None))[3]
 
