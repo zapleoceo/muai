@@ -61,6 +61,11 @@ async def _existing(room: str, message_id: str) -> RoomMessageRow | None:
         ))).scalar_one_or_none()
 
 
+async def already_posted(room: str, message_id: str) -> bool:
+    """Allow an idempotent retry to retain the original snapshot validation result."""
+    return await _existing(room, message_id) is not None
+
+
 def _same_payload(r: RoomMessageRow, payload: dict[str, Any]) -> bool:
     return all(getattr(r, k) == v for k, v in payload.items())
 
