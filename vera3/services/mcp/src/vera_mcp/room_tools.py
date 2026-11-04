@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 import uuid
+from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import Context
 from pydantic import Field
+from vera_shared.office.runtime_snapshot import PREFIX, validate_runtime_publication
 from vera_shared.room import messages, task_queue
 
 from vera_mcp.auth import client_of
@@ -51,6 +53,12 @@ async def room_post(
 ) -> dict[str, Any]:
     """Написать в комнату (to=None — всем; to — адресация, не приватность). Повтор message_id с тем же содержимым — не дубль, с другим — ошибка. session — метка твоего runtime для аудита. Post a message; the same message_id is idempotent."""
     me = client_of(ctx)
+    runtime_snapshot = me == "dot" and to == "office-dashboard" and body.startswith(PREFIX)
+    if runtime_snapshot:
+        if room != "main" or task_id is not None or status != "info":
+            raise ValueError("OFFICE_RUNTIME_V1 requires main/office-dashboard, no task, info")
+        if message_id is None or not await messages.already_posted(_room(room), message_id):
+            validate_runtime_publication(body, datetime.now(UTC))
     reply_id = in_reply_to
     if isinstance(in_reply_to, int):
         prior = await messages.get_message(room=_room(room), id=in_reply_to)
@@ -61,7 +69,9 @@ async def room_post(
         room=_room(room), message_id=message_id or f"{me}-{uuid.uuid4().hex[:12]}",
         from_agent=me, body=body, to_agent=to, task_id=task_id,
         in_reply_to=reply_id,
-        status=status, from_session=check_session(me, session))
+        status=status, from_session=check_session(me, session),
+        validate_row=(lambda row: validate_runtime_publication(
+            row.body, datetime.now(UTC), created_at=row.created_at)) if runtime_snapshot else None)
     return {"ok": True, "deduped": deduped, "message": message_view(msg)}
 
 
