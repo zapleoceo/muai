@@ -4,7 +4,16 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import BigInteger, DateTime, Index, String, UniqueConstraint, func
+from sqlalchemy import (
+    BigInteger,
+    DateTime,
+    ForeignKeyConstraint,
+    Index,
+    LargeBinary,
+    String,
+    UniqueConstraint,
+    func,
+)
 from sqlalchemy.orm import Mapped, mapped_column
 
 from vera_shared.db.engine import Base
@@ -21,12 +30,15 @@ class RoomTaskOriginRow(Base):
     room: Mapped[str] = mapped_column(String(64), primary_key=True)
     task_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     creator_principal: Mapped[str] = mapped_column(String(64), nullable=False)
+    creator_project: Mapped[str | None] = mapped_column(String(64), nullable=True)
     client_task_id: Mapped[str] = mapped_column(String(128), nullable=False)
     payload_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     origin: Mapped[dict[str, Any]] = mapped_column(JsonType, nullable=False)
     result_recipient: Mapped[dict[str, Any]] = mapped_column(JsonType, nullable=False)
     context: Mapped[dict[str, Any]] = mapped_column(JsonType, nullable=False, default=dict)
     attachments: Mapped[list[Any]] = mapped_column(JsonType, nullable=False, default=list)
+    pending_title: Mapped[str | None] = mapped_column(String(200), nullable=True)
+    pending_body: Mapped[str | None] = mapped_column(String(8000), nullable=True)
     correlation_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     causation_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
     delivered_revision: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
@@ -47,5 +59,21 @@ class OfficeAnswerKeyRow(Base):
     qid: Mapped[int] = mapped_column(BigInteger, nullable=False)
     text_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     revision_after: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime, nullable=False, server_default=func.now())
+
+
+class OfficeImageRow(Base):
+    __tablename__ = "office_task_images"
+    __table_args__ = (ForeignKeyConstraint(["room", "task_id"],
+                                         ["room_task_origin.room", "room_task_origin.task_id"],
+                                         ondelete="CASCADE"),)
+
+    room: Mapped[str] = mapped_column(String(64), primary_key=True)
+    task_id: Mapped[str] = mapped_column(String(128), primary_key=True)
+    attachment_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
+    sha256: Mapped[str] = mapped_column(String(64), nullable=False)
+    mime: Mapped[str] = mapped_column(String(32), nullable=False)
+    content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now())

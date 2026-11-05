@@ -20,11 +20,15 @@ RECIPIENT_KEYS = frozenset({"channel", "chat", "reply_to", "thread"})
 CONTEXT_KEYS = frozenset({"reply_to"})
 REPLY_KEYS = frozenset({"id", "user", "text", "media"})
 ATTACH_KEYS = frozenset({"type", "file_id", "file_unique_id", "mime", "size", "duration",
-                         "w", "h", "url", "url_expires_at"})
+                         "w", "h", "url", "url_expires_at", "sha256"})
 ATTACH_INT_KEYS = frozenset({"size", "duration", "w", "h"})
 #: подписанная ссылка живёт недолго и меняется между повторами — в хеш не входит
 VOLATILE_ATTACH_KEYS = frozenset({"url", "url_expires_at"})
 MAX_ATTACHMENTS = 10
+MAX_IMAGE_BYTES = 4 * 1024 * 1024
+MAX_TASK_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_TASK_IMAGES = 4
+IMAGE_MIMES = frozenset({"image/jpeg", "image/png", "image/webp"})
 MAX_REPLY_TEXT = 2000
 ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 MAX_TITLE = 200
@@ -80,13 +84,27 @@ def clean_attachments(value: Any) -> list[dict[str, str | int]]:
     if not isinstance(value, list) or len(value) > MAX_ATTACHMENTS:
         raise InvalidInput(f"attachments must be a list of at most {MAX_ATTACHMENTS} objects")
     clean = []
+    image_count = 0
+    image_bytes = 0
     for item in value:
         att = clean_map(item, "attachment", ATTACH_KEYS, max_len=2048)
         if "type" not in att or "file_id" not in att:
             raise InvalidInput("attachment needs type and file_id")
         for key in ATTACH_INT_KEYS & set(att):
-            if not isinstance(att[key], int) or att[key] < 0:
+            if isinstance(att[key], bool) or not isinstance(att[key], int) or att[key] < 0:
                 raise InvalidInput(f"attachment {key} must be a non-negative integer")
+        if "sha256" in att:
+            if (att["type"] not in ("photo", "document")
+                    or att.get("mime") not in IMAGE_MIMES
+                    or not isinstance(att["sha256"], str)
+                    or not re.fullmatch(r"[0-9a-f]{64}", att["sha256"])
+                    or not isinstance(att.get("size"), int)
+                    or not 1 <= att["size"] <= MAX_IMAGE_BYTES):
+                raise InvalidInput("image attachment needs supported mime, size and sha256")
+            image_count += 1
+            image_bytes += att["size"]
+            if image_count > MAX_TASK_IMAGES or image_bytes > MAX_TASK_IMAGE_BYTES:
+                raise InvalidInput("task image count or total size exceeds limit")
         clean.append(att)
     return clean
 

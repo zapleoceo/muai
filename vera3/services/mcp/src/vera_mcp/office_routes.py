@@ -13,7 +13,7 @@ from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
-from vera_shared.office import intake
+from vera_shared.office import images, intake
 from vera_shared.office.acl import OfficeForbidden, OfficePrincipal
 from vera_shared.office.intake_input import InvalidInput
 
@@ -62,6 +62,8 @@ def _guarded(handler: Handler) -> Callable[[Request], Awaitable[Response]]:
             return error_response(403, "forbidden")
         except intake.IntakeNotFound:
             return error_response(404, "not_found")
+        except LookupError:
+            return error_response(404, "not_found")
         except intake.IntakeConflict as exc:
             return error_response(409, exc.code, str(exc))
         except intake.IntakeBusy as exc:
@@ -104,6 +106,22 @@ async def _delivered(request: Request, principal: OfficePrincipal) -> Response:
         principal, request.path_params["task_id"], data.get("revision")))
 
 
+async def _image(request: Request, principal: OfficePrincipal) -> Response:
+    try:
+        index = int(request.path_params["index"])
+    except ValueError:
+        raise InvalidInput("image index must be an integer") from None
+    chunks, size = [], 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > images.MAX_IMAGE_BYTES:
+            raise InvalidInput("image exceeds 4194304 bytes")
+        chunks.append(chunk)
+    result = await images.put_image(principal, request.path_params["task_id"], index,
+                                    b"".join(chunks))
+    return JSONResponse(result, status_code=200 if result["ready"] else 202)
+
+
 async def _list(request: Request, principal: OfficePrincipal) -> Response:
     q = request.query_params
     return JSONResponse(await intake.list_tasks(
@@ -116,4 +134,5 @@ def office_app() -> Starlette:
         Route("/tasks", _guarded(_list), methods=["GET"]),
         Route("/tasks/{task_id}/answers", _guarded(_answer), methods=["POST"]),
         Route("/tasks/{task_id}/delivered", _guarded(_delivered), methods=["POST"]),
+        Route("/tasks/{task_id}/images/{index}", _guarded(_image), methods=["PUT"]),
     ])

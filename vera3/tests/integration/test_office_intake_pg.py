@@ -6,10 +6,13 @@ SQLite не воспроизводит `SELECT … FOR UPDATE` и реальну
 from __future__ import annotations
 
 import asyncio
+import hashlib
+import io
 import os
 
 import pytest
 import pytest_asyncio
+from PIL import Image
 
 TEST_DB_URL = os.environ.get(
     "TEST_DATABASE_URL", "postgresql+asyncpg://vera:test@localhost:5433/vera_test")
@@ -68,6 +71,38 @@ async def test_concurrent_create_same_client_task_id_makes_one_task():
         origins = (await s.execute(select(func.count()).select_from(RoomTaskOriginRow))).scalar()
         rooms = (await s.execute(select(func.count()).select_from(RoomTaskRow))).scalar()
     assert (origins, rooms) == (1, 1)
+
+
+@pytest.mark.usefixtures("pg_db")
+async def test_concurrent_identical_image_uploads_create_one_file_and_request():
+    from sqlalchemy import func, select
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models_office import OfficeImageRow
+    from vera_shared.db.models_room import RoomMessageRow, RoomTaskRow
+    from vera_shared.office import images, intake
+
+    stream = io.BytesIO()
+    Image.new("RGB", (2, 2), "red").save(stream, format="PNG")
+    content = stream.getvalue()
+    made = await intake.create_task(
+        _principal(), "tg--100-image", "Image", "Inspect image",
+        {"channel": "telegram", "chat": "-100", "message": "image"},
+        {"channel": "telegram", "chat": "-100"},
+        attachments=[{"type": "photo", "file_id": "photo-1", "mime": "image/png",
+                      "size": len(content), "sha256": hashlib.sha256(content).hexdigest()}])
+    results = await asyncio.gather(*[
+        images.put_image(_principal(), made["task_id"], 0, content)
+        for _ in range(6)], return_exceptions=True)
+    assert not [r for r in results if isinstance(r, Exception)], results
+    assert all(r["ready"] for r in results)
+    assert sum(1 for r in results if r["stored"]) == 1
+    async with get_session() as s:
+        count = (await s.execute(select(func.count()).select_from(OfficeImageRow))).scalar_one()
+        tasks = (await s.execute(select(func.count()).select_from(RoomTaskRow).where(
+            RoomTaskRow.task_id == made["task_id"]))).scalar_one()
+        messages = (await s.execute(select(func.count()).select_from(RoomMessageRow).where(
+            RoomMessageRow.task_id == made["task_id"]))).scalar_one()
+    assert (count, tasks, messages) == (1, 1, 1)
 
 
 @pytest.mark.usefixtures("pg_db")
