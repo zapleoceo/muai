@@ -37,6 +37,15 @@ returns `ready=true` with the expected hash. A transport failure leaves the
 row pending for retry. An invalid image is a visible failed request and must
 be corrected at the source; the sender does not silently dispatch text alone.
 
+## Code map
+
+`OfficeImageRow` stores the verified content and digest under the Office task
+origin. `expected_images` selects image attachment indexes. `verify_image`
+checks bytes against the declared metadata and decodes the image. `put_image`
+serializes and stores an upload; `all_images_stored` checks readiness, and
+`complete_image_task` opens the Room task when ready. `read_image` enforces
+the live lease and rechecks content integrity for `room_task_image`.
+
 ## Release verification
 
 Apply migration `061_office_task_images.sql` and deploy Office with Pillow
