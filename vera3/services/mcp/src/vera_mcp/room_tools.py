@@ -10,6 +10,7 @@ from mcp.server.mcpserver import Context
 from mcp.types import ImageContent, TextContent
 from pydantic import Field
 from vera_shared.office.images import read_image
+from vera_shared.office.message_files import message_files
 from vera_shared.office.runtime_snapshot import PREFIX, validate_runtime_publication
 from vera_shared.room import messages, task_queue
 
@@ -143,12 +144,18 @@ async def room_history(
 
 async def room_message_get(
     id: Annotated[int, Field(ge=1)], room: Room = "main", task_id: Ident | None = None,
+    ctx: Context = None,
 ) -> dict[str, Any]:
     """Fetch full text by numeric id; optional task_id rejects an unrelated result."""
     item = await messages.get_message(room=_room(room), id=id, task_id=task_id)
     if item is None:
         raise ValueError(f"message {id} not found in room {room}")
-    return {"room": room, "message": message_view(item)}
+    result = {"room": room, "message": message_view(item)}
+    if ctx is not None and item.get("task_id"):
+        files = await message_files(client_of(ctx), _room(room), item["task_id"])
+        if files:
+            result["attachments"] = files
+    return result
 
 
 async def room_task_image(

@@ -29,6 +29,7 @@ MAX_IMAGE_BYTES = 4 * 1024 * 1024
 MAX_TASK_IMAGE_BYTES = 8 * 1024 * 1024
 MAX_TASK_IMAGES = 4
 IMAGE_MIMES = frozenset({"image/jpeg", "image/png", "image/webp"})
+DOCUMENT_MIMES = frozenset({"text/plain", "text/csv", "application/json"})
 MAX_REPLY_TEXT = 2000
 ID_RE = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 MAX_TITLE = 200
@@ -95,12 +96,14 @@ def clean_attachments(value: Any) -> list[dict[str, str | int]]:
                 raise InvalidInput(f"attachment {key} must be a non-negative integer")
         if "sha256" in att:
             if (att["type"] not in ("photo", "document")
-                    or att.get("mime") not in IMAGE_MIMES
+                    or att.get("mime") not in IMAGE_MIMES | DOCUMENT_MIMES
                     or not isinstance(att["sha256"], str)
                     or not re.fullmatch(r"[0-9a-f]{64}", att["sha256"])
                     or not isinstance(att.get("size"), int)
                     or not 1 <= att["size"] <= MAX_IMAGE_BYTES):
                 raise InvalidInput("image attachment needs supported mime, size and sha256")
+            if att.get("mime") in DOCUMENT_MIMES and att["size"] > 65536:
+                raise InvalidInput("document exceeds 65536 bytes")
             image_count += 1
             image_bytes += att["size"]
             if image_count > MAX_TASK_IMAGES or image_bytes > MAX_TASK_IMAGE_BYTES:

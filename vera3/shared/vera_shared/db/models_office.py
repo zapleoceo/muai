@@ -75,5 +75,6 @@ class OfficeImageRow(Base):
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
     mime: Mapped[str] = mapped_column(String(32), nullable=False)
     content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(
         DateTime, nullable=False, server_default=func.now())

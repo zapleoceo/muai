@@ -13,7 +13,9 @@ from vera_shared.db.models_office import OfficeImageRow
 from vera_shared.db.models_room import RoomTaskRow
 from vera_shared.office import repository as repo
 from vera_shared.office.acl import OfficePrincipal, authorize
-from vera_shared.office.intake_input import ID_RE, InvalidInput
+from vera_shared.office.file_content import verify_document
+from vera_shared.office.file_repository import RETENTION, require_capacity
+from vera_shared.office.intake_input import DOCUMENT_MIMES, ID_RE, InvalidInput
 from vera_shared.timeutil import utc_naive_now
 
 MAX_IMAGE_BYTES = 4 * 1024 * 1024
@@ -31,6 +33,9 @@ def verify_image(content: bytes, expected_mime: str, expected_sha: str) -> str:
     digest = hashlib.sha256(content).hexdigest()
     if digest != expected_sha:
         raise InvalidInput("image sha256 does not match task attachment")
+    if expected_mime in DOCUMENT_MIMES:
+        verify_document(content, expected_mime)
+        return digest
     try:
         with warnings.catch_warnings():
             warnings.simplefilter("error", Image.DecompressionBombWarning)
@@ -69,12 +74,19 @@ async def put_image(principal: OfficePrincipal, task_id: str, index: int,
         room, files = origin.room, origin.attachments
         prior = await s.get(OfficeImageRow, (room, task_id, index))
         if prior is not None:
+            if prior.expires_at is not None and prior.expires_at <= utc_naive_now():
+                raise InvalidInput("attachment has expired")
             if prior.sha256 != digest or prior.content != content:
                 raise ValueError("image already stored with different content")
             stored = False
         else:
+            expiry = origin.created_at + RETENTION
+            if expiry <= utc_naive_now():
+                raise InvalidInput("attachment upload period has expired")
+            await require_capacity(s, len(content))
             s.add(OfficeImageRow(room=room, task_id=task_id, attachment_index=index,
-                                 sha256=digest, mime=expected["mime"], content=content))
+                                 sha256=digest, mime=expected["mime"], content=content,
+                                 expires_at=expiry))
             await s.flush()
             stored = True
     from vera_shared.office.intake import complete_image_task
@@ -90,12 +102,13 @@ async def all_images_stored(room: str, task_id: str, attachments: list[dict[str,
         return True
     async with get_session() as s:
         for i in expected:
-            if await s.get(OfficeImageRow, (room, task_id, i)) is None:
+            row = await s.get(OfficeImageRow, (room, task_id, i))
+            if row is None or (row.expires_at is not None and row.expires_at <= utc_naive_now()):
                 return False
     return True
 
 
-async def read_image(agent: str, room: str, task_id: str, index: int,
+async def read_attachment(agent: str, room: str, task_id: str, index: int,
                      ) -> tuple[bytes, str, str]:
     async with get_session() as s:
         task = await s.get(RoomTaskRow, (room, task_id))
@@ -103,9 +116,17 @@ async def read_image(agent: str, room: str, task_id: str, index: int,
                 or task.lease_until <= utc_naive_now() or task.status != "in_progress"):
             raise LookupError("image not available to this executor")
         row = await s.get(OfficeImageRow, (room, task_id, index))
-        if row is None:
+        if row is None or (row.expires_at is not None and row.expires_at <= utc_naive_now()):
             raise LookupError("image not found")
         content, mime, digest = row.content, row.mime, row.sha256
     if hashlib.sha256(content).hexdigest() != digest:
         raise ValueError("stored image integrity check failed")
     return content, mime, digest
+
+
+async def read_image(agent: str, room: str, task_id: str, index: int,
+                     ) -> tuple[bytes, str, str]:
+    result = await read_attachment(agent, room, task_id, index)
+    if not result[1].startswith("image/"):
+        raise LookupError("attachment is not an image")
+    return result

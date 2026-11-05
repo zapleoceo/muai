@@ -15,6 +15,7 @@ from starlette.responses import JSONResponse, Response
 from starlette.routing import Route
 from vera_shared.office import images, intake
 from vera_shared.office.acl import OfficeForbidden, OfficePrincipal
+from vera_shared.office.file_repository import StorageFull
 from vera_shared.office.intake_input import InvalidInput
 
 from vera_mcp.auth import OFFICE_PRINCIPAL_KEY
@@ -71,6 +72,9 @@ def _guarded(handler: Handler) -> Callable[[Request], Awaitable[Response]]:
                                   headers={"Retry-After": "1"})
         except InvalidInput as exc:
             return error_response(422, "invalid_request", str(exc))
+        except StorageFull as exc:
+            return error_response(503, "storage_full", str(exc), retryable=True,
+                                  headers={"Retry-After": "3600"})
         except ValueError as exc:
             return error_response(400, "malformed_request", str(exc))
         except Exception as exc:
