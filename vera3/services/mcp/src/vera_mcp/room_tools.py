@@ -1,12 +1,15 @@
 """MCP-инструменты сообщений комнаты агентов. Автор — имя токена, не аргумент."""
 from __future__ import annotations
 
+import base64
 import uuid
 from datetime import UTC, datetime
 from typing import Annotated, Any, Literal
 
 from mcp.server.mcpserver import Context
+from mcp.types import ImageContent, TextContent
 from pydantic import Field
+from vera_shared.office.images import read_image
 from vera_shared.office.runtime_snapshot import PREFIX, validate_runtime_publication
 from vera_shared.room import messages, task_queue
 
@@ -148,8 +151,21 @@ async def room_message_get(
     return {"room": room, "message": message_view(item)}
 
 
+async def room_task_image(
+    task_id: Ident, index: Annotated[int, Field(ge=0, le=9)], ctx: Context,
+    room: Room = "main",
+) -> list[TextContent | ImageContent]:
+    """Return a verified image only to the executor holding this task's live lease."""
+    content, mime, digest = await read_image(
+        client_of(ctx), _room(room), task_id, index)
+    return [TextContent(type="text", text=f"sha256:{digest}"),
+            ImageContent(type="image", data=base64.b64encode(content).decode("ascii"),
+                         mimeType=mime)]
+
+
 ROOM_TOOLS = (room_post, room_inbox, room_ack, room_history,
               room_task_open, room_task_claim, room_task_update, room_task_progress,
               room_task_state,
               room_task_history, room_task_wait, room_task_next, room_task_release,
-              room_tasks, room_message_get, room_task_cancel, room_task_inventory)
+              room_tasks, room_message_get, room_task_cancel, room_task_inventory,
+              room_task_image)

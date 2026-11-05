@@ -136,9 +136,10 @@ async def test_reason_redacted_in_view_and_history(sqlite_db):
     assert LEAK not in event["text"] and LEAK not in str(event["data"])
 
 
-async def test_tool_is_registered_last_without_reordering_existing_ones():
+async def test_image_tool_is_appended_without_reordering_existing_ones():
     names = [t.__name__ for t in r.ROOM_TOOLS]
-    assert names[-3:] == ["room_message_get", "room_task_cancel", "room_task_inventory"]
+    assert names[-4:] == ["room_message_get", "room_task_cancel",
+                          "room_task_inventory", "room_task_image"]
     assert names[:14] == ["room_post", "room_inbox", "room_ack", "room_history",
                           "room_task_open", "room_task_claim", "room_task_update",
                           "room_task_progress", "room_task_state", "room_task_history",

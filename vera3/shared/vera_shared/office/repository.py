@@ -18,9 +18,12 @@ async def origin_by_client(s: AsyncSession, principal: str, client_task_id: str,
         RoomTaskOriginRow.client_task_id == client_task_id))).scalar_one_or_none()
 
 
-async def origin_of(s: AsyncSession, task_id: str) -> RoomTaskOriginRow | None:
-    return (await s.execute(select(RoomTaskOriginRow).where(
-        RoomTaskOriginRow.task_id == task_id))).scalar_one_or_none()
+async def origin_of(s: AsyncSession, task_id: str, *, for_update: bool = False,
+                    ) -> RoomTaskOriginRow | None:
+    query = select(RoomTaskOriginRow).where(RoomTaskOriginRow.task_id == task_id)
+    if for_update:
+        query = query.with_for_update()
+    return (await s.execute(query)).scalar_one_or_none()
 
 
 async def insert_origin(s: AsyncSession, **fields: Any) -> RoomTaskOriginRow:
