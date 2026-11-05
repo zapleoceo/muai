@@ -1,25 +1,18 @@
-"""Validate small inert documents without executing or extracting their contents."""
+"""Preview small inert UTF-8 documents; all other bytes remain opaque files."""
 from __future__ import annotations
 
-import json
-
-from vera_shared.office.intake_input import DOCUMENT_MIMES, InvalidInput
+from vera_shared.office.intake_input import DOCUMENT_MIMES
 
 MAX_TEXT_BYTES = 64 * 1024
 
 
-def verify_document(content: bytes, mime: str) -> str:
+def document_text(content: bytes, mime: str) -> str | None:
     if mime not in DOCUMENT_MIMES or not 1 <= len(content) <= MAX_TEXT_BYTES:
-        raise InvalidInput("document must be UTF-8 TXT/CSV/JSON, at most 65536 bytes")
+        return None
     try:
         text = content.decode("utf-8")
     except UnicodeDecodeError:
-        raise InvalidInput("document must be valid UTF-8") from None
+        return None
     if any(ord(c) < 32 and c not in "\t\n\r" for c in text):
-        raise InvalidInput("document contains binary control characters")
-    if mime == "application/json":
-        try:
-            json.loads(text)
-        except ValueError:
-            raise InvalidInput("document is not valid JSON") from None
+        return None
     return text

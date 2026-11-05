@@ -73,7 +73,7 @@ class OfficeImageRow(Base):
     task_id: Mapped[str] = mapped_column(String(128), primary_key=True)
     attachment_index: Mapped[int] = mapped_column(BigInteger, primary_key=True)
     sha256: Mapped[str] = mapped_column(String(64), nullable=False)
-    mime: Mapped[str] = mapped_column(String(32), nullable=False)
+    mime: Mapped[str] = mapped_column(String(128), nullable=False)
     content: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
     expires_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     created_at: Mapped[datetime] = mapped_column(

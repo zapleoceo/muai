@@ -6,8 +6,8 @@ from typing import Any
 
 from vera_shared.db.engine import get_session
 from vera_shared.office import repository
+from vera_shared.office.file_content import document_text
 from vera_shared.office.images import expected_images, read_attachment
-from vera_shared.office.intake_input import DOCUMENT_MIMES
 
 
 async def message_files(agent: str, room: str, task_id: str) -> list[dict[str, Any]]:
@@ -24,8 +24,9 @@ async def message_files(agent: str, room: str, task_id: str) -> list[dict[str, A
             return []
         item: dict[str, Any] = {"index": index, "mime": mime, "sha256": digest,
                                 "size": len(content), "untrusted_data": True}
-        if mime in DOCUMENT_MIMES:
-            item.update(encoding="utf-8", content=content.decode("utf-8"))
+        preview = document_text(content, mime)
+        if preview is not None:
+            item.update(encoding="utf-8", content=preview)
         else:
             item.update(encoding="base64", content=base64.b64encode(content).decode("ascii"))
         result.append(item)

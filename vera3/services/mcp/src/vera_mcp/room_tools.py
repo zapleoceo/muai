@@ -2,14 +2,22 @@
 from __future__ import annotations
 
 import base64
+import json
 import uuid
 from datetime import UTC, datetime
-from typing import Annotated, Any, Literal
+from typing import Annotated, Any, Literal, cast
 
 from mcp.server.mcpserver import Context
-from mcp.types import ImageContent, TextContent
+from mcp.types import (
+    BlobResourceContents,
+    CallToolResult,
+    EmbeddedResource,
+    ImageContent,
+    TextContent,
+)
 from pydantic import Field
 from vera_shared.office.images import read_image
+from vera_shared.office.intake_input import IMAGE_MIMES
 from vera_shared.office.message_files import message_files
 from vera_shared.office.runtime_snapshot import PREFIX, validate_runtime_publication
 from vera_shared.room import messages, task_queue
@@ -155,6 +163,23 @@ async def room_message_get(
         files = await message_files(client_of(ctx), _room(room), item["task_id"])
         if files:
             result["attachments"] = files
+            pictures = []
+            for file in files:
+                if file["mime"] in IMAGE_MIMES:
+                    pictures.append(ImageContent(type="image", data=file.pop("content"),
+                                                 mimeType=file["mime"]))
+                    file["encoding"] = "mcp-image"
+                elif file["encoding"] == "base64":
+                    uri = f"office-file://attachment/{item['task_id']}/{file['index']}"
+                    pictures.append(EmbeddedResource(type="resource", resource=
+                        BlobResourceContents(uri=uri, mimeType="application/octet-stream",
+                                             blob=file.pop("content"))))
+                    file["encoding"] = "mcp-resource"
+            if pictures:
+                # Keep the published object schema while carrying native binary blocks.
+                return cast(dict[str, Any], CallToolResult(
+                    content=[TextContent(type="text", text=json.dumps(result)), *pictures],
+                    structuredContent=result))
     return result
 
 

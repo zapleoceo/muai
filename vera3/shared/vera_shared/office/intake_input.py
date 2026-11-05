@@ -96,14 +96,15 @@ def clean_attachments(value: Any) -> list[dict[str, str | int]]:
                 raise InvalidInput(f"attachment {key} must be a non-negative integer")
         if "sha256" in att:
             if (att["type"] not in ("photo", "document")
-                    or att.get("mime") not in IMAGE_MIMES | DOCUMENT_MIMES
+                    or not isinstance(att.get("mime"), str)
+                    or not re.fullmatch(r"[a-z0-9.+-]+/[a-z0-9.+-]+", att["mime"])
+                    or len(att["mime"]) > 128
+                    or (att["type"] == "photo" and att["mime"] not in IMAGE_MIMES)
                     or not isinstance(att["sha256"], str)
                     or not re.fullmatch(r"[0-9a-f]{64}", att["sha256"])
                     or not isinstance(att.get("size"), int)
                     or not 1 <= att["size"] <= MAX_IMAGE_BYTES):
                 raise InvalidInput("image attachment needs supported mime, size and sha256")
-            if att.get("mime") in DOCUMENT_MIMES and att["size"] > 65536:
-                raise InvalidInput("document exceeds 65536 bytes")
             image_count += 1
             image_bytes += att["size"]
             if image_count > MAX_TASK_IMAGES or image_bytes > MAX_TASK_IMAGE_BYTES:

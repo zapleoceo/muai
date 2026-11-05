@@ -9,7 +9,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models_office import OfficeImageRow, RoomTaskOriginRow
 from vera_shared.office import file_repository, images, intake
 from vera_shared.office.acl import OfficePrincipal
-from vera_shared.office.file_content import verify_document
+from vera_shared.office.file_content import document_text
 from vera_shared.office.intake_input import InvalidInput
 from vera_shared.room import messages, tasks
 from vera_shared.timeutil import utc_naive_now
@@ -89,9 +89,8 @@ async def test_storage_quota_rejects_second_upload_without_dispatch(monkeypatch)
 
 @pytest.mark.parametrize(("content", "mime"), [
     (b'MZ\x00executable', "text/plain"), (b'\xff', "text/plain"),
-    (b'not-json', "application/json"), (b'x' * 65537, "text/csv"),
+    (b'not-json', "application/octet-stream"), (b'x' * 65537, "text/csv"),
     (b'<html>bad</html>', "text/html"),
 ], ids=["binary", "utf8", "json", "oversize", "unsupported"])
-def test_documents_reject_binary_invalid_json_oversize_and_unsupported(content, mime):
-    with pytest.raises(InvalidInput):
-        verify_document(content, mime)
+def test_binary_or_large_documents_use_file_resource_instead_of_text_preview(content, mime):
+    assert document_text(content, mime) is None

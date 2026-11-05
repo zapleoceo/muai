@@ -62,7 +62,8 @@ async def test_global_file_quota_serializes_uploads_of_different_tasks(monkeypat
 
     content = b"Office concurrency test\n"
     monkeypatch.setattr(file_repository, "MAX_STORED_BYTES", len(content))
-    attachment = {"type": "document", "file_id": "test", "mime": "text/plain",
+    attachment = {"type": "document", "file_id": "test",
+                  "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
                   "size": len(content), "sha256": hashlib.sha256(content).hexdigest()}
     made = [await intake.create_task(_principal(), f"quota-{i}", "Quota", "Test only",
         {"channel": "test"}, {"channel": "test"}, attachments=[attachment])

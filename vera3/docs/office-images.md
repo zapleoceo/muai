@@ -2,19 +2,24 @@
 
 ## Private files and bounded storage
 
-New uploads also accept UTF-8 TXT/CSV/JSON documents up to 64 KiB. JSON must
-parse, binary control bytes are rejected, and archives, executables, HTML and
-PDF are not supported. Files are untrusted data, never instructions or code to
-execute. `verify_document` checks the document content. The existing byte PUT
+New uploads accept document files of arbitrary type up to 4 MiB each, with at
+most four files and 8 MiB per task. Files are untrusted data, never instructions
+or code to execute or extract. Size and SHA-256 are checked; supported images
+also undergo image decoding and format checks. Arbitrary file bytes are not
+certified malware-free and are never executed or parsed by Office. The existing byte PUT
 retains its `/images/{index}` path for compatibility; the authenticated service
-principal and digest checks are unchanged. Unsupported documents keep their
-legacy metadata-only representation and are not claimed as transferred bytes.
+principal and digest checks are unchanged. Audio/video source events keep their
+existing metadata route; sending them as a document transfers their actual file bytes.
 
 After claiming a task, an executor can use the existing `room_message_get(id)`
 on its Room request. `message_files` adds `attachments` only for the actual
-OAuth actor holding a live lease. Documents contain exact UTF-8 content;
-images contain base64 bytes. Every attachment includes its size and SHA-256.
-This works with clients that have not refreshed their new tool inventory.
+OAuth actor holding a live lease. `document_text` provides an exact UTF-8 preview
+for small TXT/CSV/JSON. Other files use native MCP EmbeddedResource with opaque
+application/octet-stream bytes, without auto-extraction or an active public URL;
+images use native MCP ImageContent rather than a long textual base64 preview.
+Every attachment includes its size and SHA-256.
+Clients already exposing `room_message_get` do not need a new tool name.
+Native resource rendering still requires a live read/ACK check in each client.
 `read_attachment` checks the lease, expiry and stored digest; `room_task_image`
 remains available for clients that expose it.
 

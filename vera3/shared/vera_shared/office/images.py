@@ -13,9 +13,8 @@ from vera_shared.db.models_office import OfficeImageRow
 from vera_shared.db.models_room import RoomTaskRow
 from vera_shared.office import repository as repo
 from vera_shared.office.acl import OfficePrincipal, authorize
-from vera_shared.office.file_content import verify_document
 from vera_shared.office.file_repository import RETENTION, require_capacity
-from vera_shared.office.intake_input import DOCUMENT_MIMES, ID_RE, InvalidInput
+from vera_shared.office.intake_input import ID_RE, IMAGE_MIMES, InvalidInput
 from vera_shared.timeutil import utc_naive_now
 
 MAX_IMAGE_BYTES = 4 * 1024 * 1024
@@ -33,8 +32,7 @@ def verify_image(content: bytes, expected_mime: str, expected_sha: str) -> str:
     digest = hashlib.sha256(content).hexdigest()
     if digest != expected_sha:
         raise InvalidInput("image sha256 does not match task attachment")
-    if expected_mime in DOCUMENT_MIMES:
-        verify_document(content, expected_mime)
+    if expected_mime not in IMAGE_MIMES:
         return digest
     try:
         with warnings.catch_warnings():
@@ -127,6 +125,6 @@ async def read_attachment(agent: str, room: str, task_id: str, index: int,
 async def read_image(agent: str, room: str, task_id: str, index: int,
                      ) -> tuple[bytes, str, str]:
     result = await read_attachment(agent, room, task_id, index)
-    if not result[1].startswith("image/"):
+    if result[1] not in IMAGE_MIMES:
         raise LookupError("attachment is not an image")
     return result
