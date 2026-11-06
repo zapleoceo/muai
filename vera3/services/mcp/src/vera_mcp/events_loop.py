@@ -9,6 +9,7 @@ import time
 from collections.abc import AsyncIterator
 
 from vera_shared.db.engine import get_session
+from vera_shared.office.file_repository import prune_expired
 from vera_shared.room.event_outbox import prune_outbox
 
 from vera_mcp.events_deliver import deliver_due
@@ -26,8 +27,11 @@ def delivery_enabled() -> bool:
 async def _prune() -> None:
     async with get_session() as s:
         removed = await prune_outbox(s)
+        files = await prune_expired(s)
     if removed:
         log.info("mcp events: pruned %s outbox rows", removed)
+    if files:
+        log.info("office: pruned %s expired temporary files", files)
 
 
 async def run_delivery_loop(*, poll_s: float = POLL_S) -> None:

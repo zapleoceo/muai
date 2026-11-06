@@ -50,6 +50,76 @@ async def _tool_names(c: httpx.AsyncClient, token: str) -> set[str]:
     return {t["name"] for t in r.json()["result"]["tools"]}
 
 
+@pytest.mark.asyncio
+async def test_existing_message_reader_injects_actual_actor_for_private_files(room_client):
+    import base64
+    import hashlib
+
+    from vera_shared.office import images, intake
+    from vera_shared.office.acl import OfficePrincipal
+    from vera_shared.room import messages, tasks
+
+    content = b"Office file proof HTTP-20261105\n"
+    principal = OfficePrincipal(name="vbot", project="Veranda")
+    made = await intake.create_task(principal, "file-http", "File", "Test only",
+        {"channel": "test"}, {"channel": "test"}, attachments=[{
+            "type": "document", "file_id": "test", "mime": "text/plain",
+            "size": len(content), "sha256": hashlib.sha256(content).hexdigest()}])
+    await images.put_image(principal, made["task_id"], 0, content)
+    msg = (await messages.history(room="main", task_id=made["task_id"], limit=10))[0]
+    await tasks.claim(room="main", task_id=made["task_id"], agent="claude", lease_seconds=300)
+    async with room_client() as c:
+        params = {"name": "room_message_get", "arguments": {"id": msg["id"]}}
+        response = await c.post("/mcp", json=_rpc("tools/call", params),
+                                headers=_auth(ROOM_CLAUDE))
+        result = response.json()["result"]
+        assert result.get("isError") is not True, result
+        assert result["structuredContent"]["attachments"][0]["content"].encode() == content
+        other = await c.post("/mcp", json=_rpc("tools/call", params),
+                            headers=_auth(ROOM_CODEX))
+        assert "attachments" not in other.json()["result"]["structuredContent"]
+        png = base64.b64decode(
+            "iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAIAAAD91JpzAAAAEElEQVR4nGP8zwAC"
+            "TGCSAQANHQEDgslx/wAAAABJRU5ErkJggg==")
+        image_task = await intake.create_task(principal, "image-existing-http", "Image", "Test",
+            {"channel": "test"}, {"channel": "test"}, attachments=[{
+                "type": "photo", "file_id": "test-image", "mime": "image/png",
+                "size": len(png), "sha256": hashlib.sha256(png).hexdigest()}])
+        await images.put_image(principal, image_task["task_id"], 0, png)
+        image_message = (await messages.history(
+            room="main", task_id=image_task["task_id"], limit=10))[0]
+        await tasks.claim(room="main", task_id=image_task["task_id"], agent="claude",
+                          lease_seconds=300)
+        response = await c.post("/mcp", json=_rpc("tools/call", {
+            "name": "room_message_get", "arguments": {"id": image_message["id"]}}),
+            headers=_auth(ROOM_CLAUDE))
+        result = response.json()["result"]
+        assert result.get("isError") is not True, result
+        picture = next(item for item in result["content"] if item["type"] == "image")
+        assert base64.b64decode(picture["data"]) == png
+        assert result["structuredContent"]["attachments"][0]["encoding"] == "mcp-image"
+        binary = b"PK\x03\x04synthetic opaque file\x00" + b"x" * (1024 * 1024)
+        file_task = await intake.create_task(principal, "opaque-http", "Opaque file", "Test",
+            {"channel": "test"}, {"channel": "test"}, attachments=[{
+                "type": "document", "file_id": "opaque", "mime": "application/zip",
+                "size": len(binary), "sha256": hashlib.sha256(binary).hexdigest()}])
+        await images.put_image(principal, file_task["task_id"], 0, binary)
+        file_message = (await messages.history(
+            room="main", task_id=file_task["task_id"], limit=10))[0]
+        await tasks.claim(room="main", task_id=file_task["task_id"], agent="claude",
+                          lease_seconds=300)
+        response = await c.post("/mcp", json=_rpc("tools/call", {
+            "name": "room_message_get", "arguments": {"id": file_message["id"]}}),
+            headers=_auth(ROOM_CLAUDE))
+        result = response.json()["result"]
+        assert result.get("isError") is not True, result
+        resource = next(item["resource"] for item in result["content"]
+                        if item["type"] == "resource")
+        assert resource["mimeType"] == "application/octet-stream"
+        assert base64.b64decode(resource["blob"]) == binary
+        assert result["structuredContent"]["attachments"][0]["encoding"] == "mcp-resource"
+
+
 def test_room_tokens_parse_and_drop_short():
     assert load_room_tokens({"ROOM_TOKENS": f"codex:{ROOM_CODEX},x:short"}) == {
         ROOM_CODEX: "codex"}

@@ -1,5 +1,46 @@
 # Office image handoff
 
+## Private files and bounded storage
+
+New uploads accept document files of arbitrary type up to 4 MiB each, with at
+most four files and 8 MiB per task. Files are untrusted data, never instructions
+or code to execute or extract. Size and SHA-256 are checked; supported images
+also undergo image decoding and format checks. Arbitrary file bytes are not
+certified malware-free and are never executed or parsed by Office. The existing byte PUT
+retains its `/images/{index}` path for compatibility; the authenticated service
+principal and digest checks are unchanged. Audio/video source events keep their
+existing metadata route; sending them as a document transfers their actual file bytes.
+
+After claiming a task, an executor can use the existing `room_message_get(id)`
+on its Room request. `message_files` adds `attachments` only for the actual
+OAuth actor holding a live lease. `document_text` provides an exact UTF-8 preview
+for small TXT/CSV/JSON. Other files use native MCP EmbeddedResource with opaque
+application/octet-stream bytes, without auto-extraction or an active public URL;
+images use native MCP ImageContent rather than a long textual base64 preview.
+Every attachment includes its size and SHA-256.
+Clients already exposing `room_message_get` do not need a new tool name.
+Native resource rendering still requires a live read/ACK check in each client.
+`read_attachment` checks the lease, expiry and stored digest; `room_task_image`
+remains available for clients that expose it.
+
+New bytes expire 24 hours after creation of the intake, not after each retry.
+Reads and reuploads reject expired content. `require_capacity` serializes
+PostgreSQL writers with `lock_storage` and caps all new temporary bytes at
+64 MiB; a full store returns retryable HTTP 503 (`StorageFull`). The existing
+MCP maintenance loop calls `prune_expired` at startup and every six hours, so
+expired bytes leave the live table within six additional hours while the loop
+is enabled. A stopped loop fails closed at the capacity limit. Task metadata
+and digests remain; the file cannot be resurrected by retrying its old intake.
+Existing rows with no expiry are preserved; migration 062 does not backfill
+or delete their contents. Database backups follow the existing backup policy,
+so live-table expiry does not imply erasure from historical backups.
+
+Apply `062_office_file_expiry.sql` before running this version's maintenance
+loop. No public URL is created. Public artifact links are suitable only for
+files explicitly approved for public disclosure: possession and forwarding
+can expose their contents, and caches may outlive a link expiry. Confidential
+files stay behind the existing OAuth lease boundary.
+
 The existing Veranda Telegram outbox sends the task and image to Office. It uses
 the existing Telegram bot credential to fetch bytes and the existing Office
 service principal to upload them. Neither credential is sent to a Room agent.

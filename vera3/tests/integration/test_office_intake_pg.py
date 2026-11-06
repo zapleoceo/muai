@@ -57,6 +57,25 @@ async def _create(cid: str = "tg--100-1"):
 
 
 @pytest.mark.usefixtures("pg_db")
+async def test_global_file_quota_serializes_uploads_of_different_tasks(monkeypatch):
+    from vera_shared.office import file_repository, images, intake
+
+    content = b"Office concurrency test\n"
+    monkeypatch.setattr(file_repository, "MAX_STORED_BYTES", len(content))
+    attachment = {"type": "document", "file_id": "test",
+                  "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                  "size": len(content), "sha256": hashlib.sha256(content).hexdigest()}
+    made = [await intake.create_task(_principal(), f"quota-{i}", "Quota", "Test only",
+        {"channel": "test"}, {"channel": "test"}, attachments=[attachment])
+        for i in range(2)]
+    result = await asyncio.gather(*[
+        images.put_image(_principal(), row["task_id"], 0, content) for row in made],
+        return_exceptions=True)
+    assert sum(isinstance(r, dict) and r["ready"] for r in result) == 1
+    assert sum(isinstance(r, file_repository.StorageFull) for r in result) == 1
+
+
+@pytest.mark.usefixtures("pg_db")
 async def test_concurrent_create_same_client_task_id_makes_one_task():
     from sqlalchemy import func, select
     from vera_shared.db.engine import get_session
