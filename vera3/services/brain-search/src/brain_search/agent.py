@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from vera_shared.llm.client import LLMCallFailed, chat_async
+from vera_shared.timeutil import utc_naive_now
 
 from brain_search.agent_tools import (
     BUILTIN_SPECS,
@@ -31,6 +32,7 @@ from brain_search.agent_tools import (
 )
 from brain_search.authorship import AUTHORSHIP_RULES
 from brain_search.evidence import EVIDENCE_RULES, POLARITY_RULES, evidence_excerpt
+from brain_search.query_parse import TZ_OFFSET_H
 
 log = logging.getLogger(__name__)
 
@@ -156,6 +158,7 @@ async def run_agent(
 
     base_prompt = (
         f"{SYSTEM_PROMPT}\n\n"
+        f"Reference time: {utc_naive_now().isoformat()}Z; configured local offset UTC{TZ_OFFSET_H:+d}.\n"
         f"### Твоя конфигурация:\n{self_context}\n\n"
         f"{history_block}"
         f"### Доступные инструменты:\n{tools_block}\n\n"

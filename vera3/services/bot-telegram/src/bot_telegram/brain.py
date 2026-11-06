@@ -15,6 +15,7 @@ from datetime import datetime
 import httpx
 from vera_shared.redact_view import redact_view
 from vera_shared.timeutil import utc_naive_now
+from vera_shared.voice_help.fact_route import external_facts
 
 log = logging.getLogger(__name__)
 
@@ -37,6 +38,12 @@ class BrainAnswer:
 
 
 async def ask_brain(query: str, chat_id: int, user_id: int) -> BrainAnswer:
+    if external_facts(query):
+        return BrainAnswer(
+            raw="Актуальные внешние сведения нельзя подтвердить по личной памяти. "
+                "Нужен свежий источник с датой, временем и типом курса. "
+                "Передайте проверку существующему уполномоченному исполнителю.",
+            provider="external-source-required", cost_usd=0, n_results=0, n_history=0)
     async with httpx.AsyncClient(timeout=120.0) as c:
         r = await c.post(
             f"{SEARCH_URL}/search",

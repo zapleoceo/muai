@@ -18,11 +18,13 @@ dot: ref `result_recipient: dot` и строка в next_action; ответст�
 """
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
 from vera_shared.redact import redact_secrets
 from vera_shared.room.messages import post_message
 from vera_shared.room.tasks import open_task
+from vera_shared.voice_help.fact_route import fresh_facts_action
 from vera_shared.voice_help.hold import ask_owner_once
 from vera_shared.voice_help.policy import (
     AGENT,
@@ -64,15 +66,22 @@ def _route(clean: str) -> str:
     return f"\n{DOT_RESULT_NOTE}" if routes_to_dot(clean) else ""
 
 
-def normal_action(clean: str) -> str:
+def normal_action(clean: str, *, reference_at: datetime | None = None) -> str:
     """next_action без удержания: при открытии и когда владелец подтвердил источник."""
-    return f"{clean[:ACTION_CHARS]}\n\n{SAFETY_NOTE}{_route(clean)}"
+    suffix = f"\n\n{SAFETY_NOTE}{_route(clean)}{fresh_facts_action(clean, reference_at)}"
+    budget = min(ACTION_CHARS, NEXT_ACTION_CHARS - len(suffix))
+    pointer = "Read the complete original request in this task's opening Room message before acting. Preview:\n"
+    if len(clean) <= budget:
+        pointer = ""
+    return f"{pointer}{clean[:max(0, budget - len(pointer))]}{suffix}"
 
 
-def help_texts(clean: str, *, uncertain: bool, doubts: str) -> tuple[str, str, str]:
+
+def help_texts(clean: str, *, uncertain: bool, doubts: str,
+               reference_at: datetime | None = None) -> tuple[str, str, str]:
     """→ (заголовок, next_action, тело поста). Без времени: повтор — тот же текст."""
     if not uncertain:
-        action = normal_action(clean)
+        action = normal_action(clean, reference_at=reference_at)
         return (f"Срочно: {clean[:TITLE_CHARS]}", action,
                 f"Срочная просьба владельца голосом: {action}")
     action = (f"{UNCERTAIN_NOTE}\n{UNCERTAIN_HOLD}\n{SAFETY_NOTE}{_route(clean)}\n"
@@ -83,6 +92,7 @@ def help_texts(clean: str, *, uncertain: bool, doubts: str) -> tuple[str, str, s
 
 async def open_help_task(*, command_id: str, event_id: int | None, instruction: str,
                          source: dict[str, Any] | None, uncertain: bool = False,
+                         reference_at: datetime | None = None,
                          ) -> str:
     """→ task_id. Повторный вызов ничего не создаёт и не публикует второй раз."""
     room, task_id = help_room(), help_task_id(command_id)
@@ -97,7 +107,15 @@ async def open_help_task(*, command_id: str, event_id: int | None, instruction: 
         refs.append({"kind": "source", "ref": RESULT_RECIPIENT_REF})
     if event_id is not None:
         refs.insert(0, {"kind": "voice_event", "ref": str(event_id)})
-    title, action, body = help_texts(clean, uncertain=uncertain, doubts=doubts)
+    title, action, body = help_texts(clean, uncertain=uncertain, doubts=doubts,
+                                    reference_at=reference_at)
+    if clean not in body:
+        pointer = "\nRead the complete original request in this task's opening Room message before acting."
+        if "Read the complete original request" not in action:
+            action = action[:NEXT_ACTION_CHARS - len(pointer)] + pointer
+        body += f"\n\nComplete original request:\n{clean}"
+    if uncertain:
+        body += fresh_facts_action(clean, reference_at)
     await open_task(
         room=room, task_id=task_id, agent=AGENT, title=title, paths=None,
         project=project_for(src.get("app"), src.get("window_title")),
