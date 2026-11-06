@@ -79,7 +79,7 @@ async def test_queue_row_waits_for_claim_then_closes():
     assert await help_worker.track_help(rec, now + timedelta(minutes=2)) == 1
     assert rec.sent[-1] == help_worker.taken_text("claude")
     row = await queue_row("vc-h")
-    assert (row.status, row.help_state, row.instruction) == ("done", "taken", "")
+    assert (row.status, row.help_state) == ("opened", "taken") and row.instruction
 
 
 @uses_db
@@ -188,7 +188,7 @@ async def test_owner_denial_cancels_without_claim():
     with pytest.raises(TaskBusy, match="cancelled"):
         await tasks.claim(room=ROOM, task_id="help-vc-h", agent="codex",
                           lease_seconds=900)
-    assert (await queue_row("vc-h")).status == "done"
+    assert (await queue_row("vc-h")).status == "cancelled"
 
 
 @uses_db
@@ -205,7 +205,7 @@ async def test_owner_answer_lifts_then_claims():
     assert await help_worker.track_help(rec, now + timedelta(minutes=1)) == 1
     [task] = await tasks_in(ROOM)
     assert SOURCE_CONFIRMED in [r["ref"] for r in task.refs]
-    assert (await queue_row("vc-h")).status == "done"
+    assert (await queue_row("vc-h")).status == "opened"
 
 
 @uses_db

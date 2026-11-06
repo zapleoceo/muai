@@ -203,45 +203,17 @@ Postgres (`tests/integration/test_voice_help_pg.py`): на SQLite `FOR UPDATE`
 и снимает кнопки, чужому — пустой ответ; ничего не меняет. Каждый шаг —
 сначала сообщение, потом отметка: at-least-once, как у ответа.
 
-**Результат исполнителя** (`help_worker.deliver_result`, `result_text`,
-`vera_shared.voice_help.result_state`): когда задача закрыта со статусом done и в
-событии `done` есть текст, бот шлёт владельцу «Результат по задаче <id> (<агент>): …»
-через тот же `send_to_owner` (при `OWNER_TELEGRAM_ID=0` он бросает — fail-closed,
-отправки нет). Ответ мозга уже ушёл раньше и не повторяется. Без миграции: этап — в
-`voice_command_queue.help_state` (`result_pending` → `closed`; `result_error`,
-`result_unknown`), квитанция (`result_message_id`, `result_sent_at`,
-`result_errors`) — в `source`. Намерение (`result_pending`) пишется до отправки;
-исключение отправки или пустой message_id → `result_error`, повтор до
-`RESULT_MAX_ERRORS`; намерение без квитанции на следующем проходе (падение между
-отправкой и записью) → `result_unknown`, автоповтора нет. Строка закрывается только
-после квитанции; пустой результат закрывает как раньше. Результаты старше
-команды, созданные раньше `VOICE_RESULT_DELIVERY_SINCE` (ISO UTC; деплой ставит время
-выкатки), не обрабатываются; переменная не задана — функция выключена, ничего не шлётся,
-строки закрываются как раньше. Ответ мозга и результат исполнителя делят одну заявку
-на доставку (`delivery_claim`, ключ `delivery` в `source`): кто взял — шлёт, второй нет;
-ответ мозга считается доставкой, поэтому после него результат отдельным сообщением
-не уходит. Неясный исход (упали после отправки) не повторяется.
-
-**Одна срочная задача — одно финальное сообщение** (`bot_telegram/answer_delivery.py`:
-`deliver_answer`, `status_only_text`; `delivery_claim.claim`/`settle`/`update_source`,
+**Executor result delivery (current contract):** help commands have a single
+executor final owner before and after handoff acceptance. `deliver_answer` never
+sends a help final. Reservations and real receipts are atomic with queue state;
+unknown outcomes are never replayed. Legacy brain receipts, missing result text,
+disabled cutoff and unverified external facts require explicit review, not a
+fabricated delivery. See [Listener result ownership and current facts](voice-result-repair.md)
+for state transitions, scoped diagnostics and regression coverage. Existing
+`delivery_claim.claim`/`settle`/`update_source`/`classify_send_error`,
 `result_state.move`/`record_error`/`record_receipt`/`executor_result`/`parse_since`/
-`delivery_since`/`log_delivery_mode`, `voice_commands.get_command`,
-`help_worker.failure_route`/`assigned_text`/`result_text`/`deliver_result`). Финал — заявка
-`delivery`. После `handoff_accept` финал за исполнителем, мозг шлёт только статус «Мозг
-ответил, задачу ведёт <агент>» (заявка `progress`, финал не расходует) и `answered_at`
-не ставит. До приёма мозг заканчивает через заявку `delivery`; если её занял исполнитель —
-не шлёт, `answered_at` не ставится: ответ считается доставленным только при квитанции
-самого мозга. Сбои отправки делит `classify_send_error`: точный отказ Telegram
-(`TelegramBadRequest`/`Forbidden`/`Unauthorized`, отказ соединения, `OWNER_TELEGRAM_ID`
-не задан) — `error`, повтор допустим; всё остальное (таймаут после запроса, 5xx, пустой
-message_id) — `unknown`, автоповтора нет. `VOICE_RESULT_DELIVERY_SINCE` — в окружении
-`bot-telegram` (docker-compose).
+`delivery_since`/`log_delivery_mode`, and `voice_commands.get_command` remain.
 
-Решение «мозг или исполнитель» атомарно: `delivery_claim.claim_unless_accepted` в одной
-транзакции блокирует строку задачи (её же блокирует `handoff.accept`; держатель
-считает `tracking.holder_of`) и строку очереди, перепроверяет приём и заявку и только
-потом берёт заявку. Финал отдаётся исполнителю, если задача уже `done` или хоть раз был `handoff_accept` (держатель после done исчезает — без этого мозг забрал бы финал). Исполнитель берёт заявку ДО перехода в `result_pending`: проигрыш этап не трогает; заявку в состоянии `error` (точный отказ) может забрать любой из двух. Заявка статуса `notice` в `claimed`/`unknown` помечает `notified_at` без повтора. Гонка проверена на Postgres
-(`tests/integration/test_voice_final_race_pg.py`).
 
 **Мозг не ответил, а задача жива** (`voice_worker.notify_failed`,
 `help_worker.failure_route`): для срочной просьбы с задачей комнаты вместо

@@ -63,10 +63,12 @@ async def _opened(*, brain_delivered: bool = False):
     with patch.object(voice_worker, "ask_brain", AsyncMock(return_value=answer())), \
          patch.object(voice_worker, "save_event", AsyncMock()):
         await voice_worker.process_one(brain, OWNER)
-    if not brain_delivered:
+    if brain_delivered:
         async with get_session() as s:
             row = await s.get(VoiceCommandRow, "vc-help1")
-            row.source = {k: v for k, v in (row.source or {}).items() if k != "delivery"}
+            row.source = {**row.source, "delivery": {"owner": "brain", "state": "sent", "message_id": 77}}
+            row.answered_at = row.task_opened_at
+        brain.sent.append(answer().raw)
     return (await queue_row("vc-help1")).task_opened_at, brain
 
 
@@ -169,7 +171,7 @@ async def test_empty_result_not_sent_and_closed(note):
     await help_worker.track_help(rec, opened + timedelta(minutes=1))
     assert _results(rec) == []
     row = await queue_row("vc-help1")
-    assert row.help_state == "closed" and "result_message_id" not in (row.source or {})
+    assert row.help_state == "result_review" and "result_message_id" not in (row.source or {})
 
 
 @uses_db
@@ -181,7 +183,7 @@ async def test_brain_answer_is_not_resent_and_secret_is_redacted():
     await help_worker.track_help(rec, opened + timedelta(minutes=1))
     assert not any("Смотрю логи." in m for m in rec.sent)
     assert _results(rec) == []  # ответ мозга считается доставкой
-    assert (await queue_row("vc-help1")).help_state == "closed"
+    assert (await queue_row("vc-help1")).help_state == "result_review"
 
 
 @uses_db
@@ -240,7 +242,7 @@ async def test_command_before_cutoff_and_unset_env_send_nothing(monkeypatch):
     monkeypatch.setenv(result_state.SINCE_ENV, "2999-01-01T00:00:00Z")
     rec = Recorder()
     await help_worker.track_help(rec, opened + timedelta(minutes=1))
-    assert rec.sent == [] and (await queue_row("vc-help1")).help_state == "closed"
+    assert rec.sent == [] and (await queue_row("vc-help1")).help_state == "result_review"
 
 
 @uses_db
@@ -250,7 +252,7 @@ async def test_unset_env_disables_feature(monkeypatch):
     monkeypatch.delenv(result_state.SINCE_ENV)
     rec = Recorder()
     await help_worker.track_help(rec, opened + timedelta(minutes=1))
-    assert rec.sent == [] and (await queue_row("vc-help1")).help_state == "closed"
+    assert rec.sent == [] and (await queue_row("vc-help1")).help_state == "result_review"
 
 
 @uses_db
@@ -288,7 +290,7 @@ async def test_results_before_rollout_are_not_resent(monkeypatch):
     rec = Recorder()
     await help_worker.track_help(rec, opened + timedelta(minutes=1))
     assert rec.sent == []
-    assert (await queue_row("vc-help1")).help_state == "closed"
+    assert (await queue_row("vc-help1")).help_state == "result_review"
 
 
 @uses_db
@@ -456,88 +458,25 @@ async def _open_with(side_effect=None):
 
 
 @uses_db
-async def test_before_accept_brain_final_then_executor_sends_nothing():
+async def test_help_never_calls_brain_even_if_it_would_succeed():
     rec = await _open_with()
-    assert any("Смотрю логи." in m for m in rec.sent)
     row = await queue_row("vc-help1")
-    assert row.answered_at is not None and row.source["delivery"]["state"] == "sent"
-    await _finish("итог")
-    out = Recorder()
-    opened = row.task_opened_at
-    await help_worker.track_help(out, opened + timedelta(minutes=1))
-    assert out.sent == []
-
-
-@uses_db
-async def test_after_accept_brain_is_status_only_and_executor_owns_final():
-    async def accept_during_brain(*_a, **_k):
-        await hand_to(ROOM, TASK, "codex")
-        return answer()
-
-    rec = await _open_with(side_effect=accept_during_brain)
-    assert not any("Смотрю логи." in m for m in rec.sent)
-    assert rec.sent[-1] == "Мозг ответил, задачу ведёт codex."
-    row = await queue_row("vc-help1")
-    assert row.answered_at is None
-    assert "delivery" not in row.source and row.source["progress"]["state"] == "sent"
-    await _finish("итог")
+    assert len(rec.sent) == 1 and row.answered_at is None
+    assert "delivery" not in row.source
+    await _finish("executor final")
     out = Recorder()
     await help_worker.track_help(out, row.task_opened_at + timedelta(minutes=1))
-    await help_worker.track_help(out, row.task_opened_at + timedelta(minutes=2))
     assert len(_results(out)) == 1
 
 
 @uses_db
-async def test_executor_reserved_final_brain_does_not_send_or_mark_answered():
-    async def executor_reserves(*_a, **_k):
-        await delivery_claim.claim("vc-help1", "executor", datetime(2026, 1, 1))
-        return answer()
-
-    rec = await _open_with(side_effect=executor_reserves)
-    assert not any("Смотрю логи." in m for m in rec.sent)
+async def test_help_answer_boundary_cannot_send_a_late_brain_final():
+    from bot_telegram.answer_delivery import deliver_answer
+    await _opened()
     row = await queue_row("vc-help1")
-    assert row.answered_at is None and row.source["delivery"]["owner"] == "executor"
-
-
-@uses_db
-async def test_brain_ambiguous_send_is_unknown_without_answered_or_retry():
-    await accept_voice_command(help_cmd(), x_internal_secret=SECRET)
-
-    async def timeout_send(_h, _p):
-        if "Открыл задачу" in _p or "Услышала" in _p:
-            return 1
-        raise ReadTimeout("after request")
-
-    sends = []
-
-    async def spy(h, p):
-        sends.append(p)
-        return await timeout_send(h, p)
-
-    with patch.object(voice_worker, "ask_brain", AsyncMock(return_value=answer())), \
-         patch.object(voice_worker, "save_event", AsyncMock()):
-        await voice_worker.process_one(spy, OWNER)
-        await voice_worker.process_one(spy, OWNER)
-    row = await queue_row("vc-help1")
-    assert row.answered_at is None and row.source["delivery"]["state"] == "unknown"
-    assert row.status != "pending"
-    assert len([p for p in sends if "Смотрю логи" in p]) == 1
-
-
-@uses_db
-async def test_brain_definite_failure_is_error_and_retryable():
-    await accept_voice_command(help_cmd(), x_internal_secret=SECRET)
-
-    async def refuse(_h, p):
-        if "Смотрю логи" in p:
-            raise TelegramBadRequest("bad")
-        return 1
-
-    with patch.object(voice_worker, "ask_brain", AsyncMock(return_value=answer())), \
-         patch.object(voice_worker, "save_event", AsyncMock()):
-        await voice_worker.process_one(refuse, OWNER)
-    row = await queue_row("vc-help1")
-    assert row.source["delivery"]["state"] == "error" and row.status == "pending"
+    out = Recorder()
+    assert await deliver_answer(out, row, answer()) is None
+    assert out.sent == [] and "delivery" not in (await queue_row("vc-help1")).source
 
 
 def test_compose_has_result_since_in_bot_telegram_only():
@@ -620,7 +559,7 @@ async def test_brain_claim_before_accept_wins_and_executor_then_sends_nothing():
     opened, _ = await _opened()
     verdict = await delivery_claim.claim_unless_accepted(
         "vc-help1", ROOM, TASK, "brain", datetime(2026, 1, 1))
-    assert verdict == ("won", None)
+    assert verdict == ("executor", "executor")
     held = await tasks.claim(room=ROOM, task_id=TASK, agent="vera", lease_seconds=900)
     await handoff.offer(room=ROOM, task_id=TASK, agent="vera",
                         fencing_token=held["fencing_token"], to_agent="codex")
@@ -629,7 +568,7 @@ async def test_brain_claim_before_accept_wins_and_executor_then_sends_nothing():
     await _finish("итог")
     out = Recorder()
     await help_worker.track_help(out, opened + timedelta(minutes=1))
-    assert _results(out) == []
+    assert len(_results(out)) == 1
 
 
 async def _offer_accept_done(note: str = "итог исполнителя") -> None:
@@ -678,7 +617,7 @@ async def test_lost_claim_does_not_move_row_to_pending():
     out = Recorder()
     await help_worker.track_help(out, opened + timedelta(minutes=1))
     row = await queue_row("vc-help1")
-    assert out.sent == [] and row.help_state == "opened"
+    assert out.sent == [] and row.help_state == "result_review"
 
 
 @uses_db

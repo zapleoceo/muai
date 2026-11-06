@@ -79,9 +79,9 @@ async def record_error(command_id: str, errors: int, now: datetime) -> None:
 
 async def record_receipt(command_id: str, message_id: int, now: datetime) -> bool:
     """Квитанция и закрытие одним UPDATE; → True, если записана именно сейчас."""
-    return await update_source(
-        command_id, {"result_message_id": message_id, "result_sent_at": now.isoformat()},
-        only_state=PENDING, help_state="closed", updated_at=now)
+    from vera_shared.voice_help.result_delivery import store_result_receipt
+
+    return await store_result_receipt(command_id, message_id, now)
 
 
 def delivery_since() -> datetime | None:

@@ -23,6 +23,8 @@ from typing import Any
 from vera_shared.redact import redact_secrets
 from vera_shared.room.messages import post_message
 from vera_shared.room.tasks import open_task
+from vera_shared.timeutil import utc_naive_now
+from vera_shared.voice_help.fact_route import fresh_facts_action
 from vera_shared.voice_help.hold import ask_owner_once
 from vera_shared.voice_help.policy import (
     AGENT,
@@ -66,7 +68,10 @@ def _route(clean: str) -> str:
 
 def normal_action(clean: str) -> str:
     """next_action без удержания: при открытии и когда владелец подтвердил источник."""
-    return f"{clean[:ACTION_CHARS]}\n\n{SAFETY_NOTE}{_route(clean)}"
+    suffix = f"\n\n{SAFETY_NOTE}{_route(clean)}{fresh_facts_action(clean, utc_naive_now())}"
+    budget = min(ACTION_CHARS, NEXT_ACTION_CHARS - len(suffix))
+    return f"{clean[:max(0, budget)]}{suffix}"
+
 
 
 def help_texts(clean: str, *, uncertain: bool, doubts: str) -> tuple[str, str, str]:

@@ -81,7 +81,7 @@ async def test_owner_verified_opens_urgent_task_without_mark():
     [post] = await messages_in(ROOM)
     assert (post.status, post.task_id) == ("request", "help-vc-help1")
     assert rec.sent[0] == f"Открыл задачу help-vc-help1: {INSTRUCTION}"
-    assert rec.sent[1].startswith("Смотрю логи.")
+    assert len(rec.sent) == 1
     row = await queue_row("vc-help1")
     assert (row.status, row.help_state) == ("opened", "opened")
     assert await tasks_in("main") == [] and await messages_in("main") == []
@@ -122,7 +122,7 @@ async def test_repeat_and_bot_restart_give_one_task_and_one_notice():
     for _ in range(2):
         await accept_voice_command(help_cmd(doubts=["blind"]), x_internal_secret=SECRET)
     rec = Recorder()
-    crashed = AsyncMock(side_effect=RuntimeError("бот упал до «Открыл»"))
+    crashed = AsyncMock(side_effect=ConnectionRefusedError("бот упал до «Открыл»"))
     assert await _run(crashed) == [True]
     row = await queue_row("vc-help1")
     assert (row.status, row.help_state) == ("pending", "opened")

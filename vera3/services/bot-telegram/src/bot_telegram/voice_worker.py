@@ -1,20 +1,8 @@
-"""Голосовые поручения: бот сам пишет владельцу первым.
+"""Voice intake: help belongs to the existing Room executor; non-help uses memory.
 
-Поручение приходит из очереди (`vera_shared.voice_commands`), его кладёт
-шлюз. Сначала — «Услышала: „…“. Делаю.», чтобы владелец посреди звонка знал,
-что его поняли; потом — ответ мозга тем же путём, что на текстовое сообщение
-(`brain.ask_brain`).
-
-Границы первой версии, и они здесь, а не в слушателе или шлюзе:
-- адресат один — владелец. `Send` уже привязан к OWNER_TELEGRAM_ID, чата в
-  этом модуле нет вовсе; без владельца воркер не берёт из очереди ничего;
-- действий с внешним эффектом нет: поручение — это вопрос мозгу, и
-  единственный побочный эффект — ответ владельцу.
-
-Опрос раз в POLL_S, а не LISTEN/NOTIFY: таблица крошечная, запрос по индексу,
-а уведомления потребовали бы отдельного постоянного соединения мимо пула —
-ради выигрыша в две секунды на ответе, которому и так ждать поиска.
-"""
+Help intake notices and finals use separate conservative delivery reservations.
+Uncertain sources remain on the existing owner-confirmation hold. No historic
+command is replayed and no Room ACK/offer is treated as acceptance."""
 from __future__ import annotations
 
 import asyncio
@@ -45,6 +33,7 @@ from vera_shared.voice_help.queue_state import (
     mark_escalated,
     mark_opened,
 )
+from vera_shared.voice_help.result_delivery import review_result
 from vera_shared.voice_help.room_intake import escalate, open_help_task
 
 from bot_telegram.answer_delivery import deliver_answer
@@ -121,8 +110,18 @@ async def open_and_notify(send: Send, row: VoiceCommandRow, now: datetime) -> bo
         await mark_opened(row.command_id, task_id, now)
     opened = utc_naive_now()
     if row.acked_at is None:
-        await say(send, opened_text(task_id, row.instruction, uncertain=uncertain))
-        await mark_acked(row.command_id)
+        held = await claim(row.command_id, "intake", now, "intake_notice")
+        if held is None:
+            text = opened_text(task_id, row.instruction, uncertain=uncertain)
+            try:
+                msg_id = await send(escape(text, quote=False), text)
+            except Exception as exc:
+                await settle(row.command_id, "intake", classify_send_error(exc), key="intake_notice")
+                raise
+            await settle(row.command_id, "intake", "sent" if msg_id else "unknown",
+                         msg_id, key="intake_notice")
+            if msg_id:
+                await mark_acked(row.command_id)
     log.info("voice-worker: %s очередь→задача %s мс, →уведомление %s мс%s",
              row.command_id, _ms(row.created_at, opened),
              _ms(row.created_at, utc_naive_now()),
@@ -131,14 +130,7 @@ async def open_and_notify(send: Send, row: VoiceCommandRow, now: datetime) -> bo
 
 
 async def process_one(send: Send, owner_id: int) -> bool:
-    """Ответить на одно поручение. False — очередь пуста.
-
-    Гарантия — ответ не теряется и обычно приходит один раз. Дубль возможен в
-    одном узком окне: Telegram принял сообщение, а `mark_answered` не успел
-    записаться (процесс убит в эти миллисекунды, упала БД) или ответ Telegram
-    потерялся в сети. Тогда ретрай ответит повторно — at-least-once: потерять
-    ответ хуже, чем прислать его дважды. То же окно у «Услышала» (`acked_at`).
-    """
+    """Claim one command; hold help for executor final, process ordinary memory normally."""
     row = await claim_command()
     if row is None:
         return False
@@ -146,7 +138,13 @@ async def process_one(send: Send, owner_id: int) -> bool:
         now = utc_naive_now()
         held = row.help_state in WATCHED
         age = now - row.spoken_at
-        if row.answered_at is None and row.acked_at is None and age > MAX_AGE:
+        if row.help_state and age > MAX_AGE and not row.task_id:
+            await review_result(row.command_id, "stale_unopened", now)
+            return True
+        if row.help_state and row.answered_at is not None:
+            await hold_command(row.command_id, now)
+            return True
+        if not row.help_state and row.answered_at is None and row.acked_at is None and age > MAX_AGE:
             text = stale_text(row.instruction, age)
             await send(escape(text, quote=False), text)
             await mark_answered(row.command_id)
@@ -157,10 +155,14 @@ async def process_one(send: Send, owner_id: int) -> bool:
         elif row.answered_at is None:
             if row.help_state in HELP_TO_OPEN:
                 held = True
-                if await open_and_notify(send, row, now):
-                    await hold_command(row.command_id, now)
-                    return True
-            elif row.acked_at is None:
+                await open_and_notify(send, row, now)
+                await hold_command(row.command_id, now)
+                return True
+            if row.help_state:
+                # Help has one final owner, including after restart/legacy intake.
+                await hold_command(row.command_id, now)
+                return True
+            if row.acked_at is None:
                 await say(send, ack_text(row.instruction))
                 await mark_acked(row.command_id)
             answer = await ask_brain(row.instruction, owner_id, owner_id)

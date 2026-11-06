@@ -19,6 +19,7 @@ from sqlalchemy import select, update
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_voice import VoiceCommandRow
+from vera_shared.timeutil import utc_naive_now
 
 KEY = "delivery"
 CAS_TRIES = 8
@@ -67,7 +68,9 @@ async def settle(command_id: str, owner: str, state: str, message_id: int | None
     def put(current: dict[str, Any] | None) -> dict[str, Any] | None:
         if current is None or current["owner"] != owner:
             return None
-        return {**current, "state": state,
+        if current["state"] == "sent" or (current["state"] == "unknown" and state != "sent"):
+            return None
+        return {**current, "state": state, "settled_at": utc_naive_now().isoformat(),
                 **({"message_id": message_id} if message_id else {})}
 
     await _swap(command_id, put, key)
@@ -145,6 +148,8 @@ async def claim_unless_accepted(command_id: str, room: str, task_id: str, owner:
         row = await s.get(VoiceCommandRow, command_id, with_for_update=True)
         if row is None:
             return "lost", {"owner": "?", "state": "unknown"}
+        if row.help_state and owner == "brain":
+            return "executor", "executor"
         current = (row.source or {}).get(KEY)
         if current is not None and current["state"] != "error":
             return "lost", current

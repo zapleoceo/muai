@@ -15,6 +15,7 @@ from vera_shared.room import (
     task_wait,
     tasks,
 )
+from vera_shared.voice_help.status_read import voice_status_for_task
 
 from vera_mcp.auth import client_of
 from vera_mcp.room_common import (
@@ -157,7 +158,8 @@ async def room_task_history(
 ) -> dict[str, Any]:
     """Журнал событий задачи по возрастанию id (только чтение, после since_id). Task event log, oldest first."""
     return {"room": room, "task_id": task_id, "events": events_view(await task_progress.history(
-        room=_room(room), task_id=task_id, since_id=since_id, limit=limit))}
+        room=_room(room), task_id=task_id, since_id=since_id, limit=limit)),
+        "voice_status": await voice_status_for_task(_room(room), task_id)}
 
 
 async def room_task_release(

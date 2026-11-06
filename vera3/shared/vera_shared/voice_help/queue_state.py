@@ -28,7 +28,8 @@ HELD = "opened"
 async def _set(command_id: str, now: datetime, **values: object) -> None:
     async with get_session() as s:
         await s.execute(update(VoiceCommandRow)
-                        .where(VoiceCommandRow.command_id == command_id)
+                        .where(VoiceCommandRow.command_id == command_id,
+                               VoiceCommandRow.help_state.not_in(("closed", "result_pending", "result_unknown", "result_review")))
                         .values(updated_at=now, **values))
 
 
@@ -37,7 +38,12 @@ async def mark_opened(command_id: str, task_id: str, now: datetime) -> None:
 
 
 async def hold_command(command_id: str, now: datetime) -> None:
-    await _set(command_id, now, status=HELD, error=None)
+    async with get_session() as s:
+        await s.execute(update(VoiceCommandRow).where(
+            VoiceCommandRow.command_id == command_id,
+            VoiceCommandRow.status.in_(("pending", "processing", HELD)),
+            VoiceCommandRow.help_state.not_in(("closed", "result_unknown", "result_review"))
+        ).values(status=HELD, error=None, updated_at=now))
 
 
 async def release_held(command_id: str, now: datetime) -> None:

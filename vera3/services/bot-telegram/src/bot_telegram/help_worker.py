@@ -1,17 +1,8 @@
-"""Срочная просьба голосом: «Открыл задачу», «Взял: …» и эскалация dot.
+"""Track accepted help work and deliver executor results with actual receipts.
 
-Живёт в том же цикле, что `voice_worker`: второй шины нет, состояние — в
-строке очереди (`vera_shared.voice_help.queue_state`): до claim она в
-`status=opened`, на claim/отмене — `release_held`. Ответ владельца на вопрос
-неподтверждённой задачи снимает удержание (`voice_help.hold.lift_hold`). Каждый шаг — сначала
-сообщение владельцу, потом отметка: упади бот между ними, следующий проход
-повторит сообщение (at-least-once, как у ответа на поручение).
-
-Кнопок нет (решение владельца 11.10.2026): владельцу уходит только
-уведомление, задача открывается сразу.
-
-Часы приходят аргументом `now` — тесты подставляют свои.
-"""
+Room completion is readiness, not Telegram delivery. Unknown sends are never
+replayed; legacy competing finals and unavailable evidence require review.
+Queue state and final receipt are committed atomically by the shared repository."""
 from __future__ import annotations
 
 import logging
@@ -23,16 +14,22 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskRow
 from vera_shared.db.models_voice import VoiceCommandRow
 from vera_shared.redact import redact_secrets
-from vera_shared.voice_help.delivery_claim import claim, classify_send_error, settle
+from vera_shared.voice_commands import GUARD_VERSION
+from vera_shared.voice_help.delivery_claim import classify_send_error, settle
+from vera_shared.voice_help.fact_route import external_facts, fresh_result
 from vera_shared.voice_help.hold import is_confirmed, lift_hold
 from vera_shared.voice_help.policy import help_room, source_uncertain
 from vera_shared.voice_help.queue_state import (
-    mark_closed,
     mark_escalated,
     mark_reminded,
     mark_taken,
-    release_held,
     watched_help,
+)
+from vera_shared.voice_help.result_delivery import (
+    cancel_help,
+    reserve_result,
+    review_result,
+    stale_result_claim,
 )
 from vera_shared.voice_help.result_state import (
     ERROR,
@@ -105,23 +102,36 @@ async def deliver_result(send: Send, row: VoiceCommandRow, now: datetime) -> boo
     Двухфазно (см. result_state): намерение пишется ДО отправки; квитанция — после.
     Нет текста (или он старше выкатки) — слать нечего, закрываем как раньше.
     """
+    source = row.source or {}
+    uncertain = (source.get("guard_version") != GUARD_VERSION or source.get("guard") != "own"
+                 or source_uncertain(row.confidence, source.get("doubts") or []))
+    if uncertain:
+        async with get_session() as session:
+            task = await session.get(RoomTaskRow, (help_room(), row.task_id))
+        if task is None or not is_confirmed(task.refs):
+            await review_result(row.command_id, "source_unverified", now)
+            return False
     since = delivery_since()
     if since is None or row.created_at < since:
-        return True  # выключено или команда старше выкатки: закрываем как раньше
+        await review_result(row.command_id, "delivery_cutoff", now)
+        return False
     found = await executor_result(help_room(), row.task_id)
     if found is None:
-        return True
+        await review_result(row.command_id, "missing_final_text", now)
+        return False
+    if external_facts(row.instruction):
+        checked = fresh_result(found[1], now)
+        if checked is None:
+            await review_result(row.command_id, "unverified_external_result", now)
+            return False
+        found = (found[0], checked)
     errors = result_errors(row)
     if errors >= RESULT_MAX_ERRORS:
         return False
-    held = await claim(row.command_id, "executor", now)  # раньше намерения: проигрыш не трогает этап
+    held = await reserve_result(row.command_id, now)
     if held is not None:
-        # Ответ мозга (или чужая заявка) уже считается доставкой: второго сообщения нет.
-        log.info("help-worker: %s — заявка у %s (%s), результат не шлю",
-                 row.command_id, held["owner"], held["state"])
-        return held["owner"] == "brain" and held["state"] == "sent"
-    if not await move(row.command_id, (row.help_state,), PENDING, now):
-        await settle(row.command_id, "executor", "error")  # отправки не было — заявку отпускаем
+        if held.get("owner") == "brain":
+            await review_result(row.command_id, "legacy_brain_final", now)
         return False
     text = result_text(row.task_id, *found)
     try:
@@ -136,10 +146,9 @@ async def deliver_result(send: Send, row: VoiceCommandRow, now: datetime) -> boo
         else:
             await _result_unknown(row.command_id, type(e).__name__, now)
         return False
-    if not message_id:
+    if type(message_id) is not int or message_id <= 0:
         await _result_unknown(row.command_id, "no message_id", now)
         return False
-    await settle(row.command_id, "executor", "sent", message_id)
     return await record_receipt(row.command_id, message_id, now)
 
 
@@ -162,11 +171,14 @@ async def track_help(send: Send, now: datetime) -> int:
 
 
 async def _track_one(send: Send, row: VoiceCommandRow, now: datetime) -> str | None:
+    delivery = (row.source or {}).get("delivery", {})
+    if delivery.get("owner") == "brain" and delivery.get("state") != "error":
+        await review_result(row.command_id, "legacy_brain_final", now)
+        return None
     if row.help_state == PENDING:
-        # Намерение есть, квитанции нет: исход отправки неизвестен — не повторяем.
-        await move(row.command_id, (PENDING,), UNKNOWN, now)
-        log.warning("help-worker: %s — результат мог уйти, квитанции нет; "
-                    "автоповтора нет (result_unknown)", row.command_id)
+        if not stale_result_claim(row, now):
+            return None
+        await _result_unknown(row.command_id, "stale reservation", now)
         return UNKNOWN
     if row.instruction and await lift_hold(
             help_room(), row.task_id, normal_action(redact_secrets(row.instruction))):
@@ -179,7 +191,6 @@ async def _track_one(send: Send, row: VoiceCommandRow, now: datetime) -> str | N
     if step == TAKEN and holder:
         await say(send, taken_text(holder))
         await mark_taken(row.command_id, holder, now)
-        await release_held(row.command_id, now)
     elif step == ESCALATE:
         await escalate(task_id=row.task_id)
         await say(send, ESCALATED_TEXT)
@@ -188,10 +199,14 @@ async def _track_one(send: Send, row: VoiceCommandRow, now: datetime) -> str | N
         await say(send, REMIND_TEXT)
         await mark_reminded(row.command_id, now)
     elif step == CLOSED:
-        if status == "done" and not await deliver_result(send, row, now):
+        if status == "done":
+            if not await deliver_result(send, row, now):
+                return None
+        elif status == "cancelled":
+            await cancel_help(row.command_id, row.help_state, now)
+        else:
+            await review_result(row.command_id, "execution_ended_without_delivery", now)
             return None
-        await mark_closed(row.command_id, now)
-        await release_held(row.command_id, now)
     return step
 
 
