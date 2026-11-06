@@ -181,7 +181,7 @@ async def _track_one(send: Send, row: VoiceCommandRow, now: datetime) -> str | N
         await _result_unknown(row.command_id, "stale reservation", now)
         return UNKNOWN
     if row.instruction and await lift_hold(
-            help_room(), row.task_id, normal_action(redact_secrets(row.instruction))):
+            help_room(), row.task_id, normal_action(redact_secrets(row.instruction), reference_at=row.created_at)):
         log.info("help-worker: %s источник подтверждён владельцем", row.command_id)
     holder, status = await task_holder(help_room(), row.task_id)
     elapsed = now - (row.task_opened_at or now)

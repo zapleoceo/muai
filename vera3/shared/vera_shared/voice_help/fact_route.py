@@ -9,7 +9,7 @@ from urllib.parse import urlsplit
 _PERSONAL = re.compile(r"\b(помни\w*|вспомни\w*|обсуждал\w*|говорил\w*|покупал\w*|менял\w*|remember|recall)\b", re.I)
 _PERSONAL_ACTION = re.compile(r"\b(я|мы|I|we)\b.{0,60}\b(менял\w*|покупал\w*|обсуждал\w*|говорил\w*|bought|paid|said)\b", re.I)
 _CURRENT = re.compile(r"\b(сейчас|текущ\w*|актуаль\w*|сегодня|today|current|now|latest)\b", re.I)
-_CURRENCY = re.compile(r"(курс|сколько|стоит|rate|price).*(доллар|долар|грив|usd|uah)|(доллар|usd).*(грив|uah)", re.I)
+_CURRENCY = re.compile(r"(курс|стоит|стоимост|цена|rate|price).*(доллар|долар|грив|usd|uah)|(доллар|долар|грив|usd|uah).*(курс|стоит|стоимост|цена|rate|price)|(доллар|usd).*(грив|uah)", re.I | re.S)
 _PUBLIC = re.compile(r"\b(погод\w*|новост\w*|weather|news)\b", re.I)
 PREFIX = "FRESH_FACTS_V1\n"
 
@@ -19,12 +19,14 @@ def external_facts(query: str) -> bool:
     return not personal and bool(_CURRENCY.search(query) or _PUBLIC.search(query))
 
 
-def fresh_facts_action(query: str, now: datetime) -> str:
+def fresh_facts_action(query: str, now: datetime | None) -> str:
     if not external_facts(query):
         return ""
-    at = now.replace(tzinfo=UTC).isoformat() if now.tzinfo is None else now.isoformat()
+    at = "not supplied; establish actual current time before lookup"
+    if now is not None:
+        at = now.replace(tzinfo=UTC).isoformat() if now.tzinfo is None else now.isoformat()
     return (
-        f"\nCurrent external facts; reference time {at} (UTC; owner timezone unknown). "
+        f"\nCurrent external facts; recorded request reference time {at} (UTC; owner timezone unknown). "
         "Do not use personal memory or old events as current data. Use only already authorized "
         "public sources, no new access or paid calls. For USD/UAH specify official NBU vs "
         "cash/buy/sell rate; do not substitute one for another. "

@@ -38,8 +38,8 @@ Source-uncertain tasks still need the existing explicit owner confirmation.
 `external_facts` classifies the bounded current-facts routes (currency, weather,
 news), preserving explicit personal recall. `ask_brain` fails closed for these
 routes instead of searching old personal events. Normal help intake uses the
-existing authorized Room executor. `fresh_facts_action` passes actual UTC reference
-time, source/time/type requirements, and the `FRESH_FACTS_V1` final-note contract.
+existing authorized Room executor. `fresh_facts_action` passes the persisted UTC request reference
+time (stable across retries, not an observation timestamp), source/time/type requirements, and the `FRESH_FACTS_V1` final-note contract.
 The owner's timezone is not inferred. The ordinary memory agent receives actual
 UTC time and its existing configured local offset for relative-date interpretation.
 
@@ -79,3 +79,9 @@ Release uses the existing code-only master CI process after exact-HEAD review;
 unrelated blocked Office/Veranda PRs are excluded. Live health/version can be read
 after deployment; a new real owner command is needed for a new live delivery
 receipt, rather than replaying a historic command.
+
+Opening Room messages retain the complete redacted request when next_action is
+a shortened preview. The preview explicitly requires reading the opening message
+before acting, so trailing owner constraints are not lost. Persisted request time
+keeps the idempotent opening message body identical if the worker restarts after
+Room commit but before queue acknowledgement.

@@ -105,7 +105,8 @@ async def open_and_notify(send: Send, row: VoiceCommandRow, now: datetime) -> bo
                  or source_uncertain(row.confidence, source.get("doubts") or []))
     task_id = await open_help_task(
         command_id=row.command_id, event_id=row.event_id,
-        instruction=row.instruction, source=row.source, uncertain=uncertain)
+        instruction=row.instruction, source=row.source, uncertain=uncertain,
+        reference_at=row.created_at)
     if row.help_state != "opened":
         await mark_opened(row.command_id, task_id, now)
     opened = utc_naive_now()

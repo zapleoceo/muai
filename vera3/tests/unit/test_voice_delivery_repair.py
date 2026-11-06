@@ -214,3 +214,34 @@ async def test_late_real_receipt_resolves_unknown_without_second_send():
     current = await queue_row(row.command_id)
     assert sender.sent == [] and current.source["delivery"]["state"] == "sent"
     assert current.source["delivery"]["message_id"] == 801 and current.status == "done"
+
+
+async def test_restart_after_opening_message_commit_uses_identical_body():
+    from voice_help_kit import messages_in
+    await accept_voice_command(help_cmd(instruction="курс USD UAH"), x_internal_secret=SECRET)
+    with patch.object(voice_worker, "mark_opened", AsyncMock(side_effect=RuntimeError("interrupted"))):
+        await voice_worker.process_one(Recorder(), OWNER)
+    [first] = await messages_in(ROOM)
+    async with get_session() as session:
+        row = await session.get(VoiceCommandRow, "vc-help1")
+        row.next_attempt_at = None
+        later = row.created_at + timedelta(minutes=1)
+    with patch.object(voice_worker, "utc_naive_now", return_value=later):
+        await voice_worker.process_one(Recorder(), OWNER)
+    [again] = await messages_in(ROOM)
+    assert again.body == first.body
+    assert (await queue_row("vc-help1")).help_state == "opened"
+
+
+@pytest.mark.parametrize("uncertain", [False, True])
+async def test_long_request_keeps_last_constraints_in_room_body(uncertain):
+    from voice_help_kit import messages_in, tasks_in
+    instruction = "курс USD UAH " + "x" * 1700 + " NEVER PUBLISH OR SPEND."
+    await accept_voice_command(help_cmd(instruction=instruction, confidence=0.3 if uncertain else 0.95),
+                               x_internal_secret=SECRET)
+    await voice_worker.process_one(Recorder(), OWNER)
+    [task] = await tasks_in(ROOM)
+    post = next(m for m in await messages_in(ROOM) if m.message_id == TASK)
+    assert instruction in post.body and "FRESH_FACTS_V1" in post.body
+    assert len(task.next_action) <= 2000
+    assert "Read the complete original request" in task.next_action
