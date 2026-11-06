@@ -65,6 +65,10 @@ async def voice_status_for_task(room: str, task_id: str) -> dict[str, Any] | Non
             "receipt": receipt,
             "receipt_at": receipt_time.isoformat() + "Z" if receipt_time else None,
             "review_reason": reason,
+            "phase_notices": {phase: source[f"help_notice_{phase}"]["state"]
+                              for phase in ("taken", "escalate", "remind")
+                              if isinstance(source.get(f"help_notice_{phase}"), dict)
+                              and source[f"help_notice_{phase}"].get("state") in ("claimed", "unknown", "sent", "error")},
         }
     final = await executor_result(room, task_id)
     result["prepared_executor"] = final[0] if final else None

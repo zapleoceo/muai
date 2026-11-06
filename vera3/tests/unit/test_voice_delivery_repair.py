@@ -245,3 +245,80 @@ async def test_long_request_keeps_last_constraints_in_room_body(uncertain):
     assert instruction in post.body and "FRESH_FACTS_V1" in post.body
     assert len(task.next_action) <= 2000
     assert "Read the complete original request" in task.next_action
+
+
+@pytest.mark.parametrize("accepted", [False, True])
+@pytest.mark.parametrize("receipt", [0, TimeoutError("unknown outcome")])
+async def test_unknown_phase_notice_is_not_replayed(accepted, receipt):
+    row, _, _ = await opened()
+    if accepted:
+        await hand_to(ROOM, TASK, "codex")
+    send = AsyncMock(side_effect=receipt) if isinstance(receipt, Exception) else AsyncMock(return_value=receipt)
+    await help_worker.track_help(send, row.task_opened_at + timedelta(minutes=5))
+    await help_worker.track_help(send, row.task_opened_at + timedelta(minutes=6))
+    assert send.await_count == 1
+    current = await queue_row(row.command_id)
+    key = "help_notice_taken" if accepted else "help_notice_escalate"
+    assert current.source[key]["state"] == "unknown" and "delivery" not in current.source
+    from vera_shared.voice_help.status_read import voice_status_for_task
+    status = await voice_status_for_task(ROOM, TASK)
+    assert status["phase_notices"]["taken" if accepted else "escalate"] == "unknown"
+
+
+async def test_definitely_unsent_phase_notice_can_retry_without_duplicate():
+    row, _, _ = await opened()
+    send = AsyncMock(side_effect=[ConnectionRefusedError(), 81])
+    for minute in (5, 6, 7):
+        await help_worker.track_help(send, row.task_opened_at + timedelta(minutes=minute))
+    current = await queue_row(row.command_id)
+    assert send.await_count == 2 and current.help_state == "escalated"
+    assert current.source["help_notice_escalate"]["message_id"] == 81
+
+
+async def test_restart_with_claimed_phase_notice_never_replays():
+    from vera_shared.voice_help.delivery_claim import claim
+    row, _, _ = await opened()
+    await hand_to(ROOM, TASK, "codex")
+    await claim(row.command_id, "help_notice", row.task_opened_at, "help_notice_taken")
+    sender = Recorder()
+    await help_worker.track_help(sender, row.task_opened_at + timedelta(minutes=1))
+    assert sender.sent == [] and (await queue_row(row.command_id)).help_state == "opened"
+    await help_worker.track_help(sender, row.task_opened_at + timedelta(minutes=6))
+    assert sender.sent == [] and (await queue_row(row.command_id)).help_state == "taken"
+
+
+async def test_concurrent_phase_tracker_waits_for_definite_send_outcome():
+    import asyncio
+    row, _, _ = await opened()
+    await hand_to(ROOM, TASK, "codex")
+    started, proceed = asyncio.Event(), asyncio.Event()
+
+    async def rejected(_h, _p):
+        started.set()
+        await proceed.wait()
+        raise ConnectionRefusedError()
+
+    first = asyncio.create_task(help_worker.track_help(rejected, row.task_opened_at + timedelta(minutes=1)))
+    await asyncio.wait_for(started.wait(), 5)
+    second = Recorder()
+    try:
+        await help_worker.track_help(second, row.task_opened_at + timedelta(minutes=1))
+        assert (await queue_row(row.command_id)).help_state == "opened"
+    finally:
+        proceed.set()
+        await first
+    await help_worker.track_help(second, row.task_opened_at + timedelta(minutes=2))
+    current = await queue_row(row.command_id)
+    assert len(second.sent) == 1 and current.help_state == "taken"
+    assert current.source["help_notice_taken"]["state"] == "sent"
+
+
+async def test_stale_phase_snapshot_cannot_replace_newer_proven_failure():
+    from vera_shared.voice_help.delivery_claim import claim, settle
+    row, _, _ = await opened()
+    key = "help_notice_taken"
+    await claim(row.command_id, "help_notice", row.task_opened_at, key)
+    old_claim = (await queue_row(row.command_id)).source[key]
+    await settle(row.command_id, "help_notice", "error", key=key)
+    assert not await settle(row.command_id, "help_notice", "unknown", key=key, expected=old_claim)
+    assert (await queue_row(row.command_id)).source[key]["state"] == "error"

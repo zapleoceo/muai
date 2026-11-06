@@ -55,6 +55,7 @@ from vera_shared.voice_help.tracking import (
 )
 
 from bot_telegram.formatting import TELEGRAM_MAX_CHARS
+from bot_telegram.help_notices import send_help_notice
 
 log = logging.getLogger(__name__)
 
@@ -189,15 +190,15 @@ async def _track_one(send: Send, row: VoiceCommandRow, now: datetime) -> str | N
     if step == TAKEN and row.help_state in ("taken", ERROR):
         return None  # «Взял» уже сказано; строку держим ради результата
     if step == TAKEN and holder:
-        await say(send, taken_text(holder))
-        await mark_taken(row.command_id, holder, now)
+        if await send_help_notice(send, row.command_id, TAKEN, taken_text(holder), now):
+            await mark_taken(row.command_id, holder, now)
     elif step == ESCALATE:
         await escalate(task_id=row.task_id)
-        await say(send, ESCALATED_TEXT)
-        await mark_escalated(row.command_id, now)
+        if await send_help_notice(send, row.command_id, ESCALATE, ESCALATED_TEXT, now):
+            await mark_escalated(row.command_id, now)
     elif step == REMIND:
-        await say(send, REMIND_TEXT)
-        await mark_reminded(row.command_id, now)
+        if await send_help_notice(send, row.command_id, REMIND, REMIND_TEXT, now):
+            await mark_reminded(row.command_id, now)
     elif step == CLOSED:
         if status == "done":
             if not await deliver_result(send, row, now):

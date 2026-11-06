@@ -188,3 +188,42 @@ async def test_late_voice_worker_hold_cannot_reopen_delivered_row(pg_db, monkeyp
     async with get_session() as session:
         row = await session.get(VoiceCommandRow, "vc-race1")
         assert row.status == "done" and row.help_state == "closed" and row.instruction == ""
+
+
+async def test_concurrent_phase_trackers_wait_for_live_sender_and_retry_proven_failure(pg_db):
+    from bot_telegram import help_worker
+    from vera_shared.db.engine import get_session
+    from vera_shared.db.models_voice import VoiceCommandRow
+    from vera_shared.room import handoff
+    from vera_shared.timeutil import utc_naive_now
+    await _offered_task()
+    await handoff.accept(room=ROOM, task_id=TASK, agent="codex")
+    started, proceed = asyncio.Event(), asyncio.Event()
+    calls = []
+    now = utc_naive_now()
+
+    async def rejected(_h, _p):
+        started.set()
+        await proceed.wait()
+        raise ConnectionRefusedError()
+
+    async def sent(_h, plain):
+        calls.append(plain)
+        return 901
+
+    first = asyncio.create_task(help_worker.track_help(rejected, now))
+    await asyncio.wait_for(started.wait(), 5)
+    try:
+        await help_worker.track_help(sent, now)
+        async with get_session() as session:
+            row = await session.get(VoiceCommandRow, "vc-race1")
+            assert row.help_state == "opened"
+    finally:
+        proceed.set()
+        await first
+    await help_worker.track_help(sent, now)
+    async with get_session() as session:
+        row = await session.get(VoiceCommandRow, "vc-race1")
+        assert row.help_state == "taken" and len(calls) == 1
+        assert row.source["help_notice_taken"]["message_id"] == 901
+        assert "delivery" not in row.source

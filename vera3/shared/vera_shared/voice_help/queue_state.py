@@ -29,7 +29,7 @@ async def _set(command_id: str, now: datetime, **values: object) -> None:
     async with get_session() as s:
         await s.execute(update(VoiceCommandRow)
                         .where(VoiceCommandRow.command_id == command_id,
-                               VoiceCommandRow.help_state.not_in(("closed", "result_pending", "result_unknown", "result_review")))
+                               VoiceCommandRow.help_state.not_in(("closed", "cancelled", "result_pending", "result_unknown", "result_review")))
                         .values(updated_at=now, **values))
 
 

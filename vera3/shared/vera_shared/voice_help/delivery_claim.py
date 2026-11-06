@@ -64,16 +64,18 @@ async def claim(command_id: str, owner: str, now: datetime,
 
 
 async def settle(command_id: str, owner: str, state: str, message_id: int | None = None,
-                 key: str = KEY) -> None:
+                 key: str = KEY, *, expected: dict[str, Any] | None = None) -> bool:
     def put(current: dict[str, Any] | None) -> dict[str, Any] | None:
         if current is None or current["owner"] != owner:
+            return None
+        if expected is not None and current != expected:
             return None
         if current["state"] == "sent" or (current["state"] == "unknown" and state != "sent"):
             return None
         return {**current, "state": state, "settled_at": utc_naive_now().isoformat(),
                 **({"message_id": message_id} if message_id else {})}
 
-    await _swap(command_id, put, key)
+    return await _swap(command_id, put, key) is not None
 
 
 async def update_source(command_id: str, extra: dict[str, Any], *, only_state: str,

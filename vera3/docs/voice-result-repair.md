@@ -85,3 +85,14 @@ a shortened preview. The preview explicitly requires reading the opening message
 before acting, so trailing owner constraints are not lost. Persisted request time
 keeps the idempotent opening message body identical if the worker restarts after
 Room commit but before queue acknowledgement.
+
+`send_help_notice` uses separate per-phase reservations for taken, escalation and
+reminder notices. Timeout/no receipt never replays that phase; a proven rejection
+may retry. Phase state reflects actual execution/dispatch facts, not a final
+Telegram receipt. These keys never claim the executor final delivery key.
+
+A second phase tracker waits for a live claimed notice; it cannot advance the
+phase while the first sender may still return a definite rejection. Stranded
+claims become unknown after five minutes without replay; real execution state
+may then advance independently of the notice receipt. PostgreSQL covers the
+concurrent-tracker / pre-send-rejection / successful-retry sequence.
