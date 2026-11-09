@@ -22,6 +22,7 @@ from vera_shared.office.message_files import message_files
 from vera_shared.office.runtime_snapshot import PREFIX, validate_runtime_publication
 from vera_shared.room import messages, task_queue
 
+from vera_mcp import room_push
 from vera_mcp.auth import client_of
 from vera_mcp.room_common import (  # noqa: F401
     DEFAULT_LEASE_S,
@@ -84,7 +85,10 @@ async def room_post(
         status=status, from_session=check_session(me, session),
         validate_row=(lambda row: validate_runtime_publication(
             row.body, datetime.now(UTC), created_at=row.created_at)) if runtime_snapshot else None)
-    return {"ok": True, "deduped": deduped, "message": message_view(msg)}
+    view = message_view(msg)
+    if not deduped:
+        room_push.schedule_push(view)
+    return {"ok": True, "deduped": deduped, "message": view}
 
 
 async def room_inbox(

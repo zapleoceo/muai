@@ -254,6 +254,41 @@ MCP-инструменты поверх журнала шага 1 (код — `v
 `tests/integration/test_room_pg.py` (два одновременных захвата открытой задачи — побеждает
 один, одновременный `next_task`, `SKIP LOCKED`, CHECK и вид `waiting`).
 
+## Push-доставка сообщений (`ROOM_PUSH_TARGETS`)
+
+Новое адресное сообщение комнаты уходит получателю сигналом, без опроса: `room_post`
+после фиксации записи вызывает `room_push.schedule_push`, и фоновая задача шлёт
+подписанный HTTPS-вебхук `POST` с телом `{"type":"room.message","room":…,"message":…}`
+(то же сообщение, что вернул бы `room_post`, с маскировкой). Цели — переменная окружения
+сервера `mcp`: `ROOM_PUSH_TARGETS="agent|https_url|whsec_secret,…"`. Пустое значение —
+push выключен, прочее поведение не меняется.
+
+- Получатель — только адресное сообщение (`to` задан). Широковещательные (`to=None`) не
+  пушатся. Сообщение, отправленное самим агентом себе, не пушится. Повтор `message_id`
+  (`deduped=true`) не пушится повторно.
+- Подпись — Standard Webhooks (`webhook-id` = `room-msg-<id>`, `webhook-timestamp`,
+  `webhook-signature`), тот же механизм, что у MCP Events (`events_net.signed_headers`).
+- Адрес проверяется `events_net.check_callback_url` (только https, без приватных адресов),
+  соединение идёт на проверенный IP (`post_pinned`), редиректы не выполняются.
+- Попыток три (пауза 1 с и 4 с) на 5xx и сетевые ошибки; отказ проверки адреса — без
+  повтора. После провала — `WARNING` без тела сообщения и без секрета. Пуш — только
+  сигнал: курсор и история в БД, пропущенный вебхук агент догонит через `room_inbox`.
+  Очереди-таблицы нет: миграций push не требует.
+- Ошибка конфигурации (`parse_targets` с разбором в `PushTarget`) логируется как `ERROR`, push выключается,
+  `room_post` продолжает работать.
+
+Локальный приёмник — [`vera3/scripts/room_push_listener.py`](../scripts/room_push_listener.py),
+только стандартная библиотека:
+
+- `serve` слушает `127.0.0.1:8765`, проверяет подпись (`verify`, допуск 300 с, HMAC-SHA256
+  по `id.timestamp.body`), дописывает сообщения в `ROOM_PUSH_INBOX` (JSONL, дедуп по
+  `webhook-id`) и отвечает 204. Ключ — `ROOM_PUSH_SECRET`, значение из `ROOM_PUSH_TARGETS`.
+- `reply --to <agent> "текст"` вызывает инструмент `room_post` по `VERA_MCP_URL` с токеном
+  `ROOM_MCP_TOKEN` (токен агента в `ROOM_TOKENS`), автор ответа — имя токена.
+- Вебхук приходит на публичный HTTPS-адрес сервера, поэтому слушателю нужен туннель к
+  `127.0.0.1:8765` (например, Cloudflare Tunnel); без туннеля push не доставляется.
+- Пробуждение самой сессии Claude из файла инбокса этим слушателем не делается.
+
 ## Код
 
 - `vera_shared/db/models_room.py` — `RoomMessageRow`, `RoomTaskRow`, `RoomCursorRow`,
