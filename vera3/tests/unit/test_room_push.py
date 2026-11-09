@@ -7,7 +7,6 @@ import json
 import httpx
 import pytest
 from standardwebhooks import Webhook
-
 from vera_mcp import room_push
 from vera_mcp.events_net import CallbackRejected
 
