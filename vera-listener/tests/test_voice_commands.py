@@ -34,10 +34,11 @@ def _hear(watch: CommandWatch, until: float, *, system_speech=()) -> None:
 
 
 class TestWhoseVoice:
-    def test_owner_alone_is_accepted_right_away(self):
+    @pytest.mark.parametrize("phrase", [PHRASE, PHRASE.replace("Вера", "Верна")])
+    def test_owner_alone_is_accepted_right_away(self, phrase):
         watch, sent = _watch()
         _hear(watch, 20)
-        watch.on_segment("mic", 5.0, 9.0, PHRASE)
+        watch.on_segment("mic", 5.0, 9.0, phrase)
         watch.chunk_done("mic", 11.0)
         assert len(sent) == 1
         assert sent[0]["instruction"] == "срочно напиши мне что-то в телеграм"
