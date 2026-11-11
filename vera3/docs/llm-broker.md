@@ -244,6 +244,15 @@ database and would otherwise leak an open circuit into the next test.
   under an `asyncio.Lock` with a double-checked `if _http is None` — two
   concurrent first-callers used to be able to race and each construct
   their own client, leaking one.
+- Code layout (2026-11-12): `broker_client.py` keeps config, the shared
+  client, the `usage_log` mirror and the three entry points
+  (`chat_via_broker`, `chat_async_via_broker`, `embed_via_broker`);
+  exceptions (`BrokerCallFailed`, `BrokerJobPending`, `BrokerJobGone`,
+  `BrokerJobErrored`) and `_short` live in `broker_errors.py`; the job poll
+  loop is `broker_jobs.poll_job` (returns the `done` body, raises otherwise).
+  Every old name is still importable from `broker_client`. Config, `_http`
+  and `_log_usage` stay in `broker_client` on purpose: tests and
+  `client.close_http_client` patch/reset them as attributes of that module.
 
 ## Env vars
 

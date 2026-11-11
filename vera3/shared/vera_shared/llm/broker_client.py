@@ -5,6 +5,10 @@ talking to providers directly. Broker handles key selection, cost guard,
 fallback chain, and per-key cooldowns. We just pass capability + content.
 
 Same signature/return as the legacy client so callers don't change.
+
+Отказы — `broker_errors`, цикл опроса джобы — `broker_jobs`; имена
+реэкспортируются отсюда. Конфиг, общий HTTP-клиент и зеркало в usage_log
+остаются здесь: тесты подменяют их как атрибуты этого модуля.
 """
 from __future__ import annotations
 
@@ -18,7 +22,27 @@ import httpx
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import UsageLogRow
-from vera_shared.redact_view import redact_view
+from vera_shared.llm.broker_errors import (
+    BrokerCallFailed,
+    BrokerJobErrored,
+    BrokerJobGone,
+    BrokerJobPending,
+    _short,
+)
+from vera_shared.llm.broker_jobs import poll_job
+
+__all__ = [
+    "BrokerCallFailed",
+    "BrokerJobErrored",
+    "BrokerJobGone",
+    "BrokerJobPending",
+    "_short",
+    "broker_enabled",
+    "chat_async_via_broker",
+    "chat_via_broker",
+    "embed_via_broker",
+    "time",
+]
 
 log = logging.getLogger(__name__)
 
@@ -34,36 +58,6 @@ JOB_POLL_DEADLINE_S = float(os.environ.get("BROKER_JOB_DEADLINE_S", "120"))
 
 def broker_enabled() -> bool:
     return bool(BROKER_URL and BROKER_PROJECT_KEY)
-
-
-class BrokerCallFailed(Exception):
-    """Broker returned non-2xx or all providers exhausted."""
-
-
-class BrokerJobPending(BrokerCallFailed):
-    """The client's poll ceiling passed while the broker still works the job.
-    Carries `job_id` so the caller can come back for the result instead of
-    resubmitting the same payload."""
-
-    def __init__(self, job_id: int | str, ceiling: float) -> None:
-        super().__init__(f"job {job_id} still pending after {ceiling:.0f}s")
-        self.job_id = job_id
-
-
-class BrokerJobGone(BrokerCallFailed):
-    """The broker no longer knows this job (404): retention purged it."""
-
-    def __init__(self, job_id: int | str) -> None:
-        super().__init__(f"job {job_id} not found on broker")
-        self.job_id = job_id
-
-
-class BrokerJobErrored(BrokerCallFailed):
-    """The job reached the terminal `error` state on the broker."""
-
-    def __init__(self, job_id: int | str, error: object) -> None:
-        super().__init__(f"job {job_id} failed: {error}")
-        self.job_id = job_id
 
 
 # Shared httpx client — TLS handshake reuse for performance
@@ -85,7 +79,7 @@ async def _client() -> httpx.AsyncClient:
 
 
 async def _log_usage(meta: dict[str, Any], workflow: str | None,
-                      event_id: int | None, capability: str | None) -> None:
+                     event_id: int | None, capability: str | None) -> None:
     """Mirror broker's response into Vera's usage_log so dashboard works."""
     try:
         async with get_session() as s:
@@ -112,6 +106,46 @@ async def _log_usage(meta: dict[str, Any], workflow: str | None,
         log.warning("usage_log write failed: %s", e)
 
 
+async def _post(c: httpx.AsyncClient, path: str, params: dict[str, str],
+                payload: dict[str, Any]) -> dict[str, Any]:
+    try:
+        r = await c.post(f"{BROKER_URL}{path}", params=params, json=payload)
+    except Exception as e:
+        raise BrokerCallFailed(f"broker network: {e}") from e
+    if r.status_code >= 400:
+        raise BrokerCallFailed(f"broker {r.status_code}: {_short(r.text)}")
+    return r.json()
+
+
+def _chat_payload(messages: list[dict[str, Any]], max_tokens: int, temperature: float,
+                  workflow: str | None, model: str | None,
+                  response_format: dict[str, Any] | None) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "messages": messages,
+        "max_tokens": max_tokens,
+        "temperature": temperature,
+        "workflow": workflow,
+    }
+    if model:
+        payload["model"] = model
+    if response_format:
+        payload["response_format"] = response_format
+    return payload
+
+
+def _chat_meta(data: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "provider": data.get("provider"),
+        "model": data.get("model"),
+        "tokens_in": data.get("tokens_in", 0),
+        "tokens_out": data.get("tokens_out", 0),
+        "cost_usd": data.get("cost_usd", 0.0),
+        "latency_ms": data.get("latency_ms", 0),
+        "request_id": data.get("request_id"),
+        "key_label": data.get("key_label"),
+    }
+
+
 async def chat_via_broker(
     *,
     messages: list[dict[str, Any]],
@@ -124,42 +158,12 @@ async def chat_via_broker(
     model: str | None = None,
 ) -> tuple[str, dict[str, Any]]:
     """Drop-in replacement for the legacy chat()."""
-    payload: dict[str, Any] = {
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "workflow": workflow,
-    }
-    if model:
-        payload["model"] = model
-    if response_format:
-        payload["response_format"] = response_format
-
-    c = await _client()
-    try:
-        r = await c.post(
-            f"{BROKER_URL}/v1/chat", params={"capability": capability}, json=payload,
-        )
-    except Exception as e:
-        raise BrokerCallFailed(f"broker network: {e}") from e
-
-    if r.status_code >= 400:
-        raise BrokerCallFailed(f"broker {r.status_code}: {_short(r.text)}")
-
-    data = r.json()
-    text = data.get("text", "")
-    meta = {
-        "provider": data.get("provider"),
-        "model": data.get("model"),
-        "tokens_in": data.get("tokens_in", 0),
-        "tokens_out": data.get("tokens_out", 0),
-        "cost_usd": data.get("cost_usd", 0.0),
-        "latency_ms": data.get("latency_ms", 0),
-        "request_id": data.get("request_id"),
-        "key_label": data.get("key_label"),
-    }
+    payload = _chat_payload(messages, max_tokens, temperature, workflow, model,
+                            response_format)
+    data = await _post(await _client(), "/v1/chat", {"capability": capability}, payload)
+    meta = _chat_meta(data)
     await _log_usage(meta, workflow, event_id, capability)
-    return text, meta
+    return data.get("text", ""), meta
 
 
 async def chat_async_via_broker(
@@ -185,17 +189,8 @@ async def chat_async_via_broker(
     `resume_job_id` — джоба, оставшаяся у брокера после прошлого
     BrokerJobPending: опросить её, а не отправлять payload заново.
     """
-    payload: dict[str, Any] = {
-        "messages": messages,
-        "max_tokens": max_tokens,
-        "temperature": temperature,
-        "workflow": workflow,
-    }
-    if model:
-        payload["model"] = model
-    if response_format:
-        payload["response_format"] = response_format
-
+    payload = _chat_payload(messages, max_tokens, temperature, workflow, model,
+                            response_format)
     ceiling = poll_deadline_s if poll_deadline_s else JOB_POLL_DEADLINE_S
     c = await _client()
 
@@ -216,108 +211,26 @@ async def chat_async_via_broker(
         except (BrokerJobGone, BrokerJobErrored) as e:
             log.info("job %s not resumable (%s) — resubmitting", resume_job_id, e)
 
-    try:
-        r = await c.post(
-            f"{BROKER_URL}/v1/jobs", params={"capability": capability}, json=payload,
-        )
-    except Exception as e:
-        raise BrokerCallFailed(f"broker network: {e}") from e
-    if r.status_code >= 400:
-        raise BrokerCallFailed(f"broker {r.status_code}: {_short(r.text)}")
-
-    job = r.json()
+    job = await _post(c, "/v1/jobs", {"capability": capability}, payload)
     return await _poll_job(c, job["job_id"], ceiling=ceiling,
                            poll_after_s=float(job.get("poll_after_s") or 2),
                            workflow=workflow, event_id=event_id, capability=capability)
 
 
-#: Ответы на ОПРОС, после которых джоба у брокера, скорее всего, жива: прокси
-#: или сам API на мгновение недоступен. 429 — тоже «подожди», не «упало».
-_POLL_TRANSIENT = frozenset({429, 500, 502, 503, 504})
-
-
-def _short(body: str, limit: int = 200) -> str:
-    """Тело ошибки для сообщения: одна строка. HTML-страница Cloudflare
-    иначе растекалась многострочником по логам и triage_error."""
-    return redact_view(" ".join(body.split())[:limit])
-
-
 async def _poll_job(c: httpx.AsyncClient, job_id: int | str, *, ceiling: float,
                     poll_after_s: float, workflow: str | None, event_id: int | None,
                     capability: str) -> tuple[str, dict[str, Any]]:
-    """Poll one job to a terminal state or until `ceiling` seconds pass.
-
-    Сбой самого ОПРОСА (сеть, 5xx прокси) — не сбой джобы: брокер её считает
-    дальше. До 13.09.2026 один 502 от Cloudflare на GET бросал ожидание, id
-    джобы терялся, и следующая попытка отправляла фото заново — двойной счёт
-    модели. Теперь такой ответ = «ещё не знаю», опрос продолжается до
-    дедлайна, а по дедлайну уходит BrokerJobPending с id — как у обычной
-    долгой джобы.
-    """
-    deadline = time.monotonic() + ceiling
-    while True:
-        await asyncio.sleep(poll_after_s)
-        try:
-            r = await c.get(f"{BROKER_URL}/v1/jobs/{job_id}")
-        except Exception as e:  # noqa: BLE001 — сеть мигнула, джоба жива
-            log.warning("job %s poll network error (%s) — keep polling", job_id, e)
-            r = None
-        if r is not None and r.status_code == 404:
-            raise BrokerJobGone(job_id)
-        if r is None or r.status_code in _POLL_TRANSIENT:
-            if r is not None:
-                log.warning("job %s poll %s — keep polling", job_id, r.status_code)
-            if time.monotonic() > deadline:
-                raise BrokerJobPending(job_id, ceiling)
-            continue
-        if r.status_code >= 400:
-            raise BrokerCallFailed(f"broker poll {r.status_code}: {_short(r.text)}")
-
-        data = r.json()
-        status = data.get("status")
-        if status == "pending":
-            if time.monotonic() > deadline:
-                raise BrokerJobPending(job_id, ceiling)
-            poll_after_s = float(data.get("poll_after_s") or poll_after_s)
-            continue
-        if status == "error":
-            raise BrokerJobErrored(job_id, data.get("error"))
-        if status != "done":
-            # Malformed/unexpected response (bad JSON, new status we don't
-            # know about) must NOT be treated as a silent success with an
-            # empty answer — that's worse than a clear error.
-            raise BrokerCallFailed(f"job {job_id} unexpected status: {status!r}")
-
-        text = data.get("text", "")
-        meta = {
-            "provider": data.get("provider"),
-            "model": data.get("model"),
-            "tokens_in": data.get("tokens_in", 0),
-            "tokens_out": data.get("tokens_out", 0),
-            "cost_usd": data.get("cost_usd", 0.0),
-            "latency_ms": data.get("latency_ms", 0),
-            "request_id": data.get("request_id"),
-            "key_label": data.get("key_label"),
-        }
-        await _log_usage(meta, workflow, event_id, capability)
-        return text, meta
+    data = await poll_job(c, BROKER_URL, job_id, ceiling=ceiling, poll_after_s=poll_after_s)
+    meta = _chat_meta(data)
+    await _log_usage(meta, workflow, event_id, capability)
+    return data.get("text", ""), meta
 
 
 async def embed_via_broker(texts: str | list[str]) -> list[list[float]]:
     """Drop-in replacement for the legacy embed()."""
     inputs = [texts] if isinstance(texts, str) else list(texts)
-    c = await _client()
-    try:
-        r = await c.post(
-            f"{BROKER_URL}/v1/embed",
-            params={"provider": "voyage"},
-            json={"input": inputs},
-        )
-    except Exception as e:
-        raise BrokerCallFailed(f"broker network: {e}") from e
-    if r.status_code >= 400:
-        raise BrokerCallFailed(f"broker {r.status_code}: {_short(r.text)}")
-    data = r.json()
+    data = await _post(await _client(), "/v1/embed", {"provider": "voyage"},
+                       {"input": inputs})
     meta = {
         "provider": "voyage",
         "model": data.get("model"),
