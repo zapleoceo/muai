@@ -56,6 +56,15 @@ def test_parse_kv_free_text_yields_nothing():
     assert _parse_kv("текст без разделителя b/n : 100") == {}   # нет '---'
 
 
+def test_parse_kv_skips_non_numeric_value_with_warning(caplog):
+    body = "отчёт\n---\nsecret note: 5\t6\ncontract: 3\n"
+    with caplog.at_level("WARNING", logger="brain_search.reports"):
+        kv = _parse_kv(body)
+    assert kv == {"contract": 3.0}
+    assert "пропущено 1" in caplog.text
+    assert "secret note" not in caplog.text and "5\t6" not in caplog.text
+
+
 def test_is_snapshot_key():
     assert _is_snapshot_key("ost, idr") is True
     assert _is_snapshot_key("lead point") is True
