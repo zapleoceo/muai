@@ -183,9 +183,9 @@ until 2026-07-11 — split for the same reason as the dashboard above):
 | Module | Owns |
 |---|---|
 | `config.py` | Env-configurable tuning constants (poll/batch/concurrency/pace, group-batch size/char cap, canonical chat_id SQL fragment) |
-| `prompts.py` | Single-event + group-batch prompt templates |
+| `prompts.py` | Single-event + group-batch prompt templates; the project enum is built from `vera_shared.projects.rules.PROJECTS` |
 | `schemas.py` | `TRIAGE_JSON_SCHEMA` / `TRIAGE_BATCH_JSON_SCHEMA` (strict json_schema defs) |
-| `postprocess.py` | `NATURE_BY_SOURCE`/`PROJECT_VOCAB`/`postprocess_triage()` — validates the LLM's output against the closed vocab |
+| `postprocess.py` | `NATURE_BY_SOURCE`/`PROJECT_VOCAB`/`postprocess_triage()` — validates the LLM's output against the closed vocab. `PROJECT_VOCAB` is `vera_shared.projects.rules.VALID_PROJECTS` (one project vocabulary for triage, search and the voice route); the project is normalised with `project_key()`. The model's `ready_subtype` is dropped - nothing read it, the `events.ready_subtype` column stays NULL |
 | `claim.py` | `_claim_batch()` (the `FOR UPDATE SKIP LOCKED` query), `chat_kind()`, group-batch chunking |
 | `triage_calls.py` | `triage_one()`/`triage_group_batch()` — the actual broker calls; raise on failure, don't catch |
 | `concurrency.py` | Semaphore-bounded wrappers normalizing single/group results to one shape |

@@ -3,8 +3,8 @@
 2026-07-08: extracted from what used to be two independently-hand-written
 copies (single-event TRIAGE_PROMPT_TEMPLATE + TRIAGE_BATCH_PROMPT_HEADER) —
 same context/rules text, drifting risk on every edit. Also compressed
-wording (verbose multi-line JSON block + 2-3 examples per ready_subtype
-case -> one-line JSON shape + one example each): confirmed live via
+wording (verbose multi-line JSON block + 2-3 examples per case ->
+one-line JSON shape + one example each): confirmed live via
 Cerebras' own API response that `usage.prompt_tokens` is IDENTICAL whether
 a repeated prefix hits their server-side cache or not (cached_tokens=640/750
 vs 0/750, same total) — our daily token quota is charged full price
@@ -16,10 +16,17 @@ TRIAGE_BATCH_JSON_SCHEMA (the enforced structure for schema-capable
 providers, see schemas.py) and postprocess_triage's validation/
 normalization are untouched; this only compresses the human-readable
 instructions.
+
+2026-11: ready_subtype (deal/openhouse, with a hardcoded IT STEP Jakarta
+"Open House 29 июня" and +62 phone examples) removed from both prompts -
+nothing read it. The project enum comes from vera_shared.projects.rules.
 """
 from __future__ import annotations
 
 from vera_shared.db.models import EventRow
+from vera_shared.projects.rules import PROJECTS
+
+_PROJECT_ENUM = "|".join(PROJECTS)
 
 _TRIAGE_CONTEXT = (
     "Контекст Димы: Branch Director IT STEP Academy Jakarta (апрель 2026, "
@@ -34,10 +41,6 @@ _TRIAGE_RULES = (
     "дела Димы; news — новости/рассылки; other — всё прочее.\n"
     "Правила nature: world_event — факт мира; my_intent — Дима сам "
     "формулирует запрос/идею.\n"
-    'ready_subtype ТОЛЬКО если needs_action=true: "deal" — явное намерение '
-    'купить курс + готов действовать сейчас (пример: "хочу записаться, вот '
-    'номер +62..."); "openhouse" — интерес к Open House 29 июня, не покупка '
-    '(пример: "когда опен хаус? хочу прийти"); иначе null.\n'
     "В signals.summary: текст «[удалено: …]» уже не действует, не включай его; "
     "«Ready to Prod/Test» — готовность, не деплой: «выкачено» только при "
     "явном деплое/Done. "
@@ -59,12 +62,11 @@ TRIAGE_PROMPT_TEMPLATE = """Ты — Вера, цифровая память Д�
 {content}
 ---
 
-Верни СТРОГО JSON: {{"importance": <0-100>, "project": "<itstep|veranda|family|""" \
-    """personal|news|other>", "nature": "<world_event|my_intent>", "topics": [<2-4 """ \
+Верни СТРОГО JSON: {{"importance": <0-100>, "project": "<""" + _PROJECT_ENUM + """>", "nature": "<world_event|my_intent>", "topics": [<2-4 """ \
     """рус. тега нижний регистр из: """ + _TRIAGE_TOPICS + """>], "people_mentioned": """ \
     """[<люди>], "signals": [{{"type": "task|event|news|offer|question|decision|""" \
     """anomaly", "summary": "<кратко>", "date": "<ISO|null>"}}], "needs_action": """ \
-    """<bool>, "ready_subtype": <null|"deal"|"openhouse">}}
+    """<bool>}}
 
 """ + _TRIAGE_RULES + """
 
@@ -80,12 +82,11 @@ TRIAGE_BATCH_PROMPT_HEADER = """Ты — Вера, цифровая память
 {events_block}
 
 Верни СТРОГО JSON: {{"results": [{{"event_id": <int>, "importance": <0-100>, """ \
-    """"project": "<itstep|veranda|family|personal|news|other>", "nature": """ \
+    """"project": "<""" + _PROJECT_ENUM + """>", "nature": """ \
     """"<world_event|my_intent>", "topics": [<2-4 рус. тега нижний регистр из: """ \
     + _TRIAGE_TOPICS + """>], "people_mentioned": [<люди>], "signals": [{{"type": """ \
     """"task|event|news|offer|question|decision|anomaly", "summary": "<кратко>", """ \
-    """"date": "<ISO|null>"}}], "needs_action": <bool>, "ready_subtype": """ \
-    """<null|"deal"|"openhouse">}}, ...]}} — ОДИН объект на КАЖДЫЙ event_id выше, """ \
+    """"date": "<ISO|null>"}}], "needs_action": <bool>}}, ...]}} — ОДИН объект на КАЖДЫЙ event_id выше, """ \
     """ничего не пропускай.
 
 """ + _TRIAGE_RULES + """
