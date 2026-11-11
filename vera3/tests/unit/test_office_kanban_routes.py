@@ -59,7 +59,7 @@ def test_kanban_route_requires_owner_and_passes_closed_filter() -> None:
     load.assert_awaited_once_with(include_closed=True)
 
 
-def test_modal_route_requires_owner_and_shows_recent_history_without_write_form() -> None:
+def test_modal_route_requires_owner_and_shows_history_with_owner_actions() -> None:
     denied = HTMLResponse("denied", status_code=401)
     with patch("dashboard.office_hourly_routes.owner_or_blank_401", return_value=denied), patch(
             "dashboard.office_hourly_routes.load_detail", AsyncMock()) as load:
@@ -80,5 +80,20 @@ def test_modal_route_requires_owner_and_shows_recent_history_without_write_form(
     assert response.status_code == 200
     assert response.headers["cache-control"] == "private, no-store"
     assert "Описание" in response.body.decode() and "История" in response.body.decode()
-    assert "Проверено" in response.body.decode() and "<form" not in response.body.decode()
+    body = response.body.decode()
+    assert "Проверено" in body
+    for action in ("move/continue", "move/snooze", "pause", "move/cancel"):
+        assert f'action="/tasks/main/T-1/{action}"' in body
+    assert "data-confirm=" in body  # отмена спрашивает подтверждение
     recent.assert_awaited_once_with("main", "T-1")
+
+
+def test_closed_task_modal_has_no_owner_actions() -> None:
+    from dashboard.office_owner_actions_view import owner_actions_bar
+    for status in ("done", "cancelled"):
+        row = SimpleNamespace(room="main", task_id="T-1", status=status)
+        assert owner_actions_bar(SimpleNamespace(row=row)) == ""
+    paused = SimpleNamespace(row=SimpleNamespace(room="main", task_id="T/1", status="blocked"),
+                             attention=SimpleNamespace(state="paused"))
+    html = owner_actions_bar(paused)
+    assert 'action="/tasks/main/T%2F1/resume"' in html and "/pause" not in html

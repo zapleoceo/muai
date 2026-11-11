@@ -257,6 +257,8 @@ services:
       SEARCH_URL: http://brain-search:8000
       GATEWAY_URL: http://gateway:8000
       INTERNAL_SECRET: ${INTERNAL_SECRET:?INTERNAL_SECRET must be set}
+      # пульт зависших задач; включать только после миграции 063_stall_board
+      STALL_BOARD_ENABLED: ${STALL_BOARD_ENABLED:-0}
     # aiogram, лонг-поллинг
     mem_limit: 448m  # импорт 169 МБ (aiogram) — было 160m, ниже импорта
     restart: unless-stopped

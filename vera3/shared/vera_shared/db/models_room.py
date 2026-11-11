@@ -188,6 +188,22 @@ class WatchdogStateRow(Base):
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
 
+
+class StallBoardRow(Base):
+    """Пульт зависших задач в Telegram (миграция 063): одно сообщение, правится на месте."""
+    __tablename__ = "stall_board"
+
+    name: Mapped[str] = mapped_column(String(64), primary_key=True)
+    message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    posted_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    rev: Mapped[int] = mapped_column(BigInteger, nullable=False, default=0)
+    current_room: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    current_task_id: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    mode: Mapped[str] = mapped_column(String(16), nullable=False, default="ask")
+    skipped: Mapped[list[Any]] = mapped_column(JsonType, nullable=False, default=list)
+    rendered: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
 from vera_shared.db import models_room_events  # noqa: E402
 
 # Импорт ради регистрации таблиц MCP Events в общей metadata комнаты.

@@ -6,7 +6,7 @@ from datetime import datetime
 
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import RoomTaskEventRow, RoomTaskRow
-from vera_shared.room import owner_actions, questions, recovery
+from vera_shared.room import owner_actions, owner_task_actions, questions, recovery
 from vera_shared.room.attention import (
     CANCELLED,
     DONE,
@@ -130,6 +130,16 @@ async def submit_answer(room: str, task_id: str, qid: int, text: str) -> None:
 async def owner_pause(room: str, task_id: str, reason: str, *, paused: bool) -> None:
     act = owner_actions.pause_by_owner if paused else owner_actions.resume_by_owner
     await act(room=room, task_id=task_id, reason=reason)
+
+
+async def owner_move(room: str, task_id: str, reason: str, *, action: str) -> None:
+    """Кнопки владельца, которые двигают задачу: continue / snooze / cancel."""
+    acts = {"continue": owner_task_actions.continue_by_owner,
+            "snooze": owner_task_actions.snooze_by_owner,
+            "cancel": owner_task_actions.cancel_by_owner}
+    if action not in acts:
+        raise ValueError(f"unknown owner action {action!r}")
+    await acts[action](room=room, task_id=task_id, reason=reason)
 
 
 async def owner_resolve_wait(room: str, task_id: str, reason: str) -> None:

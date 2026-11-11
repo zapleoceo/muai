@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
+from dashboard.csrf import owner_post_gate
 from dashboard.office_hourly_service import load_recent_task_events, load_report
 from dashboard.office_hourly_view import modal_body, report_body
+from dashboard.office_owner_cancel import apply_pending_cancellations
 from dashboard.render import _render, owner_or_blank_401, owner_or_redirect
 from dashboard.tasks_service import load_detail
 
@@ -32,3 +34,11 @@ async def office_hourly_detail(request: Request, room: str, task_id: str) -> HTM
     events = await load_recent_task_events(room, task_id)
     return HTMLResponse(modal_body(item, events, questions),
                         headers={"Cache-Control": "private, no-store"})
+
+
+@router.post("/office/hourly/apply-cancellations", response_model=None)
+async def office_apply_cancellations(request: Request):
+    if (denied := owner_post_gate(request)) is not None:
+        return denied
+    await apply_pending_cancellations()
+    return RedirectResponse("/office/hourly", status_code=303)

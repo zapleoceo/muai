@@ -32,7 +32,7 @@ def _clean_reason(reason: str) -> str:
 
 
 async def _set_owner_pause(room: str, task_id: str, reason: str, *, paused: bool,
-                           actor: str) -> dict[str, Any]:
+                           actor: str, via: str = "dashboard") -> dict[str, Any]:
     reason = _clean_reason(reason)
     kind = "paused" if paused else "resumed"
     async with get_session() as s:
@@ -47,21 +47,21 @@ async def _set_owner_pause(room: str, task_id: str, reason: str, *, paused: bool
             await record_event(s, room=room, task_id=task_id, kind=kind, agent=OWNER_AGENT,
                                fencing_token=row.fencing_token, text=reason,
                                data={"by": BY_OWNER, "actor": actor, "reason": reason,
-                                     "via": "dashboard"})
+                                     "via": via})
         await s.refresh(row)
         return {**task_dict(row), "changed": changed, "owner_paused": paused}
 
 
 async def pause_by_owner(*, room: str, task_id: str, reason: str,
-                         actor: str = OWNER_AGENT) -> dict[str, Any]:
+                         actor: str = OWNER_AGENT, via: str = "dashboard") -> dict[str, Any]:
     """Пауза владельца; повтор при уже стоящей паузе — без новой записи."""
-    return await _set_owner_pause(room, task_id, reason, paused=True, actor=actor)
+    return await _set_owner_pause(room, task_id, reason, paused=True, actor=actor, via=via)
 
 
 async def resume_by_owner(*, room: str, task_id: str, reason: str,
-                          actor: str = OWNER_AGENT) -> dict[str, Any]:
+                          actor: str = OWNER_AGENT, via: str = "dashboard") -> dict[str, Any]:
     """Снимает только паузу владельца; пауза держателя остаётся (ST7)."""
-    return await _set_owner_pause(room, task_id, reason, paused=False, actor=actor)
+    return await _set_owner_pause(room, task_id, reason, paused=False, actor=actor, via=via)
 
 
 async def _answers_of(s: Any, q: RoomTaskQuestionRow) -> list[Any]:

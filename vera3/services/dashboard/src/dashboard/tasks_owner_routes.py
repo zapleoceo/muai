@@ -1,4 +1,5 @@
-"""Защищённые действия владельца (B1): wait/resolve, закрытие вопроса, recover, start.
+"""Защищённые действия владельца (B1): wait/resolve, закрытие вопроса, recover, start,
+а также continue / snooze / cancel — кнопки, которые двигают зависшую задачу.
 
 Все POST — за `owner_post_gate` (сессия владельца + same-origin), как `/pause`. Коды:
 404 нет задачи/вопроса, 409 состояние (живая аренда, устаревший fencing, финальная задача),
@@ -18,6 +19,7 @@ from dashboard.csrf import owner_post_gate
 from dashboard.tasks_routes import _fragment, _problem
 from dashboard.tasks_service import (
     owner_close_question,
+    owner_move,
     owner_recover,
     owner_resolve_wait,
     owner_start,
@@ -81,3 +83,11 @@ async def task_start(request: Request, room: str, task_id: str,
     return await _guarded(request, room, task_id, lambda: owner_start(
         room, task_id, expected_fencing_token, status=status, clear_wait=clear_wait,
         auto_pickup=auto_pickup, reason=reason))
+
+
+@router.post("/tasks/{room}/{task_id}/move/{action}", response_class=HTMLResponse)
+async def task_move(request: Request, room: str, task_id: str,
+                    action: str = Path(..., pattern="^(continue|snooze|cancel)$"),  # noqa: B008
+                    reason: str = Form(...)):  # noqa: B008
+    return await _guarded(request, room, task_id,
+                          lambda: owner_move(room, task_id, reason, action=action))
