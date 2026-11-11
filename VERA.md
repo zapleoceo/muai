@@ -47,13 +47,21 @@ indirection is what keeps it a future one-file change.
 
 ### Containers
 
-`vera3-gateway`, `vera3-dashboard`, `vera3-brain-search`,
-`vera3-brain-triage-1..5`, `vera3-bot-telegram`, `vera3-ingestor-gmail`,
-`vera3-ingestor-telegram`, `vera3-ingestor-instagram`,
-`vera3-media-worker`, `vera3-postgres`, `vera3-prune`.
+`vera3/infra/docker-compose.yml` defines 14 services (compose project
+`vera3`). Started by a plain `docker compose up -d` (and by the deploy):
+
+`vera3-postgres`, `vera3-gateway`, `vera3-mcp`, `vera3-brain-triage-N`
+(`deploy.replicas: ${BRAIN_TRIAGE_REPLICAS:-2}` - the count on the server
+comes from `infra/.env`), `vera3-brain-search`, `vera3-bot-telegram`,
+`vera3-ingestor-gmail`, `vera3-ingestor-telegram`, `vera3-ingestor-slack`,
+`vera3-media-worker`, `vera3-dashboard`, `vera3-prune`.
+
+Under `profiles: ["optional"]`, so NOT started by default and not watched
+by the monitor: `vera3-ingestor-instagram` (off by owner decision
+2026-08-28) and `vera3-ingestor-trello` (no keys).
 
 Host ports (loopback only): gateway `8001`, brain-search `8002`,
-dashboard `8003`, postgres `5433`.
+dashboard `8003`, mcp `8007`, postgres `5433`.
 
 The same host also runs unrelated stacks — `aibroker-*` and `stepan2-*`.
 Scope every compose command to `/var/www/vera3/infra` so they are never
@@ -72,7 +80,8 @@ vera3/
 │   ├── gateway/          # POST /event/<source>, X-Internal-Secret
 │   ├── brain-triage/     # LLM classify workers (FOR UPDATE SKIP LOCKED)
 │   ├── brain-search/     # ReAct agent + embedding search
-│   ├── ingestor-{gmail,telegram,instagram}/
+│   ├── mcp/              # MCP server (/mcp) + agent room + office intake
+│   ├── ingestor-{gmail,telegram,slack,trello,instagram}/
 │   ├── bot-telegram/     # aiogram, owner-only
 │   ├── dashboard/        # HTMX UI
 │   └── media-worker/     # vision / OCR on attachments
@@ -107,7 +116,7 @@ vera3/
 | Deploy pipeline, CI gates, monitor, backups | [`vera3/docs/deploy-ops.md`](vera3/docs/deploy-ops.md) |
 | Triage, patterns, consolidation, tuning history | [`vera3/docs/brain.md`](vera3/docs/brain.md) |
 | Tables, columns, invariants | [`vera3/docs/domain-model.md`](vera3/docs/domain-model.md) |
-| Identity / values / goals / style layer | [`vera3/docs/identity.md`](vera3/docs/identity.md) |
+| Person identity resolution: one person across channels (aliases, linking without LLM, merge review) | [`vera3/docs/identity.md`](vera3/docs/identity.md) |
 | Source contract, adding a new source | [`vera3/docs/sources.md`](vera3/docs/sources.md) |
 | Слушатель разговоров на ноутбуке (`vera-listener/`) | [`vera3/docs/listener.md`](vera3/docs/listener.md) |
 | LLM routing, token tiers, cost caps | [`vera3/docs/llm-broker.md`](vera3/docs/llm-broker.md) |
@@ -128,7 +137,7 @@ git push origin master
 Push to `master` runs `.github/workflows/deploy.yml` (the only vera3
 workflow; PRs run it without the deploy job): **docs gate → quality (secret
 scan, ruff `E,F,W,I,B,UP,SIM,C4,RET`, vulture, docs name-sync) → tests
-(per-package coverage floors, diff-cover 75%) → build of all 11 images →
+(per-package coverage floors, diff-cover 75%) → build of all 12 images →
 deploy**. Any failing gate blocks the deploy and notifies the owner.
 
 Manual fallback — `ssh hetzner-root /usr/local/bin/vera3-deploy`. It takes
@@ -144,11 +153,14 @@ then poll gateway `/healthz` for 60s.
 > promptly returned. Commit the same fix before calling an incident closed.
 
 Migrations are **never** run by the deploy. See
-[`.claude/commands/migrate.md`](.claude/commands/migrate.md) — and note
-there is no migration tracking table, so migrations must be written
-idempotently.
+[`.claude/commands/migrate.md`](.claude/commands/migrate.md). Applied
+migrations are recorded in `schema_migrations` (migration 021; apply with
+`vera3/scripts/apply_migration.sh`); `vera3/scripts/check_migrations.sh`
+compares that table with the files. Still write migrations idempotently.
 
-Monitor: `/usr/local/bin/vera3-monitor`, root cron `*/5`, 11 dimensions,
+Monitor: `vera3/scripts/vera3-monitor.sh`, run by root cron `*/5` straight
+from the deployed tree (`/var/www/vera3/scripts/`, no `/usr/local/bin`
+copy), 12 numbered checks (the container list comes from `compose config`),
 alerts by DM to the owner. Backup: `/usr/local/bin/vera-backup.sh`, cron
 03:30 (DB dumps of all projects go only through the NAS stream — vera since 2026-10-23, aibroker/stepan2 since 2026-10-24; the server keeps secrets.tar.gz + SHA256SUMS; see deploy-ops.md Backup).
 
@@ -170,19 +182,21 @@ as a pre-commit hook.
 
 ## 7. Known gaps
 
-- **No migration tracking table.** Nothing records which of
-  `vera3/infra/migrations/*.sql` has been applied. Numbering also skips
-  `018` and `019`.
+- ~~No migration tracking table~~ - **есть с миграции 021**
+  (`schema_migrations`, сверка - `scripts/check_migrations.sh`, проверка 12
+  монитора). Нумерация при этом неровная, ключ учёта - полное имя файла, а
+  не номер: дважды заняты `004`, `009`, `014` и `052`; файлов `001`, `018`,
+  `019` и `054` нет.
 - ~~Coverage gate is 40% in `vera3-tests.yml` but 70% in `deploy.yml`~~ —
   **исправлено 2026-09-01; с 2026-10 воркфлоу один.** Оба воркфлоу гоняли один и тот же гейт
   (`vera3/scripts/check_coverage.py`) с порогом НА КАЖДЫЙ пакет, а не одним
   процентом на репозиторий. Прежние 70% считались по двум пакетам из
   двенадцати, то есть описывали 38.8% продового кода; настоящая цифра по
   всему коду — 70.8%.
-- **Host memory is tight**: 3.7 GiB total, ~2 GiB in use with 5 triage
-  replicas. Scaling `brain-triage` up needs a resize first.
-- **Legacy tree is still in the repo** (§3). It pollutes greps and search
-  tools, and nothing builds from it.
+- **Host memory is tight** (замер 2026-08: 3.7 GiB total, ~2 GiB in use
+  with 5 triage replicas; не перепроверено - STATUS.md 2026-09-01 пишет
+  уже 7.6 ГБ). Scaling `brain-triage` up needs a check of free memory first.
+- ~~Legacy tree is still in the repo~~ - удалено 2026-08-20 (§3).
 
 ---
 

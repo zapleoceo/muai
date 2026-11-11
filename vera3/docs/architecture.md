@@ -44,13 +44,14 @@
 |---|---|
 | `vera3-postgres` | All state. pgvector 0.8.2: embeddings as `halfvec(1024)` (migration 030) as the only vector column (the legacy JSONB column was dropped by migrations 038/039); ANN via HNSW over binary quantization, rerank by halfvec (see `brain.md`). Long events (>4000 chars) also get chunk vectors in `event_chunk_embeddings` (migration 032, same index shape); search takes the best of event and chunk similarity per event. |
 | `vera3-gateway` | `POST /event/<source>` — single ingest endpoint with X-Internal-Secret |
-| `vera3-brain-triage-N` | Scalable workers (`docker compose up -d --scale brain-triage=3`). SELECT FOR UPDATE SKIP LOCKED → atomic claim. |
+| `vera3-mcp` | MCP server on 127.0.0.1:8007, public as `https://dima.veranda.my/mcp` (`mcp-claude.md`); also the agent room (`agent-room.md`) and office intake `/office/v1` (`office-intake.md`) |
+| `vera3-brain-triage-N` | Scalable workers: `deploy.replicas: ${BRAIN_TRIAGE_REPLICAS:-2}` in compose. SELECT FOR UPDATE SKIP LOCKED → atomic claim. |
 | `vera3-brain-search` | FastAPI `/search` — ReAct agent loop, calls AIbroker. |
 | `vera3-bot-telegram` | aiogram polling — DM to owner; плюс воркер голосовых поручений: забирает `voice_command_queue` и пишет владельцу первым (см. `api.md`, «Ответ на голосовое поручение») |
 | `vera3-ingestor-telegram` | Telethon userbot + FastAPI tools server on :8000 |
 | `vera3-ingestor-gmail` | OAuth refresh + Gmail API polling |
-| `vera3-ingestor-instagram` | instagrapi inbox polling |
-| `vera3-ingestor-trello` | Trello actions-фид всех досок + суточный дайджест сроков |
+| `vera3-ingestor-instagram` | instagrapi inbox polling. Profile `optional`: off since 2026-08-28, not started by the deploy |
+| `vera3-ingestor-trello` | Trello actions-фид всех досок + суточный дайджест сроков. Профиль `optional`: ключей нет, деплой не поднимает |
 | `vera3-ingestor-slack` | Slack: сообщения каналов, личек и тредов (треды опрашиваются отдельно — history их не отдаёт) |
 | `vera3-dashboard` | HTMX UI on :8003 |
 | `vera3-prune` | daily `image prune -f` (dangling only) + `builder prune --filter until=72h`. Never `system prune -a` — the daemon is shared with aibroker/stepan2 and `-a` would delete their tagged images |
