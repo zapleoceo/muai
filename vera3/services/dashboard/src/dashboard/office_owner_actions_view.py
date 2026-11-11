@@ -16,11 +16,11 @@ from dashboard.render import esc
 FINAL = ("done", "cancelled")
 
 
-def _form(url: str, label: str, reason: str, confirm: str = "") -> str:
+def _form(url: str, label: str, reason: str, confirm: str = "", kind: str = "secondary") -> str:
     ask = f' data-confirm="{esc(confirm)}"' if confirm else ""
     return (f'<form class="kb-act" method="post" action="{esc(url)}" data-owner-action{ask}>'
             f'<input type="hidden" name="reason" value="{esc(reason)}">'
-            f'<button type="submit">{esc(label)}</button></form>')
+            f'<button type="submit" class="sm {kind}">{esc(label)}</button></form>')
 
 
 def owner_actions_bar(item) -> str:
@@ -37,14 +37,13 @@ def owner_actions_bar(item) -> str:
             + _form(f"{base}/move/snooze", snooze, "Ждать: кнопка страницы офиса")
             + pause
             + _form(f"{base}/move/cancel", "Отменить", "Отмена: кнопка страницы офиса",
-                    confirm="Отменить задачу насовсем? Взять её снова будет нельзя.")
+                    confirm="Отменить задачу насовсем? Взять её снова будет нельзя.", kind="danger")
             + '<p class="kb-act-result" aria-live="polite"></p></div>')
 
 
 ACTIONS_CSS = """<style>
 .kb-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 16px}
-.kb-act{margin:0}.kb-act button{padding:6px 12px;border-radius:8px;border:1px solid var(--line,#ccc);background:var(--panel,#fff);color:inherit;cursor:pointer}
-.kb-act button:hover{border-color:var(--accent,#888)}.kb-act-result{flex-basis:100%;margin:4px 0 0;font-size:.9em}
+.kb-act{margin:0}.kb-act-result{flex-basis:100%;margin:4px 0 0;font-size:.9em;color:var(--text)}
 </style>"""
 
 ACTIONS_JS = """
