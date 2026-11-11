@@ -31,7 +31,7 @@ async def load_entity_names() -> list[tuple[int, str]]:
         rows = (await s.execute(text(
             "SELECT id, name FROM entities WHERE name IS NOT NULL"
         ))).all()
-    return [(eid, name) for eid, name in rows]
+    return [tuple(row) for row in rows]
 
 
 async def load_entity_handles(
