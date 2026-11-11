@@ -199,7 +199,7 @@ def _scope_decisions(report: HourlyReport) -> str:
             'история задач сохранится.</p>'
             '<form method="post" action="/office/hourly/apply-cancellations" '
             "onsubmit=\"return confirm('Отменить все эти задачи?')\">"
-            f'<button type="submit">Отменить все {len(rows)}</button></form>'
+            f'<button type="submit" class="danger">Отменить все {len(rows)}</button></form>'
             f'<ul class="kb-history">{"".join(items)}</ul></details>')
 
 

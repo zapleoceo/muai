@@ -13,7 +13,7 @@ TOKENS_CSS = """
 :root{color-scheme:dark;
 --bg:#07080b;--bg-raised:#0c0e13;--bg-inset:#090a0e;--surface:#10121a;--surface-2:#161924;--surface-3:#1d212e;
 --line:rgba(255,255,255,.075);--line-strong:rgba(255,255,255,.16);
---text:#e6e9f0;--text-strong:#fff;--muted:#8d95a6;--faint:#5c6475;
+--text:#e6e9f0;--text-strong:#fff;--muted:#8d95a6;--faint:#828a9c;
 --accent:#8b8cff;--accent-strong:#a5a6ff;--accent-ink:#0b0b1f;--accent-soft:rgba(139,140,255,.14);--accent-line:rgba(139,140,255,.42);
 --ok:#5fd69b;--warn:#f4c26b;--err:#ff7a88;
 --ok-bg:rgba(95,214,155,.13);--warn-bg:rgba(244,194,107,.13);--err-bg:rgba(255,122,136,.13);
