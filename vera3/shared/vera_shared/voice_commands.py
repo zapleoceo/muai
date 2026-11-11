@@ -18,6 +18,7 @@ from typing import Any
 from sqlalchemy import and_, or_, select, update
 from sqlalchemy.exc import IntegrityError
 
+from vera_shared.backoff import exp_backoff
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_voice import VoiceCommandRow
@@ -124,7 +125,7 @@ async def create_command(command_id: str, instruction: str, spoken_at: datetime,
 def retry_delay(attempts: int) -> timedelta:
     """Пауза перед следующей попыткой: 30 с, минута, две. Три подряд без паузы
     — это три отказа одного и того же упавшего поиска за секунду."""
-    return timedelta(seconds=RETRY_BASE_S * 2 ** max(0, attempts - 1))
+    return timedelta(seconds=exp_backoff(attempts, RETRY_BASE_S))
 
 
 async def claim_command() -> VoiceCommandRow | None:

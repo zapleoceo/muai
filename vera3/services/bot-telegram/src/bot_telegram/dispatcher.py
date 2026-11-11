@@ -28,6 +28,7 @@ import re
 from datetime import timedelta
 from typing import Any
 
+from vera_shared.backoff import exp_backoff
 from vera_shared.office.owner_routing import verified_office_origin
 from vera_shared.redact import redact_secrets
 from vera_shared.room import handoff, task_queue, task_wait, tasks
@@ -102,8 +103,8 @@ async def _post(task: dict[str, Any]) -> str:
 
 
 def backoff_s(attempt: int) -> int:
-    base = RECEIPT_WAIT_S * 2 ** (attempt - 1)
-    return int(base * random.uniform(1 - JITTER, 1 + JITTER))
+    return int(exp_backoff(attempt, RECEIPT_WAIT_S,
+                           jitter=random.uniform(1 - JITTER, 1 + JITTER)))
 
 
 async def _delivered(task: dict[str, Any]) -> bool:

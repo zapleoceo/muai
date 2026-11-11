@@ -9,7 +9,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from fastapi import HTTPException, Request
-from vera_shared.redact_view import redact_tree, redact_view
+from vera_shared.redact_view import redact_fields
 
 from dashboard.auth import COOKIE_NAME, require_owner
 
@@ -26,11 +26,5 @@ def owner_wants_raw(request: Request) -> bool:
 
 def redact_event_row(row: Mapping[str, Any]) -> dict[str, Any]:
     """Копия строки события со скрытыми значениями секретов в текстовых полях."""
-    out = dict(row)
-    for key in ("content_text", "triage_error"):
-        if isinstance(out.get(key), str):
-            out[key] = redact_view(out[key])
-    for key in ("content_extra", "metadata"):
-        if out.get(key) is not None:
-            out[key] = redact_tree(out[key])
-    return out
+    return redact_fields(row, text_keys=("content_text", "triage_error"),
+                         tree_keys=("content_extra", "metadata"))

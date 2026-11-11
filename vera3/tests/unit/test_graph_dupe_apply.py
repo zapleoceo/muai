@@ -176,13 +176,13 @@ class TestCrashSafety:
         await _seed()
         plan = await _plan()
         seen = []
-        real = dupe_apply._write_json
+        real = dupe_apply.write_json_atomic
 
         def spy(path, data):
             seen.append([e["status"] for e in data["entries"]])
             real(path, data)
 
-        monkeypatch.setattr(dupe_apply, "_write_json", spy)
+        monkeypatch.setattr(dupe_apply, "write_json_atomic", spy)
         await apply_plan(plan, tmp_path / "r.json", cases={4})
         assert ["intent"] in seen and seen[-1] == ["done"]
 

@@ -14,6 +14,7 @@ from typing import Any
 from sqlalchemy import bindparam, delete, select, text
 from sqlalchemy.exc import DBAPIError
 
+from vera_shared.backoff import exp_backoff
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_graph import PairStatsRow
 from vera_shared.db.models_pair_roles import PairRoleInferenceRow, PairRoleRunRow
@@ -77,8 +78,8 @@ BACKOFF_MAX_DAYS = 7
 
 
 def backoff(failures: int) -> timedelta:
-    return min(timedelta(hours=BACKOFF_BASE_HOURS * 2 ** min(max(0, failures - 1), 12)),
-               timedelta(days=BACKOFF_MAX_DAYS))
+    return timedelta(hours=exp_backoff(failures, BACKOFF_BASE_HOURS,
+                                       cap=BACKOFF_MAX_DAYS * 24, max_exponent=12))
 
 
 async def save_failure(a: int, b: int, marker: str, reason: str) -> None:

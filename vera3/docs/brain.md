@@ -751,7 +751,9 @@ straight from SQL, `cost_usd=0.0`, `provider="vera-report"`:
 3. `build_monthly_report(chat_id, chat_title, year)` — pulls every event
    for that chat/year (no LIMIT — the whole point is a complete sum),
    parses `key: value` lines appearing after a `---` body separator, and
-   groups by month. Fields are split into two kinds: flow fields (`b/n`,
+   groups by month. A value that matches the pattern but is not a number
+   (tab or newline inside it) is skipped, and `_parse_kv` logs one WARNING
+   with the count only — no key, no value, no body. Fields are split into two kinds: flow fields (`b/n`,
    `contract, SC`, `expenses` — summed per month) and snapshot fields
    (`ost`, `Lead Point` — a running balance/score, so the month's value
    is the *last* one seen, never a sum of snapshots).

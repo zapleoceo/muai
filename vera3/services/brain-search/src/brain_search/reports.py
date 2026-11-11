@@ -99,13 +99,17 @@ def _parse_kv(body: str) -> dict[str, float]:
     """key→число из тела после '---'. Свободный текст просто не даст матчей."""
     tail = body.split("---", 1)[1] if "---" in body else ""
     out: dict[str, float] = {}
+    skipped = 0
     for key, raw_val in _KV_LINE_RE.findall(tail):
         key = " ".join(key.split()).strip().lower()
         val = raw_val.replace(" ", "")
         try:
             out[key] = float(val)
         except ValueError:
-            continue
+            # Значение с табом/переводом строки внутри (`\s` в шаблоне) — не число.
+            skipped += 1
+    if skipped:
+        log.warning("reports: пропущено %d нечисловых значений в отчёте", skipped)
     return out
 
 

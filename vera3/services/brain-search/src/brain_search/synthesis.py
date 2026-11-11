@@ -8,7 +8,7 @@ from sqlalchemy import text
 from vera_shared.db.engine import get_session
 from vera_shared.events.visibility import NOT_HIDDEN_SQL
 from vera_shared.llm.client import LLMCallFailed, chat_async
-from vera_shared.redact_view import redact_tree, redact_view
+from vera_shared.redact_view import redact_fields, redact_tree, redact_view
 
 from brain_search.agent import run_agent
 from brain_search.authorship import AUTHORSHIP_RULES, author_tag
@@ -119,8 +119,11 @@ def build_context(results: list[SearchResult], by_id: dict[int, Candidate],
     return "\n\n".join(blocks) if blocks else "(нет данных)"
 
 
+_PREVIEW = frozenset({"content_preview"})
+
+
 def _redacted(r: SearchResult) -> SearchResult:
-    return r.model_copy(update={"content_preview": redact_view(r.content_preview)})
+    return r.model_copy(update=redact_fields(r.model_dump(include=_PREVIEW), text_keys=_PREVIEW))
 
 
 async def answer(
@@ -187,7 +190,7 @@ async def answer(
             timeout=90,
         )
         provider, cost = meta.get("provider"), meta.get("cost_usd", 0.0)
-    except (LLMCallFailed, asyncio.TimeoutError) as e:
+    except (TimeoutError, LLMCallFailed) as e:
         log.warning("Synth failed: %s", e)
         answer_text = ("Не могу обратиться к LLM (провайдеры заняты или "
                        f"таймаут). Нашёл {len(results)} событий.")
