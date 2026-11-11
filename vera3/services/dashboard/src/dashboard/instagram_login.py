@@ -29,6 +29,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models_sources import InstagramSessionRow
 
 from dashboard.auth import COOKIE_NAME, require_owner
+from dashboard.csrf import same_origin_or_403
 from dashboard.ui.shell import standalone_html
 
 log = logging.getLogger(__name__)
@@ -76,6 +77,8 @@ async def instagram_start(
     password: str = Form(...),
 ):
     require_owner(request, request.cookies.get(COOKIE_NAME))
+    if (denied := same_origin_or_403(request)) is not None:
+        return denied
     _prune_flows()
 
     from instagrapi import Client
@@ -127,6 +130,8 @@ async def instagram_verify(
     code: str = Form(...),
 ):
     require_owner(request, request.cookies.get(COOKIE_NAME))
+    if (denied := same_origin_or_403(request)) is not None:
+        return denied
     _prune_flows()
     # НЕ pop() здесь — если verify ниже упадёт (напр. Instagram отказывает
     # с feedback_required — это бывает без всякой связи с самим кодом), флоу

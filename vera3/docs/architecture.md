@@ -67,7 +67,7 @@ this project's own "~200 lines, one responsibility per file" convention):
 | `auth_routes.py` | `/login`, `/api/tg_login`, `/api/logout`, `/healthz` |
 | `home_routes.py` | `/` — «Поиск»: `status_line` (одна строка здоровья) и поле «Спросить Веру» |
 | `health.py` | `assess` / `Health` / `silent_sources` — уровень ok/warn/err для статусной строки из уже посчитанных чисел (очередь разбора, сбои, молчащие источники опроса), без новых запросов в БД |
-| `progress_routes.py` | `/_progress`, `/control/backfill(-rate)` — HTMX live-progress fragment + pause/rate controls. Две очереди показываются РАЗДЕЛЬНО и каждая со своим темпом: триаж считается по `workflow='triage'`, распознавание — по `workflow='media_vision'`. До 02.09.2026 ETA был один и делил весь backlog на темп триажа, хотя backlog почти целиком состоит из фото, идущих через vision в десять раз медленнее: страница показывала «В очереди на триаж 442, ETA ~3.3 ч» при пустой очереди триажа и настоящих 36 часах. Полосы меряют долю сделанного от всего объёма (`done` и `media_backlog_total` из `app_control`); прежний знаменатель — работа за последние сутки — заставлял полосу расти, когда Вера больше работала, и падать, когда крон доливал очередь |
+| `progress_routes.py` | `/_progress`, `/control/backfill(-rate)` — HTMX live-progress fragment + pause/rate controls. POST-ручки за `same_origin_or_403`. Две очереди показываются РАЗДЕЛЬНО и каждая со своим темпом: триаж считается по `workflow='triage'`, распознавание — по `workflow='media_vision'`. До 02.09.2026 ETA был один и делил весь backlog на темп триажа, хотя backlog почти целиком состоит из фото, идущих через vision в десять раз медленнее: страница показывала «В очереди на триаж 442, ETA ~3.3 ч» при пустой очереди триажа и настоящих 36 часах. Полосы меряют долю сделанного от всего объёма (`done` и `media_backlog_total` из `app_control`); прежний знаменатель — работа за последние сутки — заставлял полосу расти, когда Вера больше работала, и падать, когда крон доливал очередь |
 | `events_routes.py` | `/events` («Входящее») — запрос и маршрутизация, `/events/{id}` — карточка события |
 | `sources_view.py` | `render_block` / `cell` — блоки подробностей источника, `source_level` — цвет точки |
 | `progress_view.py` | `pause_controls`, `rate_controls` — разметка живого прогресса (стили — `PROGRESS_CSS` в `ui/css_pages.py`) |
@@ -110,7 +110,8 @@ this project's own "~200 lines, one responsibility per file" convention):
 месяцев тишины ничего не сообщают. На стороне ингестора токен достаёт `load_token()`, а
 `mark_ok()` / `mark_dead()` пишут в `SlackAuthRow`, живой он или отозван.
 | `search_routes.py` | `/search-ui` — proxies to brain-search |
-| `settings_routes.py` | `/settings`, `/control/settings` — SETTINGS registry |
+| `settings_routes.py` | `/settings`, `/control/settings` — SETTINGS registry; POST за `same_origin_or_403`, нечисловое значение не сохраняется и пишется WARNING |
+| `gmail_accounts_repo.py` | `list_gmail_poll_status()` - email и `last_polled_at` Gmail-ящиков для фрагмента `/_progress` (SQL вынесен из `progress_routes.py`) |
 | `entities_routes.py` | Маршруты `/entities/duplicates`, `/entities/merge`, `/entities/suggestion`, массовые кнопки, аватарки. Один путь слияния — `_merge_with_report` → `vera_shared.graph.merge.merge_entities` с отчётом в лог |
 | `duplicates_repo.py` | `load_queue` → `QueueItem`, `pair_dossiers`: очередь проверки дублей (предложения Веры + точные совпадения email/@username), досье пары. SQL остаётся в `vera_shared.graph` |
 | `entities_view.py` / `entities_cards.py` | Очередь дублей: `review_body`, `pair_view`, `analysis_status`; карточки `person_card`, `pair_html`, `group_html`, `order_pair`, `msg_count` |

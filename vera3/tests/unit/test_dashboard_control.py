@@ -16,6 +16,7 @@ from dashboard.app import app  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 client = TestClient(app)
+SAME_ORIGIN = {"Sec-Fetch-Site": "same-origin"}
 
 
 def test_control_backfill_requires_auth():
@@ -50,7 +51,7 @@ def test_control_backfill_pause_sets_flag_when_authed():
         r = client.post(
             "/control/backfill",
             data={"action": "pause"},
-            cookies={COOKIE_NAME: cookie_val},
+            cookies={COOKIE_NAME: cookie_val}, headers=SAME_ORIGIN,
         )
     assert r.status_code == 200
     fake_set.assert_awaited_once_with(True)
@@ -72,7 +73,7 @@ def test_control_backfill_resume_clears_flag_when_authed():
         r = client.post(
             "/control/backfill",
             data={"action": "resume"},
-            cookies={COOKIE_NAME: cookie_val},
+            cookies={COOKIE_NAME: cookie_val}, headers=SAME_ORIGIN,
         )
     assert r.status_code == 200
     fake_set.assert_awaited_once_with(False)
@@ -98,7 +99,7 @@ def test_control_rate_sets_cap_when_authed():
         r = client.post(
             "/control/backfill-rate",
             data={"max_per_hour": "600"},
-            cookies={COOKIE_NAME: cookie_val},
+            cookies={COOKIE_NAME: cookie_val}, headers=SAME_ORIGIN,
         )
     assert r.status_code == 200
     fake_set.assert_awaited_once_with(600)

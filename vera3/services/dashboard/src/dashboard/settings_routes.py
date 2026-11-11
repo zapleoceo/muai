@@ -2,15 +2,18 @@
 registry) plus a read-only view of deploy-time env params."""
 from __future__ import annotations
 
+import logging
 import os
 
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 from vera_shared.control import SETTINGS, get_settings_values, set_control
 
+from dashboard.csrf import same_origin_or_403
 from dashboard.render import _render, esc, owner_or_redirect
 from dashboard.ui.components import collapsible
 
+log = logging.getLogger(__name__)
 router = APIRouter()
 
 # Deploy-time параметры (env/compose) — только для справки, меняются передеплоем.
@@ -86,6 +89,8 @@ async def settings_page(request: Request):
 async def control_settings(request: Request):
     if (resp := owner_or_redirect(request)) is not None:
         return resp
+    if (denied := same_origin_or_403(request)) is not None:
+        return denied
     form = await request.form()
     for s in SETTINGS:
         raw = form.get(s.key)
@@ -97,6 +102,8 @@ async def control_settings(request: Request):
             try:
                 val = str(max(0, int(raw)))
             except (ValueError, TypeError):
+                log.warning("settings: %s left unchanged, not an integer: %r",
+                            s.key, str(raw)[:40])
                 continue
         await set_control(s.key, val)
     return RedirectResponse("/settings", status_code=303)

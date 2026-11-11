@@ -17,6 +17,8 @@ from dashboard.auth_routes import _set_session_cookie  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from starlette.responses import Response  # noqa: E402
 
+SAME_ORIGIN = {"Sec-Fetch-Site": "same-origin"}
+
 
 def _cookie() -> str:
     resp = Response()
@@ -31,7 +33,7 @@ def _ask(payload: dict) -> str:
     http.__aenter__.return_value.post = AsyncMock(return_value=reply)
     with patch("dashboard.search_routes.httpx.AsyncClient", return_value=http):
         r = TestClient(app).post("/search-ui", data={"q": "кто"},
-                                 cookies={COOKIE_NAME: _cookie()})
+                                 cookies={COOKIE_NAME: _cookie()}, headers=SAME_ORIGIN)
     return r.text
 
 

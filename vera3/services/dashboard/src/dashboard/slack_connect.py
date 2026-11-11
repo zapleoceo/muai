@@ -23,6 +23,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models_sources import SlackAuthRow
 
 from dashboard.auth import COOKIE_NAME, require_owner
+from dashboard.csrf import same_origin_or_403
 from dashboard.stats import drop_detail_cache
 from dashboard.ui.shell import standalone_html
 
@@ -119,6 +120,8 @@ async def slack_start_form(request: Request):
 @router.post("/api/slack/start")
 async def slack_start(request: Request, token: str = Form(...)):
     require_owner(request, request.cookies.get(COOKIE_NAME))
+    if (denied := same_origin_or_403(request)) is not None:
+        return denied
     token = token.strip()
 
     who, reason = await verify(token)

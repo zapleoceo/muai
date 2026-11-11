@@ -3,17 +3,16 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Form, Request
 from fastapi.responses import HTMLResponse
-from sqlalchemy import select
 from vera_shared.control import (
     get_backfill_max_per_hour,
     is_backfill_paused,
     set_backfill_max_per_hour,
     set_backfill_paused,
 )
-from vera_shared.db.engine import get_session
-from vera_shared.db.models_sources import GmailAccountRow
 from vera_shared.timeutil import utc_naive_now
 
+from dashboard.csrf import same_origin_or_403
+from dashboard.gmail_accounts_repo import list_gmail_poll_status
 from dashboard.progress_view import pause_controls, rate_controls
 from dashboard.render import esc, local_dt, owner_or_blank_401
 from dashboard.stats import get_stats
@@ -34,6 +33,8 @@ async def control_backfill(request: Request, action: str = Form(...)):
     refreshed progress fragment so HTMX swaps it in place."""
     if (resp := owner_or_blank_401(request)) is not None:
         return resp
+    if (denied := same_origin_or_403(request)) is not None:
+        return denied
     await set_backfill_paused(action == "pause")
     return HTMLResponse(await _build_progress_fragment())
 
@@ -44,6 +45,8 @@ async def control_backfill_rate(request: Request, max_per_hour: int = Form(0)):
     Owner-only. Returns the refreshed progress fragment."""
     if (resp := owner_or_blank_401(request)) is not None:
         return resp
+    if (denied := same_origin_or_403(request)) is not None:
+        return denied
     await set_backfill_max_per_hour(max(0, max_per_hour))
     return HTMLResponse(await _build_progress_fragment())
 
@@ -79,11 +82,8 @@ async def _build_progress_fragment() -> str:
     dead = st["dead"]
     per_source_1h = st["per_source_1h"]
 
-    async with get_session() as s:
-        # Gmail-аккаунты — лёгкий запрос (3 строки), держим живым (не кэшируем).
-        gmail = (await s.execute(
-            select(GmailAccountRow).order_by(GmailAccountRow.id)
-        )).scalars().all()
+    # Gmail-аккаунты — лёгкий запрос (3 строки), держим живым (не кэшируем).
+    gmail = await list_gmail_poll_status()
 
     # Две очереди, две скорости, два ETA. Раньше ETA был один и считался как
     # `весь backlog / темп ТРИАЖА` — а backlog почти целиком состоит из фото,
@@ -102,14 +102,14 @@ async def _build_progress_fragment() -> str:
     ) or '<span class="mute">за последний час событий не поступало</span>'
 
     gmail_rows = []
-    for g in gmail:
-        last = local_dt(g.last_polled_at, "time")
+    for email, polled_at in gmail:
+        last = local_dt(polled_at, "time")
         ago = ""
-        if g.last_polled_at:
-            mins = int((now - g.last_polled_at).total_seconds() / 60)
+        if polled_at:
+            mins = int((now - polled_at).total_seconds() / 60)
             ago = f" ({mins}м назад)"
         gmail_rows.append(
-            f'<div class="row"><span>📧 {esc(g.email)}</span>'
+            f'<div class="row"><span>📧 {esc(email)}</span>'
             f'<span class="mute">последний опрос: {last}{ago}</span></div>'
         )
 

@@ -24,6 +24,7 @@ from dashboard.instagram_login import _flows  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 
 client = TestClient(app)
+SAME_ORIGIN = {"Sec-Fetch-Site": "same-origin"}
 
 
 def _owner_cookie() -> str:
@@ -48,7 +49,7 @@ def test_failed_verify_keeps_flow_alive_for_retry():
                AsyncMock(side_effect=Exception("feedback_required"))):
         r = client.post("/api/instagram/verify",
                         data={"flow_id": "testflow", "code": "123456"},
-                        cookies={COOKIE_NAME: _owner_cookie()})
+                        cookies={COOKIE_NAME: _owner_cookie()}, headers=SAME_ORIGIN)
 
     assert r.status_code == 200
     assert "feedback_required" in r.text
@@ -67,7 +68,7 @@ def test_successful_verify_removes_flow():
          patch("dashboard.instagram_login._save_session", AsyncMock()):
         r = client.post("/api/instagram/verify",
                         data={"flow_id": "testflow2", "code": "123456"},
-                        cookies={COOKIE_NAME: _owner_cookie()})
+                        cookies={COOKIE_NAME: _owner_cookie()}, headers=SAME_ORIGIN)
 
     assert r.status_code == 200
     assert "testflow2" not in _flows
@@ -76,5 +77,5 @@ def test_successful_verify_removes_flow():
 def test_verify_unknown_flow_returns_400():
     r = client.post("/api/instagram/verify",
                     data={"flow_id": "does-not-exist", "code": "1"},
-                    cookies={COOKIE_NAME: _owner_cookie()})
+                    cookies={COOKIE_NAME: _owner_cookie()}, headers=SAME_ORIGIN)
     assert r.status_code == 400

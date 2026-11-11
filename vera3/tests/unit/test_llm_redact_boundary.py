@@ -187,7 +187,8 @@ def test_search_proxy_log_masks_upstream_body(caplog):
     http.__aenter__.return_value.post = AsyncMock(return_value=reply)
     with patch("dashboard.search_routes.httpx.AsyncClient", return_value=http), \
             caplog.at_level(logging.WARNING):
-        TestClient(app).post("/search-ui", data={"q": "x"}, cookies={COOKIE_NAME: cookie})
+        TestClient(app).post("/search-ui", data={"q": "x"}, cookies={COOKIE_NAME: cookie},
+                             headers={"Sec-Fetch-Site": "same-origin"})
     assert "HTTP 502" in caplog.text and CANARY not in caplog.text
 
 
