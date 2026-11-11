@@ -300,8 +300,16 @@ push выключен, прочее поведение не меняется.
   `task_queue.py`, захват вынесен в `apply_claim` (`tasks.py`).
 - `vera_shared/room/messages.py` — `post_message`, `inbox`, `ack` (курсор только
   растёт), `history`, `message_dict`; ошибка `MessageConflict`.
-- `vera_shared/room/tasks.py` — `open_task`, `claim`, `update`, `release`,
-  `list_tasks`, `task_dict`; ошибки `TaskNotFound`, `TaskBusy`, `StaleLease`.
+- `vera_shared/room/tasks.py` — фасад (с 2026-11-12): реэкспортирует `open_task`,
+  `claim`, `update`, `release`, `complete_attested`, `apply_claim`,
+  `clear_holder_wait`, `task_dict`, `_locked`, `_require_lease`; ошибки
+  `TaskNotFound`, `TaskBusy`, `StaleLease`. Реализация: `task_open.py`
+  (`open_task`), `task_lifecycle.py` (`claim`/`update`/`release`),
+  `task_attested.py` (`complete_attested`), `task_lease.py` (правила аренды над
+  заблокированной строкой: `apply_claim`, `clear_holder_wait`, `_require_lease`,
+  `RELEASE_STATUSES`, `HELD_STATUSES`), `task_errors.py` (отказы), `task_store.py`
+  (SQL: `_locked`, `get_task_row`, `last_done_event`, `lock_receipt`,
+  `receipt_already_used`). `list_tasks` живёт в `task_queue.py`.
 - `vera_mcp/room_tools.py` — тонкие MCP-инструменты, список `ROOM_TOOLS`.
 - Тесты: `tests/unit/test_mcp_room_tools.py`, `tests/unit/test_mcp_room_auth.py`;
   гонки на живом Postgres — `tests/integration/test_room_pg.py` (порядок фиксации,
