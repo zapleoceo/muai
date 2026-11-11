@@ -69,7 +69,9 @@ this project's own "~200 lines, one responsibility per file" convention):
 | `home_routes.py` | `/` — «Поиск»: `status_line` (одна строка здоровья) и поле «Спросить Веру» |
 | `health.py` | `assess` / `Health` / `silent_sources` — уровень ok/warn/err для статусной строки из уже посчитанных чисел (очередь разбора, сбои, молчащие источники опроса), без новых запросов в БД |
 | `progress_routes.py` | `/_progress`, `/control/backfill(-rate)` — HTMX live-progress fragment + pause/rate controls. POST-ручки за `same_origin_or_403`. Две очереди показываются РАЗДЕЛЬНО и каждая со своим темпом: триаж считается по `workflow='triage'`, распознавание — по `workflow='media_vision'`. До 02.09.2026 ETA был один и делил весь backlog на темп триажа, хотя backlog почти целиком состоит из фото, идущих через vision в десять раз медленнее: страница показывала «В очереди на триаж 442, ETA ~3.3 ч» при пустой очереди триажа и настоящих 36 часах. Полосы меряют долю сделанного от всего объёма (`done` и `media_backlog_total` из `app_control`); прежний знаменатель — работа за последние сутки — заставлял полосу расти, когда Вера больше работала, и падать, когда крон доливал очередь |
-| `events_routes.py` | `/events` («Входящее») — запрос и маршрутизация, `/events/{id}` — карточка события |
+| `events_routes.py` | `/events` («Входящее»), `/events/{id}` — карточка события. Только маршрутизация: разобрать запрос → `events_service` → разметка |
+| `events_service.py` | `events_filter` — WHERE только из фиксированных фрагментов, всё пользовательское уходит в параметры (ILIKE с экранированием `%`/`_`, курсор `(occurred_at, id)`); `load_events_page` → `EventsPage` (строки, `has_more` по лишней строке, `timed_out`); `load_event_card` — строка события плюс участники, которых граф уже знает (адрес gmail, автор по telegram id) |
+| `events_repo.py` | SQL «Входящего»: `fetch_event_page` (текстовый поиск ограничен `statement_timeout` 5с на Postgres; таймаут — `None`, а не 500) и `get_event_card_row` |
 | `sources_view.py` | `render_block` / `cell` — блоки подробностей источника, `source_level` — цвет точки |
 | `progress_view.py` | `pause_controls`, `rate_controls` — разметка живого прогресса (стили — `PROGRESS_CSS` в `ui/css_pages.py`) |
 | `events_view.py` | Разметка «Входящего»: `day_label`, `day_groups`, `event_row`, `events_table`, `status_cell`, `filter_form`, `more_link`; `PAGE_STEP` = 50, `STATUS_LABEL` — подписи статусов по-русски |
@@ -117,6 +119,7 @@ this project's own "~200 lines, one responsibility per file" convention):
 | `duplicates_repo.py` | `load_queue` → `QueueItem`, `pair_dossiers`: очередь проверки дублей (предложения Веры + точные совпадения email/@username), досье пары. SQL остаётся в `vera_shared.graph` |
 | `entities_view.py` / `entities_cards.py` | Очередь дублей: `review_body`, `pair_view`, `analysis_status`; карточки `person_card`, `pair_html`, `group_html`, `order_pair`, `msg_count` |
 | `merge_routes.py` / `graph_script_merge.py` | Поиск людей, предпросмотр и слияние, перенос связей из карточки (`/api/graph/people/search`, `/merge/*`, `/move/*`); диалог «Это тот же человек…» / «Связи не про этого человека» |
+| `gmail_oauth_service.py` / `gmail_oauth_repo.py` | Gmail re-connect без HTTP: `gmail_oauth_configured`, `gmail_consent_url`, `complete_gmail_oauth` (code → refresh-токен → email) возвращает `GmailOAuthOutcome` с видом исхода (`exchange_failed`, `no_refresh_token`, `no_gmail_scope`, `userinfo_failed`, `connected`); токен без Gmail-scope не сохраняется. SQL — `save_gmail_refresh_token` (снять `needs_reauth`, сбросить `last_polled_at`). Маршрут `gmail_oauth.py` проверяет `error`/`code`/подписанный `state` и рисует страницу по исходу |
 | `gmail_oauth.py`, `instagram_login.py`, `telegram_login.py` | OAuth/login flows — the pattern the above split follows. `telegram_login.py` re-auths the userbot StringSession when a revoked session crash-loops the ingestor: `telegram_start_form` (GET `/api/telegram/start`) shows the phone form, `telegram_start` (POST) sends the code, `telegram_verify` (POST `/api/telegram/verify`) takes the code and — if cloud 2FA is on — the password, then saves the new encrypted session |
 | `stats.py` | Cached (TTL 60s) DB aggregation feeding home/progress/sources. Темп распознавания берётся из `usage_log` как `COUNT(*) FILTER (WHERE workflow='media_vision' AND success …)`. Колонка именно `success` (boolean): у Веры своя `usage_log`, а у брокера — своя, и там на этом месте текстовый `status`. Перепутанная схема ловится только интеграционным тестом на живом Postgres (`tests/integration/test_postgres_sql.py`), потому что весь этот SQL на SQLite не исполняется |
 | `events_filters.py` | `source_options` / `status_options` — выпадающие фильтры `/events` из данных (выбранное значение из запроса не выпадает из списка): источники — те, у которых есть события (`stats.sources_all`, тот же GROUP BY из кэша), подписи — из `source_registry`, статусы — из `TRIAGE_STATUS_INFO`. До 2026-09-13 список был прибит в HTML (gmail/telegram/instagram/monitor): события слушателя (`voice`), Slack, Trello и Claude в журнале было не отфильтровать, а статусы ограничивались done/pending/error — без `media_pending`, где живёт очередь распознавания |
@@ -205,7 +208,8 @@ events LEFT JOIN event_embeddings`, скоринг, кэш самоописан�
 
 | Модуль | Ответственность |
 |---|---|
-| `app.py` | только маршруты и разбор запроса (170 строк) |
+| `app.py` | только маршрут: секрет → `run_search` → ответ; `InvalidSearchFilters` → 422 |
+| `search_service.py` | ветки `/search`: `try_report` (точный помесячный отчёт по чату), точные id событий, цитата, время, эмбеддинг; `link_scope` проверяет фильтр до тяжёлой выборки; при точном запросе без точного попадания — честный отказ вместо синтеза по шуму. `run_search` — вся маршрутизация вопроса |
 | `models.py` | `SearchQuery` / `AnswerResponse` / `SearchResult` |
 | `retrieval.py` | `fetch_candidates()` — ОДНА форма запроса и явные режимы (`project`/`fts`/`time`/`vector`/`recent`) вместо шести копий |
 | `ann.py` | смысловые кандидаты из всего корпуса: HNSW по битам → точный пересчёт по halfvec, объединение с основным режимом (`fetch_ann_rows`, `merge_candidates`); включается только при валидном индексе — см. `brain.md`, «pgvector и смысловой поиск» |
@@ -226,6 +230,37 @@ LEFT, и понять, намеренно ли это, можно было то�
 импорте) удалён 2026-11: регистраций в нём не было ни одной, читателей тоже.
 В `vera_shared/tools` остались только примитивы `Tool`/`ToolSpec`/
 `FunctionTool`/`HTTPTool` - тоже без вызовов в сервисах.
+
+## gateway: маршруты → сервис → репозиторий
+
+До 2026-11-12 приём события держал `INSERT … ON CONFLICT` прямо в
+обработчике, а `claude_session.py` — модели, upsert очереди, upsert
+события-выжимки и маршруты в одном файле на 229 строк. Теперь маршрут
+только проверяет секрет и вход, зовёт сервис и отдаёт ответ.
+
+| Модуль | Ответственность |
+|---|---|
+| `events.py` | `POST /event/{source}` (401 без секрета, 400 при несовпадении `source` пути и тела — до БД), `GET /api/events/{id}` |
+| `events_service.py` | `ingest_raw_event` — строка события в `pending`, ответ `{ok, event_id, deduped}`; `get_event_view` — событие с маскировкой текста и `triage_metadata` |
+| `events_repo.py` | `insert_event_once` — `ON CONFLICT (source, source_event_id) DO NOTHING RETURNING id`, при конфликте подбирает id существующей строки в той же сессии; `get_event_row` |
+| `claude_session.py` | `POST /v1/claude/session` (202 — в очереди, 200 + `unchanged` — уже осмыслена), `GET /v1/claude/session/{id}` (404 — не присылалась) |
+| `claude_session_models.py` | `Turn` (вырезает `\u0000`), `ClaudeSession`, `ClaudeSessionAccepted`, `ClaudeSessionStatus` |
+| `claude_session_service.py` | `queue_session`, `session_status`, `store_summary` (выжимка → одно событие на сессию), `body_text`, `naive` |
+| `claude_session_repo.py` | `enqueue_session` (повтор не возвращает в очередь, пока `done_turns` не меньше присланного), `get_queued_session`, `upsert_session_event` (перезапись только если реплик прибавилось или прошлый заход был пустышкой) |
+
+## ingestor-telegram: tools-server
+
+`tools_http.py` был 357 строк: маршруты, разбор диалогов/участников/истории,
+скачивание медиа и JSON-Schema инструментов в одном файле. Сравнение
+`X-Internal-Secret` шло через `!=` — теперь через общий
+`vera_shared.auth.internal_secret_ok` (постоянное по времени, fail-closed).
+
+| Модуль | Ответственность |
+|---|---|
+| `tools_http.py` | `build_app` — только маршруты `/tools/*`, `/media/download`, `/actions/send_message`, `/tools/sync_project_rosters` и проверка секрета |
+| `chat_tools.py` | `resolve_chat` (@username, id или подстрока названия), `entity_summary`, `list_dialogs`, `get_chat_info`, `get_participants`, `get_dialog_history`, `find_user`; ошибки Telegram отдаются агенту как `{"error": …}`, а не 500 |
+| `media_payload.py` | `media_payload` — медиа → base64 + mime для media-worker'а (лимит размера и времени — `media_download.py`), `media_mime` |
+| `tools_specs.py` | `TOOL_SPECS` для `GET /tools/spec`; `/actions/send_message` туда не входит |
 
 ## DB connection pool sizing
 

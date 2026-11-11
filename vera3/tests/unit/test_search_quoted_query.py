@@ -147,25 +147,26 @@ def test_event_id_inside_requested_quote_is_not_a_direct_read_instruction():
 
 @pytest.mark.asyncio
 async def test_quoted_report_words_do_not_intercept_search(monkeypatch):
-    from brain_search import app as search_app
+    from brain_search import search_service
 
     find_chat = AsyncMock(side_effect=AssertionError("quoted report words are content"))
-    monkeypatch.setattr(search_app, "find_report_chat", find_chat)
-    assert await search_app._try_report('Найди цитату «отчёт помесячно за 2026 год»') is None
+    monkeypatch.setattr(search_service, "find_report_chat", find_chat)
+    assert await search_service.try_report('Найди цитату «отчёт помесячно за 2026 год»') is None
     find_chat.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 async def test_quote_search_keeps_structured_source_account_and_date_filters(monkeypatch):
     from brain_search import app as search_app
+    from brain_search import search_service
     from brain_search.models import AnswerResponse, SearchQuery
     from brain_search.retrieval import Candidates
 
     monkeypatch.setenv("INTERNAL_SECRET", "synthetic-test-secret")
     fetch = AsyncMock(return_value=Candidates([], "fts"))
-    monkeypatch.setattr(search_app, "fetch_candidates", fetch)
-    monkeypatch.setattr(search_app, "embed_query", AsyncMock(return_value=None))
-    monkeypatch.setattr(search_app, "synthesize", AsyncMock(return_value=AnswerResponse(
+    monkeypatch.setattr(search_service, "fetch_candidates", fetch)
+    monkeypatch.setattr(search_service, "embed_query", AsyncMock(return_value=None))
+    monkeypatch.setattr(search_service, "synthesize", AsyncMock(return_value=AnswerResponse(
         answer="Not returned by this search", results=[], provider=None, cost_usd=0)))
     filters = {"source": "gmail", "account": "test-account",
                "start": "2026-10-03T17:00:00", "end": "2026-10-04T17:00:00"}
@@ -205,15 +206,16 @@ async def test_agent_search_preserves_explicit_source_and_day_window(monkeypatch
 @pytest.mark.asyncio
 async def test_empty_quote_selection_does_not_claim_source_absence(monkeypatch, use_agent):
     from brain_search import app as search_app
+    from brain_search import search_service
     from brain_search.models import AnswerResponse, SearchQuery
     from brain_search.retrieval import Candidates
 
     monkeypatch.setenv("INTERNAL_SECRET", "synthetic-test-secret")
-    monkeypatch.setattr(search_app, "fetch_candidates", AsyncMock(return_value=Candidates([], "fts")))
-    monkeypatch.setattr(search_app, "embed_query", AsyncMock(return_value=None))
+    monkeypatch.setattr(search_service, "fetch_candidates", AsyncMock(return_value=Candidates([], "fts")))
+    monkeypatch.setattr(search_service, "embed_query", AsyncMock(return_value=None))
     synthesis = AsyncMock(return_value=AnswerResponse(answer="Agent may search further",
                                                      results=[], provider=None, cost_usd=0))
-    monkeypatch.setattr(search_app, "synthesize", synthesis)
+    monkeypatch.setattr(search_service, "synthesize", synthesis)
     result = await search_app.search(SearchQuery(q=SHORT, use_agent=use_agent),
                                      "synthetic-test-secret")
     synthesis.assert_not_awaited()
@@ -225,18 +227,19 @@ async def test_empty_quote_selection_does_not_claim_source_absence(monkeypatch, 
 @pytest.mark.asyncio
 async def test_quote_with_hits_disables_broad_agent_search(monkeypatch):
     from brain_search import app as search_app
+    from brain_search import search_service
     from brain_search.models import AnswerResponse, SearchQuery
     from brain_search.retrieval import Candidates
 
     monkeypatch.setenv("INTERNAL_SECRET", "synthetic-test-secret")
-    monkeypatch.setattr(search_app, "fetch_candidates", AsyncMock(
+    monkeypatch.setattr(search_service, "fetch_candidates", AsyncMock(
         return_value=Candidates([_candidate(900101, body="amber otter lantern",
                                               account="test-account", importance=50)], "phrase")))
-    monkeypatch.setattr(search_app, "embed_query", AsyncMock(
+    monkeypatch.setattr(search_service, "embed_query", AsyncMock(
         side_effect=AssertionError("explicit phrase must not call embeddings")))
     synthesis = AsyncMock(return_value=AnswerResponse(
         answer="Found", results=[], provider=None, cost_usd=0))
-    monkeypatch.setattr(search_app, "synthesize", synthesis)
+    monkeypatch.setattr(search_service, "synthesize", synthesis)
     await search_app.search(SearchQuery(q=SHORT, use_agent=True), "synthetic-test-secret")
     assert synthesis.await_args.args[0].use_agent is False
     assert synthesis.await_args.args[2] is None

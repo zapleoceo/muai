@@ -6,21 +6,16 @@
 
 /api/gmail/start    — owner-only, редирект на Google consent (state подписан)
 /api/gmail/oauth/callback — обмен code→refresh, сохранить, снять needs_reauth
+
+Обмен и сохранение — `gmail_oauth_service`, SQL — `gmail_oauth_repo`; здесь
+разбор запроса и страницы ответа.
 """
 from __future__ import annotations
 
-import logging
-import os
 from html import escape as _esc
-from urllib.parse import urlencode
 
-import httpx
 from fastapi import APIRouter, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
-from sqlalchemy import select
-from vera_shared.crypto import encrypt
-from vera_shared.db.engine import get_session
-from vera_shared.db.models_sources import GmailAccountRow
 
 from dashboard.auth import (
     COOKIE_NAME,
@@ -28,46 +23,54 @@ from dashboard.auth import (
     require_owner,
     verify_oauth_state,
 )
+from dashboard.gmail_oauth_service import (
+    GmailOAuthOutcome,
+    complete_gmail_oauth,
+    gmail_consent_url,
+    gmail_oauth_configured,
+)
 from dashboard.ui.shell import standalone_html
 
-log = logging.getLogger(__name__)
 router = APIRouter()
-
-CLIENT_ID = os.environ.get("GMAIL_CLIENT_ID", "")
-CLIENT_SECRET = os.environ.get("GMAIL_CLIENT_SECRET", "")
-BASE_URL = os.environ.get("DASHBOARD_BASE_URL", "https://dima.veranda.my")
-REDIRECT_URI = f"{BASE_URL}/api/gmail/oauth/callback"
-# Least-privilege: Vera только ЧИТАЕТ письма. Один Gmail-scope = одна галка
-# на экране Google, меньше шанс случайно снять критичный доступ.
-SCOPES = " ".join([
-    "https://www.googleapis.com/auth/gmail.readonly",
-    "https://www.googleapis.com/auth/userinfo.email",
-    "openid",
-])
 
 
 def _page(title: str, body_html: str, *, code: int = 200) -> HTMLResponse:
     return HTMLResponse(standalone_html(title, body_html), status_code=code)
 
 
+def _outcome_page(outcome: GmailOAuthOutcome) -> HTMLResponse:
+    if outcome.kind == "exchange_failed":
+        return _page("Ошибка", f"<h1 class='err'>❌ обмен кода: {outcome.status}</h1>"
+                     f"<pre>{_esc(outcome.detail)}</pre>", code=400)
+    if outcome.kind == "no_refresh_token":
+        return _page("Ошибка",
+                     "<h1 class='err'>❌ нет refresh_token</h1>"
+                     "<p>Отзови доступ в Google и попробуй снова "
+                     "(нужен prompt=consent).</p>", code=400)
+    if outcome.kind == "no_gmail_scope":
+        return _page("Неполный доступ",
+                     "<h1 class='err'>⚠️ Не выдан доступ к Gmail</h1>"
+                     "<p>Ты разрешил только профиль/email, но НЕ чтение писем.</p>"
+                     "<p>Нажми «Переподключить» снова и <b>оставь все галочки</b> "
+                     "(особенно «Просмотр сообщений и настроек почты»).</p>"
+                     "<p><a href='/api/gmail/start'>🔁 Переподключить заново</a></p>",
+                     code=400)
+    if outcome.kind == "userinfo_failed":
+        return _page("Ошибка", f"<h1 class='err'>❌ userinfo: {_esc(outcome.detail)}</h1>",
+                     code=400)
+    return _page("Готово",
+                 f"<h1>✓</h1><p>Переподключён <span class='email'>{_esc(outcome.detail)}</span></p>"
+                 "<p><a href='/api/gmail/start'>→ ещё аккаунт</a> &nbsp;·&nbsp; "
+                 "<a href='/sources'>← к источникам</a></p>")
+
+
 @router.get("/api/gmail/start")
 async def gmail_start(request: Request):
     require_owner(request, request.cookies.get(COOKIE_NAME))  # raises 401
-    if not CLIENT_ID or not CLIENT_SECRET:
+    if not gmail_oauth_configured():
         return _page("Ошибка", "<h1 class='err'>GMAIL_CLIENT_ID/SECRET не заданы</h1>",
                      code=500)
-    params = {
-        "response_type": "code",
-        "client_id": CLIENT_ID,
-        "redirect_uri": REDIRECT_URI,
-        "scope": SCOPES,
-        "access_type": "offline",
-        "prompt": "consent",          # форсируем выдачу refresh_token
-        "include_granted_scopes": "true",
-        "state": issue_oauth_state(),
-    }
-    return RedirectResponse(
-        "https://accounts.google.com/o/oauth2/v2/auth?" + urlencode(params))
+    return RedirectResponse(gmail_consent_url(issue_oauth_state()))
 
 
 @router.get("/api/gmail/oauth/callback")
@@ -83,60 +86,4 @@ async def gmail_callback(request: Request):
     # Anti-CSRF: state должен быть подписан нами и не протух
     if not verify_oauth_state(qp.get("state")):
         return _page("Ошибка", "<h1 class='err'>❌ невалидный state</h1>", code=403)
-
-    async with httpx.AsyncClient(timeout=30) as c:
-        r = await c.post("https://oauth2.googleapis.com/token", data={
-            "grant_type": "authorization_code", "code": code,
-            "client_id": CLIENT_ID, "client_secret": CLIENT_SECRET,
-            "redirect_uri": REDIRECT_URI,
-        })
-    if r.status_code != 200:
-        return _page("Ошибка", f"<h1 class='err'>❌ обмен кода: {r.status_code}</h1>"
-                     f"<pre>{_esc(r.text[:300])}</pre>", code=400)
-    tok = r.json()
-    refresh = tok.get("refresh_token")
-    access = tok.get("access_token")
-    granted = tok.get("scope", "")
-    if not refresh:
-        return _page("Ошибка",
-                     "<h1 class='err'>❌ нет refresh_token</h1>"
-                     "<p>Отзови доступ в Google и попробуй снова "
-                     "(нужен prompt=consent).</p>", code=400)
-    # КРИТИЧНО: без Gmail-scope токен бесполезен (читать письма нельзя).
-    # Именно из-за этого demoniwwwe молча не опрашивался. Не сохраняем такой
-    # токен — заставляем переподключить с галкой «Чтение писем».
-    if "gmail." not in granted:
-        return _page("Неполный доступ",
-                     "<h1 class='err'>⚠️ Не выдан доступ к Gmail</h1>"
-                     "<p>Ты разрешил только профиль/email, но НЕ чтение писем.</p>"
-                     "<p>Нажми «Переподключить» снова и <b>оставь все галочки</b> "
-                     "(особенно «Просмотр сообщений и настроек почты»).</p>"
-                     "<p><a href='/api/gmail/start'>🔁 Переподключить заново</a></p>",
-                     code=400)
-
-    async with httpx.AsyncClient(timeout=15) as c:
-        r2 = await c.get("https://openidconnect.googleapis.com/v1/userinfo",
-                         headers={"Authorization": f"Bearer {access}"})
-    if r2.status_code != 200:
-        return _page("Ошибка", f"<h1 class='err'>❌ userinfo: {_esc(r2.text[:200])}</h1>", code=400)
-    email = r2.json().get("email", "?")
-
-    refresh_enc = encrypt(refresh)
-    async with get_session() as s:
-        existing = (await s.execute(
-            select(GmailAccountRow).where(GmailAccountRow.email == email)
-        )).scalar_one_or_none()
-        if existing:
-            existing.refresh_token_enc = refresh_enc
-            existing.is_active = True
-            existing.needs_reauth = False
-            existing.last_error = None
-            existing.last_polled_at = None  # перепрокачать новые письма
-        else:
-            s.add(GmailAccountRow(email=email, refresh_token_enc=refresh_enc,
-                                  is_active=True, needs_reauth=False))
-    log.info("Gmail re-auth OK: %s", email)
-    return _page("Готово",
-                 f"<h1>✓</h1><p>Переподключён <span class='email'>{_esc(email)}</span></p>"
-                 "<p><a href='/api/gmail/start'>→ ещё аккаунт</a> &nbsp;·&nbsp; "
-                 "<a href='/sources'>← к источникам</a></p>")
+    return _outcome_page(await complete_gmail_oauth(code))

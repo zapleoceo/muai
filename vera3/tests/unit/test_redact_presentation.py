@@ -70,7 +70,7 @@ async def test_gateway_event_masks_text_and_metadata_keeps_ids():
     async def get(*_a):
         return row
     session.get = get
-    with patch("gateway.events.get_session", MagicMock(return_value=_Ctx(session))):
+    with patch("gateway.events_repo.get_session", MagicMock(return_value=_Ctx(session))):
         out = await get_event(1, x_internal_secret="test-internal-secret")
     clean(out["content_text"] + str(out["triage_metadata"]))
     assert (out["id"], out["source_event_id"], out["triage_status"]) == (1, "s1", "done")
@@ -124,8 +124,8 @@ async def _get(path: str, cookies: dict[str, str] | None = None) -> httpx.Respon
     async def execute(*_a, **_k):
         return _Result(_row())
     session.execute = execute
-    with patch("dashboard.events_routes.get_session", MagicMock(return_value=_Ctx(session))), \
-         patch("dashboard.events_routes.find_entity_by_alias", AsyncMock(return_value=None)):
+    with patch("dashboard.events_repo.get_session", MagicMock(return_value=_Ctx(session))), \
+         patch("dashboard.events_service.find_entity_by_alias", AsyncMock(return_value=None)):
         async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app),
                                      base_url="http://t", follow_redirects=False) as c:
             c.cookies.update(cookies or {})

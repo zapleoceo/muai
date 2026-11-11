@@ -52,7 +52,7 @@ async def test_get_event_returns_row_with_correct_secret():
         project="itstep", ready_subtype=None,
     )
     session = _row_session(row)
-    with patch("gateway.events.get_session",
+    with patch("gateway.events_repo.get_session",
                MagicMock(return_value=_FakeSessionCtx(session))):
         result = await get_event(1, x_internal_secret="test-internal-secret")
     assert result["id"] == 1
@@ -62,7 +62,7 @@ async def test_get_event_returns_row_with_correct_secret():
 @pytest.mark.asyncio
 async def test_get_event_404_when_not_found():
     session = _row_session(None)
-    with patch("gateway.events.get_session",
+    with patch("gateway.events_repo.get_session",
                MagicMock(return_value=_FakeSessionCtx(session))), \
          pytest.raises(HTTPException) as exc:
         await get_event(1, x_internal_secret="test-internal-secret")

@@ -88,6 +88,7 @@ async def test_candidate_pipeline_merges_exact_title_under_date_and_link_scope(m
 @pytest.mark.asyncio
 async def test_route_exact_id_is_not_hidden_by_inferred_date_or_project(monkeypatch):
     from brain_search import app as search_app
+    from brain_search import search_service
 
     monkeypatch.setenv("INTERNAL_SECRET", "synthetic-test-secret")
     fetch = AsyncMock(return_value=retrieval.Candidates(
@@ -95,8 +96,8 @@ async def test_route_exact_id_is_not_hidden_by_inferred_date_or_project(monkeypa
     synthesis_call = AsyncMock(return_value=AnswerResponse(
         answer="Synthetic notice [event:512322]", results=[],
         provider="test", cost_usd=0))
-    monkeypatch.setattr(search_app, "fetch_candidates", fetch)
-    monkeypatch.setattr(search_app, "synthesize", synthesis_call)
+    monkeypatch.setattr(search_service, "fetch_candidates", fetch)
+    monkeypatch.setattr(search_service, "synthesize", synthesis_call)
     response = await search_app.search(
         SearchQuery(q="событие 512322 от 5 октября по проекту Веранда",
                     use_agent=False,
@@ -113,15 +114,16 @@ async def test_route_exact_id_is_not_hidden_by_inferred_date_or_project(monkeypa
 @pytest.mark.asyncio
 async def test_missing_exact_subject_does_not_synthesize_noise_as_absence(monkeypatch):
     from brain_search import app as search_app
+    from brain_search import search_service
 
     monkeypatch.setenv("INTERNAL_SECRET", "synthetic-test-secret")
-    monkeypatch.setattr(search_app, "embed_query", AsyncMock(return_value=None))
-    monkeypatch.setattr(search_app, "fetch_candidates", AsyncMock(
+    monkeypatch.setattr(search_service, "embed_query", AsyncMock(return_value=None))
+    monkeypatch.setattr(search_service, "fetch_candidates", AsyncMock(
         return_value=retrieval.Candidates(
             [_event(900100, "Synthetic unrelated notice", 0.5)],
             "fts+title", title_found=False)))
     synthesis_call = AsyncMock(side_effect=AssertionError("unrelated result must not answer"))
-    monkeypatch.setattr(search_app, "synthesize", synthesis_call)
+    monkeypatch.setattr(search_service, "synthesize", synthesis_call)
     result = await search_app.search(
         SearchQuery(q='Find subject: "Synthetic Sapphire Notice" on 2026-10-04'),
         "synthetic-test-secret")

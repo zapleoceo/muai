@@ -61,7 +61,7 @@ class TestShell:
 
 class TestPagesCarryNoColourLiterals:
     def test_events_and_sources_markup(self):
-        with patch("dashboard.events_routes._fetch", AsyncMock(return_value=[{
+        with patch("dashboard.events_service.fetch_event_page", AsyncMock(return_value=[{
                 "id": 1, "triage_status": "done", "importance": None, "source": "telegram",
                 "account": "u", "occurred_at": datetime(2026, 1, 1, 10), "content_text": "x",
                 "metadata": {}, "nature": None, "has_emb": False, "request_id": None,
