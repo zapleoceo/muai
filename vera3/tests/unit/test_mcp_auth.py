@@ -159,8 +159,11 @@ async def test_write_through_http_is_audited_under_the_token_name(mcp_client):
             "tools/call", {"name": "audit_log", "arguments": {}}),
             headers=_auth(CODEX_TOKEN))
     entries = r.json()["result"]["structuredContent"]["entries"]
-    assert [(e["client"], e["tool"], e["target"]) for e in entries] == [
-        ("codex", "hide_event", "event:7")]
+    # разрушительная правка через MCP — только предложение до решения владельца
+    assert [(e["client"], e["tool"], e["target"], e["status"]) for e in entries] == [
+        ("codex", "hide_event", "proposal:7", "proposed")]
+    async with get_session() as s:
+        assert (await s.get(EventRow, 7)).triage_status == "done"
 
 
 @pytest.mark.asyncio
