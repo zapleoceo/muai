@@ -12,8 +12,18 @@ import time
 
 from fastapi import Cookie, HTTPException, Request
 
-SESSION_SECRET = os.environ["TOKEN_SECRET"]
-BOT_TOKEN = os.environ["TELEGRAM_BOT_TOKEN"]
+
+def _required_secret(name: str) -> str:
+    # Пустой секрет делает HMAC подделываемым: cookie и Telegram-подпись для
+    # публичного OWNER_ID собираются без знания ключа. Падаем на импорте.
+    value = os.environ.get(name, "").strip()
+    if not value:
+        raise RuntimeError(f"{name} must be set and non-empty for dashboard auth")
+    return value
+
+
+SESSION_SECRET = _required_secret("TOKEN_SECRET")
+BOT_TOKEN = _required_secret("TELEGRAM_BOT_TOKEN")
 OWNER_ID = int(os.environ["OWNER_TELEGRAM_ID"])
 if OWNER_ID == 0:
     raise RuntimeError("OWNER_TELEGRAM_ID не должен быть 0 в проде")
