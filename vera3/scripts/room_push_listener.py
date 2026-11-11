@@ -10,7 +10,12 @@
   ROOM_PUSH_INBOX   файл JSONL для принятых сообщений
 
   python room_push_listener.py serve [--port 8765]
+  python room_push_listener.py wait [--after N] [--timeout 3600]
   python room_push_listener.py reply --to dot "текст ответа"
+
+`wait` блокируется до прихода нового сообщения и завершается с ним (код 0) или по
+таймауту без сообщений (код 3). Запущенный фоном из сессии Claude Code, он будит её
+ровно в момент прихода: опроса и трат токенов на ожидание нет.
 """
 from __future__ import annotations
 
@@ -22,18 +27,24 @@ import json
 import os
 import sys
 import time
-import uuid
+import urllib.parse
 import urllib.request
+import uuid
 from collections.abc import Mapping
-from http.server import BaseHTTPRequestHandler, HTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
+
+from room_push_inbox import Inbox
 
 TOLERANCE_S = 300
 MAX_BODY = 262_144
 DEFAULT_INBOX = Path.home() / "vera-room-inbox.jsonl"
 DEFAULT_MCP_URL = "https://dima.veranda.my/mcp"
 PROTOCOL_VERSION = "2025-06-18"
+MAX_WAIT_S = 3600.0
+WAIT_SECRET_HEADER = "X-Room-Push-Secret"
+EXIT_TIMEOUT = 3
 
 
 def verify(secret: str, headers: Mapping[str, str], body: bytes, now: float) -> bool:
@@ -56,17 +67,7 @@ def verify(secret: str, headers: Mapping[str, str], body: bytes, now: float) -> 
                if part.startswith("v1,"))
 
 
-def _seen_ids(inbox: Path) -> set[str]:
-    if not inbox.exists():
-        return set()
-    ids: set[str] = set()
-    for line in inbox.read_text(encoding="utf-8").splitlines():
-        if line.strip():
-            ids.add(json.loads(line)["event_id"])
-    return ids
-
-
-def _make_handler(secret: str, inbox: Path, seen: set[str]) -> type[BaseHTTPRequestHandler]:
+def make_handler(secret: str, inbox: Inbox) -> type[BaseHTTPRequestHandler]:
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:
             length = int(self.headers.get("Content-Length", "0"))
@@ -77,15 +78,28 @@ def _make_handler(secret: str, inbox: Path, seen: set[str]) -> type[BaseHTTPRequ
             if not verify(secret, self.headers, body, time.time()):
                 self.send_error(401)
                 return
-            event_id = self.headers["webhook-id"]
-            if event_id not in seen:
-                record = {"event_id": event_id, "received_at": time.time(),
-                          "payload": json.loads(body)}
-                with inbox.open("a", encoding="utf-8") as fh:
-                    fh.write(json.dumps(record, ensure_ascii=False) + "\n")
-                seen.add(event_id)
+            inbox.add(self.headers["webhook-id"], json.loads(body))
             self.send_response(204)
             self.end_headers()
+
+        def do_GET(self) -> None:
+            url = urllib.parse.urlsplit(self.path)
+            # The tunnel exposes this port publicly, so reading the inbox needs the secret.
+            given = self.headers.get(WAIT_SECRET_HEADER, "")
+            if url.path != "/wait" or not hmac.compare_digest(given, secret):
+                self.send_error(404)
+                return
+            query = urllib.parse.parse_qs(url.query)
+            after = int(query["after"][0]) if "after" in query else inbox.latest
+            timeout = min(float(query.get("timeout", [MAX_WAIT_S])[0]), MAX_WAIT_S)
+            records = inbox.wait_after(after, timeout)
+            body = json.dumps({"latest": inbox.latest, "messages": records},
+                              ensure_ascii=False).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
 
         def log_message(self, fmt: str, *args: Any) -> None:
             sys.stderr.write(f"listener {self.address_string()} {fmt % args}\n")
@@ -93,12 +107,31 @@ def _make_handler(secret: str, inbox: Path, seen: set[str]) -> type[BaseHTTPRequ
     return Handler
 
 
-def serve(port: int, inbox: Path) -> None:
+def serve(port: int, inbox_path: Path) -> None:
     secret = os.environ["ROOM_PUSH_SECRET"]
-    handler = _make_handler(secret, inbox, _seen_ids(inbox))
-    with HTTPServer(("127.0.0.1", port), handler) as httpd:
-        print(f"room push listener on 127.0.0.1:{port}, inbox {inbox}", flush=True)
+    handler = make_handler(secret, Inbox(inbox_path))
+    with ThreadingHTTPServer(("127.0.0.1", port), handler) as httpd:
+        print(f"room push listener on 127.0.0.1:{port}, inbox {inbox_path}", flush=True)
         httpd.serve_forever()
+
+
+def format_message(record: dict[str, Any]) -> str:
+    m = record["payload"]["message"]
+    task = f" task={m['task_id']}" if m.get("task_id") else ""
+    return f"#{m['id']} {m['from']} -> {m['to']} [{m['status']}]{task}: {m['body']}"
+
+
+def wait(port: int, after: int | None, timeout: float) -> int:
+    query = {"timeout": str(timeout)} | ({"after": str(after)} if after is not None else {})
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/wait?{urllib.parse.urlencode(query)}",
+        headers={WAIT_SECRET_HEADER: os.environ["ROOM_PUSH_SECRET"]})
+    with urllib.request.urlopen(req, timeout=timeout + 30) as resp:
+        result = json.loads(resp.read())
+    for record in result["messages"]:
+        print(format_message(record))
+    print(f"latest={result['latest']}")
+    return 0 if result["messages"] else EXIT_TIMEOUT
 
 
 def _rpc(url: str, token: str, payload: dict[str, Any], session: str | None
@@ -132,6 +165,10 @@ def main() -> None:
     sub = parser.add_subparsers(dest="cmd", required=True)
     srv = sub.add_parser("serve")
     srv.add_argument("--port", type=int, default=8765)
+    wai = sub.add_parser("wait")
+    wai.add_argument("--port", type=int, default=8765)
+    wai.add_argument("--after", type=int, default=None)
+    wai.add_argument("--timeout", type=float, default=MAX_WAIT_S)
     rep = sub.add_parser("reply")
     rep.add_argument("text")
     rep.add_argument("--to", required=True)
@@ -141,6 +178,8 @@ def main() -> None:
     if args.cmd == "serve":
         serve(args.port, inbox)
         return
+    if args.cmd == "wait":
+        sys.exit(wait(args.port, args.after, min(args.timeout, MAX_WAIT_S)))
     url = os.environ.get("VERA_MCP_URL", DEFAULT_MCP_URL)
     result = room_post(url, os.environ["ROOM_MCP_TOKEN"], args.text, args.to, args.room)
     print(json.dumps(result, ensure_ascii=False))
