@@ -13,6 +13,7 @@ from datetime import datetime, timedelta
 
 import httpx
 from sqlalchemy import select, update
+from vera_shared.backoff import exp_backoff
 from vera_shared.crypto import decrypt
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_room_events import (
@@ -42,7 +43,7 @@ ATTEMPT_DEADLINE_S = 20.0
 
 def backoff_delay(attempt: int, rand: Callable[[], float] = random.random) -> float:
     """Экспоненциальная задержка с потолком и джиттером 50..100%."""
-    return min(MAX_DELAY_S, BASE_DELAY_S * 2 ** max(attempt - 1, 0)) * (0.5 + rand() / 2)
+    return exp_backoff(attempt, BASE_DELAY_S, cap=MAX_DELAY_S, jitter=0.5 + rand() / 2)
 
 
 def _close(row: RoomEventOutboxRow, status: str, error: str | None, now: datetime) -> None:

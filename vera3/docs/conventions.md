@@ -23,6 +23,17 @@
 - `log.warning` for expected transient (rate limits, network blips).
 - `log.error` / `log.exception` only for unexpected.
 - Never silently swallow.
+- Pause before a retry: `vera_shared.backoff.exp_backoff(attempt, base, *, cap,
+  max_exponent, jitter)` — `base * 2^(attempt-1)` (attempts `<= 1` give `base`),
+  exponent clipped by `max_exponent`, delay clipped by `cap`, then multiplied by
+  `jitter` (a factor the caller draws itself, so units and distribution stay with
+  the caller). Callers keep their own names: `dispatcher.backoff_s` (seconds,
+  ±20% `random.uniform`, `int`), `events_deliver.backoff_delay` (cap 900 s, factor
+  0.5..1), `pair_roles_store.backoff` (hours, exponent ≤ 12, cap 7 days),
+  `voice_commands.retry_delay` (30 s, no cap). Proven bit-for-bit against the
+  old formulas in `tests/unit/test_backoff.py`.
+- Field-level output redaction: `vera_shared.redact_view.redact_fields` (see
+  `security.md`), not a local loop over keys.
 
 ## Naming
 
