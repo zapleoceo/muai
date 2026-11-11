@@ -1,8 +1,7 @@
 """Tool ABC + spec for the agent loop.
 
 Each Tool has a stable name, description (LLM-readable), JSON-Schema
-params, and an exec coroutine. Tools are registered into a single
-ToolRegistry that brain-search uses for function-calling.
+params, and an exec coroutine.
 """
 from __future__ import annotations
 

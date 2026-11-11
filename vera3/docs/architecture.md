@@ -219,6 +219,12 @@ LEFT, и понять, намеренно ли это, можно было то�
 глазами. Намеренно: без эмбеддинга такую строку нечем ранжировать. Теперь
 это отдельный режим с тестом.
 
+Инструменты агента живут в `brain_search/agent_tools.py`. Общий реестр
+`vera_shared/tools/registry.py` (реестр по умолчанию, регистрация при
+импорте) удалён 2026-11: регистраций в нём не было ни одной, читателей тоже.
+В `vera_shared/tools` остались только примитивы `Tool`/`ToolSpec`/
+`FunctionTool`/`HTTPTool` - тоже без вызовов в сервисах.
+
 ## DB connection pool sizing
 
 `vera_shared/db/engine._pool_kwargs()` — every service's Postgres pool is
