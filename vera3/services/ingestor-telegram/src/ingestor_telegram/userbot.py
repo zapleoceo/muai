@@ -16,8 +16,8 @@ from telethon.sessions import StringSession
 from vera_shared.chat_activity import min_own_messages, own_message_count
 from vera_shared.crypto import decrypt
 from vera_shared.db.engine import get_session, init_engine
-from vera_shared.db.models import EventRow
 from vera_shared.db.models_sources import TelegramSessionRow
+from vera_shared.ingest import insert_events
 from vera_shared.ingest_policy import is_ignored_chat, is_ignored_sender
 from vera_shared.media_policy import classify_chat_kind, media_skip_reason
 from vera_shared.timeutil import utc_naive_now
@@ -156,50 +156,45 @@ async def save_message(client: TelegramClient, msg) -> None:
 
     source_event_id = f"tg:{chat.id}:{msg.id}"
 
-    async with get_session() as s:
-        existing = (await s.execute(
-            select(EventRow.id).where(
-                EventRow.source == "telegram",
-                EventRow.source_event_id == source_event_id,
-            )
-        )).scalar_one_or_none()
-        if existing:
-            return
-        s.add(EventRow(
-            source="telegram",
-            source_event_id=source_event_id,
-            account="userbot",
-            category=chat_type,
-            content_text=content,
-            occurred_at=msg.date.replace(tzinfo=None) if msg.date else utc_naive_now(),
-            metadata_={
-                "chat_id": chat.id,
-                "chat_type": chat_type,
-                "chat_title": chat_title,
-                "sender_id": sender.id if sender else None,
-                "sender_username": sender_username,
-                "direction": direction,
-                "author_role": author_role,
-                "author_label": author_label,
-                "msg_id": msg.id,
-                # chat_kind — единственное поле для различения приватный/группа/
-                # канал, см. classify_chat_kind().
-                "chat_kind": chat_kind,
-                # Оставлены для обратной совместимости — НЕ используй is_channel
-                # для «это вещательный канал», используй chat_kind=="channel".
-                "is_channel": chat_type in {"channel"},
-                "is_group": chat_type in {"chat", "chatfull"},
-                "is_supergroup": chat_type == "channel" and getattr(chat, "megagroup", False),
-                "media_kind": media_kind,
-                "media_meta": media_meta or None,
-                "needs_recognition": needs_recognition,
-                # Причина пропуска и признак участия — чтобы граф связей и
-                # доливка очереди решали по данным, а не по названию чата.
-                "media_skip_reason": skip_reason,
-                "owner_participates": own_messages > 0,
-            },
-            triage_status="media_pending" if needs_recognition else "pending",
-        ))
+    # Дедуп атомарный (ON CONFLICT) — общий с остальными источниками; повтор
+    # того же сообщения (live + backfill) не вставляется и не синкает граф.
+    inserted = await insert_events([{
+        "source": "telegram",
+        "source_event_id": source_event_id,
+        "account": "userbot",
+        "category": chat_type,
+        "content_text": content,
+        "occurred_at": msg.date.replace(tzinfo=None) if msg.date else utc_naive_now(),
+        "metadata_": {
+            "chat_id": chat.id,
+            "chat_type": chat_type,
+            "chat_title": chat_title,
+            "sender_id": sender.id if sender else None,
+            "sender_username": sender_username,
+            "direction": direction,
+            "author_role": author_role,
+            "author_label": author_label,
+            "msg_id": msg.id,
+            # chat_kind — единственное поле для различения приватный/группа/
+            # канал, см. classify_chat_kind().
+            "chat_kind": chat_kind,
+            # Оставлены для обратной совместимости — НЕ используй is_channel
+            # для «это вещательный канал», используй chat_kind=="channel".
+            "is_channel": chat_type in {"channel"},
+            "is_group": chat_type in {"chat", "chatfull"},
+            "is_supergroup": chat_type == "channel" and getattr(chat, "megagroup", False),
+            "media_kind": media_kind,
+            "media_meta": media_meta or None,
+            "needs_recognition": needs_recognition,
+            # Причина пропуска и признак участия — чтобы граф связей и
+            # доливка очереди решали по данным, а не по названию чата.
+            "media_skip_reason": skip_reason,
+            "owner_participates": own_messages > 0,
+        },
+        "triage_status": "media_pending" if needs_recognition else "pending",
+    }])
+    if not inserted:
+        return
 
     # Side-effect: keep entities/memberships in sync with reality.
     try:
