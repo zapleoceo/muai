@@ -20,13 +20,14 @@ from gateway.claude_session_models import (
     ClaudeSessionAccepted,
     ClaudeSessionStatus,
 )
-
-# store_summary — реэкспорт: claude_session_worker импортирует его отсюда.
 from gateway.claude_session_service import (
     queue_session,
     session_status,
-    store_summary,  # noqa: F401
+    store_summary,
 )
+
+# store_summary — реэкспорт: claude_session_worker импортирует его отсюда.
+__all__ = ["router", "store_summary"]
 
 router = APIRouter()
 
