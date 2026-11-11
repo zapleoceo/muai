@@ -11,6 +11,7 @@ from vera_mcp import write_tools as w
 from vera_shared.db.engine import get_session
 from vera_shared.db.models import EventRow
 from vera_shared.db.models_graph import EntityAliasRow, EntityRow
+from vera_shared.journal import proposals
 from vera_shared.search_client import SearchUnavailable
 from vera_shared.timeutil import utc_naive_now
 
@@ -71,7 +72,7 @@ async def test_recent_events_filters_and_cap(sqlite_db):
 async def test_hidden_event_leaves_recent_and_timeline_but_get_event_still_shows_it(sqlite_db):
     await seed_events()
     alice, _ = await seed_entities()
-    await w.hide_event(1, ctx())
+    await proposals.approve((await w.hide_event(1, ctx()))["proposal_id"])
     assert [e["id"] for e in (await r.recent_events(hours=48))["events"]] == [2]
     tl = await r.timeline(alice, start="2020-01-01", end="2100-01-01")
     assert [e["id"] for e in tl["events"]] == [3]
@@ -220,8 +221,10 @@ async def test_sql_query_tool_and_audit_log(sqlite_db, ro_env):
     await seed_events()
     out = await r.sql_query("SELECT source, COUNT(*) AS n FROM events GROUP BY source ORDER BY n DESC")
     assert out["rows"][0] == ["telegram", 2]
-    await w.hide_event(1, ctx())
+    await proposals.approve((await w.hide_event(1, ctx()))["proposal_id"])
     log = await r.audit_log()
-    assert [e["tool"] for e in log["entries"]] == ["hide_event"]
+    # применённая правка и подтверждённое владельцем предложение
+    assert [(e["tool"], e["target"], e["status"]) for e in log["entries"]] == [
+        ("hide_event", "event:1", "applied"), ("hide_event", "proposal:1", "approved")]
     assert (await r.audit_log(client="other"))["entries"] == []
     assert datetime.fromisoformat(log["entries"][0]["at"])

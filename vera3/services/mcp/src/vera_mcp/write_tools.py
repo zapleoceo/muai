@@ -1,5 +1,10 @@
 """MCP-инструменты записи. Каждая запись попадает в `mcp_audit` и откатывается `undo`.
 
+`hide_event`, `relationship_retire` и `entity_merge` (dry_run=false) только
+предлагают правку (`vera_shared.journal.proposals`): клиент MCP читает
+недоверенный текст, и такой вызов мог прийти из инъекции. Применяет
+владелец на `/approvals` дашборда.
+
 Событие скрывается (`hidden`), связь снимается (`is_current=false`), прежние
 версии лежат в журнале. Слияние сущностей (`entity_merge`) — исключение: оно
 удаляет строки-дубли, но кладёт в журнал весь `MergeReport`, и
@@ -16,8 +21,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from vera_shared.db.engine import get_session
 from vera_shared.events import edit as event_edit
 from vera_shared.graph import edit as graph_edit
-from vera_shared.graph.merge_actions import apply_merge, preview_merge
-from vera_shared.journal import audit
+from vera_shared.graph.merge_actions import preview_merge
+from vera_shared.journal import audit, proposals
 from vera_shared.journal.undo import undo_entry
 from vera_shared.memory.remember import RememberOutcome, remember_fact
 
@@ -87,12 +92,9 @@ async def update_event(
 
 
 async def hide_event(event_id: int, ctx: Context) -> dict[str, Any]:
-    """Скрыть событие из поиска и выдач (не удаляя). Soft-hide an event; reversible via unhide_event / undo."""
-    async def op(s: AsyncSession) -> Applied:
-        before, after = await event_edit.set_hidden(s, event_id, hidden=True)
-        return event_id, before, after, {"hidden": True}
-
-    return await _audited(ctx, "hide_event", {"event_id": event_id}, "event", op)
+    """Предложить скрыть событие; применяется только после подтверждения владельцем на /approvals. Propose a soft-hide; NOT applied until the owner approves it in the dashboard (returns proposal_id)."""
+    return await proposals.propose(client_of(ctx), "hide_event", {"event_id": event_id},
+                                   event_id)
 
 
 async def unhide_event(event_id: int, ctx: Context) -> dict[str, Any]:
@@ -154,13 +156,9 @@ async def relationship_set(
 
 
 async def relationship_retire(relationship_id: int, ctx: Context) -> dict[str, Any]:
-    """Снять связь (is_current=false), не удаляя. Retire a relationship; reversible via undo."""
-    async def op(s: AsyncSession) -> Applied:
-        before, after = await graph_edit.retire_relationship(s, relationship_id)
-        return relationship_id, before, after, {"relationship_id": relationship_id}
-
-    return await _audited(ctx, "relationship_retire",
-                          {"relationship_id": relationship_id}, "relationship", op)
+    """Предложить снять связь; применяется только после подтверждения владельцем на /approvals. Propose retiring a relationship; NOT applied until the owner approves it (returns proposal_id)."""
+    return await proposals.propose(client_of(ctx), "relationship_retire",
+                                   {"relationship_id": relationship_id}, relationship_id)
 
 
 async def entity_merge(
@@ -168,10 +166,13 @@ async def entity_merge(
     reason: Annotated[str, Field(min_length=3, max_length=500)], ctx: Context,
     dry_run: bool = True, force: bool = False,
 ) -> dict[str, Any]:
-    """Слить дубли: drop_ids вливаются в keep_id. По умолчанию dry_run=true: возвращает имена и счётчики, ничего не меняя; выполнить — dry_run=false. Владелец и сущности с identity-узлами требуют force=true; откат — entity_unmerge/undo. Merge duplicate entities; dry run by default."""
+    """Слить дубли: drop_ids вливаются в keep_id. По умолчанию dry_run=true: возвращает имена и счётчики, ничего не меняя; dry_run=false создаёт предложение, которое применяется только после подтверждения владельцем на /approvals. Владелец и сущности с identity-узлами требуют force=true; откат — entity_unmerge/undo. Merge duplicate entities; dry run by default, dry_run=false returns a proposal_id the owner must approve."""
     if dry_run:
         return await preview_merge(keep_id, drop_ids, reason, force)
-    return await apply_merge(keep_id, drop_ids, reason, client_of(ctx), force)
+    return await proposals.propose(
+        client_of(ctx), "entity_merge",
+        {"keep_id": keep_id, "drop_ids": drop_ids, "reason": reason, "force": force},
+        keep_id)
 
 
 async def entity_unmerge(merge_audit_id: int, ctx: Context,

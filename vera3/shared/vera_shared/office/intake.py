@@ -36,7 +36,11 @@ from vera_shared.office.intake_input import (
     payload_hash,
     text_hash,
 )
-from vera_shared.office.owner_routing import is_owner_message
+from vera_shared.office.owner_routing import (
+    is_owner_message,
+    log_owner_promotion,
+    owner_claim_refs,
+)
 from vera_shared.redact import redact_secrets
 from vera_shared.room import questions
 from vera_shared.room.messages import post_message
@@ -110,8 +114,11 @@ async def _open_room_task(principal: OfficePrincipal, room: str, task_id: str, t
         next_action=f"{clean[:BODY_ACTION_CHARS]}\n\n{note}",
         refs=[{"kind": "source", "ref": f"office:{principal.name}:{client_task_id}"},
               *([{"kind": "source", "ref": "owner_dispatch: dot"},
-                 {"kind": "source", "ref": "result_recipient: dot"}]
+                 {"kind": "source", "ref": "result_recipient: dot"},
+                 *owner_claim_refs(principal)]
                 if owner_message else [])])
+    if owner_message:
+        log_owner_promotion(principal, task_id)
     await post_message(room=room, message_id=task_id, from_agent=principal.name,
                        task_id=task_id, status="request",
                        body=f"{clean}\n\n{note}" if image_indexes else clean)

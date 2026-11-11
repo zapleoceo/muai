@@ -13,6 +13,7 @@ from fastapi import FastAPI, Response
 from vera_shared.db.engine import close_engine, init_engine
 from vera_shared.room.single_executor import single_executor_mode
 
+from dashboard.approvals_routes import router as approvals_router
 from dashboard.assets_routes import router as assets_router
 from dashboard.auth_routes import router as auth_router
 from dashboard.connection_routes import router as connection_router
@@ -60,6 +61,7 @@ for router in (
     telegram_login_router, slack_connect_router, source_actions_router,
     assets_router, connection_router, journal_router, merge_router,
     room_oauth_router, tasks_router, tasks_owner_router, office_hourly_router,
+    approvals_router,
 ):
     app.include_router(router)
 

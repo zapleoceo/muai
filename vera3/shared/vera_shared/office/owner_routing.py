@@ -1,12 +1,29 @@
 """Authority for routing a Veranda Office task to dot."""
 from __future__ import annotations
 
+import logging
 import os
 from typing import Any
 
 from vera_shared.db.engine import get_session
 from vera_shared.office import repository as repo
 from vera_shared.office.acl import OfficePrincipal
+
+log = logging.getLogger(__name__)
+
+#: Владельца подтвердила не Вера, а сервис (его `origin.from_id`): по этому ref
+#: агенты и дашборд видят, на чьём слове держатся auto_pickup и ответственный dot.
+OWNER_CLAIM_REF_PREFIX = "owner_claim: service_asserted by "
+
+
+def owner_claim_refs(principal: OfficePrincipal) -> list[dict[str, str]]:
+    return [{"kind": "source", "ref": f"{OWNER_CLAIM_REF_PREFIX}{principal.name}"}]
+
+
+def log_owner_promotion(principal: OfficePrincipal, task_id: str) -> None:
+    """Без текста сообщения: только кто заявил владельца и какая задача поднята."""
+    log.info("office owner dispatch: task=%s promoted to dot on owner claim asserted "
+             "by principal=%s project=%s", task_id, principal.name, principal.project)
 
 
 def is_owner_message(principal: OfficePrincipal, origin: dict[str, Any],

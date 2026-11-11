@@ -236,7 +236,8 @@ async def test_hidden_event_is_excluded_from_search_candidates(pg_db):
         return {r[0] for r in found.rows}
 
     assert event_id in await ids()
-    await write_tools.hide_event(event_id, _Ctx())
+    from vera_shared.journal import proposals
+    await proposals.approve((await write_tools.hide_event(event_id, _Ctx()))["proposal_id"])
     assert event_id not in await ids()
     window = (now - timedelta(days=1), now + timedelta(days=1))
     found = await retrieval.fetch_candidates(

@@ -15,6 +15,7 @@ from vera_shared.db.models_mcp import McpAuditRow
 from vera_shared.events.edit import EventBusy, EventNotFound
 from vera_shared.graph.edit import GraphEditError
 from vera_shared.graph.merge_errors import MergeError
+from vera_shared.journal import proposals
 from vera_shared.journal.audit import AuditNotFound
 from vera_shared.journal.undo import UndoRefused
 from vera_shared.memory.remember import RememberOutcome
@@ -50,8 +51,33 @@ async def event(event_id: int = 1) -> EventRow:
 
 
 async def audit_rows() -> list[McpAuditRow]:
+    """Применённые правки; предложения (ждут владельца) — отдельно, см. proposal_rows."""
     async with get_session() as s:
-        return list((await s.execute(select(McpAuditRow).order_by(McpAuditRow.id))).scalars())
+        return list((await s.execute(
+            select(McpAuditRow).where(McpAuditRow.target_kind != proposals.PROPOSAL_KIND)
+            .order_by(McpAuditRow.id))).scalars())
+
+
+async def proposal_rows() -> list[McpAuditRow]:
+    async with get_session() as s:
+        return list((await s.execute(
+            select(McpAuditRow).where(McpAuditRow.target_kind == proposals.PROPOSAL_KIND)
+            .order_by(McpAuditRow.id))).scalars())
+
+
+# Разрушительные инструменты только предлагают правку; применяет владелец
+# (dashboard /approvals → proposals.approve). Хелперы проходят оба шага.
+async def hide(event_id: int, c) -> dict:
+    return await proposals.approve((await w.hide_event(event_id, c))["proposal_id"])
+
+
+async def retire(rel_id: int, c) -> dict:
+    return await proposals.approve((await w.relationship_retire(rel_id, c))["proposal_id"])
+
+
+async def merge(keep: int, drops: list[int], reason: str, c, force: bool = False) -> dict:
+    proposed = await w.entity_merge(keep, drops, reason, c, dry_run=False, force=force)
+    return await proposals.approve(proposed["proposal_id"])
 
 
 # ─── remember ────────────────────────────────────────────────────────────────
@@ -140,7 +166,7 @@ async def test_update_event_metadata_only_does_not_requeue(sqlite_db):
 
 async def test_update_event_on_hidden_event_stays_hidden(sqlite_db):
     await add_event(1, "old")
-    await w.hide_event(1, ctx())
+    await hide(1, ctx())
     await w.update_event(1, ctx(), content_text="new")
     assert (await event()).triage_status == "hidden"
 
@@ -181,7 +207,7 @@ async def test_update_event_validation(sqlite_db):
 
 async def test_hide_and_unhide_restore_the_exact_previous_status(sqlite_db):
     await add_event(1, "broken", status="error", triage_metadata={"k": 1})
-    res = await w.hide_event(1, ctx())
+    res = await hide(1, ctx())
     assert res["hidden"] is True
     assert (await event()).triage_status == "hidden"
     await w.unhide_event(1, ctx())
@@ -192,8 +218,8 @@ async def test_hide_and_unhide_restore_the_exact_previous_status(sqlite_db):
 
 async def test_hide_twice_keeps_original_status(sqlite_db):
     await add_event(1, "x", status="done")
-    await w.hide_event(1, ctx())
-    await w.hide_event(1, ctx())
+    await hide(1, ctx())
+    await hide(1, ctx())
     await w.unhide_event(1, ctx())
     assert (await event()).triage_status == "done"
 
@@ -206,14 +232,14 @@ async def test_unhide_without_hide_changes_nothing(sqlite_db):
 
 async def test_hide_undo_restores_status(sqlite_db):
     await add_event(1, "x", status="done")
-    res = await w.hide_event(1, ctx())
+    res = await hide(1, ctx())
     await w.undo(res["audit_id"], ctx())
     assert (await event()).triage_status == "done"
 
 
 async def test_hide_undo_refused_after_unhide(sqlite_db):
     await add_event(1, "x", status="done")
-    hid = await w.hide_event(1, ctx())
+    hid = await hide(1, ctx())
     await w.unhide_event(1, ctx())
     with pytest.raises(UndoRefused, match="force"):
         await w.undo(hid["audit_id"], ctx())
@@ -289,7 +315,7 @@ async def test_relationship_set_new_then_undo_retires(sqlite_db):
 async def test_relationship_set_existing_updates_and_undo_restores(sqlite_db):
     a, b = await add_entity("A"), await add_entity("B")
     first = await w.relationship_set(a, b, "friend_of", ctx(), fact="v1", confidence=0.5)
-    await w.relationship_retire(first["relationship_id"], ctx())
+    await retire(first["relationship_id"], ctx())
     second = await w.relationship_set(a, b, "friend_of", ctx(), fact="v2", confidence=0.9)
     assert second["created"] is False
     assert second["relationship_id"] == first["relationship_id"]
@@ -304,7 +330,7 @@ async def test_relationship_set_existing_updates_and_undo_restores(sqlite_db):
 async def test_relationship_retire_and_undo(sqlite_db):
     a, b = await add_entity("A"), await add_entity("B")
     made = await w.relationship_set(a, b, "boss_of", ctx())
-    res = await w.relationship_retire(made["relationship_id"], ctx())
+    res = await retire(made["relationship_id"], ctx())
     assert (await rel_row(made["relationship_id"])).is_current is False
     await w.undo(res["audit_id"], ctx())
     assert (await rel_row(made["relationship_id"])).is_current is True
@@ -327,7 +353,7 @@ async def test_relationship_validation(sqlite_db):
     with pytest.raises(GraphEditError, match="not found"):
         await w.relationship_set(a, 999, "friend_of", ctx())
     with pytest.raises(GraphEditError, match="not found"):
-        await w.relationship_retire(999, ctx())
+        await retire(999, ctx())
     assert await audit_rows() == []
 
 
@@ -336,7 +362,7 @@ async def test_relationship_validation(sqlite_db):
 
 async def test_undo_twice_and_undo_of_undo_are_refused(sqlite_db):
     await add_event(1, "x")
-    hid = await w.hide_event(1, ctx())
+    hid = await hide(1, ctx())
     undone = await w.undo(hid["audit_id"], ctx("codex"))
     assert undone["undone"] == hid["audit_id"]
     with pytest.raises(UndoRefused, match="already undone"):
@@ -363,7 +389,7 @@ async def test_undo_unsupported_kind(sqlite_db):
 
 async def test_hide_undo_does_not_overwrite_a_text_edit_made_while_hidden(sqlite_db):
     await add_event(1, "v0", status="done")
-    hid = await w.hide_event(1, ctx())
+    hid = await hide(1, ctx())
     await w.update_event(1, ctx(), content_text="v1", metadata={"k": "new"})
     await w.undo(hid["audit_id"], ctx())
     ev = await event()
@@ -374,7 +400,7 @@ async def test_hide_undo_does_not_overwrite_a_text_edit_made_while_hidden(sqlite
 async def test_text_undo_does_not_overwrite_a_later_hide(sqlite_db):
     await add_event(1, "v0", status="done")
     edit = await w.update_event(1, ctx(), content_text="v1")
-    await w.hide_event(1, ctx())
+    await hide(1, ctx())
     await w.undo(edit["audit_id"], ctx())
     ev = await event()
     assert ev.content_text == "v0"
@@ -383,15 +409,15 @@ async def test_text_undo_does_not_overwrite_a_later_hide(sqlite_db):
 
 async def test_unhide_undo_hides_again_and_refuses_after_later_change(sqlite_db):
     await add_event(1, "x", status="done")
-    await w.hide_event(1, ctx())
+    await hide(1, ctx())
     shown = await w.unhide_event(1, ctx())
     await w.undo(shown["audit_id"], ctx())
     assert (await event()).triage_status == "hidden"
 
     await add_event(2, "y", status="done")
-    await w.hide_event(2, ctx())
+    await hide(2, ctx())
     shown = await w.unhide_event(2, ctx())
-    await w.hide_event(2, ctx())
+    await hide(2, ctx())
     with pytest.raises(UndoRefused, match="force"):
         await w.undo(shown["audit_id"], ctx())
 
@@ -405,7 +431,7 @@ async def test_busy_event_is_not_edited_or_hidden(sqlite_db, status):
     with pytest.raises(EventBusy, match=status):
         await w.update_event(1, ctx(), content_text="y")
     with pytest.raises(EventBusy):
-        await w.hide_event(1, ctx())
+        await hide(1, ctx())
     assert (await event()).content_text == "x"
     assert await audit_rows() == []
 
@@ -440,7 +466,7 @@ async def test_entity_merge_audits_report_and_undo_restores_the_duplicate(sqlite
     keep, dup, other = await add_entity("Keep"), await add_entity("Dup"), await add_entity("O")
     await w.entity_add_alias(dup, "telegram", "user:9", ctx())
     await w.relationship_set(dup, other, "friend_of", ctx())
-    res = await w.entity_merge(keep, [dup], "same person", ctx("codex"), dry_run=False)
+    res = await merge(keep, [dup], "same person", ctx("codex"))
     assert res["keep_id"] == keep and res["merged"] == [dup] and res["counts"]
     assert dup not in await _names()
     async with get_session() as s:
@@ -462,7 +488,7 @@ async def test_entity_merge_audits_report_and_undo_restores_the_duplicate(sqlite
 
 async def test_merge_undo_via_generic_undo_and_refusals(sqlite_db):
     keep, dup = await add_entity("Keep"), await add_entity("Dup")
-    res = await w.entity_merge(keep, [dup], "same person", ctx(), dry_run=False)
+    res = await merge(keep, [dup], "same person", ctx())
     await w.entity_rename(keep, "Renamed", ctx())
     with pytest.raises(UndoRefused, match="force"):
         await w.undo(res["audit_id"], ctx())
@@ -474,7 +500,7 @@ async def test_merge_undo_via_generic_undo_and_refusals(sqlite_db):
 
 async def test_merge_undo_refused_when_the_dropped_id_is_taken(sqlite_db):
     keep, dup = await add_entity("Keep"), await add_entity("Dup")
-    res = await w.entity_merge(keep, [dup], "same person", ctx(), dry_run=False)
+    res = await merge(keep, [dup], "same person", ctx())
     await add_entity("Newcomer", entity_id=dup)
     with pytest.raises(UndoRefused, match="заняты"):
         await w.undo(res["audit_id"], ctx())
@@ -483,12 +509,12 @@ async def test_merge_undo_refused_when_the_dropped_id_is_taken(sqlite_db):
 async def test_merge_validation_and_unmerge_of_other_tool(sqlite_db):
     keep = await add_entity("Keep")
     with pytest.raises(MergeError):
-        await w.entity_merge(keep, [keep], "self merge", ctx(), dry_run=False)
+        await merge(keep, [keep], "self merge", ctx())
     with pytest.raises(MergeError, match="не найдена"):
-        await w.entity_merge(keep, [999], "ghost", ctx(), dry_run=False)
+        await merge(keep, [999], "ghost", ctx())
     assert await audit_rows() == []
     hid = await add_event(1, "x")
-    shown = await w.hide_event(hid, ctx())
+    shown = await hide(hid, ctx())
     with pytest.raises(ValueError, match="not entity_merge"):
         await w.entity_unmerge(shown["audit_id"], ctx())
 
@@ -521,9 +547,9 @@ async def test_merge_of_the_owner_needs_force(sqlite_db):
     assert preview["would_be_refused"] is True and "owner" in preview["blockers"][0]
     assert preview["counts"] is None
     with pytest.raises(MergeBlocked, match="force=true"):
-        await w.entity_merge(owner, [dup], "same person", ctx(), dry_run=False)
+        await merge(owner, [dup], "same person", ctx())
     assert dup in await _names()
-    forced = await w.entity_merge(owner, [dup], "same person", ctx(), dry_run=False, force=True)
+    forced = await merge(owner, [dup], "same person", ctx(), force=True)
     assert forced["merged"] == [dup]
     assert dup not in await _names()
 
@@ -536,8 +562,8 @@ async def test_merge_of_an_entity_with_identity_nodes_needs_force(sqlite_db):
     async with get_session() as s:
         s.add(IdentityNodeRow(type="style", label="tone", listener_entity_id=dup))
     with pytest.raises(MergeBlocked, match="identity nodes"):
-        await w.entity_merge(keep, [dup], "same person", ctx(), dry_run=False)
-    forced = await w.entity_merge(keep, [dup], "same person", ctx(), dry_run=False, force=True)
+        await merge(keep, [dup], "same person", ctx())
+    forced = await merge(keep, [dup], "same person", ctx(), force=True)
     assert forced["audit_id"]
 
 
@@ -600,3 +626,74 @@ async def test_relationship_set_survives_a_concurrent_insert_of_the_same_triple(
     assert (row.fact, row.confidence) == ("loser", 0.9)
     async with get_session() as s:
         assert len((await s.execute(select(RelationshipRow))).scalars().all()) == 1
+
+
+# ─── разрушительные правки ждут владельца ────────────────────────────────────
+
+
+async def test_destructive_tools_only_propose_and_change_nothing(sqlite_db):
+    await add_event(1, "x", status="done")
+    a, b = await add_entity("A"), await add_entity("B")
+    rel = await w.relationship_set(a, b, "boss_of", ctx())
+    applied_before = len(await audit_rows())
+
+    hid = await w.hide_event(1, ctx())
+    ret = await w.relationship_retire(rel["relationship_id"], ctx())
+    mer = await w.entity_merge(a, [b], "same person", ctx(), dry_run=False)
+
+    for out in (hid, ret, mer):
+        assert out["status"] == "pending_owner_approval" and out["audit_id"] is None
+        assert out["approve_at"] == "/approvals"
+    assert (await event()).triage_status == "done"
+    assert (await rel_row(rel["relationship_id"])).is_current is True
+    assert await _names() == {a: "A", b: "B"}
+    assert len(await audit_rows()) == applied_before
+    rows = await proposal_rows()
+    assert [r.tool for r in rows] == ["hide_event", "relationship_retire", "entity_merge"]
+    assert {r.status for r in rows} == {"proposed"}
+    assert rows[0].after["preview"]["excerpt"] == "x"
+
+
+async def test_undo_cannot_apply_or_touch_a_proposal(sqlite_db):
+    await add_event(1, "x", status="done")
+    out = await w.hide_event(1, ctx())
+    with pytest.raises(UndoRefused, match="proposal"):
+        await w.undo(out["proposal_id"], ctx())
+    assert (await event()).triage_status == "done"
+
+
+async def test_approve_applies_once_and_reject_closes(sqlite_db):
+    await add_event(1, "x", status="done")
+    await add_event(2, "y", status="done")
+    first = await w.hide_event(1, ctx("codex"))
+    applied = await proposals.approve(first["proposal_id"])
+    assert (await event()).triage_status == "hidden"
+    with pytest.raises(proposals.ProposalNotPending):
+        await proposals.approve(first["proposal_id"])
+    row = (await proposal_rows())[0]
+    assert row.status == "approved" and row.after["applied_audit_id"] == applied["audit_id"]
+    applied_row = (await audit_rows())[-1]
+    assert (applied_row.tool, applied_row.client) == ("hide_event", "codex")
+
+    second = await w.hide_event(2, ctx())
+    await proposals.reject(second["proposal_id"])
+    assert (await event(2)).triage_status == "done"
+    with pytest.raises(proposals.ProposalNotPending):
+        await proposals.approve(second["proposal_id"])
+    assert await proposals.pending() == []
+
+
+async def test_failed_approval_stays_pending(sqlite_db):
+    await add_event(1, "x", status="done")
+    out = await w.hide_event(1, ctx())
+    async with get_session() as s:
+        (await s.get(EventRow, 1)).triage_status = "processing"
+    with pytest.raises(EventBusy):
+        await proposals.approve(out["proposal_id"])
+    assert [r.id for r in await proposals.pending()] == [out["proposal_id"]]
+
+
+async def test_proposal_for_missing_target_is_refused_up_front(sqlite_db):
+    with pytest.raises(EventNotFound):
+        await w.hide_event(404, ctx())
+    assert await proposal_rows() == []

@@ -65,18 +65,24 @@ async def test_create_opens_room_task_in_principal_project():
     assert made["revision"] > 0
 
 
-async def test_verified_owner_dm_is_routed_to_dot(monkeypatch):
+async def test_verified_owner_dm_is_routed_to_dot(monkeypatch, caplog):
     monkeypatch.setenv("OWNER_TELEGRAM_ID", "169510539")
     principal = OfficePrincipal(name="veranda_bot", project="Veranda")
     origin = {**ORIGIN, "from_id": 169510539, "chat": "169510539"}
     recipient = {**RECIPIENT, "chat": "169510539"}
-    made = await _create(principal, cid="owner-dm", origin=origin, recipient=recipient)
+    with caplog.at_level("INFO", logger="vera_shared.office.owner_routing"):
+        made = await _create(principal, cid="owner-dm", origin=origin, recipient=recipient)
     from vera_shared.db.engine import get_session
     async with get_session() as s:
         task = await s.get(RoomTaskRow, (ROOM, made["task_id"]))
     assert task.auto_pickup and task.responsible == "dot"
     assert {r["ref"] for r in task.refs} >= {
-        "owner_dispatch: dot", "result_recipient: dot"}
+        "owner_dispatch: dot", "result_recipient: dot",
+        "owner_claim: service_asserted by veranda_bot"}
+    promoted = [r.getMessage() for r in caplog.records if "owner dispatch" in r.getMessage()]
+    assert len(promoted) == 1
+    assert made["task_id"] in promoted[0] and "principal=veranda_bot" in promoted[0]
+    assert "Заказать воду" not in promoted[0] and "Вода" not in promoted[0]
 
 
 async def test_owner_in_allowed_group_is_routed_once(monkeypatch):
@@ -125,7 +131,8 @@ async def test_non_owner_or_non_allowed_chat_is_not_auto_routed(monkeypatch, ori
     async with get_session() as s:
         task = await s.get(RoomTaskRow, (ROOM, made["task_id"]))
     assert not task.auto_pickup and task.responsible is None
-    assert not any(r["ref"].startswith("owner_dispatch:") for r in task.refs)
+    assert not any(r["ref"].startswith(("owner_dispatch:", "owner_claim:"))
+                   for r in task.refs)
 
 
 async def test_same_payload_returns_existing_task_without_duplicates():
