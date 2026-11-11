@@ -22,9 +22,8 @@ NOW = datetime(2026, 11, 11, 8, 0, tzinfo=UTC)
 
 
 def report(pending) -> HourlyReport:
-    rep = HourlyReport(NOW, NOW - timedelta(hours=1), [], [], {})
-    rep.pending_cancellations = pending
-    return rep
+    return HourlyReport(NOW, NOW - timedelta(hours=1), [], [], {},
+                        pending_cancellations=pending)
 
 
 def row(task_id: str) -> SimpleNamespace:

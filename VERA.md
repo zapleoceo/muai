@@ -114,6 +114,7 @@ vera3/
 | Vision/OCR pipeline | [`vera3/docs/media-worker.md`](vera3/docs/media-worker.md) |
 | Entity dedup and merge | [`vera3/docs/graph-dedup.md`](vera3/docs/graph-dedup.md) |
 | HTTP surface | [`vera3/docs/api.md`](vera3/docs/api.md) |
+| Пульт зависших задач, кнопки владельца | [`vera3/docs/stall-board.md`](vera3/docs/stall-board.md) |
 | Auth boundaries, secrets | [`vera3/docs/security.md`](vera3/docs/security.md) |
 | Code style (binding) | [`vera3/docs/conventions.md`](vera3/docs/conventions.md) |
 

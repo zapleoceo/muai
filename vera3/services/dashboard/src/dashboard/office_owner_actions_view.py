@@ -28,7 +28,7 @@ def owner_actions_bar(item) -> str:
     if row.status in FINAL:
         return ""
     base = f"/tasks/{quote(row.room, safe='')}/{quote(row.task_id, safe='')}"
-    paused = getattr(item.attention, "state", None) == PAUSED
+    paused = getattr(getattr(item, "attention", None), "state", None) == PAUSED
     snooze = f"Ждать {SNOOZE.days} {days_word(SNOOZE.days)}"
     pause = (_form(f"{base}/resume", "Снять паузу", "Снять паузу: кнопка страницы офиса")
              if paused else _form(f"{base}/pause", "Пауза", "Пауза: кнопка страницы офиса"))

@@ -338,7 +338,7 @@ def test_current_handoff_remains_visible_when_waiting_without_live_lease() -> No
     assert report.cards[0].status == "Новая / в очереди"
 
 
-def test_modal_is_read_only_and_escapes_task_history() -> None:
+def test_modal_escapes_task_history_and_offers_only_owner_actions() -> None:
     row = task("modal", holder="dot")
     row.note = "Описание <script>alert(1)</script>"
     row.refs = [{"kind": "source", "ref": "<img onerror=alert(2)>"}]
@@ -353,6 +353,8 @@ def test_modal_is_read_only_and_escapes_task_history() -> None:
     assert "Результат готов" in html and "История" in html
     assert "&lt;script&gt;" in html and "<script>" not in html
     assert "&lt;bad&gt;" in html and "<bad>" not in html
-    assert "<form" not in html
+    # единственные формы — кнопки владельца, и все они ведут на маршруты /tasks/... под воротами
+    actions = [part.split('"', 1)[0] for part in html.split('action="')[1:]]
+    assert actions and all(a.startswith("/tasks/main/modal/") for a in actions)
     assert "Вопросов нет" not in html
     assert "Вопросов нет" in modal_body(SimpleNamespace(row=row), [], [])
