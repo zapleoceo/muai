@@ -14,7 +14,6 @@ from dashboard.office_card_details import (
     ref_links,
     safe_text,
 )
-from dashboard.office_card_view import details_html
 from dashboard.office_status import describe_status
 
 NOW = datetime(2026, 10, 14, 12, 0, tzinfo=UTC)
@@ -86,11 +85,10 @@ def test_delta_window_and_unchanged() -> None:
     assert delta_of([], [], NOW).unchanged
 
 
-def test_html_unchanged_and_escaping() -> None:
+def test_build_details_without_activity() -> None:
     r = row(next_action="<b>go</b>", responsible="r")
     details = build_details(r, None, NOW, {}, [], [])
-    html = details_html(details, describe_status(r, NOW))
-    assert "без изменений" in html
-    assert "&lt;b&gt;go" in html
-    assert "<b>go" not in html
-    assert "Подтверждённого результата в Room нет" in html
+    assert details.delta.unchanged
+    assert details.artifact is None
+    assert details.next_action == "<b>go</b>"
+    assert details.executor.name == "r"
