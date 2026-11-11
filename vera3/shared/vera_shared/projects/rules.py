@@ -8,12 +8,21 @@
 - Любой чат с «Veranda»/«Веранда» в названии = проект veranda.
 - Люди наследуют проект(ы) из чатов, где они участвуют (могут быть в нескольких).
 - Почтовый аккаунт *@itstep.org = проект itstep.
+
+Это единственный словарь проектов: триаж (`brain_triage.postprocess`,
+схема и промпт) и маршрут голосовых просьб (`voice_help.policy`) берут его
+отсюда, а не держат свои копии.
 """
 from __future__ import annotations
 
 import functools
 import os
 import re
+
+#: Закрытый словарь проектов. Порядок значим: так он показывается модели в
+#: промпте триажа.
+PROJECTS: tuple[str, ...] = ("itstep", "veranda", "family", "personal", "news", "other")
+VALID_PROJECTS: frozenset[str] = frozenset(PROJECTS)
 
 # Владелец (Дима) — ось всего, из «людей проекта» исключается.
 OWNER_TG_ID = int(os.environ.get("OWNER_TELEGRAM_ID", "169510539"))
@@ -42,7 +51,11 @@ QUERY_TRIGGERS: dict[str, tuple[str, ...]] = {
     "veranda": ("verand", "веранд"),
 }
 
-VALID_PROJECTS = {"itstep", "veranda", "family", "personal", "news", "other"}
+# Проект → подстроки в app/окне ноутбука, кроме NAME_RULES: рабочие системы
+# IT STEP (Sintegrum, Jira) открываются в окнах без слова itstep.
+APP_RULES: dict[str, tuple[str, ...]] = {
+    "itstep": ("itstep", "sintegrum", "jira"),
+}
 
 
 def folder_to_project(folder_title: str | None) -> str | None:
@@ -61,6 +74,26 @@ def match_name(chat_title: str | None) -> str | None:
     for project, subs in NAME_RULES.items():
         if any(s in low for s in subs):
             return project
+    return None
+
+
+def project_key(name: str | None) -> str | None:
+    """Имя проекта в любом регистре → ключ словаря (или None).
+
+    Комната пишет проекты с заглавной (`Veranda`, см. docs/office-intake.md),
+    словарь — строчными; сравнивать их можно только через этот ключ.
+    Хранимые значения не переписываются."""
+    key = (name or "").strip().casefold()
+    return key if key in VALID_PROJECTS else None
+
+
+def match_context(text: str | None) -> str | None:
+    """Проект по подстроке в app/окне: APP_RULES, затем NAME_RULES."""
+    low = (text or "").lower()
+    for rules in (APP_RULES, NAME_RULES):
+        for project, subs in rules.items():
+            if any(s in low for s in subs):
+                return project
     return None
 
 

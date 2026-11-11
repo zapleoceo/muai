@@ -95,7 +95,9 @@ exactly what reaches the provider.
 Constants: `brain_triage.schemas.TRIAGE_JSON_SCHEMA`,
 `vera_shared.graph.rel_extract.REL_EXTRACT_JSON_SCHEMA`. Both are built
 from the same enum sources the code already validates against
-(`PROJECT_VOCAB`, `PREDICATES`) so the schema and the client-side
+(`PROJECT_VOCAB`, `PREDICATES`; `PROJECT_VOCAB` is itself
+`vera_shared.projects.rules.VALID_PROJECTS`, the only project vocabulary)
+so the schema and the client-side
 `postprocess_triage()` / predicate check can't silently drift apart —
 see `vera3/tests/unit/test_triage_json_schema.py` and
 `test_rel_extract_schema.py` for the drift guards.
@@ -836,7 +838,9 @@ from sums rather than silently treated as zero.
 если содержательных слов нет или они ничего не нашли. Слова-триггеры самого
 проекта («Веранда») в tsquery не попадают: внутри проекта они есть везде.
 Проект определяет `vera_shared.projects.rules` (`QUERY_TRIGGERS`,
-`project_from_query`) — те же правила, что у `sync_projects`; своих реестров
+`project_from_query`) — те же правила, что у `sync_projects`, триажа
+(`PROJECTS`/`VALID_PROJECTS`, `project_key`) и голосового маршрута
+(`APP_RULES`, `match_context`); своих реестров
 ящиков и чатов (`PROJECT_ALIASES`, ILIKE по account, `chat_title = ANY`) у
 поиска больше нет: колонка `events.project` заполнена у 99.8% событий
 (532 из 471 тыс. — NULL; замер 2026-10-03).

@@ -120,8 +120,9 @@
 
 **Задача** (`vera_shared/voice_help/room_intake.py`, `open_help_task`):
 `room=help_room()` (`VOICE_HELP_ROOM`, по умолчанию `main`), `task_id=help-<command_id>`,
-`project=project_for(app, window)` (правило в `voice_help/policy.py`,
-`PROJECT_RULES`, иначе `Vera`), `priority=0`, `auto_pickup=True` только для
+`project=project_for(app, window)` (подстроки из общего словаря
+`vera_shared.projects.rules`: `APP_RULES`, затем `NAME_RULES` через
+`match_context`; иначе `Vera`), `priority=0`, `auto_pickup=True` только для
 подтверждённого источника (задачу выдаёт `room_task_next`). Неподтверждённая
 задача создаётся с `auto_pickup=False` до вопроса; явное «да, это я» включает
 `auto_pickup` под блокировкой строки вместе с `source_confirmed`.
@@ -130,7 +131,7 @@
 владелец подтверждён — заголовок «Срочно: <текст>», `next_action` —
 поручение и `SAFETY_NOTE` («Срочность не снимает подтверждений…») —
 `normal_action`. Поручение про dot/ChatGPT (`routes_to_dot`, список
-`DOT_NEEDLES` рядом с `PROJECT_RULES`, без регистра, после вычистки) —
+`DOT_NEEDLES` в `voice_help/policy.py`, без регистра, после вычистки) —
 `responsible` прежний, в `refs` `source` — `RESULT_RECIPIENT_REF`
 (`result_recipient: dot`), в `next_action` — `DOT_RESULT_NOTE` («результат —
 room_post to=dot с task_id; закрывать только по receipt»).

@@ -20,8 +20,10 @@
   т.е. запись реестра `имя:Veranda:токен`. Доказательство: prod `room_tasks.project` (read-only
   SELECT) содержит `Vera`, `Orchestra`, `Lamas`, `Sintegrum`, `SinHRM` и т.д. — все с заглавной,
   значения `Veranda` пока нет. Регистр значим (проект задачи берётся из принципала), `veranda`
-  создал бы отдельный проект. Замечание: `PROJECT_RULES` в `vera_shared/voice_help/policy.py`
-  использует нижний регистр (`veranda`, `itstep`) — расхождение с конвенцией комнаты, здесь не правится.
+  создал бы отдельный проект. Замечание: голосовой маршрут (`voice_help.policy.project_for`) отдаёт ключ общего
+  словаря `vera_shared.projects.rules` в нижнем регистре (`veranda`, `itstep`) - расхождение с
+  конвенцией комнаты. Хранимые значения не переписаны; сравнивать проект комнаты со словарём -
+  только через `projects.rules.project_key` (casefold).
 - Принципал `OfficePrincipal(name, project, type="service", own_tasks=True)` определяется только
   аутентификацией; поля тела запроса его не задают. Проект задачи берётся из принципала.
 - `acl.authorize` — deny-by-default: разрешены лишь действия `create`, `answer`, `list`, `delivered`.

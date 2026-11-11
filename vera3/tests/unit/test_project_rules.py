@@ -76,3 +76,37 @@ class TestOwner:
 
     def test_owner_id_constant(self):
         assert OWNER_TG_ID == 169510539
+
+
+class TestSharedVocabulary:
+    """Словарь проектов один: триаж и голосовой маршрут берут его отсюда."""
+
+    def test_project_key_is_case_insensitive(self):
+        from vera_shared.projects.rules import project_key
+        assert project_key("Veranda") == "veranda"
+        assert project_key(" ITSTEP ") == "itstep"
+        assert project_key("Vera") is None
+        assert project_key(None) is None
+
+    def test_match_context_app_rules_before_names(self):
+        from vera_shared.projects.rules import match_context
+        assert match_context("chrome.exe SIN-4792 - Jira") == "itstep"
+        assert match_context("Telegram.exe Веранда - финансы") == "veranda"
+        assert match_context("jira veranda") == "itstep"
+        assert match_context(None) is None
+
+    def test_rules_only_name_valid_projects(self):
+        from vera_shared.projects.rules import (
+            ACCOUNT_RULES, APP_RULES, FOLDER_TO_PROJECT, NAME_RULES,
+            PROJECTS, QUERY_TRIGGERS, VALID_PROJECTS,
+        )
+        assert set(PROJECTS) == VALID_PROJECTS
+        named = (set(FOLDER_TO_PROJECT.values()) | set(NAME_RULES)
+                 | set(ACCOUNT_RULES) | set(QUERY_TRIGGERS) | set(APP_RULES))
+        assert named <= VALID_PROJECTS
+
+    def test_voice_route_uses_shared_vocabulary(self):
+        from vera_shared.projects.rules import VALID_PROJECTS
+        from vera_shared.voice_help.policy import DEFAULT_PROJECT, project_for
+        assert project_for("Telegram.exe", "Veranda chat") in VALID_PROJECTS
+        assert project_for("Code.exe", "myAI") == DEFAULT_PROJECT

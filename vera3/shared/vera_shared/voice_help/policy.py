@@ -13,6 +13,8 @@ import os
 import re
 from datetime import timedelta
 
+from vera_shared.projects.rules import match_context
+
 CONFIRM_BELOW = 0.75
 #: Нет claim за столько — эскалация dot; за столько — ещё напоминание владельцу.
 ESCALATE_AFTER = timedelta(minutes=5)
@@ -23,15 +25,6 @@ RESPONSIBLE = "Claude"
 ESCALATE_TO = "dot"
 DEFAULT_PROJECT = "Vera"
 
-#: Правило маршрутизации — одно: подстрока app/window → проект комнаты.
-#: Первое совпадение выигрывает; ничего не подошло — DEFAULT_PROJECT.
-PROJECT_RULES: tuple[tuple[str, str], ...] = (
-    ("itstep", "itstep"),
-    ("sintegrum", "itstep"),
-    ("jira", "itstep"),
-    ("veranda", "veranda"),
-    ("веранда", "veranda"),
-)
 
 #: Поручение про dot / ChatGPT — результат получает dot: подстрока в начале слова
 #: (после `redact_secrets`, без учёта регистра) → ref `result_recipient: dot` и
@@ -70,11 +63,10 @@ def help_room() -> str:
 
 
 def project_for(app: str | None, window_title: str | None) -> str:
-    where = f"{app or ''} {window_title or ''}".lower()
-    for needle, project in PROJECT_RULES:
-        if needle in where:
-            return project
-    return DEFAULT_PROJECT
+    """Подстрока app/window → проект по общему словарю (`projects.rules`),
+    ничего не подошло — DEFAULT_PROJECT. Ключ словаря строчный, а комната
+    пишет проекты с заглавной: сравнивать через `projects.rules.project_key`."""
+    return match_context(f"{app or ''} {window_title or ''}") or DEFAULT_PROJECT
 
 
 def routes_to_dot(clean: str) -> bool:
