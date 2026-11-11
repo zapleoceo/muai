@@ -181,6 +181,27 @@ def test_validate_tokens_fails_on_a_short_token_naming_the_client():
     assert validate_tokens({}) == {}
 
 
+@pytest.mark.parametrize("env", [
+    {"MCP_TOKENS": f"claude:{CLAUDE_TOKEN},codex:{CLAUDE_TOKEN}"},
+    {"MCP_TOKEN": CLAUDE_TOKEN, "MCP_TOKENS": f"codex:{CLAUDE_TOKEN}"},
+])
+def test_repeated_mcp_token_refuses_start_and_opens_nothing(env):
+    with pytest.raises(ValueError, match="same token twice") as err:
+        validate_tokens(env)
+    assert CLAUDE_TOKEN not in str(err.value)
+    assert load_tokens(env) == {}
+
+
+def test_shared_token_rules_are_one_helper():
+    from vera_shared.office import acl
+    from vera_shared.token_lists import is_strong_token, split_token_entries
+
+    assert acl.MIN_TOKEN_LEN == 32
+    assert is_strong_token("x" * 32) and not is_strong_token("x" * 31)
+    assert split_token_entries(" a:b:c:d , ,e", 3) == [["a", "b", "c:d"], ["e"]]
+    assert split_token_entries(None, 2) == []
+
+
 def test_main_refuses_to_start_with_a_weak_token(monkeypatch):
     from vera_mcp import __main__ as entry
 
