@@ -32,6 +32,9 @@ CASES = {
                 {"expected_fencing_token": "3", "stop_source": "process_absent_observed",
                  "effects": "none_known", "residual_risk_ack": "on"}, "owner_recover"),
     "start": (f"{BASE}/start", {"expected_fencing_token": "4"}, "owner_start"),
+    "continue": (f"{BASE}/move/continue", {"reason": "поехали"}, "owner_move"),
+    "snooze": (f"{BASE}/move/snooze", {"reason": "позже"}, "owner_move"),
+    "cancel": (f"{BASE}/move/cancel", {"reason": "не нужно"}, "owner_move"),
 }
 NAMES = list(CASES)
 
@@ -130,3 +133,34 @@ def test_close_qid_out_of_range_is_422_not_500(qid):
                         data={"reason": "r", "expected_fencing_token": "3"})
         assert r.status_code == 422
         op.assert_not_called()
+
+
+@pytest.mark.parametrize("action", ["continue", "snooze", "cancel"])
+def test_move_passes_action_and_reason(action):
+    with svc(action) as op, patch("dashboard.tasks_routes.load_detail",
+                                  AsyncMock(return_value=None)):
+        post(action, headers=SAME, cookies=cookie())
+        op.assert_awaited_once_with("main", "T-1", CASES[action][1]["reason"], action=action)
+
+
+def test_unknown_move_is_rejected_before_the_service():
+    with svc("continue") as op:
+        client = TestClient(app, follow_redirects=False)
+        r = client.post(f"{BASE}/move/delete", headers=SAME, cookies=cookie(),
+                        data={"reason": "r"})
+        assert r.status_code == 422
+        op.assert_not_called()
+
+
+def test_apply_pending_cancellations_is_owner_only_and_redirects():
+    target = "dashboard.office_hourly_routes.apply_pending_cancellations"
+    with patch(target, AsyncMock(return_value={"cancelled": 2, "failed": 0})) as op:
+        client = TestClient(app, follow_redirects=False)
+        path = "/office/hourly/apply-cancellations"
+        assert client.post(path, headers=SAME).status_code == 401
+        assert client.post(path, headers={"origin": "https://evil.example"},
+                           cookies=cookie()).status_code == 403
+        op.assert_not_called()
+        r = client.post(path, headers=SAME, cookies=cookie())
+        assert r.status_code == 303 and r.headers["location"] == "/office/hourly"
+        op.assert_awaited_once()

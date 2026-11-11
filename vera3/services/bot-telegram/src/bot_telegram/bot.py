@@ -11,10 +11,11 @@ from aiogram.enums import ParseMode
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
+from vera_shared.room import stall_board
 from vera_shared.room.single_executor import single_executor_mode
 from vera_shared.voice_help.result_state import log_delivery_mode
 
-from bot_telegram import dispatcher, voice_worker
+from bot_telegram import dispatcher, stall_worker, voice_worker
 from bot_telegram.brain import BrainError, ask_brain, save_event
 from bot_telegram.formatting import format_error, format_reply, plain_fallback
 
@@ -161,6 +162,20 @@ async def on_help_confirmation(callback: CallbackQuery):
             log.info("help-callback: кнопки уже сняты")
 
 
+@dp.callback_query(F.data.startswith(stall_board.PREFIX))
+async def on_stall_board(callback: CallbackQuery):
+    """Кнопки пульта зависших задач; чужое нажатие — пустой ответ без действия."""
+    if OWNER_ID == 0 or callback.from_user is None or callback.from_user.id != OWNER_ID:
+        await callback.answer()
+        return
+    try:
+        toast = await stall_worker.press(bot, OWNER_ID, callback.data or "")
+    except Exception:
+        log.exception("stall board button failed")
+        toast = "Не получилось, попробуйте ещё раз"
+    await callback.answer(toast)
+
+
 async def main():
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
     log.info("Vera 3.0 bot starting, owner=%s", OWNER_ID)
@@ -172,12 +187,16 @@ async def main():
                                  name="voice-worker")
     dispatch_worker = asyncio.create_task(dispatcher.run_forever(OWNER_ID),
                                           name="office-dispatcher")
+    workers = [worker, dispatch_worker]
+    if stall_worker.enabled():
+        workers.append(asyncio.create_task(stall_worker.run_forever(bot, OWNER_ID),
+                                           name="stall-board"))
     try:
         await dp.start_polling(bot)
     finally:
-        worker.cancel()
-        dispatch_worker.cancel()
-        await asyncio.gather(worker, dispatch_worker, return_exceptions=True)
+        for task in workers:
+            task.cancel()
+        await asyncio.gather(*workers, return_exceptions=True)
 
 
 if __name__ == "__main__":

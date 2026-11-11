@@ -770,3 +770,7 @@ Successful task cancellation also withdraws its open and answered questions in
 the same transaction. Already acked questions and answer rows remain unchanged.
 The single `cancelled` audit event records the cancellation reason and the
 withdrawn question IDs; authorization and fencing rules are unchanged.
+
+## Пульт зависших задач
+
+Задачи без исполнителя, вопроса владельцу, паузы или датированного ожидания дольше двух суток Вера показывает владельцу на пульте в Telegram (одно сообщение, правится на месте) и кнопками в карточке `/office/hourly`. Подробно - [stall-board.md](stall-board.md).

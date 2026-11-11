@@ -9,6 +9,11 @@ from dashboard.office_hourly_service import (
     HourlyCard,
     HourlyReport,
 )
+from dashboard.office_owner_actions_view import (
+    ACTIONS_CSS,
+    ACTIONS_JS,
+    owner_actions_bar,
+)
 from dashboard.office_runtime_summary import runtime_count, source_summaries
 from dashboard.office_status import CANCELLED, DONE, STATUSES
 from dashboard.render import esc, local_dt
@@ -189,9 +194,12 @@ def _scope_decisions(report: HourlyReport) -> str:
                      f'<small>{esc(row.project or "Без проекта")} · запись Room: {esc(row.status)}'
                      f' · источник {esc(source)}</small></button></li>')
     return (f'<details class="kb-info"><summary>Отмена владельца ожидает записи в Room: {len(rows)}</summary>'
-            f'<p class="kb-meta">По записи Room {esc(report.scope_message_id)} эти карточки исключены '
-            'из рабочей доски. Их исходный статус и история сохранены; отмену должен записать '
-            'штатный actor создателя.</p>'
+            f'<p class="kb-meta">По записи Room {esc(report.scope_message_id)} вы решили их отменить, '
+            'но в комнате они всё ещё открыты. Кнопка ниже отменит их все от вашего имени; '
+            'история задач сохранится.</p>'
+            '<form method="post" action="/office/hourly/apply-cancellations" '
+            "onsubmit=\"return confirm('Отменить все эти задачи?')\">"
+            f'<button type="submit">Отменить все {len(rows)}</button></form>'
             f'<ul class="kb-history">{"".join(items)}</ul></details>')
 
 
@@ -233,8 +241,8 @@ def report_body(report: HourlyReport, show_closed: bool = False) -> str:
 document.addEventListener('click',async(event)=>{const button=event.target.closest('button[data-detail]');if(!button)return;trigger=button;title.textContent=button.querySelector('strong').textContent;content.textContent='Загрузка…';dialog.showModal();close.focus();if(pending)pending.abort();pending=new AbortController();try{const response=await fetch(button.dataset.detail,{credentials:'same-origin',signal:pending.signal});if(!response.ok)throw new Error('Детали недоступны ('+response.status+')');content.innerHTML=await response.text()}catch(error){if(error.name!=='AbortError')content.textContent=error.message}});
 close.addEventListener('click',()=>dialog.close());dialog.addEventListener('click',(event)=>{if(event.target===dialog)dialog.close()});dialog.addEventListener('close',()=>{if(pending)pending.abort();if(trigger)trigger.focus()});
 setInterval(()=>{if(!dialog.open)location.reload()},300000);
-})();</script>"""
-    return (f'{KANBAN_CSS}<div class="kb-head"><div><h1>Office · задачи</h1>'
+""" + ACTIONS_JS + """})();</script>"""
+    return (f'{KANBAN_CSS}{ACTIONS_CSS}<div class="kb-head"><div><h1>Office · задачи</h1>'
             f'<p class="kb-sub">Текущая координация · обновлено {local_dt(report.as_of)}</p></div>{filters}</div>'
             f'{_scope_decisions(report)}{_kanban_board(report, show_closed)}'
             f'{_excluded_scope(report, show_closed)}{summary}'
@@ -269,6 +277,6 @@ def modal_body(item, events, questions) -> str:
                             for q, _ in questions)
     history = ''.join(f'<li><span class="kb-meta">{local_dt(e.at)} · {esc(e.kind)} · {esc(e.agent or "—")}</span><br>{esc(safe_text(e.text, 2000))}</li>'
                       for e in reversed(events)) or '<li>Событий нет</li>'
-    return (f'<dl class="kb-fields">{field_html}</dl>'
+    return (f'{owner_actions_bar(item)}<dl class="kb-fields">{field_html}</dl>'
             f'<h3>Вопросы</h3><ul class="kb-history">{question_html or "<li>Вопросов нет</li>"}</ul>'
             f'<h3>История (последние 200 событий)</h3><ol class="kb-history">{history}</ol>')
