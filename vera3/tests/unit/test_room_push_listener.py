@@ -105,7 +105,7 @@ def test_wait_blocks_until_message_then_prints_it(server, monkeypatch, capsys) -
     monkeypatch.setenv("ROOM_PUSH_SECRET", SECRET)
     timer = threading.Timer(0.3, inbox.add, args=("room-msg-5", _payload(5, "привет")))
     timer.start()
-    assert mod.wait(port, None, 10.0) == 0
+    assert mod.wait(port, 0, 10.0) == 0
     out = capsys.readouterr().out
     assert "#5 dot -> claude [info]: привет" in out
     assert "latest=1" in out
