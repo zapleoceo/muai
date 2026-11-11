@@ -14,4 +14,4 @@ async def list_gmail_poll_status() -> list[tuple[str, datetime | None]]:
             select(GmailAccountRow.email, GmailAccountRow.last_polled_at)
             .order_by(GmailAccountRow.id)
         )).all()
-    return [(email, polled) for email, polled in rows]
+    return [tuple(row) for row in rows]
