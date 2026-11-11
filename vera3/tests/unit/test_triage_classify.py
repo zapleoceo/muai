@@ -67,6 +67,14 @@ class TestProject:
         assert {"itstep", "veranda", "family",
                                  "personal", "news", "other"} == PROJECT_VOCAB
 
+    def test_vocab_is_the_shared_one(self):
+        from vera_shared.projects.rules import VALID_PROJECTS
+        assert PROJECT_VOCAB is VALID_PROJECTS
+
+    def test_room_case_label_maps_to_key(self):
+        parsed = postprocess_triage({"project": " Veranda "}, "telegram")
+        assert parsed["project"] == "veranda"
+
 
 class TestEmbedSkip:
     def test_intent_sources_not_embedded(self):
@@ -92,99 +100,18 @@ class TestVocabConsistency:
         assert parsed["topics"] == ["финансы"]
 
 
-class TestReadySubtype:
-    def test_ready_deal_preserved(self):
-        parsed = postprocess_triage(
-            {
-                "needs_action": True,
-                "ready_subtype": "deal",
-                "nature": "world_event",
-                "project": "itstep",
-            },
-            "telegram",
-        )
-        assert parsed["ready_subtype"] == "deal"
+class TestReadySubtypeDropped:
+    """ready_subtype (deal/openhouse) никто не читал: поле выбрасывается,
+    колонка events.ready_subtype остаётся NULL (миграции нет)."""
 
-    def test_ready_openhouse_preserved(self):
+    def test_model_value_is_dropped(self):
         parsed = postprocess_triage(
-            {
-                "needs_action": True,
-                "ready_subtype": "openhouse",
-                "nature": "world_event",
-                "project": "itstep",
-            },
+            {"needs_action": True, "ready_subtype": "deal",
+             "nature": "world_event", "project": "itstep"},
             "telegram",
         )
-        assert parsed["ready_subtype"] == "openhouse"
+        assert "ready_subtype" not in parsed
 
-    def test_ready_subtype_normalized_to_lowercase(self):
-        parsed = postprocess_triage(
-            {
-                "needs_action": True,
-                "ready_subtype": "DEAL",  # uppercase
-                "nature": "world_event",
-                "project": "itstep",
-            },
-            "telegram",
-        )
-        assert parsed["ready_subtype"] == "deal"
-
-    def test_ready_subtype_with_whitespace_normalized(self):
-        parsed = postprocess_triage(
-            {
-                "needs_action": True,
-                "ready_subtype": "  openhouse  ",
-                "nature": "world_event",
-                "project": "itstep",
-            },
-            "telegram",
-        )
-        assert parsed["ready_subtype"] == "openhouse"
-
-    def test_ready_subtype_cleared_if_not_needs_action(self):
-        parsed = postprocess_triage(
-            {
-                "needs_action": False,
-                "ready_subtype": "deal",  # should be cleared
-                "nature": "world_event",
-                "project": "itstep",
-            },
-            "telegram",
-        )
-        assert parsed["ready_subtype"] is None
-
-    def test_ready_subtype_invalid_becomes_null(self):
-        parsed = postprocess_triage(
-            {
-                "needs_action": True,
-                "ready_subtype": "invalid_type",
-                "nature": "world_event",
-                "project": "itstep",
-            },
-            "telegram",
-        )
-        assert parsed["ready_subtype"] is None
-
-    def test_ready_subtype_null_if_missing(self):
-        parsed = postprocess_triage(
-            {
-                "needs_action": True,
-                "nature": "world_event",
-                "project": "itstep",
-                # no ready_subtype key
-            },
-            "telegram",
-        )
-        assert parsed["ready_subtype"] is None
-
-    def test_ready_subtype_null_when_needs_action_false(self):
-        parsed = postprocess_triage(
-            {
-                "needs_action": False,
-                # no ready_subtype key
-                "nature": "world_event",
-                "project": "itstep",
-            },
-            "telegram",
-        )
-        assert parsed["ready_subtype"] is None
+    def test_missing_stays_missing(self):
+        parsed = postprocess_triage({"needs_action": True}, "telegram")
+        assert "ready_subtype" not in parsed

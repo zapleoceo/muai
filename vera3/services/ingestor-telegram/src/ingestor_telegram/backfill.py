@@ -18,11 +18,10 @@ import os
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from sqlalchemy import select
 from telethon import TelegramClient
 from vera_shared.chat_activity import min_own_messages, own_message_count
-from vera_shared.db.engine import get_session, init_engine
-from vera_shared.db.models import EventRow
+from vera_shared.db.engine import init_engine
+from vera_shared.ingest import insert_events
 from vera_shared.media_policy import classify_chat_kind, media_skip_reason
 from vera_shared.timeutil import utc_naive_now
 
@@ -42,7 +41,7 @@ MAX_PER_DIALOG = int(os.environ.get("BACKFILL_MAX_PER_DIALOG", "500"))
 async def backfill_dialog(client: TelegramClient, dialog, cutoff: datetime, me,
                           min_own: int) -> int:
     """Backfill сообщений из одного диалога с момента cutoff."""
-    inserted = 0
+    specs: list[dict] = []
     try:
         async for msg in client.iter_messages(dialog.id, limit=MAX_PER_DIALOG):
             if not msg.date:
@@ -136,44 +135,41 @@ async def backfill_dialog(client: TelegramClient, dialog, cutoff: datetime, me,
 
             sid = f"tg:{dialog.id}:{msg.id}"
 
-            async with get_session() as s:
-                exists = (await s.execute(
-                    select(EventRow.id).where(
-                        EventRow.source == "telegram",
-                        EventRow.source_event_id == sid,
-                    )
-                )).scalar_one_or_none()
-                if exists:
-                    continue
-                s.add(EventRow(
-                    source="telegram",
-                    source_event_id=sid,
-                    account="userbot",
-                    category="message",
-                    content_text=content,
-                    occurred_at=msg.date.replace(tzinfo=None),
-                    metadata_={
-                        "chat_id": dialog.id,
-                        "chat_title": chat_title,
-                        "chat_kind": chat_kind,
-                        "sender_id": sender.id if sender else None,
-                        "sender_username": sender_username,
-                        "direction": direction,
-                        "author_role": author_role,
-                        "author_label": author_label,
-                        "msg_id": msg.id,
-                        "media_kind": media_kind,
-                        "media_meta": media_meta or None,
-                        "needs_recognition": needs_recognition,
-                        "media_skip_reason": skip_reason,
-                        "owner_participates": own_messages > 0,
-                    },
-                    triage_status="media_pending" if needs_recognition else "pending",
-                ))
-                inserted += 1
+            specs.append({
+                "source": "telegram",
+                "source_event_id": sid,
+                "account": "userbot",
+                "category": "message",
+                "content_text": content,
+                "occurred_at": msg.date.replace(tzinfo=None),
+                "metadata_": {
+                    "chat_id": dialog.id,
+                    "chat_title": chat_title,
+                    "chat_kind": chat_kind,
+                    "sender_id": sender.id if sender else None,
+                    "sender_username": sender_username,
+                    "direction": direction,
+                    "author_role": author_role,
+                    "author_label": author_label,
+                    "msg_id": msg.id,
+                    "media_kind": media_kind,
+                    "media_meta": media_meta or None,
+                    "needs_recognition": needs_recognition,
+                    "media_skip_reason": skip_reason,
+                    "owner_participates": own_messages > 0,
+                },
+                "triage_status": "media_pending" if needs_recognition else "pending",
+            })
     except Exception as e:
         log.warning("Dialog %s failed: %s", dialog.id, e)
-    return inserted
+    # Пишем и то, что успели собрать до сбоя диалога: раньше каждое сообщение
+    # коммитилось сразу, и частичный диалог не терялся. Дедуп — атомарный
+    # ON CONFLICT в insert_events, как у живого юзербота и шлюза.
+    try:
+        return len(await insert_events(specs))
+    except Exception as e:
+        log.warning("Dialog %s failed: %s", dialog.id, e)
+        return 0
 
 
 async def main():
