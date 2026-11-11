@@ -162,7 +162,18 @@ chat/account membership.
 ## Substrate (L1/L2/L3 graph)
 
 Materialized in Postgres. Behind `vera_shared/graph/repo.py` API so a future
-Neo4j swap is a one-file change.
+Neo4j swap stays inside `graph/`.
+
+`graph/repo.py` — тонкий фасад (с 2026-11-12): реэкспортирует публичный API,
+реализация разложена по агрегатам — `repo_entities.py` (`upsert_entity`,
+`upsert_entity_linked`), `repo_entity_lookup.py` (`find_entity_by_name`,
+`find_entity_by_alias`, `resolve_entity_exact`, `get_entity`,
+`list_relationships`), `repo_relationships.py` (`upsert_relationship` и аудит
+связей), `repo_memberships.py` (`upsert_membership`, `list_members`,
+`find_project_chats`), `repo_identity_nodes.py` (`upsert_identity_node`,
+`get_style_for_listener`, `get_global_style`), `repo_snapshot.py`
+(`graph_snapshot`, `GRAPH_MAX_NODES`). Импорт `vera_shared.graph.repo.<имя>`
+остаётся каноническим для сервисов.
 
 ### L1 — Reality
 
