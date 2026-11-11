@@ -280,6 +280,17 @@ control-событие `waiting`, raw `waiting`) само по себе не д�
 (`status_info_of`, `evidence_of`, `next_question_reminder`) живут в
 `office_hourly_status.py`, а `office_hourly_service.py` реэкспортирует их.
 
+Слои (с 2026-11-12): весь SQL часового отчёта — в `office_hourly_repo.py`:
+`load_hourly_inputs(now, window)` читает задачи, вопросы, результаты, последние
+контрольные события и следующее за блокером, runtime- и scope-записи dot и
+переходы окна одной сессией и возвращает `HourlyInputs`; там же
+`load_recent_task_events` для модалки. Разбор scope-записи dot
+(`SCOPE_PREFIX`, `parse_scope_decisions`) — в `office_scope_record.py`.
+`office_hourly_service.py` оставляет сборку отчёта (`build_report`,
+`load_report`) и реэкспортирует перенесённые имена, так что
+`dashboard.office_hourly_service.load_report`, `HourlyReport`, `HourlyCard`,
+`load_recent_task_events` импортируются как раньше.
+
 Единое правило подсчёта (`runtime_count`, `RuntimeCount`) используют глобальный,
 проектный и по-источниковый вывод. Источник учитывается, только если его собственное
 `observed_at` свежее часа, покрытие `partial` или `complete`, и источник не
