@@ -320,7 +320,7 @@ class TestLinkedEntities:
 
     До 2026-08-26 upsert_entity заводил новую запись, если своего алиаса ещё
     нет, поэтому на живых данных ни одна из 25 slack-сущностей не была связана
-    с gmail или telegram, а Yevhenii Pavlenko существовал тремя сразу.
+    с gmail или telegram, а Yevhen Testenko существовал тремя сразу.
     """
 
     async def _aliases(self, entity_id: int) -> set[tuple[str, str]]:
@@ -337,17 +337,17 @@ class TestLinkedEntities:
         from vera_shared.graph.repo import upsert_entity, upsert_entity_linked
 
         gmail_id = await upsert_entity(
-            type="person", name="Yevhenii Pavlenko",
-            source="gmail", identifier="yevhenii@sintegrum.com")
+            type="person", name="Yevhen Testenko",
+            source="gmail", identifier="yevhen@vendor.example")
 
         slack_id, how = await upsert_entity_linked(
-            type="person", name="Yevhenii Pavlenko",
+            type="person", name="Yevhen Testenko",
             source="slack", identifier="user:U123",
-            known_as=[("gmail", "yevhenii@sintegrum.com")])
+            known_as=[("gmail", "yevhen@vendor.example")])
 
         assert (slack_id, how) == (gmail_id, "linked")
         assert await self._aliases(gmail_id) == {
-            ("gmail", "yevhenii@sintegrum.com"), ("slack", "user:U123")}
+            ("gmail", "yevhen@vendor.example"), ("slack", "user:U123")}
 
     @pytest.mark.asyncio
     async def test_creates_one_person_carrying_both_aliases_when_nobody_known(self):
@@ -356,13 +356,13 @@ class TestLinkedEntities:
         from vera_shared.graph.repo import upsert_entity_linked
 
         entity_id, how = await upsert_entity_linked(
-            type="person", name="Igor Nerozya",
+            type="person", name="Ivan Petrov",
             source="slack", identifier="user:U777",
-            known_as=[("gmail", "igor@sintegrum.com")])
+            known_as=[("gmail", "ivan@vendor.example")])
 
         assert how == "new"
         assert await self._aliases(entity_id) == {
-            ("slack", "user:U777"), ("gmail", "igor@sintegrum.com")}
+            ("slack", "user:U777"), ("gmail", "ivan@vendor.example")}
 
     @pytest.mark.asyncio
     async def test_own_alias_wins_and_does_not_relink(self):

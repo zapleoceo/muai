@@ -76,7 +76,7 @@ class TestMachineSender:
         assert rel_extract_skip_reason("gmail", meta, REL_TEXT) == SKIP_MACHINE_SENDER
 
     @pytest.mark.parametrize("meta", [
-        {"from": "Ruslan Kovtiukh <kovtyukh_r@itstep.org>"},
+        {"from": "Ruslan Ivanov <ivanov_r@corp.example>"},
         {"sender_username": "zapleosoft"},
         {"from": ""},
         {},

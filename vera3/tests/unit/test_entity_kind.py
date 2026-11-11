@@ -28,11 +28,11 @@ def test_service_addresses_are_organizations(addr):
 
 @pytest.mark.parametrize("addr", [
     "zaporozec_d@itstep.org",
-    "demoniwwwe@gmail.com",
-    "kravchenko_k@itstep.org",
-    "risma@permitindo.com",
+    "jane.doe1987@example.com",
+    "kovalenko_k@corp.example",
+    "rina@vendor.example",
     "ericsimons@bolt.new",
-    "yegorov@itstep.org",
+    "petrov@corp.example",
 ])
 def test_real_people_stay_person(addr):
     assert entity_kind_for_email(addr) == "person"

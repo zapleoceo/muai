@@ -134,8 +134,8 @@ class TestSignal:
 
 class TestEntityHint:
     def test_valid_hint(self):
-        h = EntityHint(type="person", identifier="yegorov@itstep.org", name="Дмитрий Егоров")
-        assert h.identifier == "yegorov@itstep.org"
+        h = EntityHint(type="person", identifier="petrov@corp.example", name="Иван Тестов")
+        assert h.identifier == "petrov@corp.example"
 
     def test_invalid_type_rejected(self):
         with pytest.raises(ValidationError):
