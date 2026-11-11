@@ -62,7 +62,12 @@ client_task_id)`, `payload_hash`, `origin`, `result_recipient`, `context`, `atta
 когда `from_id` совпадает с ненулевым `OWNER_TELEGRAM_ID`, чат ответа совпадает
 с исходным, а исходный чат — личный чат владельца либо включён в точный список
 `OFFICE_OWNER_DISPATCH_CHATS`, задача получает `responsible=dot`,
-`auto_pickup=true` и маркер `owner_dispatch: dot`. По умолчанию в compose
+`auto_pickup=true` и маркер `owner_dispatch: dot`. Владельца здесь подтверждает
+сервис, а не Вера, поэтому такая задача несёт ещё ref
+`owner_claim: service_asserted by <принципал>` (`owner_routing.owner_claim_refs`),
+а повышение пишется в лог `log_owner_promotion` (INFO: id задачи, принципал и
+проект, без текста сообщения) - агенты и дашборд видят, на чьём слове держится
+маршрут к dot. Диспетчер этот ref не читает. По умолчанию в compose
 разрешена только группа `-1002884053196`, где был подтверждён тест владельца.
 MCP получает `OWNER_TELEGRAM_ID` из существующей настройки compose; при пустом
 или нулевом значении маршрут выключен.
