@@ -52,7 +52,7 @@ class _Session:
 def test_events_page_offers_the_listener_and_filters_by_it():
     session = _Session()
     stats = {"sources_all": [("telegram", 300000), ("slack", 900), ("voice", 113)]}
-    with patch("dashboard.events_routes.get_session", lambda: session), \
+    with patch("dashboard.events_repo.get_session", lambda: session), \
          patch("dashboard.events_routes.get_stats", AsyncMock(return_value=stats)):
         r = client.get("/events?source=voice&status=media_pending",
                        cookies={COOKIE_NAME: _owner_cookie()})

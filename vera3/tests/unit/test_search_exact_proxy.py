@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from brain_search import app as search_app
+from brain_search import search_service
 from brain_search.models import AnswerResponse, SearchQuery
 from gateway.query import SearchProxyRequest, search_proxy
 from vera_mcp import read_tools
@@ -30,11 +31,11 @@ async def test_explicit_id_survives_proxy_to_base_event(sqlite_db, monkeypatch, 
                                         "importance": row.importance, "score": 1.0}
                                        for row in rows])
 
-    monkeypatch.setattr(search_app, "synthesize", synthesize)
+    monkeypatch.setattr(search_service, "synthesize", synthesize)
     embed = AsyncMock(side_effect=AssertionError("exact lookup must skip embedding"))
     report = AsyncMock(side_effect=AssertionError("exact lookup must skip reports"))
-    monkeypatch.setattr(search_app, "embed_query", embed)
-    monkeypatch.setattr(search_app, "_try_report", report)
+    monkeypatch.setattr(search_service, "embed_query", embed)
+    monkeypatch.setattr(search_service, "try_report", report)
     question = "Check [event:900101]"
 
     async def handler(request):

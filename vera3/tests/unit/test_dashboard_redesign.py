@@ -66,7 +66,7 @@ def _event(i: int, at: datetime, text: str = "привет", account: str = "ann
 def _events(rows: list[dict], query: str = ""):
     session = _Session(rows)
     stats = {"sources_all": [("telegram", len(rows))]}
-    with patch("dashboard.events_routes.get_session", lambda: session), \
+    with patch("dashboard.events_repo.get_session", lambda: session), \
          patch("dashboard.events_routes.get_stats", AsyncMock(return_value=stats)):
         return client.get(f"/events{query}", cookies=_cookie()), session
 
@@ -213,7 +213,7 @@ class TestEvents:
                 raise DBAPIError("select", {}, Exception("canceling statement due to statement timeout"))
 
         stats = {"sources_all": []}
-        with patch("dashboard.events_routes.get_session", lambda: Slow([])),              patch("dashboard.events_routes.get_stats", AsyncMock(return_value=stats)):
+        with patch("dashboard.events_repo.get_session", lambda: Slow([])),              patch("dashboard.events_routes.get_stats", AsyncMock(return_value=stats)):
             r = client.get("/events?q=abc", cookies=_cookie())
         assert r.status_code == 200 and "Слишком долгий поиск" in r.text
 

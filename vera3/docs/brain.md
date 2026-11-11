@@ -500,7 +500,9 @@ processing is paused/paced.
 
 ## brain-search
 
-`services/brain-search/src/brain_search/app.py`
+`services/brain-search/src/brain_search/app.py` (маршрут) →
+`search_service.py` (`run_search`: ветвление вопроса по отчёту, точным id,
+цитате, времени и эмбеддингу)
 
 - `POST /search` — entry point for the Telegram bot and dashboard.
 - Hybrid retrieval: FTS (`russian` OR `indonesian`, ts_rank — see below) AND vector similarity (косинус) over Voyage embeddings.

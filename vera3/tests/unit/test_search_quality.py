@@ -423,15 +423,16 @@ async def test_out_of_steps_message_has_no_typo():
 @pytest.mark.asyncio
 async def test_search_route_strips_project_words_and_passes_project(monkeypatch):
     from brain_search import app as search_app
+    from brain_search import search_service
     from brain_search.retrieval import Candidates
 
     monkeypatch.setenv("INTERNAL_SECRET", "s")
     fetch = AsyncMock(return_value=Candidates([], "project(veranda)+fts"))
     answer = AsyncMock(return_value="ANSWER")
-    with patch.object(search_app, "_try_report", AsyncMock(return_value=None)), \
-         patch.object(search_app, "embed_query", AsyncMock(return_value=None)), \
-         patch.object(search_app, "fetch_candidates", fetch), \
-         patch.object(search_app, "synthesize", answer):
+    with patch.object(search_service, "try_report", AsyncMock(return_value=None)), \
+         patch.object(search_service, "embed_query", AsyncMock(return_value=None)), \
+         patch.object(search_service, "fetch_candidates", fetch), \
+         patch.object(search_service, "synthesize", answer):
         out = await search_app.search(
             SearchQuery(q="договор с поставщиком кальянов Веранда"), "s")
     assert out == "ANSWER"

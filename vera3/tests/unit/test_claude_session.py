@@ -9,15 +9,16 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from unittest.mock import AsyncMock, patch
 
 import pytest
 from gateway.claude_distill import SPEC, render
-from gateway.claude_session import ClaudeSession, Turn, body_text
+from gateway.claude_session_models import ClaudeSession, Turn
+from gateway.claude_session_service import body_text
 from vera_shared.llm import fold as fold_mod
 
-_T0 = datetime(2026, 8, 26, 9, 0, tzinfo=timezone.utc)
+_T0 = datetime(2026, 8, 26, 9, 0, tzinfo=UTC)
 
 _FULL = {
     "summary": "Вынесли свёртку в общий модуль и починили COM в упакованном exe.",
@@ -150,7 +151,7 @@ class TestAccept:
         from starlette.responses import Response
 
         sess = _Sess(value="26014a1e-94fe")
-        with patch("gateway.claude_session.get_session", lambda: sess), \
+        with patch("gateway.claude_session_repo.get_session", lambda: sess), \
              patch("gateway.claude_session.check_internal_secret", lambda s: None):
             res = await cs.accept_claude_session(_session(), Response(),
                                                  x_internal_secret="ok")
@@ -169,7 +170,7 @@ class TestAccept:
         from starlette.responses import Response
 
         sess = _Sess(value="26014a1e-94fe")
-        with patch("gateway.claude_session.get_session", lambda: sess), \
+        with patch("gateway.claude_session_repo.get_session", lambda: sess), \
              patch("gateway.claude_session.check_internal_secret", lambda s: None):
             res = await cs.accept_claude_session(_session(turn_count=5000), Response(),
                                                  x_internal_secret="ok")
@@ -189,7 +190,7 @@ class TestAccept:
 
         sess = _Sess(value=None)
         response = Response()
-        with patch("gateway.claude_session.get_session", lambda: sess), \
+        with patch("gateway.claude_session_repo.get_session", lambda: sess), \
              patch("gateway.claude_session.check_internal_secret", lambda s: None):
             res = await cs.accept_claude_session(_session(), response,
                                                  x_internal_secret="ok")
@@ -205,12 +206,50 @@ class TestAccept:
 
         model = AsyncMock(return_value=(json.dumps(_FULL), {}))
         with patch.object(fold_mod, "chat_async", model), \
-             patch("gateway.claude_session.get_session", lambda: _Sess(value="x")), \
+             patch("gateway.claude_session_repo.get_session", lambda: _Sess(value="x")), \
              patch("gateway.claude_session.check_internal_secret", lambda s: None):
             await cs.accept_claude_session(_session(), Response(),
                                            x_internal_secret="ok")
 
         model.assert_not_called()
+
+
+class TestStatusRoute:
+    """Статус очереди: сервис отдаёт модель или None, маршрут — 200 или 404."""
+
+    @pytest.mark.asyncio
+    async def test_unknown_session_is_404(self):
+        import gateway.claude_session as cs
+        from fastapi import HTTPException
+
+        with patch("gateway.claude_session_service.get_queued_session",
+                   AsyncMock(return_value=None)), \
+             patch("gateway.claude_session.check_internal_secret", lambda s: None), \
+             pytest.raises(HTTPException) as exc:
+            await cs.claude_session_status("nope", x_internal_secret="ok")
+        assert exc.value.status_code == 404
+
+    @pytest.mark.asyncio
+    async def test_known_session_reports_progress(self):
+        import gateway.claude_session as cs
+
+        row = _Row(status="done", done_turns=2, event_id=101, error=None)
+        with patch("gateway.claude_session_service.get_queued_session",
+                   AsyncMock(return_value=row)), \
+             patch("gateway.claude_session.check_internal_secret", lambda s: None):
+            res = await cs.claude_session_status("26014a1e-94fe", x_internal_secret="ok")
+        assert (res.status, res.turns, res.done_turns, res.event_id) == ("done", 2, 2, 101)
+
+    @pytest.mark.asyncio
+    async def test_queue_session_reports_requeue_decision(self):
+        from gateway.claude_session_service import queue_session
+
+        enqueue = AsyncMock(return_value=None)
+        with patch("gateway.claude_session_service.enqueue_session", enqueue):
+            queued, turns = await queue_session(_session(turn_count=7))
+        assert (queued, turns) == (False, 7)
+        assert enqueue.await_args.args[0] == "26014a1e-94fe"
+        assert enqueue.await_args.args[2] == 7
 
 
 class TestStoreSummary:
@@ -219,7 +258,7 @@ class TestStoreSummary:
         import gateway.claude_session as cs
 
         sess = _Sess()
-        with patch("gateway.claude_session.get_session", lambda: sess):
+        with patch("gateway.claude_session_repo.get_session", lambda: sess):
             event_id = await cs.store_summary(_Row(), _FULL, {"windows": 1})
 
         assert event_id == 101
@@ -235,7 +274,7 @@ class TestStoreSummary:
         import gateway.claude_session as cs
 
         sess = _Sess()
-        with patch("gateway.claude_session.get_session", lambda: sess):
+        with patch("gateway.claude_session_repo.get_session", lambda: sess):
             await cs.store_summary(_Row(), _FULL, {})
 
         assert sess.params["source_event_id"] == "session:26014a1e-94fe"
@@ -246,7 +285,7 @@ class TestStoreSummary:
         import gateway.claude_session as cs
 
         sess = _Sess()
-        with patch("gateway.claude_session.get_session", lambda: sess):
+        with patch("gateway.claude_session_repo.get_session", lambda: sess):
             await cs.store_summary(_Row(), _FULL, {})
 
         assert sess.params["triage_status"] == "pending"
@@ -257,7 +296,7 @@ class TestStoreSummary:
         import gateway.claude_session as cs
 
         sess = _Sess()
-        with patch("gateway.claude_session.get_session", lambda: sess):
+        with patch("gateway.claude_session_repo.get_session", lambda: sess):
             await cs.store_summary(_Row(turn_count=9), _FULL,
                                    {"windows": 3, "truncated": False})
 

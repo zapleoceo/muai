@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import base64
 import json
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from unittest.mock import AsyncMock, patch
 
@@ -166,7 +166,7 @@ async def test_claude_session_keeps_summary_past_8000():
         turn_count = 3
 
     sess = _Sess()
-    with patch("gateway.claude_session.get_session", lambda: sess):
+    with patch("gateway.claude_session_repo.get_session", lambda: sess):
         await cs.store_summary(_Row(), _LONG, {})
     body = sess.params["content_text"]
     assert len(body) > 8000 and "ПОСЛЕДНИЙ-ШАГ" in body
@@ -178,7 +178,7 @@ async def test_voice_keeps_summary_past_8000():
     from gateway.voice import Utterance, VoiceSession
     from vera_shared.llm import fold as fold_mod
 
-    t0 = datetime(2026, 9, 1, 9, 0, tzinfo=timezone.utc)
+    t0 = datetime(2026, 9, 1, 9, 0, tzinfo=UTC)
     body = VoiceSession(started_at=t0, ended_at=t0 + timedelta(minutes=5),
                         app="zoom", window_title="w",
                         utterances=[Utterance(at=0.0, stream="mic", text="привет")])

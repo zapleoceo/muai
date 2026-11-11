@@ -1,25 +1,16 @@
-"""POST /event/{source} endpoint — приём событий от ingestor'ов и webhook'ов.
-
-Дедупликация через ON CONFLICT DO NOTHING (UNIQUE constraint
-`uq_event_source_id` в db/models.py). Это закрывает race condition
-между check-and-insert при concurrent backfill + poller.
-"""
+"""POST /event/{source} — приём событий от ingestor'ов и webhook'ов;
+GET /api/events/{id} — событие по id. Логика в `events_service`, SQL в
+`events_repo`."""
 from __future__ import annotations
 
-import logging
 from typing import Any
 
 from fastapi import APIRouter, Header, HTTPException
-from sqlalchemy import select
-from sqlalchemy.dialects.postgresql import insert as pg_insert
-from vera_shared.db.engine import get_session
-from vera_shared.db.models import EventRow
 from vera_shared.events.schema import RawEvent
-from vera_shared.redact_view import redact_tree, redact_view
 
 from gateway.auth import check_internal_secret
+from gateway.events_service import get_event_view, ingest_raw_event
 
-log = logging.getLogger(__name__)
 router = APIRouter()
 
 
@@ -29,57 +20,13 @@ async def ingest_event(
     event: RawEvent,
     x_internal_secret: str | None = Header(default=None),
 ) -> dict[str, Any]:
-    """Приём события от ingestor сервиса.
-
-    Path param `source` должен совпадать с event.source (защита от мисматча).
-    """
+    """Path param `source` должен совпадать с event.source (защита от мисматча)."""
     check_internal_secret(x_internal_secret)
-
     if source.lower() != event.source.lower():
         raise HTTPException(
             400, f"Path source '{source}' != event.source '{event.source}'"
         )
-
-    values = {
-        "source": event.source,
-        "source_event_id": event.source_event_id,
-        "account": event.account,
-        "category": event.category,
-        "content_text": event.content_text,
-        "content_extra": event.content_extra,
-        "entity_hints": [h.model_dump() for h in event.entity_hints],
-        "metadata_": event.metadata,
-        "occurred_at": event.occurred_at,
-        "triage_status": "pending",
-    }
-
-    # INSERT ... ON CONFLICT (source, source_event_id) DO NOTHING RETURNING id.
-    # Если конфликт — RETURNING пуст, делаем SELECT уже существующего ID.
-    async with get_session() as s:
-        stmt = (
-            pg_insert(EventRow)
-            .values(**values)
-            .on_conflict_do_nothing(index_elements=["source", "source_event_id"])
-            .returning(EventRow.id)
-        )
-        result = await s.execute(stmt)
-        event_id = result.scalar_one_or_none()
-
-        if event_id is None:
-            # Дедуп hit — событие уже было. Подберём существующий id.
-            existing = await s.execute(
-                select(EventRow.id).where(
-                    EventRow.source == event.source,
-                    EventRow.source_event_id == event.source_event_id,
-                )
-            )
-            event_id = existing.scalar_one_or_none()
-            log.info("Dedup hit: %s/%s → event %s",
-                     event.source, event.source_event_id, event_id)
-            return {"ok": True, "event_id": event_id, "deduped": True}
-
-    log.info("Event %s ingested: %s/%s", event_id, event.source, event.source_event_id)
-    return {"ok": True, "event_id": event_id, "deduped": False}
+    return await ingest_raw_event(event)
 
 
 @router.get("/api/events/{event_id}")
@@ -93,23 +40,7 @@ async def get_event(
     # /webhook/ to gateway — /api/ falls through to dashboard), but that's
     # an accident of nginx config, not a guarantee this code should rely on.
     check_internal_secret(x_internal_secret)
-    async with get_session() as s:
-        row = await s.get(EventRow, event_id)
-        if row is None:
-            raise HTTPException(404, "Event not found")
-        return {
-            "id": row.id,
-            "source": row.source,
-            "source_event_id": row.source_event_id,
-            "account": row.account,
-            "category": row.category,
-            "content_text": redact_view(row.content_text) if row.content_text else row.content_text,
-            "occurred_at": row.occurred_at.isoformat(),
-            "received_at": row.received_at.isoformat() if row.received_at else None,
-            "triage_status": row.triage_status,
-            "triage_metadata": redact_tree(row.triage_metadata),
-            "importance": row.importance,
-            "nature": row.nature,
-            "project": row.project,
-            "ready_subtype": row.ready_subtype,
-        }
+    view = await get_event_view(event_id)
+    if view is None:
+        raise HTTPException(404, "Event not found")
+    return view

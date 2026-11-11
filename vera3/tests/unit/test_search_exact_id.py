@@ -1,7 +1,7 @@
 """Explicit event IDs reach legacy rows without relying on ranked search."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
@@ -16,7 +16,7 @@ from brain_search.rows import Candidate
 def _event(event_id: int) -> Candidate:
     return Candidate(
         id=event_id, source="gmail", source_event_id=f"synthetic-{event_id}",
-        occurred_at=datetime(2026, 10, 4, 18, tzinfo=timezone.utc),
+        occurred_at=datetime(2026, 10, 4, 18, tzinfo=UTC),
         content_text="Synthetic account notice", importance=50,
         embedding=None, rank=1000.0, account="test-account",
     )
@@ -82,8 +82,8 @@ async def test_explicit_id_bypasses_fts_and_embedding(monkeypatch):
     monkeypatch.setattr(retrieval, "_exact_rows", exact)
     found = await retrieval.fetch_candidates(
         ts_query="unrelated:*", acc_words=[],
-        time_range=(datetime(2026, 10, 5, tzinfo=timezone.utc),
-                    datetime(2026, 10, 6, tzinfo=timezone.utc)),
+        time_range=(datetime(2026, 10, 5, tzinfo=UTC),
+                    datetime(2026, 10, 6, tzinfo=UTC)),
         project=SimpleNamespace(name="unrelated"),
         q_vec=None, limit=1, exact_event_ids=[900101, 900102],
     )
@@ -99,21 +99,22 @@ async def test_explicit_id_bypasses_fts_and_embedding(monkeypatch):
 @pytest.mark.asyncio
 async def test_missing_exact_id_is_not_reported_as_nonexistent(monkeypatch):
     from brain_search import app as search_app
+    from brain_search import search_service
 
     monkeypatch.setenv("INTERNAL_SECRET", "synthetic-test-secret")
-    monkeypatch.setattr(search_app, "_try_report", AsyncMock(return_value=None))
-    monkeypatch.setattr(search_app, "fetch_candidates", AsyncMock(
+    monkeypatch.setattr(search_service, "try_report", AsyncMock(return_value=None))
+    monkeypatch.setattr(search_service, "fetch_candidates", AsyncMock(
         return_value=retrieval.Candidates([], "exact_id")))
     embed = AsyncMock(side_effect=AssertionError("exact lookup needs no embedding"))
     synthesize = AsyncMock(side_effect=AssertionError("no evidence to synthesize"))
-    monkeypatch.setattr(search_app, "embed_query", embed)
-    monkeypatch.setattr(search_app, "synthesize", synthesize)
+    monkeypatch.setattr(search_service, "embed_query", embed)
+    monkeypatch.setattr(search_service, "synthesize", synthesize)
     response = await search_app.search(SearchQuery(q="событие 900101"),
                                        "synthetic-test-secret")
     assert response.results == []
     assert "среди доступных записей" in response.answer
     assert "не доказывает" in response.answer
-    assert search_app.fetch_candidates.await_args.kwargs["exact_event_ids"] == [900101]
+    assert search_service.fetch_candidates.await_args.kwargs["exact_event_ids"] == [900101]
     embed.assert_not_awaited()
     synthesize.assert_not_awaited()
 

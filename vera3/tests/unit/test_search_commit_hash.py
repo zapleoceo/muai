@@ -1,11 +1,11 @@
 """Хэши коммитов — точные идентификаторы наравне с тикетами."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
-from brain_search import app, pipeline
+from brain_search import app, pipeline, search_service
 from brain_search.identifier_rows import (
     IDENTIFIER_RANK,
     fetch_identifier_rows,
@@ -25,7 +25,7 @@ from brain_search.models import SearchQuery
 from brain_search.retrieval import Candidates
 from brain_search.rows import Candidate
 
-_WHEN = datetime(2026, 10, 9, 9, tzinfo=timezone.utc)
+_WHEN = datetime(2026, 10, 9, 9, tzinfo=UTC)
 _SHA = "4398a6d1f0c2b7e9a5d3c1b0e8f7a6d5c4b3a291"
 
 
@@ -124,13 +124,13 @@ async def test_identifier_only_without_exact_returns_no_rows(monkeypatch):
 async def test_search_endpoint_identifier_only_miss_is_not_padded(monkeypatch):
     noise = [_cand(i, "deploy", rank=0.4) for i in range(1, 8)]
     monkeypatch.setattr(app, "check_internal_secret", lambda _s: None)
-    monkeypatch.setattr(app, "_try_report", AsyncMock(return_value=None))
-    monkeypatch.setattr(app, "embed_query", AsyncMock(return_value=None))
-    monkeypatch.setattr(app, "fetch_candidates",
+    monkeypatch.setattr(search_service, "try_report", AsyncMock(return_value=None))
+    monkeypatch.setattr(search_service, "embed_query", AsyncMock(return_value=None))
+    monkeypatch.setattr(search_service, "fetch_candidates",
                         AsyncMock(return_value=Candidates(noise, "fts")))
     synth = AsyncMock()
-    monkeypatch.setattr(app, "synthesize", synth)
-    monkeypatch.setattr(app, "_link_scope", AsyncMock(return_value=None))
+    monkeypatch.setattr(search_service, "synthesize", synth)
+    monkeypatch.setattr(search_service, "link_scope", AsyncMock(return_value=None))
     resp = await app.search(SearchQuery(q="4398a6d", limit=5, use_agent=False), "s")
     assert resp.answer == NO_EXACT_ANSWER and resp.results == []
     assert "не нашла" in NO_EXACT_ANSWER and "не доказывает" in NO_EXACT_ANSWER
@@ -139,13 +139,13 @@ async def test_search_endpoint_identifier_only_miss_is_not_padded(monkeypatch):
 
 def _wire_endpoint(monkeypatch, rows):
     monkeypatch.setattr(app, "check_internal_secret", lambda _s: None)
-    monkeypatch.setattr(app, "_try_report", AsyncMock(return_value=None))
-    monkeypatch.setattr(app, "embed_query", AsyncMock(return_value=None))
+    monkeypatch.setattr(search_service, "try_report", AsyncMock(return_value=None))
+    monkeypatch.setattr(search_service, "embed_query", AsyncMock(return_value=None))
     fetch = AsyncMock(return_value=Candidates(rows, "fts"))
-    monkeypatch.setattr(app, "fetch_candidates", fetch)
+    monkeypatch.setattr(search_service, "fetch_candidates", fetch)
     synth = AsyncMock(return_value="sentinel")
-    monkeypatch.setattr(app, "synthesize", synth)
-    monkeypatch.setattr(app, "_link_scope", AsyncMock(return_value=None))
+    monkeypatch.setattr(search_service, "synthesize", synth)
+    monkeypatch.setattr(search_service, "link_scope", AsyncMock(return_value=None))
     return fetch, synth
 
 
