@@ -11,6 +11,20 @@ talking via DM + 2 groups + 1 channel = 4 entities.
 
 ## Pieces
 
+### Code layout (с 2026-11-12)
+
+`graph/dedup.py` — фасад: все прежние пути импорта (`graph.dedup.merge_entities`,
+`find_alias_collisions`, `get_entity_dossiers`, `_as_dict`, …) работают, плюс
+авто-политика `merge_username_collision_pairs`. Реализация разложена по модулям:
+
+| Модуль | Что внутри |
+|---|---|
+| `dedup_detect.py` | `normalize_name`, `find_duplicates_by_name`, чистая группировка `group_alias_collisions` |
+| `dedup_read.py` | read-модели ревью: `get_entity_dossiers` / `get_entity_dossier`, `get_entity_context` |
+| `dedup_merge.py` | `merge_entities` — оркестрация шагов слияния в одной транзакции |
+| `dedup_store.py` | SQL чтения: `load_entity_names`, `load_entity_handles`, `load_dossier_entities`, `load_sender_samples`, `load_sender_chats`, `load_sender_projects`, `load_review_context` |
+| `dedup_merge_store.py` | SQL слияния, каждый шаг на общей сессии: `load_attribute_pair`, `write_attributes`, `move_aliases`, `move_memberships`, `move_relationships`, `delete_entity_row` |
+
 ### Detection — `vera_shared.graph.dedup.find_duplicates_by_name`
 Groups entity rows by case-folded, diacritics-stripped, ё→е/й→и normalized
 name. Returns groups of ≥2 candidates ordered by size.

@@ -92,6 +92,16 @@ telegram/slack/trello свои `[:8000]` сохранили: у них до по
   after an early-UTC poll was never listed. A body part that fails to decode
   logs a WARNING with the message id and the event keeps an empty body.
 - Accounts: 3 (`demoniwwwe@gmail.com`, `zaporozec_d@itstep.org`, `zapleosoft@gmail.com`).
+- Code layout (2026-11-12): `poller.py` — курсор (`build_query`), дедуп по БД
+  (`filter_new_ids`), прогон `poll_account` и `main_loop`; HTTP к Google —
+  `gmail_api.py` (`refresh_access`, `fetch_message_ids`, `fetch_full_messages`,
+  `fetch_messages`, `TokenRevoked`, `ScopeInsufficient`); MIME → событие —
+  `message_parse.py` (`_extract_text`, `correspondent_of`, `_format_event`);
+  SQL — `gmail_store.py` (`load_known_message_ids`, `load_pollable_accounts`,
+  `mark_account_failed`, `mark_account_polled`). Прежние импорты из
+  `ingestor_gmail.poller` реэкспортируются. Журнал поллера называет аккаунт
+  по `gmail_accounts.id`, а не по адресу: адрес — персональные данные и не
+  должен оседать в логах на уровне WARNING/ERROR.
 - Critical caveat: tokens get revoked by Google if the OAuth app sits in
   "Testing" mode for >7 days idle. See `security.md` for re-auth flow.
 - Backlog-safe polling (2026-07-17): `poller.fetch_message_ids()` lists

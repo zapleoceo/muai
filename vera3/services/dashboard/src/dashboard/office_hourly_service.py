@@ -1,15 +1,13 @@
-"""Owner dashboard projection of Room cards and timestamped results."""
+"""Owner dashboard projection of Room cards and timestamped results.
+
+Queries live in `office_hourly_repo`, the dot scope record parser in
+`office_scope_record`; both stay importable from here."""
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, replace
 from datetime import datetime, timedelta
-from typing import Any
 
-from sqlalchemy import and_, func, or_, select
-from vera_shared.db.engine import get_session
 from vera_shared.db.models_room import (
-    RoomMessageRow,
     RoomTaskEventRow,
     RoomTaskQuestionRow,
     RoomTaskRow,
@@ -18,8 +16,8 @@ from vera_shared.room.attention import ANSWERED, Attention, attention
 from vera_shared.timeutil import utc_naive_now
 
 from dashboard.office_card_details import CardDetails, details_by_task
-from dashboard.office_card_queries import load_transitions
-from dashboard.office_hourly_status import (  # noqa: F401  re-exported public names
+from dashboard.office_hourly_repo import load_hourly_inputs, load_recent_task_events
+from dashboard.office_hourly_status import (
     evidence_of,
     next_question_reminder,
     status_info_of,
@@ -33,6 +31,11 @@ from dashboard.office_scope import (
     mask_hidden_deps,
     scope_runtime,
 )
+from dashboard.office_scope_record import (
+    SCOPE_PREFIX,
+    _latest_scope_record,
+    parse_scope_decisions,
+)
 from dashboard.office_status import (
     CANCELLED,
     DONE,
@@ -40,11 +43,25 @@ from dashboard.office_status import (
     StatusInfo,
 )
 
+__all__ = [
+    "SCOPE_PREFIX",
+    "HourlyCard",
+    "HourlyReport",
+    "_latest_scope_record",
+    "build_report",
+    "evidence_of",
+    "load_recent_task_events",
+    "load_report",
+    "next_question_reminder",
+    "parse_scope_decisions",
+    "status_info_of",
+    "status_of",
+]
+
 WINDOW = timedelta(hours=1)
 STATUS_LABELS = STATUSES
 VISIBLE_STATUSES = tuple(s for s in STATUSES if s not in (DONE, CANCELLED))
 RESULT_KINDS = ("progress", "done")
-SCOPE_PREFIX = "OFFICE_SCOPE_V1\n"
 
 
 @dataclass(frozen=True)
@@ -77,49 +94,6 @@ class HourlyReport:
     scope_message_id: str | None = None
     excluded_by_decision: list[tuple[RoomTaskRow, str, bool]] | None = None
 
-
-def parse_scope_decisions(row: RoomMessageRow) -> tuple[
-    dict[tuple[str, str], str], dict[tuple[str, str], str], dict[tuple[str, str], str]
-] | None:
-    """Read a dot-attributed scope record, never treating it as a Room status change."""
-    if (row.room != "main" or row.from_agent != "dot" or
-            row.to_agent != "office-dashboard" or row.task_id is not None or
-            row.status != "info" or not row.body.startswith(SCOPE_PREFIX) or
-            len(row.body) > 12000):
-        return None
-    try:
-        raw: Any = json.loads(row.body[len(SCOPE_PREFIX):])
-        parsed = []
-        for name in ("pending_owner_cancellations", "excluded_jira_backlog",
-                     "current_handoffs"):
-            entries = raw[name]
-            if not isinstance(entries, list) or len(entries) > 100:
-                return None
-            out: dict[tuple[str, str], str] = {}
-            for entry in entries:
-                room, task_id, source = entry["room"], entry["task_id"], entry["source"]
-                if (room != "main" or not isinstance(task_id, str) or
-                        not 1 <= len(task_id) <= 128 or not isinstance(source, str) or
-                        not source.startswith("room:") or not source[5:].isdigit() or
-                        (room, task_id) in out):
-                    return None
-                out[(room, task_id)] = source
-            parsed.append(out)
-        if (parsed[0].keys() & parsed[1].keys() or
-                parsed[0].keys() & parsed[2].keys() or
-                parsed[1].keys() & parsed[2].keys()):
-            return None
-        return parsed[0], parsed[1], parsed[2]
-    except (KeyError, TypeError, ValueError):
-        return None
-
-
-def _latest_scope_record(rows: list[RoomMessageRow]) -> tuple[RoomMessageRow, tuple] | None:
-    """A bad newest record means unknown coverage, never an older silent fallback."""
-    if not rows:
-        return None
-    parsed = parse_scope_decisions(rows[0])
-    return (rows[0], parsed) if parsed is not None else None
 
 
 def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Attention],
@@ -205,63 +179,9 @@ def build_report(rows: list[RoomTaskRow], attentions: dict[tuple[str, str], Atte
 async def load_report(now: datetime | None = None,
                       include_closed: bool = False) -> HourlyReport:
     now = now or utc_naive_now()
-    ev = RoomTaskEventRow
-    valid_result = or_(ev.kind == "done", and_(ev.kind == "progress", ev.text.is_not(None),
-                                                ev.text != "",
-                                                ev.data.has_key("next_checkpoint_seconds")))  # noqa: W601
-    latest_ranked = select(ev.id.label("id"), func.row_number().over(
-        partition_by=(ev.room, ev.task_id), order_by=(ev.at.desc(), ev.id.desc())
-    ).label("rank")).where(valid_result, ev.at <= now).subquery()
-    control_ranked = select(ev.id.label("id"), func.row_number().over(
-        partition_by=(ev.room, ev.task_id), order_by=(ev.at.desc(), ev.id.desc())
-    ).label("rank")).where(ev.kind.in_(("paused", "review", "resumed", "claimed",
-                                        "handoff_accept", "unblocked", "released",
-                                        "blocked", "waiting", "ack_answer")),
-                           ev.at <= now).subquery()
-    async with get_session() as s:
-        rows_result = await s.execute(select(RoomTaskRow))
-        questions_result = await s.execute(select(RoomTaskQuestionRow).where(
-            RoomTaskQuestionRow.status.in_(("open", "answered"))))
-        events_result = await s.execute(select(ev).where(
-            valid_result, ev.at <= now,
-            or_(ev.id.in_(select(latest_ranked.c.id).where(latest_ranked.c.rank == 1)),
-                ev.at >= now - WINDOW)
-        ))
-        controls_result = await s.execute(select(ev).where(
-            ev.id.in_(select(control_ranked.c.id).where(control_ranked.c.rank == 1))))
-        runtime_result = await s.execute(select(RoomMessageRow).where(
-            RoomMessageRow.room == "main", RoomMessageRow.from_agent == "dot",
-            RoomMessageRow.to_agent == "office-dashboard",
-            RoomMessageRow.task_id.is_(None), RoomMessageRow.status == "info",
-            RoomMessageRow.body.startswith("OFFICE_RUNTIME_V1\n"),
-            RoomMessageRow.created_at <= now,
-        ).order_by(RoomMessageRow.id.desc()).limit(20))
-        scope_result = await s.execute(select(RoomMessageRow).where(
-            RoomMessageRow.room == "main", RoomMessageRow.from_agent == "dot",
-            RoomMessageRow.to_agent == "office-dashboard",
-            RoomMessageRow.task_id.is_(None), RoomMessageRow.status == "info",
-            RoomMessageRow.body.startswith(SCOPE_PREFIX),
-            RoomMessageRow.created_at <= now,
-        ).order_by(RoomMessageRow.id.desc()).limit(1))
-        rows = list(rows_result.scalars().all())
-        questions = list(questions_result.scalars().all())
-        events = list(events_result.scalars().all())
-        controls = list(controls_result.scalars().all())
-        blocked = [c for c in controls if c.kind == "blocked"]
-        control_next: list[RoomTaskEventRow] = []
-        if blocked:
-            following = select(ev.id.label("id"), func.row_number().over(
-                partition_by=(ev.room, ev.task_id), order_by=ev.id.asc()
-            ).label("rank")).where(or_(*[
-                and_(ev.room == c.room, ev.task_id == c.task_id, ev.id > c.id)
-                for c in blocked]), ev.at <= now).subquery()
-            next_result = await s.execute(select(ev).where(
-                ev.id.in_(select(following.c.id).where(following.c.rank == 1))))
-            control_next = list(next_result.scalars().all())
-        runtime_rows = list(runtime_result.scalars().all())
-        scope_rows = list(scope_result.scalars().all())
-        transitions = await load_transitions(s, now, WINDOW)
-    scope_record = _latest_scope_record(scope_rows)
+    inputs = await load_hourly_inputs(now, WINDOW)
+    rows, questions, controls = inputs.rows, inputs.questions, inputs.controls
+    scope_record = _latest_scope_record(inputs.scope_rows)
     pending_decisions, excluded_backlog, current_handoffs = (
         scope_record[1] if scope_record else ({}, {}, {}))
     scope_message_id = scope_record[0].message_id if scope_record else None
@@ -275,20 +195,12 @@ async def load_report(now: datetime | None = None,
         attentions[key] = (Attention(ANSWERED, "", None, None, None) if key in answered and not q
                            else attention(row, now, open_question_at=q.asked_at if q else None,
                                           paused=controls_by_task.get(key) == "paused"))
-    report = build_report(rows, attentions, questions, events, now, controls, control_next,
-                          transitions, include_closed=include_closed,
+    report = build_report(rows, attentions, questions, inputs.events, now, controls,
+                          inputs.control_next, inputs.transitions,
+                          include_closed=include_closed,
                           pending_decisions=pending_decisions,
                           scope_message_id=scope_message_id,
                           excluded_backlog=excluded_backlog,
                           current_handoffs=current_handoffs)
-    runtime, hidden_runtime = scope_runtime(latest_runtime_snapshot(runtime_rows, now))
+    runtime, hidden_runtime = scope_runtime(latest_runtime_snapshot(inputs.runtime_rows, now))
     return replace(report, runtime=runtime, hidden_runtime=hidden_runtime)
-
-
-async def load_recent_task_events(room: str, task_id: str) -> list[RoomTaskEventRow]:
-    """Newest history for the Office modal; the generic task page loads oldest first."""
-    async with get_session() as s:
-        result = await s.execute(select(RoomTaskEventRow).where(
-            RoomTaskEventRow.room == room, RoomTaskEventRow.task_id == task_id
-        ).order_by(RoomTaskEventRow.id.desc()).limit(200))
-        return list(result.scalars().all())
