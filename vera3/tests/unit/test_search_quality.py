@@ -373,13 +373,18 @@ class _MemSession:
 
 @pytest.mark.asyncio
 async def test_agent_memory_carries_provenance():
+    from vera_shared.memory import agent_memory
     s = _MemSession()
-    with patch.object(agent_tools, "get_session", lambda: s):
+    with patch.object(agent_memory, "get_session", lambda: s):
         obs = await agent_tools.execute_tool(
             MEMORY, {"fact": "X", "tags": ["a"], "confidence": 0.5})
-    assert obs == {"saved": True, "event_id": 99}
+    assert obs["saved"] and obs["event_id"] == 99 and obs["pending_owner_review"]
     meta = s.added[0].metadata_
-    assert meta["written_by"] == agent_tools.AGENT_WRITER == "search_agent"
+    assert meta["written_by"] == agent_memory.AGENT_WRITER == "search_agent"
+    assert meta["verified"] is False
+    # скрыто до подтверждения владельцем: поиск и триаж hidden не берут
+    assert s.added[0].triage_status == "hidden"
+    assert s.added[0].triage_metadata == {"hidden_prev_status": "pending"}
     assert s.added[0].source == "vera_memory"
     assert source_weight(s.added[0].source) <= 1.0
 

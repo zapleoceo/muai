@@ -54,6 +54,46 @@ restarts (saved in session_json_enc), don't burst.
 yet — every important state change is observable via `events` of
 source=`monitor` or `vera_memory`.
 
+## Prompt injection: owner confirmation
+
+Агенты (MCP-клиенты и агент поиска) читают недоверенный текст писем и чатов.
+Правка, которую текст инъекции может вызвать сам, не должна применяться без
+шага, которого инъекция сделать не может, - POST владельца со страницы
+дашборда (`owner_post_gate`: сессия владельца + same-origin).
+
+- **Разрушительные MCP-правки.** `hide_event`, `relationship_retire` и
+  `entity_merge(dry_run=false)` только записывают предложение
+  (`journal.proposals.propose`): строка `mcp_audit` с `target_kind='proposal'`,
+  `status='proposed'`, предпросмотр цели в `after.preview`. Миграция не нужна.
+  Применяет владелец на `/approvals` (`approvals_page`, разметка
+  `approvals_body`, `proposal_html`, `memory_html`; POST
+  `/api/approvals/decide` - `decide`, тело `Decision`): `approve` атомарно
+  переводит `proposed → applying` (двойной клик не применит правку дважды),
+  применяет её тем же путём, что раньше, и пишет обычную запись журнала от
+  имени предложившего клиента - её откатывают `undo`/`entity_unmerge` и
+  `/journal`. Сбой применения возвращает предложение в `proposed`; `reject`
+  закрывает его (`rejected`), повтор решения - `ProposalNotPending` (409).
+  `undo` строку-предложение не трогает: для вида `proposal` нет обработчика.
+  Неразрушительные и обратимые правки (`remember`, `update_event`,
+  `entity_rename`, `relationship_set`, `entity_unmerge`, `unhide_event`) идут
+  как прежде.
+- **Факты агента поиска.** `memory.remember` агента пишет через
+  `memory.agent_memory.write_agent_memory`: событие `vera_memory` сразу
+  скрыто (`hidden`, прежний статус `pending`), `metadata.written_by =
+  "search_agent"`, `metadata.verified=false`. Скрытое событие не видит ни
+  один путь поиска и ни один воркер, поэтому письмо «запомни, что …» не
+  становится фактом в ответах. Список ждущих - `pending_agent_memories`, тот
+  же `/approvals`. `confirm_agent_memory` ставит `verified=true` и снимает
+  скрытие (событие уходит в `pending`, триаж его эмбеддит), журнал -
+  `unhide_event`, откат скрывает снова; `reject_agent_memory` ставит
+  `metadata.rejected=true`, событие остаётся скрытым, журнал - `update_event`.
+- **Office: владелец со слов сервиса.** Задача, которую `veranda_bot`
+  объявил «от владельца» (`origin.from_id`), по-прежнему получает
+  `auto_pickup` и `responsible=dot`, но теперь несёт ref
+  `owner_claim: service_asserted by veranda_bot` (`owner_claim_refs`), а
+  повышение пишется в лог `log_owner_promotion` - id задачи и принципал, без
+  текста. Подробности - `office-intake.md`.
+
 ## Encryption key rotation
 
 Never rotate `TOKEN_SECRET` without re-encrypting every encrypted column.
