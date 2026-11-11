@@ -9,7 +9,6 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
@@ -20,21 +19,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from vera_shared.db.engine import get_session
 from vera_shared.db.models_graph import RelationshipRow
 from vera_shared.graph.rel_cleanup import PLAN_VERSION
+from vera_shared.graph.report_file import write_json_atomic
 
 BATCH = 200
 
 
 class PlanError(ValueError):
     """План или путь отчёта непригодны — ничего не изменено."""
-
-
-def _write_json(path: Path, data: dict[str, Any]) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as fh:
-        fh.write(json.dumps(data, ensure_ascii=False, indent=1))
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, path)
 
 
 def _state(row: RelationshipRow) -> dict[str, Any]:
@@ -64,7 +55,7 @@ async def apply_plan(plan: dict[str, Any], report_path: str | Path | None) -> di
         raise PlanError(f"неизвестная версия плана: {plan.get('version')!r}")
     todo = [a for a in plan["actions"] if a["action"] != "skip"]
     out: dict[str, Any] = {"version": PLAN_VERSION, "entries": [], "skipped": []}
-    _write_json(path, out)
+    write_json_atomic(path, out)
     for start in range(0, len(todo), BATCH):
         async with get_session() as s:
             batch: list[dict[str, Any]] = []
@@ -88,7 +79,7 @@ async def apply_plan(plan: dict[str, Any], report_path: str | Path | None) -> di
                               "rule": action["rule"], "before": action["before"],
                               "after": action["after"], "undone": False})
             out["entries"] += batch
-            _write_json(path, out)
+            write_json_atomic(path, out)
             await s.flush()
     return out
 
@@ -115,5 +106,5 @@ async def undo_report(report_path: str | Path) -> int:
                     entry["note"] = "строка изменилась после применения — не трогаю"
                 entry["undone"] = True
             await s.flush()
-        _write_json(path, data)
+        write_json_atomic(path, data)
     return undone

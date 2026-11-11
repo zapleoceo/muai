@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import json
 import logging
-import os
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -22,6 +21,7 @@ from vera_shared.db.models_graph import EntityAliasRow, EntityRow
 from vera_shared.graph import entity_edit
 from vera_shared.graph.dupe_actions import Action
 from vera_shared.graph.merge import merge_entities
+from vera_shared.graph.report_file import write_json_atomic
 from vera_shared.graph.unmerge import unmerge
 
 log = logging.getLogger(__name__)
@@ -42,15 +42,6 @@ def plan_document(actions: list[Action], source: str) -> dict[str, Any]:
     return {"version": PLAN_VERSION, "generated_at": datetime.now(UTC).isoformat(),
             "source": source, "to_apply": len(done), "counts": counts,
             "actions": actions}
-
-
-def _write_json(path: Path, data: dict[str, Any]) -> None:
-    tmp = path.with_suffix(path.suffix + ".tmp")
-    with tmp.open("w", encoding="utf-8") as fh:
-        fh.write(json.dumps(data, ensure_ascii=False, indent=1))
-        fh.flush()
-        os.fsync(fh.fileno())
-    os.replace(tmp, path)
 
 
 async def _stale(action: Action, touched: set[int]) -> str | None:
@@ -100,7 +91,7 @@ async def apply_plan(plan: dict[str, Any], report_path: str | Path | None, *,
     if plan.get("version") != PLAN_VERSION:
         raise PlanError(f"неизвестная версия плана: {plan.get('version')!r}")
     out: dict[str, Any] = {"version": PLAN_VERSION, "entries": [], "skipped": []}
-    _write_json(path, out)
+    write_json_atomic(path, out)
     touched: set[int] = set()
     for action in plan["actions"]:
         if action["action"] == "skip" or (cases and action["case"] not in cases):
@@ -115,9 +106,9 @@ async def apply_plan(plan: dict[str, Any], report_path: str | Path | None, *,
             # Намерение — на диск ДО коммита: смерть между коммитом и записью
             # отчёта иначе оставила бы изменение без пути назад.
             out["entries"].append(entry)
-            _write_json(path, out)
+            write_json_atomic(path, out)
         entry["status"] = "done"
-        _write_json(path, out)
+        write_json_atomic(path, out)
         touched.add(entry["report"]["entity_id"] if entry["kind"] == "edit"
                     else entry["report"]["keep_id"])
     return out
@@ -147,13 +138,13 @@ async def undo_report(report_path: str | Path) -> int:
         if entry.get("status") == "intent" and not await _committed(entry):
             entry["undone"] = True
             entry["note"] = "транзакция не закоммичена — откатывать нечего"
-            _write_json(path, data)
+            write_json_atomic(path, data)
             continue
         if entry["kind"] == "merge":
             await unmerge(entry["report"])
         else:
             await entity_edit.revert_edit(entry["report"])
         entry["undone"] = True
-        _write_json(path, data)
+        write_json_atomic(path, data)
         undone += 1
     return undone
