@@ -2,7 +2,7 @@
 
 Почему это вообще есть: `upsert_entity` заводил новую сущность, если своего
 алиаса ещё нет, поэтому один человек множился по записи на канал. Замер
-2026-08-26: Igor Nerozya, Olga Kryachko, Ruslan Kovtiukh — по две сущности
+2026-08-26: Ivan Petrov, Olga Kryachko, Ruslan Kovtiukh — по две сущности
 (gmail + slack) с буквально одинаковым адресом `*@itstep.org`.
 """
 from __future__ import annotations
@@ -41,18 +41,18 @@ class TestFind:
     async def test_gmail_alias_and_profile_email_are_the_same_claim(self):
         """Почтовый ингестор держит адрес алиасом, профиль Slack — атрибутом.
         Это один и тот же человек, а не два разных признака."""
-        a = await _person("Igor Nerozya", aliases=[("gmail", "nerozya_i@itstep.org")])
-        b = await _person("Igor Nerozya", email_attr="nerozya_i@itstep.org",
+        a = await _person("Ivan Petrov", aliases=[("gmail", "petrov_i@corp.example")])
+        b = await _person("Ivan Petrov", email_attr="petrov_i@corp.example",
                           aliases=[("slack", "user:U04")])
         groups = await collisions.find_email_collisions()
         assert len(groups) == 1
         assert {c["id"] for c in groups[0]["candidates"]} == {a, b}
-        assert groups[0]["email"] == "nerozya_i@itstep.org"
+        assert groups[0]["email"] == "petrov_i@corp.example"
 
     @pytest.mark.asyncio
     async def test_case_and_spaces_do_not_split_a_pair(self):
-        a = await _person("Olga", aliases=[("gmail", "kryachko_o@itstep.org")])
-        b = await _person("Olga", email_attr="  Kryachko_O@ItStep.org ")
+        a = await _person("Olga", aliases=[("gmail", "sidorova_o@corp.example")])
+        b = await _person("Olga", email_attr="  Sidorova_O@Corp.Example ")
         groups = await collisions.find_email_collisions()
         assert {c["id"] for c in groups[0]["candidates"]} == {a, b}
 
@@ -175,8 +175,8 @@ class TestDossiers:
 
     @pytest.mark.asyncio
     async def test_gmail_person_is_matched_by_address_in_from(self):
-        eid = await _person("Ruslan", aliases=[("gmail", "kovtyukh_r@itstep.org")])
-        await self._event("gmail", **{"from": "Ruslan <kovtyukh_r@itstep.org>"},
+        eid = await _person("Ruslan", aliases=[("gmail", "ivanov_r@corp.example")])
+        await self._event("gmail", **{"from": "Ruslan <ivanov_r@corp.example>"},
                           text="Author: Ruslan [counterparty]\n---\nпо лендингам")
         got = (await dossiers.build([eid]))[eid]
         assert any("по лендингам" in s for s in got["samples"])
@@ -231,7 +231,7 @@ class TestMergeKeepsAttributes:
         async with get_session() as s:
             ent = (await s.execute(
                 select(EntityRow).where(EntityRow.id == merged))).scalar_one()
-            ent.attributes = {"email": "i@itstep.org", "phone": "+380996664756",
+            ent.attributes = {"email": "i@itstep.org", "phone": "+10000000001",
                               "title": "Frontend Developer IT Step"}
 
         result = await merge_entities(keeper, merged)
@@ -241,7 +241,7 @@ class TestMergeKeepsAttributes:
             attrs = (await s.execute(
                 select(EntityRow.attributes).where(EntityRow.id == keeper)
             )).scalar_one()
-        assert attrs["phone"] == "+380996664756"
+        assert attrs["phone"] == "+10000000001"
         assert attrs["title"] == "Frontend Developer IT Step"
 
     @pytest.mark.asyncio
@@ -285,7 +285,7 @@ class TestMergeKeepsAttributes:
         async with get_session() as s:
             ent = (await s.execute(
                 select(EntityRow).where(EntityRow.id == slack_side))).scalar_one()
-            ent.attributes = {"email": "o@itstep.org", "phone": "380676574168",
+            ent.attributes = {"email": "o@itstep.org", "phone": "10000000002",
                               "title": "Designer"}
 
         done = await collisions.merge_email_collision_pairs()
@@ -294,6 +294,6 @@ class TestMergeKeepsAttributes:
             attrs = (await s.execute(
                 select(EntityRow.attributes).where(EntityRow.id == done[0]["keeper"])
             )).scalar_one()
-        assert attrs["phone"] == "380676574168"
+        assert attrs["phone"] == "10000000002"
         assert attrs["title"] == "Designer"
         assert gmail_side in (done[0]["keeper"], done[0]["merged"])

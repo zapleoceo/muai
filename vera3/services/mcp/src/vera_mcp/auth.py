@@ -27,10 +27,15 @@ from vera_shared.office.acl import (
     parse_registry,
     resolve,
 )
+from vera_shared.token_lists import (
+    MIN_TOKEN_LEN,
+    is_strong_token,
+    repeated_tokens,
+    split_token_entries,
+)
 
 log = logging.getLogger(__name__)
 
-MIN_TOKEN_LEN = 32
 DEFAULT_CLIENT = "default"
 HEALTH_PATH = "/healthz"
 CLIENT_SCOPE_KEY = "mcp_client"
@@ -48,69 +53,63 @@ class WeakTokenError(ValueError):
 
 def _pairs(raw: str | None) -> list[tuple[str, str]]:
     pairs = []
-    for i, item in enumerate(filter(None, (p.strip() for p in (raw or "").split(",")))):
-        name, sep, token = item.partition(":")
-        if not sep:
-            name, token = f"token{i + 1}", item
+    for i, parts in enumerate(split_token_entries(raw, 2)):
+        name, token = parts if len(parts) == 2 else ("", parts[0])
         pairs.append((name.strip() or f"token{i + 1}", token.strip()))
     return pairs
 
 
-def _parse_list(raw: str | None, named: dict[str, str]) -> dict[str, str]:
-    for name, token in _pairs(raw):
-        named[token] = name
-    return named
-
-
-def _parse(env: Mapping[str, str]) -> dict[str, str]:
-    named: dict[str, str] = {}
+def _mcp_pairs(env: Mapping[str, str]) -> list[tuple[str, str]]:
     single = (env.get("MCP_TOKEN") or "").strip()
-    if single:
-        named[single] = DEFAULT_CLIENT
-    return _parse_list(env.get("MCP_TOKENS"), named)
+    head = [(DEFAULT_CLIENT, single)] if single else []
+    return head + _pairs(env.get("MCP_TOKENS"))
 
 
-def _parse_room(env: Mapping[str, str]) -> dict[str, str]:
-    return _parse_list(env.get("ROOM_TOKENS"), {})
+def _room_pairs(env: Mapping[str, str]) -> list[tuple[str, str]]:
+    return _pairs(env.get("ROOM_TOKENS"))
+
+
+def _usable(pairs: list[tuple[str, str]]) -> dict[str, str]:
+    # Повтор токена на лету = неясно, чьё имя писать в аудит: такой токен не открывает ничего.
+    repeated = repeated_tokens(t for _, t in pairs)
+    return {t: n for n, t in pairs if is_strong_token(t) and t not in repeated}
+
+
+def _validated(pairs: list[tuple[str, str]], label: str, variables: str) -> dict[str, str]:
+    repeated = repeated_tokens(t for _, t in pairs)
+    if repeated:
+        names = sorted({n for n, t in pairs if t in repeated})
+        raise ValueError(f"{variables} lists the same token twice ({', '.join(names)}): "
+                         "the client name would be ambiguous")
+    weak = sorted(n for n, t in pairs if not is_strong_token(t))
+    if weak:
+        raise WeakTokenError(
+            f"{label} tokens for {', '.join(weak)} are shorter than {MIN_TOKEN_LEN} "
+            "characters; generate with `openssl rand -hex 32`")
+    return {t: n for n, t in pairs}
 
 
 def load_tokens(env: Mapping[str, str] | None = None) -> dict[str, str]:
-    """{токен: имя клиента}. Короткие токены отбрасываются (при старте их
+    """{токен: имя клиента}. Короткие и повторённые токены отбрасываются (при старте их
     ловит `validate_tokens`, здесь — защита на случай смены env на лету)."""
-    named = _parse(os.environ if env is None else env)
-    return {t: n for t, n in named.items() if len(t) >= MIN_TOKEN_LEN}
+    return _usable(_mcp_pairs(os.environ if env is None else env))
 
 
 def validate_tokens(env: Mapping[str, str] | None = None) -> dict[str, str]:
-    """Как load_tokens, но короткий токен — исключение с именем клиента."""
-    named = _parse(os.environ if env is None else env)
-    weak = sorted(n for t, n in named.items() if len(t) < MIN_TOKEN_LEN)
-    if weak:
-        raise WeakTokenError(
-            f"MCP tokens for {', '.join(weak)} are shorter than {MIN_TOKEN_LEN} "
-            "characters; generate with `openssl rand -hex 32`")
-    return named
+    """Как load_tokens, но короткий или повторённый токен — исключение с именем клиента."""
+    return _validated(_mcp_pairs(os.environ if env is None else env), "MCP",
+                      "MCP_TOKEN/MCP_TOKENS")
 
 
 def load_room_tokens(env: Mapping[str, str] | None = None) -> dict[str, str]:
-    named = _parse_room(os.environ if env is None else env)
-    return {t: n for t, n in named.items() if len(t) >= MIN_TOKEN_LEN}
+    return _usable(_room_pairs(os.environ if env is None else env))
 
 
 def validate_room_tokens(env: Mapping[str, str] | None = None) -> dict[str, str]:
-    """Короткий токен или токен, совпавший с MCP_TOKEN(S), — исключение."""
+    """Короткий, повторённый или совпавший с MCP_TOKEN(S) токен — исключение."""
     source = os.environ if env is None else env
-    named = _parse_room(source)
-    tokens = [t for _, t in _pairs(source.get("ROOM_TOKENS"))]
-    if len(tokens) != len(set(tokens)):
-        raise ValueError("ROOM_TOKENS lists the same token twice: the author name would be "
-                         "ambiguous")
-    weak = sorted(n for t, n in named.items() if len(t) < MIN_TOKEN_LEN)
-    if weak:
-        raise WeakTokenError(
-            f"ROOM tokens for {', '.join(weak)} are shorter than {MIN_TOKEN_LEN} "
-            "characters; generate with `openssl rand -hex 32`")
-    shared = sorted(named[t] for t in set(named) & set(_parse(source)))
+    named = _validated(_room_pairs(source), "ROOM", "ROOM_TOKENS")
+    shared = sorted(named[t] for t in set(named) & {t for _, t in _mcp_pairs(source)})
     if shared:
         raise ValueError(f"ROOM_TOKENS reuse an MCP token ({', '.join(shared)}): "
                          "a room token must not open the owner's memory")
@@ -130,7 +129,7 @@ def validate_office_tokens(env: Mapping[str, str] | None = None) -> dict[str, Of
     """Старт: битая запись, короткий токен или токен MCP/комнаты — исключение."""
     source = os.environ if env is None else env
     registry = parse_registry(source.get("OFFICE_SERVICE_TOKENS"))
-    check_disjoint(registry, {*_parse(source), *_parse_room(source)})
+    check_disjoint(registry, {t for _, t in (*_mcp_pairs(source), *_room_pairs(source))})
     return registry
 
 

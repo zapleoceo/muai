@@ -52,7 +52,7 @@ services:
     shm_size: 256mb
     environment:
       POSTGRES_USER: vera
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-vera}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}
       POSTGRES_DB: vera
     volumes:
       - vera3_pgdata:/var/lib/postgresql/data
@@ -78,9 +78,9 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/vera
       INTERNAL_SECRET: ${INTERNAL_SECRET:?INTERNAL_SECRET must be set}
-      TOKEN_SECRET: ${TOKEN_SECRET}
+      TOKEN_SECRET: ${TOKEN_SECRET:?TOKEN_SECRET must be set}
       OWNER_TELEGRAM_ID: ${OWNER_TELEGRAM_ID:?OWNER_TELEGRAM_ID must be set}
       # broker-only: needed by /v1/claude/remember to embed for semantic dedup
       BROKER_URL: ${BROKER_URL:-}
@@ -107,7 +107,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/vera
       # отдельный секрет клиентов MCP, не INTERNAL_SECRET: "claude:<hex>,codex:<hex>"
       MCP_TOKEN: ${MCP_TOKEN:-}
       MCP_TOKENS: ${MCP_TOKENS:-}
@@ -184,8 +184,8 @@ services:
       #   BRAIN_TRIAGE_REPLICAS=5 docker compose up -d --scale brain-triage=5
       replicas: ${BRAIN_TRIAGE_REPLICAS:-2}
     environment:
-      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
-      TOKEN_SECRET: ${TOKEN_SECRET}
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/vera
+      TOKEN_SECRET: ${TOKEN_SECRET:?TOKEN_SECRET must be set}
       TRIAGE_POLL_INTERVAL_S: ${TRIAGE_POLL_INTERVAL_S:-5}
       TRIAGE_BATCH_SIZE: ${TRIAGE_BATCH_SIZE:-16}
       # 2026-07-01: 5 → 10 параллельных LLM-вызовов на реплику. Broker'у
@@ -221,8 +221,8 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
-      TOKEN_SECRET: ${TOKEN_SECRET}
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/vera
+      TOKEN_SECRET: ${TOKEN_SECRET:?TOKEN_SECRET must be set}
       VERA_DAILY_GLOBAL_CAP_USD: ${VERA_DAILY_GLOBAL_CAP_USD:-2.0}
       BROKER_URL: ${BROKER_URL:-}
       BROKER_PROJECT_KEY: ${BROKER_PROJECT_KEY:-}
@@ -248,9 +248,9 @@ services:
       gateway:
         condition: service_started
     environment:
-      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
-      TOKEN_SECRET: ${TOKEN_SECRET}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/vera
+      TOKEN_SECRET: ${TOKEN_SECRET:?TOKEN_SECRET must be set}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN must be set}
       OWNER_TELEGRAM_ID: ${OWNER_TELEGRAM_ID}
       OFFICE_OWNER_DISPATCH_CHATS: ${OFFICE_OWNER_DISPATCH_CHATS:--1002884053196}
       VOICE_RESULT_DELIVERY_SINCE: ${VOICE_RESULT_DELIVERY_SINCE:-}
@@ -274,8 +274,8 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
-      TOKEN_SECRET: ${TOKEN_SECRET}
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/vera
+      TOKEN_SECRET: ${TOKEN_SECRET:?TOKEN_SECRET must be set}
       GMAIL_CLIENT_ID: ${GMAIL_CLIENT_ID}
       GMAIL_CLIENT_SECRET: ${GMAIL_CLIENT_SECRET}
       GMAIL_POLL_S: 300
@@ -294,8 +294,8 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
-      TOKEN_SECRET: ${TOKEN_SECRET}
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/vera
+      TOKEN_SECRET: ${TOKEN_SECRET:?TOKEN_SECRET must be set}
       TELEGRAM_API_ID: ${TELEGRAM_API_ID}
       TELEGRAM_API_HASH: ${TELEGRAM_API_HASH}
       TELEGRAM_PHONE: ${TELEGRAM_PHONE}
@@ -332,8 +332,8 @@ services:
       gateway:
         condition: service_started
     environment:
-      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
-      TOKEN_SECRET: ${TOKEN_SECRET}
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/vera
+      TOKEN_SECRET: ${TOKEN_SECRET:?TOKEN_SECRET must be set}
       GATEWAY_URL: http://gateway:8000
       INTERNAL_SECRET: ${INTERNAL_SECRET:?INTERNAL_SECRET must be set}
       IG_POLL_INTERVAL_S: "90"
@@ -360,7 +360,7 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/vera
       # Без ключа контейнер не падает, а ждёт: обязательная переменная (:?)
       # уронила бы весь `compose up`, то есть всю Веру, из-за одного источника.
       TRELLO_API_KEY: ${TRELLO_API_KEY:-}
@@ -380,11 +380,11 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/vera
       # Токен подключается из дашборда и лежит в slack_auth зашифрованным —
       # без этого ключа контейнер его не расшифрует. Пропустил при вводе UI:
       # строка в БД была, а поллер писал «No TOKEN_SECRET available».
-      TOKEN_SECRET: ${TOKEN_SECRET}
+      TOKEN_SECRET: ${TOKEN_SECRET:?TOKEN_SECRET must be set}
       # Запасной путь: если строки в slack_auth нет, токен берётся отсюда.
       # Без токена контейнер не падает, а ждёт: обязательная переменная (:?)
       # уронила бы весь `compose up`, то есть всю Веру, из-за одного источника.
@@ -418,8 +418,8 @@ services:
       ingestor-telegram:
         condition: service_started
     environment:
-      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
-      TOKEN_SECRET: ${TOKEN_SECRET}
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/vera
+      TOKEN_SECRET: ${TOKEN_SECRET:?TOKEN_SECRET must be set}
       INTERNAL_SECRET: ${INTERNAL_SECRET:?INTERNAL_SECRET must be set}
       TELEGRAM_TOOLS_URL: http://ingestor-telegram:8000
       # Vision + whisper go through the broker — no provider keys here.
@@ -448,9 +448,9 @@ services:
       postgres:
         condition: service_healthy
     environment:
-      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:-vera}@postgres:5432/vera
-      TOKEN_SECRET: ${TOKEN_SECRET}
-      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN}
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/vera
+      TOKEN_SECRET: ${TOKEN_SECRET:?TOKEN_SECRET must be set}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:?TELEGRAM_BOT_TOKEN must be set}
       TELEGRAM_BOT_USERNAME: ${TELEGRAM_BOT_USERNAME:-Dimondra_Ai_Bot}
       OWNER_TELEGRAM_ID: ${OWNER_TELEGRAM_ID}
       # userbot re-auth flow (/api/telegram/*) — StringSession login

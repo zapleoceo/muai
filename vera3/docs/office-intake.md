@@ -12,7 +12,8 @@
 ## Принципал и ACL
 
 - Реестр — env `OFFICE_SERVICE_TOKENS` (`имя:проект:токен,…`, токен ≥ 32 символов), отдельный от
-  `MCP_TOKENS` и `ROOM_TOKENS`. Разбор — `acl.parse_registry`, пересечение с другими наборами —
+  `MCP_TOKENS` и `ROOM_TOKENS`. Разбор — `acl.parse_registry` (запись режет общий
+  `vera_shared.token_lists.split_token_entries`, длину проверяет `is_strong_token`), пересечение с другими наборами —
   `acl.check_disjoint`, поиск по токену — `acl.resolve`. При старте `auth.validate_office_tokens`
   отвергает битую запись, короткий токен и токен, совпавший с MCP/комнатой; на лету
   `auth.load_office_registry` при битом env отдаёт пустой реестр (все запросы 401).

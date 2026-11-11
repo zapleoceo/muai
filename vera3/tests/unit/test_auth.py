@@ -130,3 +130,16 @@ def test_widget_signature_old_auth_date_rejected(auth_module):
     h = hmac.new(secret_key, check_string.encode(), hashlib.sha256).hexdigest()
     data = {**fields, "hash": h}
     assert auth_module.verify_telegram_auth(data) is None
+
+
+@pytest.mark.parametrize("var", ["TOKEN_SECRET", "TELEGRAM_BOT_TOKEN"])
+@pytest.mark.parametrize("value", ["", "   "])
+def test_empty_secret_fails_closed_at_import(auth_module, monkeypatch, var, value):
+    import importlib
+    monkeypatch.setenv(var, value)
+    try:
+        with pytest.raises(RuntimeError, match=var):
+            importlib.reload(auth_module)
+    finally:
+        monkeypatch.setenv(var, "restored-non-empty-secret")
+        importlib.reload(auth_module)

@@ -12,8 +12,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 
 from vera_shared.room.task_fields import PROJECT_RE
+from vera_shared.token_lists import MIN_TOKEN_LEN, is_strong_token, split_token_entries
 
-MIN_TOKEN_LEN = 32
 SERVICE_TYPE = "service"
 ACTIONS = frozenset({"create", "answer", "list", "delivered"})
 _NAME_RE = re.compile(r"^[a-z0-9_-]{1,32}$")
@@ -34,12 +34,11 @@ class OfficePrincipal:
 def parse_registry(raw: str | None) -> dict[str, OfficePrincipal]:
     """{токен: принципал}. Битая запись или короткий токен — исключение: сервис не стартует."""
     registry: dict[str, OfficePrincipal] = {}
-    for item in filter(None, (p.strip() for p in (raw or "").split(","))):
-        name, _, rest = item.partition(":")
-        project, _, token = rest.partition(":")
+    for parts in split_token_entries(raw, 3):
+        name, project, token = parts if len(parts) == 3 else ("", "", "")
         if not _NAME_RE.match(name) or not PROJECT_RE.match(project) or not token:
             raise ValueError("OFFICE_SERVICE_TOKENS entries must look like name:project:token")
-        if len(token) < MIN_TOKEN_LEN:
+        if not is_strong_token(token):
             raise ValueError(f"office token for {name} is shorter than {MIN_TOKEN_LEN} characters")
         if token in registry:
             raise ValueError("OFFICE_SERVICE_TOKENS lists the same token twice")

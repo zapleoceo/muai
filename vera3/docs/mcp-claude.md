@@ -41,6 +41,12 @@ vera3-mcp :8000 (хост 127.0.0.1:8007)          services/mcp, пакет vera
   `mcp_audit.client`) и/или `MCP_TOKEN=<hex>` (имя `default`). Токен короче
   32 символов не принимается, а сервис при старте падает с `WeakTokenError`,
   называя клиента (`validate_tokens`). Генерация: `openssl rand -hex 32`.
+  Один токен дважды (внутри `MCP_TOKENS` или в `MCP_TOKEN` и `MCP_TOKENS`
+  сразу) - тоже отказ старта (`ValueError` с именами клиентов, без самого
+  токена): раньше поздняя запись молча перезаписывала имя в аудите. На лету
+  `load_tokens` такой токен не пускает вовсе. Разбор и проверка длины общие
+  с `ROOM_TOKENS` и `OFFICE_SERVICE_TOKENS`: `vera_shared.token_lists`
+  (`split_token_entries`, `is_strong_token`, `repeated_tokens`, `MIN_TOKEN_LEN`).
 - Fail-closed: ни одного токена — любой запрос получает 401. `/healthz`
   открыт (для healthcheck контейнера и монитора). Без аутентификации
   проходят только `lifespan` и `/healthz`; websocket закрывается.

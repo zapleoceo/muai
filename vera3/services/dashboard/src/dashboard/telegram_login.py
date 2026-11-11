@@ -32,6 +32,7 @@ from vera_shared.db.engine import get_session
 from vera_shared.db.models_sources import TelegramSessionRow
 
 from dashboard.auth import COOKIE_NAME, require_owner
+from dashboard.csrf import same_origin_or_403
 from dashboard.ui.shell import standalone_html
 
 log = logging.getLogger(__name__)
@@ -112,6 +113,8 @@ async def telegram_start_form(request: Request):
 @router.post("/api/telegram/start", response_class=HTMLResponse)
 async def telegram_start(request: Request, phone: str = Form(...)):
     require_owner(request, request.cookies.get(COOKIE_NAME))
+    if (denied := same_origin_or_403(request)) is not None:
+        return denied
     await _prune_flows()
 
     from telethon import TelegramClient
@@ -150,6 +153,8 @@ async def telegram_verify(
     password: str = Form(""),
 ):
     require_owner(request, request.cookies.get(COOKIE_NAME))
+    if (denied := same_origin_or_403(request)) is not None:
+        return denied
     await _prune_flows()
     flow = _flows.get(flow_id)
     if flow is None:

@@ -30,6 +30,7 @@ from vera_shared.graph.repo import (
 from vera_shared.graph.suggestions import count_pending_suggestions
 
 from dashboard.auth import OWNER_ID
+from dashboard.csrf import same_origin_or_403
 from dashboard.graph_labels import predicate_label, role_label
 from dashboard.graph_page import graph_body
 from dashboard.render import _render, owner_or_auth_error, owner_or_blank_401
@@ -94,6 +95,8 @@ async def graph_recluster(request: Request):
     Работает в фоне — страница просто перезагружается и подтянет результат."""
     if (resp := owner_or_auth_error(request)) is not None:
         return resp
+    if (denied := same_origin_or_403(request)) is not None:
+        return denied
     if not _recluster["running"]:
         _recluster["running"] = True
         t = asyncio.create_task(_recluster_bg())

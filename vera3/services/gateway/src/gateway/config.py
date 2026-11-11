@@ -13,10 +13,6 @@ class Settings(BaseSettings):
     internal_secret: str = ""           # для service-to-service
     owner_telegram_id: int = 0          # для admin auth
 
-    # Webhook secrets
-    telegram_webhook_secret: str = ""
-    manychat_webhook_secret: str = ""
-
     # External services
     hatchet_url: str = "http://hatchet:7077"
     search_url: str = "http://brain-search:8000"

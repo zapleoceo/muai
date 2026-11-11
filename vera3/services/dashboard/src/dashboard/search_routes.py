@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse
 from vera_shared.redact_view import redact_view
 
 from dashboard.auth import COOKIE_NAME, require_owner
+from dashboard.csrf import same_origin_or_403
 from dashboard.render import esc
 from dashboard.search_view import SOURCES_SHOWN, sources_html  # noqa: F401
 from dashboard.ui.markdown import render_markdown
@@ -28,6 +29,8 @@ async def search_ui(request: Request, q: str = Form(...)):  # noqa: B008
         require_owner(request, request.cookies.get(COOKIE_NAME))
     except HTTPException:
         return HTMLResponse('<div class="error">Auth required</div>', status_code=401)
+    if (denied := same_origin_or_403(request)) is not None:
+        return denied
     try:
         async with httpx.AsyncClient(timeout=90) as c:
             r = await c.post(f"{SEARCH_URL}/search", json={"q": q, "limit": 15},

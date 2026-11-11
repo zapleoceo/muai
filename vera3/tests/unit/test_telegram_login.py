@@ -21,9 +21,9 @@ def test_esc_neutralizes_html():
 
 
 def test_phone_form_prefills_env_phone(monkeypatch):
-    monkeypatch.setenv("TELEGRAM_PHONE", "+380994811889")
+    monkeypatch.setenv("TELEGRAM_PHONE", "+10000000003")
     html = _phone_form()
-    assert "+380994811889" in html
+    assert "+10000000003" in html
     assert 'action="/api/telegram/start"' in html
 
 

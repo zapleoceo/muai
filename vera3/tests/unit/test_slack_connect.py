@@ -23,6 +23,7 @@ from vera_shared.crypto import decrypt, is_encrypted  # noqa: E402
 from vera_shared.db.models_sources import SlackAuthRow  # noqa: E402
 
 client = TestClient(app)
+SAME_ORIGIN = {"Sec-Fetch-Site": "same-origin"}
 TOKEN = "xoxp-secret-value-do-not-leak"
 WHO = {"ok": True, "team_id": "T1", "team": "Sintegrum Team",
        "user_id": "U0ME", "user": "dima"}
@@ -46,7 +47,7 @@ class TestAuthGate:
         assert r.status_code == 401
 
     def test_form_shows_required_scopes(self):
-        r = client.get("/api/slack/start", cookies={COOKIE_NAME: _owner_cookie()})
+        r = client.get("/api/slack/start", cookies={COOKIE_NAME: _owner_cookie()}, headers=SAME_ORIGIN)
         assert r.status_code == 200
         for scope in ("channels:history", "im:history", "mpim:read", "files:read"):
             assert scope in r.text
@@ -151,7 +152,7 @@ class TestNoLeak:
         with patch.object(slack_connect, "verify",
                           AsyncMock(return_value=({}, "токен не принят"))):
             r = client.post("/api/slack/start", data={"token": TOKEN},
-                            cookies={COOKIE_NAME: _owner_cookie()})
+                            cookies={COOKIE_NAME: _owner_cookie()}, headers=SAME_ORIGIN)
         assert r.status_code == 400
         assert "токен не принят" in r.text
         assert TOKEN not in r.text
@@ -161,7 +162,7 @@ class TestNoLeak:
                           AsyncMock(return_value=(WHO, None))), \
              patch.object(slack_connect, "save_token", AsyncMock()) as saved:
             r = client.post("/api/slack/start", data={"token": TOKEN},
-                            cookies={COOKIE_NAME: _owner_cookie()},
+                            cookies={COOKIE_NAME: _owner_cookie()}, headers=SAME_ORIGIN,
                             follow_redirects=False)
         assert r.status_code == 303
         assert r.headers["location"] == "/sources/slack"
@@ -173,5 +174,5 @@ class TestNoLeak:
              patch.object(slack_connect, "verify",
                           AsyncMock(return_value=({}, "токен не принят"))):
             client.post("/api/slack/start", data={"token": TOKEN},
-                        cookies={COOKIE_NAME: _owner_cookie()})
+                        cookies={COOKIE_NAME: _owner_cookie()}, headers=SAME_ORIGIN)
         assert TOKEN not in caplog.text

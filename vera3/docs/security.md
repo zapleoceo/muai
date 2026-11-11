@@ -22,6 +22,45 @@ admin path checks against it:
 `TOKEN_SECRET` itself lives in `.env` (mode 600). If it leaks, ALL of the
 above need rotation.
 
+### Fail-closed secrets
+
+- Dashboard `auth.py` reads `TOKEN_SECRET` and `TELEGRAM_BOT_TOKEN` through
+  `_required_secret`: missing, empty or whitespace-only raises `RuntimeError` at
+  import. With an empty key the session-cookie HMAC and the Telegram Login
+  signature are computable by anyone, and the owner ID is public, so an empty
+  secret must stop the process, not degrade it.
+- `infra/docker-compose.yml` passes `TOKEN_SECRET`, `TELEGRAM_BOT_TOKEN` and
+  `POSTGRES_PASSWORD` as `${VAR:?VAR must be set}` in every service. There is no
+  `vera` default password any more: role `vera` is a superuser, and postgres
+  stays bound to `127.0.0.1:5433` only.
+
+## Dashboard POST: same-origin gate
+
+Every state-changing dashboard POST checks the owner session AND
+`csrf.same_origin_or_403` (`Sec-Fetch-Site: same-origin` or `Origin` equal to
+`Host`) before any side effect; `SameSite=Lax` alone is not relied on. Gated
+since 2026-11-12 in addition to graph/merge/tasks/sources routes:
+`/control/settings`, `/control/backfill`, `/control/backfill-rate`, `/search-ui`,
+`/api/telegram/start`, `/api/telegram/verify`, `/api/instagram/start`,
+`/api/instagram/verify`, `/api/slack/start`, `/graph/recluster`.
+`/room/oauth/consent` keeps its own stricter check (`Origin` must equal the
+public origin exactly). Tests: `tests/unit/test_dashboard_csrf_gates.py`.
+
+## Agent and service tokens
+
+`MCP_TOKEN(S)`, `ROOM_TOKENS` and `OFFICE_SERVICE_TOKENS` share one parser and
+one strength rule (`vera_shared.token_lists`: `split_token_entries`,
+`is_strong_token`, `repeated_tokens`, `MIN_TOKEN_LEN = 32`). A token listed twice
+inside a set, or shared between realms, refuses start; the error names clients,
+never the token.
+
+## PII in the repository
+
+The repo is public. Tests use synthetic people only (`*.example` domains,
+`+1000000000x` phones). The `itstep-report` skill roster
+(`.claude/skills/itstep-report/people.json`) is local-only and in `.gitignore`;
+it was untracked on 2026-11-12, but older commits still contain it.
+
 ## Gmail OAuth permanence
 
 Stable refresh tokens need the OAuth app published in Google Cloud
