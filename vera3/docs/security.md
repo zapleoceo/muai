@@ -108,6 +108,20 @@ hide a secret column name require the value to match a text pattern.
 ### Выдача: дашборд, комната, gateway
 
 Та же `redact_view`/`redact_tree`, только на выходе; хранилище и аудит не меняются.
+Выбор полей записи — один помощник `redact_fields(obj, text_keys, tree_keys)` в
+`redact_view.py`: возвращает копию, строки из `text_keys` проходят `redact_view`,
+не-`None` значения из `tree_keys` — `redact_tree`, остальные ключи байт в байт. Им
+пользуются `redact_event_row` (дашборд), `_redact_search` (gateway `/v1/search`),
+`room_redact.py` (комната) и `_redacted` в brain-search `synthesis.py`.
+
+Почему движков три, а не один: `redact.py` (`redact_secrets`) — агрессивный, для
+текста, который читают другие агенты (комната, распознанная речь): режет длинные
+hex/base64, номера карт, IBAN, «пароль …» в свободной форме и готов потерять слово.
+`redact_view` — точный, для выдачи и LLM: UUID, hex, длинные числа и URL с id
+остаются, иначе ломаются поиск и ссылки. `llm/redact_boundary.py` движком не
+является: это обход формы сообщений чата (`content`, части `text`, аргументы
+`tool_calls`) поверх того же `redact_view`. Слить первые два — значит сменить
+выход одного из них.
 
 - **gateway** `GET /api/events/{id}`: `content_text` и `triage_metadata` (`redact_tree`);
   id, время, источник, статус не трогаются.

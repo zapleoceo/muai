@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from vera_shared.events.queries import recent_events as query_recent_events
 from vera_shared.graph.context import RELATIONSHIPS_LIMIT, entity_context_payload
 from vera_shared.graph.repo import find_entity_by_name
-from vera_shared.redact_view import redact_tree, redact_view
+from vera_shared.redact_view import redact_fields, redact_tree
 from vera_shared.search_client import SearchUnavailable, search_brain
 
 from gateway.auth import check_internal_secret
@@ -33,15 +33,10 @@ class SearchProxyRequest(BaseModel):
 
 
 def _redact_search(data: dict[str, Any]) -> dict[str, Any]:
-    out = dict(data)
-    if isinstance(out.get("answer"), str):
-        out["answer"] = redact_view(out["answer"])
-    if isinstance(out.get("agent_trace"), list):
-        out["agent_trace"] = redact_tree(out["agent_trace"])
+    out = redact_fields(data, text_keys=("answer",), tree_keys=("agent_trace",))
     if isinstance(out.get("results"), list):
-        out["results"] = [{**r, "content_preview": redact_view(r["content_preview"])}
-                          if isinstance(r, dict) and isinstance(r.get("content_preview"), str)
-                          else r for r in out["results"]]
+        out["results"] = [redact_fields(r, text_keys=("content_preview",))
+                          if isinstance(r, dict) else r for r in out["results"]]
     return out
 
 

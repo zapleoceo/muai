@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Iterable, Mapping
 from typing import Any
 
 MASK = "[скрыто]"
@@ -130,3 +131,16 @@ def redact_tree(obj: Any) -> Any:
     if isinstance(obj, list | tuple):
         return [redact_tree(v) for v in obj]
     return obj
+
+
+def redact_fields(obj: Mapping[str, Any], text_keys: Iterable[str] = (),
+                  tree_keys: Iterable[str] = ()) -> dict[str, Any]:
+    """Копия: строки в `text_keys` через redact_view, не-None в `tree_keys` через redact_tree."""
+    out = dict(obj)
+    for key in text_keys:
+        if isinstance(out.get(key), str):
+            out[key] = redact_view(out[key])
+    for key in tree_keys:
+        if out.get(key) is not None:
+            out[key] = redact_tree(out[key])
+    return out

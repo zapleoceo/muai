@@ -3,10 +3,9 @@ fencing_token, аренда, время и ссылки не трогаются:
 по ним работают идемпотентность и координатор."""
 from __future__ import annotations
 
-from collections.abc import Iterable
 from typing import Any
 
-from vera_shared.redact_view import redact_view
+from vera_shared.redact_view import redact_fields
 
 _MESSAGE_TEXT = ("body",)
 _TASK_TEXT = ("title", "note", "next_action", "last_progress_text", "waiting_reason")
@@ -16,18 +15,14 @@ _QUESTION_TEXT = ("question",)
 _DATA_TEXT = ("next_action", "title", "note", "reason", "result", "question", "text")
 
 
-def _mask(item: dict[str, Any], keys: Iterable[str]) -> dict[str, Any]:
-    return {k: redact_view(v) if k in keys and isinstance(v, str) else v for k, v in item.items()}
-
-
 def _refs(refs: Any) -> Any:
     if not isinstance(refs, list):
         return refs
-    return [_mask(r, ("excerpt",)) if isinstance(r, dict) else r for r in refs]
+    return [redact_fields(r, ("excerpt",)) if isinstance(r, dict) else r for r in refs]
 
 
 def message_view(m: dict[str, Any], max_body_chars: int = 0) -> dict[str, Any]:
-    out = _mask(m, _MESSAGE_TEXT)
+    out = redact_fields(m, _MESSAGE_TEXT)
     body = out["body"]
     truncated = max_body_chars > 0 and len(body) > max_body_chars
     return {**out, "body": body[:max_body_chars] if truncated else body,
@@ -42,7 +37,7 @@ def messages_view(items: list[dict[str, Any]], max_body_chars: int = 0
 def task_view(t: dict[str, Any] | None) -> dict[str, Any] | None:
     if t is None:
         return None
-    out = _mask(t, _TASK_TEXT)
+    out = redact_fields(t, _TASK_TEXT)
     if "refs" in t:
         out["refs"] = _refs(t["refs"])
     if "answered_questions" in t:  # выдача claim: текст вопроса и ответов владельца
@@ -57,24 +52,24 @@ def tasks_view(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _data(data: Any) -> Any:
     if not isinstance(data, dict):
         return data
-    out = _mask(data, _DATA_TEXT)
+    out = redact_fields(data, _DATA_TEXT)
     for side in ("before", "after"):
         if isinstance(data.get(side), dict):
-            out[side] = _mask(data[side], _DATA_TEXT)
+            out[side] = redact_fields(data[side], _DATA_TEXT)
     if "refs" in data:
         out["refs"] = _refs(data["refs"])
     return out
 
 
 def events_view(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [{**_mask(e, _EVENT_TEXT), "data": _data(e.get("data"))} if "data" in e
-            else _mask(e, _EVENT_TEXT) for e in items]
+    return [{**redact_fields(e, _EVENT_TEXT), "data": _data(e.get("data"))} if "data" in e
+            else redact_fields(e, _EVENT_TEXT) for e in items]
 
 
 def question_view(q: dict[str, Any]) -> dict[str, Any]:
-    masked = _mask(q, _QUESTION_TEXT)
+    masked = redact_fields(q, _QUESTION_TEXT)
     if "answers" in q:
-        masked["answers"] = [_mask(a, ("text",)) for a in q["answers"] or []]
+        masked["answers"] = [redact_fields(a, ("text",)) for a in q["answers"] or []]
     return masked
 
 
