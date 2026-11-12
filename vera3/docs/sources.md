@@ -345,7 +345,10 @@ telegram/slack/trello свои `[:8000]` сохранили: у них до по
 | `client.py` | `SlackClient` — только транспорт: токен, ретраи, 429 по `Retry-After`, пагинация. `SlackAuthError` на `invalid_auth`/`token_revoked`/`missing_scope` (ретраить бессмысленно), `SlackApiError` на остальное. Slack отвечает 200 даже на ошибку, поэтому разбирается тело, а не статус |
 | `mapper.py` | `message_to_event()` — упаковка в контракт `events`; `unwrap()` — разметка Slack → текст; `is_noise()` — служебное и ботовое; `parse_ts()` — `ts` → наивный UTC |
 | `store.py` | Состояние обхода: `upsert_conversations()`, `save_cursor()`, `watch_thread()`, `due_threads()`, `save_thread_cursor()`, `save_events()`; `kind_of()` — тип канала |
-| `poller.py` | `poll_conversation()` — прогон по каналу и решение о курсоре; `poll_threads()` — догон ответов в наблюдаемых тредах; `Profiles` — кэш профилей (имя плюс email/телефон/должность для связывания каналов); `bootstrap_ts()`, `newest_ts()`; `main_loop()` |
+| `poller.py` | `poll_conversation()` — прогон по каналу и решение о курсоре; `poll_threads()` — догон ответов в наблюдаемых тредах; `PermalinkBudget`; `bootstrap_ts()`; `main_loop()`. Реэкспортирует имена из трёх модулей ниже |
+| `slack_profiles.py` | `Profiles` — кэш профилей (имя плюс email/телефон/должность для связывания каналов) |
+| `slack_events.py` | `events_from()` — сообщения канала → спеки событий плюс permalink в пределах `PermalinkBudget` |
+| `slack_cursor.py` | `newest_ts()`, `skip_unreadable()` — чистые решения о курсоре и нечитаемом канале |
 
 Состояние обхода — `SlackConversationRow` и `SlackThreadRow`
 (`shared/vera_shared/db/models_sources.py`, таблицы `slack_conversations` и
