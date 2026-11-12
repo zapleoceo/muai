@@ -336,18 +336,21 @@ an unnecessary rung on the escalation ladder. Ten of eleven now run as uid
 10001 (`USER vera`, added after `pip install` — installation writes to the
 system `site-packages`).
 
-`ingestor-telegram` is deliberately **still root**, and this is the one thing
-to finish by hand. It writes its StringSession into the `vera3_tg_sessions`
-volume; Docker only transfers ownership from the image onto an *empty*
-volume, and that volume already exists in production owned by root. Adding
-`USER` without fixing it would mean `Permission denied` on the session write
-— i.e. the main data source down immediately after a deploy that runs
-automatically on push to master. One-time fix on the host:
+`ingestor-telegram` ran as root until 2026-11-12 for one reason: it writes its
+StringSession into the `vera3_tg_sessions` volume, Docker only transfers
+ownership from the image onto an *empty* volume, and the production volume
+was already owned by root - adding `USER` alone would have meant
+`Permission denied` on the session write right after the automatic deploy.
+On 2026-11-12 the volume was chowned on the host *before* the deploy (the
+running root container keeps writing regardless of ownership):
 
 ```bash
-docker compose stop ingestor-telegram
-docker run --rm -v vera3_tg_sessions:/s alpine chown -R 10001 /s
+docker run --rm -v vera3_vera3_tg_sessions:/s alpine chown -R 10001 /s
 ```
+
+and the image got the same `USER vera` (uid 10001) as the other ten, with
+`/sessions` created and owned by `vera` in the image so a fresh volume gets the
+right owner by itself. Now all eleven images run as uid 10001.
 
 then add the same two lines to its Dockerfile.
 
