@@ -21,6 +21,7 @@ EMPTY = {"work": "Задач в работе пока нет", "me": "Ничег
 PRIORITY = {0: "срочно", 1: "высокий", 2: "обычный", 3: "низкий"}
 PROGRESS_CHARS = 140
 _WARN = ("needs_owner", "lease_expired", "stale_progress")
+VIA_LABELS = {"telegram": "Telegram-бот", "dashboard": "дашборд", "start": "старт", "next": "очередь"}
 
 _CSS = """<style>
 .tk-row{display:block;padding:.7rem .9rem;border:1px solid var(--line);border-radius:var(--r-md);margin:.5rem 0;cursor:pointer}
@@ -94,11 +95,18 @@ def _field(label: str, value: str) -> str:
     return f'<dt class="muted">{label}</dt><dd>{value}</dd>'
 
 
+def _actor(e: RoomTaskEventRow) -> str:
+    data = e.data if isinstance(e.data, dict) else {}
+    who = str(data.get("actor") or e.agent or "—")
+    via = data.get("via")
+    return f"{who} · {VIA_LABELS.get(str(via), str(via))}" if via else who
+
+
 def _event(e: RoomTaskEventRow, now: datetime) -> str:
     text = f" — {esc(e.text)}" if e.text else ""
     return (f'<div class="tk-ev"><span class="muted">{esc(f"{e.at:%Y-%m-%d %H:%M}")} UTC · '
             f'{esc(ago(e.at, now))}</span> <b>{esc(e.kind)}</b> '
-            f'<span class="muted">{esc(e.agent or "—")}</span>{text}</div>')
+            f'<span class="muted">{esc(_actor(e))}</span>{text}</div>')
 
 
 def task_detail(item: TaskItem, events: list[RoomTaskEventRow],

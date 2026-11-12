@@ -156,3 +156,16 @@ def test_recovery_hold_lands_in_the_owner_tab():
     from dashboard.tasks_service import ME_STATES
     from vera_shared.room.attention import RECOVERY_HOLD
     assert RECOVERY_HOLD in ME_STATES
+
+
+def test_detail_shows_who_and_channel_of_owner_cancel():
+    ev = event(kind="cancelled", agent="owner", text="Отмена: кнопка пульта",
+               data={"by": "owner", "actor": "owner", "via": "telegram"})
+    html = task_detail(item(status="cancelled"), [ev], NOW)
+    assert "owner · Telegram-бот" in html
+    assert "2026-10-09 12:00" in html
+
+
+def test_detail_event_without_via_shows_agent_only():
+    html = task_detail(item(), [event(data={"x": 1})], NOW)
+    assert "<span class=\"muted\">claude</span>" in html

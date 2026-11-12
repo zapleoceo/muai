@@ -364,6 +364,9 @@ bearer_token_env_var = "VERA_ROOM_TOKEN"
 `GROUP_CSS`), `tasks_view` (`tasks_body`, `tabs_nav`, `task_row`,
 `task_detail`), `tasks_routes` (`tasks_page`, `task_fragment`). Внимание считает
 `task_attention.attention_map` — тот же `attention`, что у MCP.
+В истории карточки у каждого события видно, кто и через что: `data.actor` (иначе `agent`)
+и канал `data.via` подписью из `VIA_LABELS` (`telegram` — «Telegram-бот», `dashboard` — «дашборд»),
+плюс время в UTC. Так отмена с пульта в боте читается как `cancelled owner · Telegram-бот`.
 
 Вкладки `?tab=work|me|done` (по умолчанию `work`), счётчики на всех трёх:
 `done` — `done`/`cancelled`; `me` («Нужен я») — `needs_owner`, `lease_expired`,
