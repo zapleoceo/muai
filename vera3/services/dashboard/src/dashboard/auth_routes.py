@@ -11,6 +11,7 @@ from dashboard.auth import (
     issue_session,
     verify_telegram_auth,
 )
+from dashboard.csrf import same_origin_or_403
 from dashboard.render import _AUTH_ERROR, _LOGIN_HTML, FAVICON_LINKS
 
 router = APIRouter()
@@ -53,11 +54,21 @@ async def tg_login(request: Request):
     return resp
 
 
-@router.get("/api/logout")
-async def logout():
+@router.post("/api/logout", response_model=None)
+async def logout(request: Request):
+    """Только POST со страницы дашборда: GET-выход позволял чужому сайту разлогинить владельца
+    картинкой или ссылкой."""
+    if (denied := same_origin_or_403(request)) is not None:
+        return denied
     resp = RedirectResponse(url="/login", status_code=303)
     resp.delete_cookie(COOKIE_NAME, path="/")
     return resp
+
+
+@router.get("/api/logout")
+async def logout_link() -> RedirectResponse:
+    """Старые закладки на GET-выход: сессию не трогаем, ведём на главную."""
+    return RedirectResponse(url="/", status_code=303)
 
 
 @router.get("/healthz")

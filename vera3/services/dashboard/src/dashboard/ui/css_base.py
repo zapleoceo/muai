@@ -89,6 +89,8 @@ nav.top .menu>summary:hover,nav.top .menu[open]>summary,nav.top .menu>summary.on
 nav.top .menu-pop{position:absolute;right:0;top:calc(100% + .5rem);min-width:11rem;padding:.35rem;display:grid;background:var(--glass);
 backdrop-filter:blur(26px);border:1px solid var(--line-strong);border-radius:var(--r-md);box-shadow:var(--shadow-2);animation:pop .18s var(--ease)}
 nav.top .menu-pop a{border-radius:var(--r-sm);padding:.6rem .8rem}
+nav.top .menu-pop form{margin:0}nav.top .menu-pop button.out{width:100%;justify-content:flex-start;padding:.6rem .8rem;border-radius:var(--r-sm);background:transparent;border-color:transparent;box-shadow:none;color:var(--text);font-weight:inherit}
+nav.top .menu-pop button.out:hover{background:rgba(255,255,255,.06);color:var(--text-strong);filter:none;transform:none}
 nav.top .menu-pop .only-mobile{display:none}
 .ico-svg{width:1.15em;height:1.15em;stroke:currentColor;fill:none;stroke-width:1.7;stroke-linecap:round;stroke-linejoin:round;vertical-align:-.2em}
 @media (pointer:coarse),(max-width:640px){button,a[role=button],.btn,select,input:not([type=checkbox]):not([type=radio]),

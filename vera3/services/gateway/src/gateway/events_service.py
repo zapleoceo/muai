@@ -54,5 +54,4 @@ async def get_event_view(event_id: int) -> dict[str, Any] | None:
         "importance": row.importance,
         "nature": row.nature,
         "project": row.project,
-        "ready_subtype": row.ready_subtype,
     }

@@ -965,3 +965,7 @@ primary candidate pool includes recent visible events even when their
 embedding is still pending. Rows with embeddings retain vector similarity;
 the ANN pass can still add older semantic matches. This is a read-path change:
 it does not alter stored events, triage, links, or embedding jobs.
+
+`ready_subtype` (2026-11-12) убран и из строгой JSON-схемы триажа, и из записи воркера,
+и из ответа gateway: поле было IT STEP-специфичным и без читателей. Колонка
+`events.ready_subtype` осталась (без миграции), новые строки получают NULL.
