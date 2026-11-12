@@ -176,6 +176,8 @@ def main() -> None:
     rep.add_argument("--to", required=True)
     rep.add_argument("--room", default="main")
     args = parser.parse_args()
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(encoding="utf-8")
     load_env()
     inbox = Path(os.environ.get("ROOM_PUSH_INBOX", DEFAULT_INBOX))
     if args.cmd == "serve":

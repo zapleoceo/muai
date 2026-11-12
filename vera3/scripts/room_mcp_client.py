@@ -9,6 +9,8 @@ import urllib.request
 from typing import Any
 
 PROTOCOL_VERSION = "2025-06-18"
+#: Cloudflare перед Верой отвечает 403 (error 1010) на User-Agent «Python-urllib/…».
+USER_AGENT = "vera-room-listener/2"
 
 
 class ToolError(RuntimeError):
@@ -34,7 +36,7 @@ def _rpc(url: str, token: str, payload: dict[str, Any], session: str | None,
          timeout: float) -> tuple[str | None, bytes]:
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json",
                "Accept": "application/json, text/event-stream",
-               "MCP-Protocol-Version": PROTOCOL_VERSION}
+               "MCP-Protocol-Version": PROTOCOL_VERSION, "User-Agent": USER_AGENT}
     if session:
         headers["Mcp-Session-Id"] = session
     req = urllib.request.Request(url, data=json.dumps(payload).encode(), headers=headers,

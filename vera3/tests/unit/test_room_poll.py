@@ -116,7 +116,7 @@ def fake_mcp():
 
         def do_POST(self) -> None:
             body = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
-            seen.append({"auth": self.headers["Authorization"],
+            seen.append({"auth": self.headers["Authorization"], "ua": self.headers["User-Agent"],
                          "session": self.headers.get("Mcp-Session-Id"), "body": body})
             if body["method"] == "notifications/initialized":
                 self.send_response(202)
@@ -150,6 +150,7 @@ def test_call_tool_speaks_mcp_over_sse(fake_mcp) -> None:
         "initialize", "notifications/initialized", "tools/call"]
     assert [s["session"] for s in seen] == [None, "s-1", "s-1"]
     assert all(s["auth"] == "Bearer tok" for s in seen)
+    assert all(s["ua"] == client.USER_AGENT for s in seen)
 
 
 def test_call_tool_raises_on_tool_error(monkeypatch) -> None:
