@@ -175,6 +175,13 @@ Neo4j swap stays inside `graph/`.
 (`graph_snapshot`, `GRAPH_MAX_NODES`). Импорт `vera_shared.graph.repo.<имя>`
 остаётся каноническим для сервисов.
 
+ORM-модели графа: `db/models_graph.py` — фасад, реэкспортирует все модели и при
+импорте регистрирует все таблицы графа на `Base.metadata`. Сами модели по
+агрегатам: `models_graph_entities.py` (`EntityRow`, `EntityAvatarRow`,
+`EntityAliasRow`, `MembershipRow`), `models_graph_relations.py`
+(`RelationshipRow`, `PairStatsRow`, `ConnectionSuppressionRow`,
+`MergeSuggestionRow`), `models_graph_layers.py` (`PatternRow`, `IdentityNodeRow`).
+
 ### L1 — Reality
 
 - `entities` — resolved real-world thing (person, group, channel, place, project)
