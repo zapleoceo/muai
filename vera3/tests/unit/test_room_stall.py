@@ -73,7 +73,7 @@ def test_days_word(n, word):
 async def make(task_id: str, *, status: str = "blocked", age: timedelta = timedelta(days=5),
                creator: str = "dot") -> None:
     await tasks.open_task(room=R, task_id=task_id, agent=creator, title=f"Задача {task_id}",
-                          paths=None, project="Lamas")
+                          paths=None, project="Vera")
     async with get_session() as s:
         row = await s.get(RoomTaskRow, (R, task_id))
         row.status = status
@@ -188,3 +188,41 @@ async def test_actions_need_a_reason_and_an_existing_task(sqlite_db):
         await owner_task_actions.continue_by_owner(room=R, task_id="A", reason=" ")
     with pytest.raises(tasks.TaskNotFound):
         await owner_task_actions.snooze_by_owner(room=R, task_id="nope", reason="x")
+
+
+@pytest.mark.parametrize(("task_id", "refs", "tracked"), [
+    ("LAM-307", [], True),
+    ("ORCH-620", None, True),
+    ("orch-research-daily", [{"kind": "jira", "ref": "ORCH-1"}], True),
+    ("x", [{"kind": "url", "ref": "https://itstep.atlassian.net/browse/SIN-1"}], True),
+    ("x", [{"kind": "url", "ref": "https://jira.example/browse/LAM-5"}], True),
+    ("help-vc-1", [{"kind": "url", "ref": "https://github.com/a/b/pull/3"}], False),
+    ("webworms-wa-redraw", ["not-a-dict"], False),
+])
+def test_jira_tracked(task_id, refs, tracked):
+    from vera_shared.room.stall_scope import jira_tracked
+    assert jira_tracked(task_id, refs) is tracked
+
+
+def test_excluded_projects_default_env_and_empty():
+    from vera_shared.room.stall_scope import excluded_projects
+    assert excluded_projects({}) == frozenset({"lamas", "sintegrum", "sinhrm", "ии-звонилка"})
+    assert excluded_projects({"STALL_EXCLUDE_PROJECTS": " Foo, bar ,"}) == {"foo", "bar"}
+    assert excluded_projects({"STALL_EXCLUDE_PROJECTS": ""}) == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_jira_tasks_and_excluded_projects_stay_off_the_board(sqlite_db, monkeypatch):
+    monkeypatch.delenv("STALL_EXCLUDE_PROJECTS", raising=False)
+    await make("MINE")
+    await make("LAM-1")
+    await tasks.open_task(room=R, task_id="SINT", agent="dot", title="t", paths=None,
+                          project="sintegrum")
+    await tasks.open_task(room=R, task_id="REF", agent="dot", title="t", paths=None,
+                          project="Orchestra", refs=[{"kind": "jira", "ref": "ORCH-9"}])
+    async with get_session() as s:
+        for t in ("SINT", "REF"):
+            row = await s.get(RoomTaskRow, (R, t))
+            row.status = "blocked"
+            row.updated_at = row.created_at = utc_naive_now() - timedelta(days=5)
+    assert await ids() == ["MINE"]

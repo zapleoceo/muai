@@ -16,7 +16,7 @@ R = "main"
 
 async def make(task_id: str, days: int) -> None:
     await tasks.open_task(room=R, task_id=task_id, agent="dot", title=f"Задача {task_id}",
-                          paths=None, project="Lamas")
+                          paths=None, project="Vera")
     async with get_session() as s:
         row = await s.get(RoomTaskRow, (R, task_id))
         row.status = "blocked"
