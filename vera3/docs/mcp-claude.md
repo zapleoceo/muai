@@ -54,7 +54,11 @@ vera3-mcp :8000 (хост 127.0.0.1:8007)          services/mcp, пакет vera
   (`infra/nginx/vera3-mcp-zones.conf` + `limit_req` в location, ответ 429). Хост
   за Cloudflare, поэтому в том же файле стоят `set_real_ip_from` с диапазонами
   Cloudflare (cloudflare.com/ips-v4 и ips-v6) и `real_ip_header CF-Connecting-IP`,
-  а ключ зоны — `$binary_remote_addr`.
+  а ключ зоны — `$binary_remote_addr`. Параллелизм по токену — 64 соединения
+  (`limit_conn vera_mcp_conn`): каждая сессия держит SSE-поток до часа, а токен
+  комнаты делят десятки сессий. При прежних 10 новые сессии получали 429 на
+  подключении (2026-11-11). После смены лимита нужен ручной
+  `nginx -t && systemctl reload nginx` на хосте.
 - Роль `vera_ro` (sql_query) ограничена `CONNECTION LIMIT 4`.
 - `ROOM_TOKENS` — отдельные токены комнаты агентов: тот же `/mcp`, но только
   `room_*`-инструменты, без памяти (см. [agent-room.md](./agent-room.md)).
