@@ -176,6 +176,10 @@ Username в Telegram уникален глобально, поэтому две 
 сущность автора: telegram/instagram received → отправитель по alias,
 gmail received → адрес From, любые sent и «свои» источники → владелец
 (alias `user:OWNER_TG_ID`). Автора нет в графе → self-связь пропускается.
+Раскладка: `graph/rel_author.py` — `author_entity_of_event`;
+`graph/rel_extract_schema.py` — `PREDICATES`, `PROMPT`, `REL_EXTRACT_JSON_SCHEMA`,
+`parse_relationships`, `RelExtractOutcome`; `graph/rel_extract.py` —
+`extract_and_store` и реэкспорт всего перечисленного.
 
 История бага (2026-07-19): «Я» резолвилось по имени и совпадало с чужим
 аккаунтом, у которого first_name = «Я», — 221 ребро от 6+ разных авторов
