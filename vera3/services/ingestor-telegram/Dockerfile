@@ -6,17 +6,11 @@ RUN pip install --no-cache-dir /tmp/shared && rm -rf /tmp/shared
 COPY services/ingestor-telegram/pyproject.toml ./
 COPY services/ingestor-telegram/src/ ./src/
 RUN pip install --no-cache-dir -e .
-# ЕДИНСТВЕННЫЙ сервис, оставленный под root, и это не недосмотр.
-#
-# Он пишет StringSession в том `vera3_tg_sessions`, смонтированный на
-# /sessions. Том в проде УЖЕ существует и принадлежит root: Docker переносит
-# владельца из образа только на ПУСТОЙ том, при первом монтировании. Добавить
-# сюда `USER vera` — значит получить Permission denied на записи сессии, то
-# есть уронить основной источник данных сразу после деплоя, который
-# запускается автоматически по пушу в master.
-#
-# Чтобы дожать: один раз на хосте
-#   docker compose stop ingestor-telegram
-#   docker run --rm -v vera3_tg_sessions:/s alpine chown -R 10001 /s
-# и только потом добавлять сюда те же две строки, что у остальных десяти.
+# Под root работал до 12.11.2026: том `vera3_tg_sessions` (StringSession на
+# /sessions) был создан под root, а Docker переносит владельца из образа только
+# на пустой том. Перед этим деплоем на хосте один раз выполнено
+#   docker run --rm -v vera3_vera3_tg_sessions:/s alpine chown -R 10001 /s
+# Новый том получит владельца из образа сам: /sessions создаётся здесь под vera.
+RUN useradd --system --no-create-home --uid 10001 vera     && mkdir -p /sessions && chown -R vera /app /sessions
+USER vera
 CMD ["python", "-m", "ingestor_telegram.userbot"]
