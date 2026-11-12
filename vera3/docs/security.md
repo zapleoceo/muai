@@ -259,3 +259,10 @@ dashboard `search_routes` и `entities_routes`, `_short` в `broker_client`)
 секретом не подтвердится. Аудио-загрузка whisper обходит текстовое маскирование
 по замыслу. Также маскируются `tool_calls[].function.arguments` и части
 `input_text`.
+
+## Выход из дашборда только POST (2026-11-12)
+
+`POST /api/logout` за `same_origin_or_403`; меню отправляет форму. `GET /api/logout`
+больше не трогает сессию и ведёт на главную: раньше выход по GET позволял чужому сайту
+разлогинить владельца картинкой или ссылкой (`logout`, `logout_link` в `auth_routes.py`).
+В меню рядом с "Настройки" появилась ссылка "Подтверждения" на `/approvals`.

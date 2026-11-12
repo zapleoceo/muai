@@ -78,7 +78,7 @@ class TestShell:
             assert label in html
         for href in ('href="/"', 'href="/events"', 'href="/graph"',
                      'href="/sources"', 'href="/journal"', 'href="/settings"',
-                     'href="/api/logout"'):
+                     'action="/api/logout"'):
             assert href in html
         assert ">log<" not in html and "сущности" not in html
 

@@ -203,7 +203,7 @@ def _triage_item(event_id: int, **overrides) -> dict:
     base = {
         "event_id": event_id, "importance": 40, "project": "other",
         "nature": "world_event", "topics": [], "people_mentioned": [],
-        "signals": [], "needs_action": False, "ready_subtype": None,
+        "signals": [], "needs_action": False,
     }
     base.update(overrides)
     return base

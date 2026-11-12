@@ -153,7 +153,6 @@ async def process_pending() -> int:
                         importance=metadata.get("importance") if metadata else None,
                         nature=metadata.get("nature") if metadata else None,
                         project=metadata.get("project") if metadata else None,
-                        ready_subtype=metadata.get("ready_subtype") if metadata else None,
                         triage_started_at=None,
                         triage_error=None,
                     )

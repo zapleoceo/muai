@@ -64,11 +64,10 @@ def test_schema_project_enum_matches_vocab():
     assert enum == PROJECT_VOCAB
 
 
-def test_schema_ready_subtype_allows_null_and_two_values():
+def test_schema_has_no_ready_subtype():
+    """IT STEP-специфичный ready_subtype убран 2026-11: читателей не было (колонка осталась)."""
     schema = TRIAGE_JSON_SCHEMA["json_schema"]["schema"]
-    prop = schema["properties"]["ready_subtype"]
-    assert "null" in prop["type"]
-    assert set(prop["enum"]) == {"deal", "openhouse", None}
+    assert "ready_subtype" not in str(schema)
 
 
 def test_schema_all_top_level_properties_required():
@@ -123,7 +122,7 @@ async def test_triage_one_passes_schema_not_json_object():
             json.dumps({
                 "importance": 50, "project": "other", "nature": "world_event",
                 "topics": [], "people_mentioned": [], "signals": [],
-                "needs_action": False, "ready_subtype": None,
+                "needs_action": False,
             }),
             {"provider": "test", "model": "test/model"},
         )

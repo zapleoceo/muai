@@ -43,14 +43,10 @@ _TRIAGE_ITEM_PROPERTIES: dict[str, Any] = {
         },
     },
     "needs_action": {"type": "boolean"},
-    "ready_subtype": {
-        "type": ["string", "null"],
-        "enum": ["deal", "openhouse", None],
-    },
 }
 _TRIAGE_ITEM_REQUIRED = [
     "importance", "project", "nature", "topics",
-    "people_mentioned", "signals", "needs_action", "ready_subtype",
+    "people_mentioned", "signals", "needs_action",
 ]
 
 TRIAGE_JSON_SCHEMA = {

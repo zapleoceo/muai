@@ -114,11 +114,13 @@ class TestConsistency:
         for key in ("telegram", "gmail", "vera_memory", "unknown-x"):
             assert source_icon(key).startswith("<svg") and "<circle" in source_icon("unknown-x")
 
-    def test_nav_has_settings_and_logout_in_one_menu(self):
+    def test_nav_has_settings_approvals_and_post_logout_in_one_menu(self):
         from dashboard.ui.shell import nav
         html = nav("home")
         menu = html[html.index('<details class="menu">'):]
-        assert 'href="/settings"' in menu and 'href="/api/logout"' in menu
+        assert 'href="/settings"' in menu and 'href="/approvals"' in menu
+        assert '<form method="post" action="/api/logout">' in menu
+        assert 'href="/api/logout"' not in menu
 
     def test_mobile_events_are_stacked_cards_with_text_first(self):
         from dashboard.ui.theme import VERA_CSS

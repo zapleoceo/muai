@@ -55,8 +55,10 @@ def nav(active: str) -> str:
     left = "".join(link(*item) for item in NAV_ITEMS)
     on = ' class="on"' if key == "settings" else ""
     menu = (f'<li><details class="menu"><summary{on} title="Настройки и выход" aria-label="Меню">{_GEAR}</summary>'
-            '<div class="menu-pop"><a class="only-mobile" href="/journal">Журнал правок</a><a href="/settings">Настройки</a>'
-            '<a class="out" href="/api/logout">Выйти</a></div></details></li>')
+            '<div class="menu-pop"><a class="only-mobile" href="/journal">Журнал правок</a>'
+            '<a href="/approvals">Подтверждения</a><a href="/settings">Настройки</a>'
+            '<form method="post" action="/api/logout"><button type="submit" class="out">Выйти</button>'
+            '</form></div></details></li>')
     right = link("journal", "/journal", "Журнал").replace("<li>", '<li class="nav-journal">', 1) + menu
     return (f'<nav class="top" aria-label="Разделы"><ul><li class="brand"><span class="orb"></span>'
             f'<span class="word">Vera</span></li>{left}</ul><ul>{right}</ul></nav>')
