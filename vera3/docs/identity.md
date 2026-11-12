@@ -97,6 +97,14 @@ Ruslan Kovtiukh (gmail + slack) и Yevhenii Pavlenko (gmail + slack, а след
 
 ## 2. Кандидаты и LLM-судья (`vera_shared/graph/identity.py`)
 
+Раскладка по модулям (`identity.py` реэкспортирует всё ниже — старые импорты
+`from vera_shared.graph.identity import …` работают):
+`identity_names.py` — нормализация имён (`canonical_name_parts`);
+`identity_candidates.py` — поиск пар (`find_identity_candidates`);
+`identity_store.py` — весь SQL: входы для поиска (`load_identity_inputs`) и
+строки `merge_suggestions`; `identity_kind.py` — `entity_kind_for_email`;
+в самом `identity.py` — LLM-судья и `run_identity_analysis`.
+
 - `canonical_name_parts(name)` — (имя, фамилия) в канонической форме:
   lower, транслит LAT→RU по звучанию, уменьшительные → полные
   (Маша/Masha → мария; Оля/Olga → ольга). Эмодзи и мусор отбрасываются.
