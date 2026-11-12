@@ -12,6 +12,7 @@ from vera_shared.db.models_room import RoomTaskEventRow, RoomTaskRow
 from vera_shared.room.owner_block import owner_block
 from vera_shared.room.owner_task_actions import SNOOZE_ACTION
 from vera_shared.room.stall_rules import ACTIVE_STATUSES, StallFacts, is_stalled
+from vera_shared.room.stall_scope import excluded_projects, off_board
 from vera_shared.timeutil import parse_iso_naive, utc_naive_now
 from vera_shared.voice_help.attest_state import attestation_for
 
@@ -66,10 +67,12 @@ def _view(row: RoomTaskRow, now: datetime) -> Stalled:
 
 
 async def stalled_tasks(now: datetime | None = None) -> list[Stalled]:
-    """Зависшие задачи, самые давние первыми."""
+    """Зависшие задачи, самые давние первыми; задачи из Jira (`stall_scope`) не берутся."""
     now = now or utc_naive_now()
+    projects = excluded_projects()
     async with get_session() as s:
         rows = (await s.execute(select(RoomTaskRow).where(
             RoomTaskRow.status.in_(ACTIVE_STATUSES)))).scalars().all()
-        found = [_view(row, now) for row in rows if is_stalled(await facts_of(s, row, now), now)]
+        mine = [r for r in rows if not off_board(r.task_id, r.project, r.refs, projects)]
+        found = [_view(row, now) for row in mine if is_stalled(await facts_of(s, row, now), now)]
     return sorted(found, key=lambda t: (-t.idle, t.room, t.task_id))
