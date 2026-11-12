@@ -97,6 +97,14 @@ Ruslan Kovtiukh (gmail + slack) и Yevhenii Pavlenko (gmail + slack, а след
 
 ## 2. Кандидаты и LLM-судья (`vera_shared/graph/identity.py`)
 
+Раскладка по модулям (`identity.py` реэкспортирует всё ниже — старые импорты
+`from vera_shared.graph.identity import …` работают):
+`identity_names.py` — нормализация имён (`canonical_name_parts`);
+`identity_candidates.py` — поиск пар (`find_identity_candidates`);
+`identity_store.py` — весь SQL: входы для поиска (`load_identity_inputs`) и
+строки `merge_suggestions`; `identity_kind.py` — `entity_kind_for_email`;
+в самом `identity.py` — LLM-судья и `run_identity_analysis`.
+
 - `canonical_name_parts(name)` — (имя, фамилия) в канонической форме:
   lower, транслит LAT→RU по звучанию, уменьшительные → полные
   (Маша/Masha → мария; Оля/Olga → ольга). Эмодзи и мусор отбрасываются.
@@ -168,6 +176,10 @@ Username в Telegram уникален глобально, поэтому две 
 сущность автора: telegram/instagram received → отправитель по alias,
 gmail received → адрес From, любые sent и «свои» источники → владелец
 (alias `user:OWNER_TG_ID`). Автора нет в графе → self-связь пропускается.
+Раскладка: `graph/rel_author.py` — `author_entity_of_event`;
+`graph/rel_extract_schema.py` — `PREDICATES`, `PROMPT`, `REL_EXTRACT_JSON_SCHEMA`,
+`parse_relationships`, `RelExtractOutcome`; `graph/rel_extract.py` —
+`extract_and_store` и реэкспорт всего перечисленного.
 
 История бага (2026-07-19): «Я» резолвилось по имени и совпадало с чужим
 аккаунтом, у которого first_name = «Я», — 221 ребро от 6+ разных авторов
@@ -566,6 +578,10 @@ Timur; остаётся `tim`) и дубль `bergabung`; регулярка м
 единственным источником ролей; пара собирается при чтении (`connections`,
 `connection_model`, `connection_data`). Хранится только кэш взаимодействий —
 `pair_stats` (ниже): он нужен ради скорости и целиком пересчитывается.
+`connection_model` разложен: пороги и списки ролей — `connection_rules`, типы
+`Claim`/`Role`/`Connection` и `is_corroborated` — `connection_types`; в самом
+`connection_model` — сила общения, `build_connection`, `role_payload`, и он
+реэкспортирует всё перечисленное.
 
 **Что считается взаимодействием пары** (`pair_stats_sql`, только люди):
 

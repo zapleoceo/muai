@@ -9,13 +9,17 @@
 надо забирать через `conversations.replies`, а тред, чьё корневое сообщение
 старше курсора, в истории вообще не появится — сколько бы новых ответов там ни
 было. Без наблюдения за тредами обсуждения в Slack были бы невидимы навсегда.
+
+Кэш профилей — `slack_profiles`, разбор сообщений в события — `slack_events`,
+чистые решения о курсоре — `slack_cursor`; здесь всё реэкспортируется.
+`PermalinkBudget` и `_Session` остаются здесь: тесты подменяют
+`poller.PERMALINK_POLL_BUDGET_S` и `poller.SlackClient`.
 """
 from __future__ import annotations
 
 import asyncio
 import logging
 import os
-from datetime import datetime, timedelta
 
 from vera_shared.db.engine import init_engine
 from vera_shared.db.models_sources import SlackConversationRow
@@ -28,7 +32,30 @@ from vera_shared.timeutil import utc_naive_now
 
 from ingestor_slack import auth, store
 from ingestor_slack.client import SlackAuthError, SlackClient
-from ingestor_slack.mapper import message_to_event, parse_ts
+from ingestor_slack.mapper import parse_ts
+from ingestor_slack.slack_cursor import UNREADABLE_RETRY_H, newest_ts, skip_unreadable
+from ingestor_slack.slack_events import (
+    PERMALINK_CONCURRENCY,
+    PERMALINK_TIMEOUT_S,
+    events_from,
+)
+from ingestor_slack.slack_profiles import Profiles
+
+__all__ = [
+    "PERMALINK_CONCURRENCY",
+    "PERMALINK_TIMEOUT_S",
+    "UNREADABLE_RETRY_H",
+    "PermalinkBudget",
+    "Profiles",
+    "bootstrap_ts",
+    "main_loop",
+    "newest_ts",
+    "parse_ts",
+    "poll_conversation",
+    "poll_once",
+    "poll_threads",
+    "skip_unreadable",
+]
 
 log = logging.getLogger("slack")
 
@@ -40,88 +67,17 @@ MAX_PAGES = int(os.environ.get("SLACK_MAX_PAGES", "20"))
 # проверяется реже, а не выпадает.
 THREADS_PER_RUN = int(os.environ.get("SLACK_THREADS_PER_RUN", "20"))
 THREAD_WATCH_DAYS = int(os.environ.get("SLACK_THREAD_WATCH_DAYS", "21"))
-PERMALINK_TIMEOUT_S = 5
-PERMALINK_CONCURRENCY = 8
 PERMALINK_POLL_BUDGET_S = 10
 DENY_CHANNELS = frozenset(
     x.strip().lstrip("#").lower()
     for x in os.environ.get("SLACK_DENY_CHANNELS", "").split(",") if x.strip()
 )
-# Как часто перепроверять канал, который в прошлый раз оказался нечитаемым.
-# Не «никогда»: в канал могут вернуть, и тогда он должен ожить сам.
-UNREADABLE_RETRY_H = int(os.environ.get("SLACK_UNREADABLE_RETRY_H", "24"))
 
-
-def skip_unreadable(last_error: str | None, last_polled_at: datetime | None,
-                    now: datetime, retry_after_h: int = UNREADABLE_RETRY_H) -> bool:
-    """Пропустить канал в этом прогоне, потому что он не читается?
-
-    Чистая функция — решение принимается по строке прошлой ошибки и времени
-    последней попытки, без БД и часов.
-    """
-    if not slack_channel_unreadable(last_error) or last_polled_at is None:
-        return False
-    return (now - last_polled_at) < timedelta(hours=retry_after_h)
+_events_from = events_from
 
 
 def bootstrap_ts() -> str:
     return f"{(utc_naive_now().timestamp() - BOOTSTRAP_DAYS * 86400):.6f}"
-
-
-def newest_ts(messages: list[dict]) -> str | None:
-    return max((str(m.get("ts") or "") for m in messages), default="") or None
-
-
-class Profiles:
-    """Кэш профилей: «id → имя и что известно о человеке».
-
-    Без кэша users.info звался бы на каждое сообщение, а профиль в воркспейсе
-    меняется раз в год. Кроме имени берём то, что связывает человека с другими
-    каналами: рабочий email — это же алиас gmail, и по нему сущность
-    прицепляется к уже существующей, без догадок LLM.
-    """
-
-    #: что вытаскиваем из профиля. Не всё подряд: телефон и должность полезны
-    #: как контекст, картинки и статус — шум.
-    FIELDS = ("email", "phone", "title", "real_name", "display_name")
-
-    def __init__(self, client: SlackClient):
-        self._client = client
-        self._names: dict[str, str] = {}
-        self._profiles: dict[str, dict[str, str]] = {}
-
-    @property
-    def known(self) -> dict[str, str]:
-        return self._names
-
-    def profile(self, user_id: str) -> dict[str, str]:
-        return self._profiles.get(user_id, {})
-
-    async def resolve(self, user_ids: set[str]) -> dict[str, str]:
-        for uid in sorted(user_ids - self._names.keys()):
-            if not uid:
-                continue
-            try:
-                info = await self._client.user_info(uid)
-            except Exception as e:  # noqa: BLE001 — без имени событие всё равно нужно
-                log.debug("slack: профиль %s не забрал: %s", uid, e)
-                self._names[uid] = uid
-                continue
-            profile = info.get("profile") or {}
-            fields = {}
-            for key in self.FIELDS:
-                value = str(profile.get(key) or "").strip()
-                if value:
-                    fields[key] = value
-            if info.get("tz"):
-                fields["tz"] = str(info["tz"])
-            if info.get("is_bot"):
-                fields["is_bot"] = "true"
-            self._profiles[uid] = fields
-            self._names[uid] = str(
-                info.get("real_name") or fields.get("real_name")
-                or info.get("name") or uid)
-        return self._names
 
 
 class PermalinkBudget:
@@ -137,54 +93,6 @@ class PermalinkBudget:
         if self.deadline is None:
             self.deadline = now + PERMALINK_POLL_BUDGET_S
         return max(0.0, self.deadline - now)
-
-
-async def _events_from(messages: list[dict], row: SlackConversationRow,
-                       me_id: str, account: str, names: Profiles,
-                       client: SlackClient, budget: PermalinkBudget) -> list[dict]:
-    await names.resolve({str(m.get("user") or "") for m in messages})
-    specs = []
-    semaphore = asyncio.Semaphore(PERMALINK_CONCURRENCY)
-
-    async def add_permalink(spec: dict, ts: str) -> None:
-        async with semaphore:
-            if budget.disabled:
-                return
-            try:
-                permalink = await asyncio.wait_for(
-                    client.get_permalink(row.conversation_id, ts),
-                    timeout=PERMALINK_TIMEOUT_S)
-            except Exception as e:  # noqa: BLE001 - a link must not block ingestion
-                log.warning("slack/%s: permalink unavailable for %s: %s",
-                            row.name, ts, e)
-                budget.failures += 1
-                if budget.failures >= 2:
-                    budget.disabled = True
-            else:
-                if permalink:
-                    spec["metadata_"]["permalink"] = permalink
-
-    links = []
-    for message in messages:
-        spec = message_to_event(
-            message, channel_id=row.conversation_id, channel_name=row.name,
-            channel_kind=row.kind, is_private=row.is_private,
-            me_id=me_id, account=account, names=names.known,
-        )
-        if spec:
-            specs.append(spec)
-            links.append((spec, str(message["ts"])))
-    if links and not budget.disabled and budget.remaining() > 0:
-        tasks = [asyncio.create_task(add_permalink(spec, ts)) for spec, ts in links]
-        _, pending = await asyncio.wait(tasks, timeout=budget.remaining())
-        if pending:
-            budget.disabled = True
-            log.warning("slack/%s: permalink lookup budget exhausted; ingesting without links",
-                        row.name)
-            for task in pending:
-                task.cancel()
-        await asyncio.gather(*tasks, return_exceptions=True)
-    return specs
 
 
 async def poll_threads(client: SlackClient, row: SlackConversationRow,

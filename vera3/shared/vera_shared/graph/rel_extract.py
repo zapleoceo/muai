@@ -10,25 +10,32 @@ budget doesn't justify it; we want a small set of HIGH-CONFIDENCE links
 (boss/coworker/spouse/founder-of) — not every passing mention.
 
 Triage cost contract: ≤300 output tokens per event, capability='structured'.
+
+The model contract (prompt, schema, parsing, outcome) lives in
+`rel_extract_schema`, the author lookup in `rel_author`; both are re-exported
+here. `extract_and_store` stays here with its collaborators imported at module
+level, because tests patch `rel_extract.chat_async`, `rel_extract.judge_batch`
+and the resolvers.
 """
 from __future__ import annotations
 
-import json
 import logging
-from collections import Counter
-from dataclasses import dataclass, field
 
-from sqlalchemy import text
-
-from vera_shared.db.engine import get_session
-from vera_shared.events.visibility import NOT_HIDDEN_SQL
+from vera_shared.graph.rel_author import author_entity_of_event
+from vera_shared.graph.rel_extract_schema import (
+    PREDICATES,
+    PROMPT,
+    REL_EXTRACT_JSON_SCHEMA,
+    SELF_TOKENS,
+    RelExtractOutcome,
+    parse_relationships,
+)
 from vera_shared.graph.rel_judge import Candidate, judge_batch
 from vera_shared.graph.rel_text import End, Evidence, has_self_marker, single_token_name
 from vera_shared.graph.rel_validate import (
     is_referential_name,
 )
 from vera_shared.graph.repo import (
-    find_entity_by_alias,
     get_entity,
     resolve_entity_exact,
 )
@@ -37,149 +44,21 @@ from vera_shared.graph.repo_relationships import (
     resolve_strong_identifier,
     upsert_relationship,
 )
-from vera_shared.ingest.authorship import OWNER, resolve_author
 from vera_shared.links.circle import EventCircle, event_circle, resolve_short_name
 from vera_shared.llm.client import LLMCallFailed, chat_async
 
-log = logging.getLogger(__name__)
-
-# Первое лицо в тексте («я работаю в X») — это АВТОР сообщения, не сущность
-# с именем «Я». Раньше «Я» резолвилось по имени и все такие связи падали на
-# случайный аккаунт, чей first_name = «Я» (найдено вживую: 221 ребро от 6+
-# разных авторов на одном чужом человеке).
-SELF_TOKENS = {"я", "i", "me", "myself"}
-
-PREDICATES = [
-    "boss_of",          # X is boss of Y
-    "reports_to",       # X reports to Y (inverse of boss_of, model picks one)
-    "coworker_of",      # X and Y work together
-    "co_founder_of",    # X is co-founder of org Y
-    "works_at",         # X works at org Y
-    "client_of",        # X is client of Y (org or person)
-    "vendor_of",        # X provides services/goods to Y
-    "spouse_of",        # symmetric
-    "parent_of",        # X is parent of Y
-    "child_of",         # inverse
-    "friend_of",        # symmetric
-    "lives_in",         # X lives in place Y
+__all__ = [
+    "PREDICATES",
+    "PROMPT",
+    "REL_EXTRACT_JSON_SCHEMA",
+    "SELF_TOKENS",
+    "RelExtractOutcome",
+    "author_entity_of_event",
+    "extract_and_store",
+    "is_referential_name",
 ]
 
-PROMPT = """Извлеки факты-связи между сущностями из текста сообщения.
-Возвращай ТОЛЬКО JSON по схеме — без префиксов, без markdown.
-
-Доступные предикаты: {preds}
-
-Правила:
-  - Только связи которые ЯВНО упомянуты в тексте, не выводи из контекста
-  - Если subject/object — сам автор сообщения («я», «мне», от первого лица),
-    пиши РОВНО "Я" — система сама подставит автора
-  - Если нет уверенных связей — верни {{"relationships": []}}
-  - Максимум 3 связи на одно сообщение
-
-Schema:
-{{
-  "relationships": [
-    {{"subject": "<name>", "predicate": "<one of above>",
-      "object": "<name>", "fact": "<verbatim text justifying it>",
-      "confidence": <0.0-1.0>}}
-  ]
-}}
-
-Текст:
-{body}"""
-
-# json_schema вместо json_object — форсит grammar-constrained decoding у
-# провайдеров которые его поддерживают (gemini/openai/groq), так что
-# битый JSON (частая причина потерь на cerebras gpt-oss) физически не
-# может быть сгенерирован. predicate ограничен PREDICATES прямо в схеме —
-# не полагаемся только на промпт-инструкцию.
-REL_EXTRACT_JSON_SCHEMA = {
-    "type": "json_schema",
-    "json_schema": {
-        "name": "rel_extract",
-        "strict": True,
-        "schema": {
-            "type": "object",
-            "properties": {
-                "relationships": {
-                    "type": "array",
-                    "maxItems": 3,
-                    "items": {
-                        "type": "object",
-                        "properties": {
-                            "subject": {"type": "string"},
-                            "predicate": {"type": "string", "enum": PREDICATES},
-                            "object": {"type": "string"},
-                            "fact": {"type": "string"},
-                            "confidence": {"type": "number", "minimum": 0.0,
-                                           "maximum": 1.0},
-                        },
-                        "required": [
-                            "subject", "predicate", "object", "fact", "confidence",
-                        ],
-                        "additionalProperties": False,
-                    },
-                },
-            },
-            "required": ["relationships"],
-            "additionalProperties": False,
-        },
-    },
-}
-
-
-async def author_entity_of_event(event_id: int) -> int | None:
-    """Кто автор события — как entity_id. Это цель self-токенов («я»).
-
-    Решение «чей это текст» вынесено в таблицу `ingest.authorship`: раньше тут
-    была цепочка `if source == …`, и источник без ветки целиком приписывался
-    владельцу — тихая порча графа при каждом новом источнике.
-
-    None, если автор не определён или его сущности (ещё) нет в графе: тогда
-    self-связь скипается, а не вешается на кого попало.
-    """
-    from vera_shared.projects.rules import OWNER_TG_ID
-    async with get_session() as s:
-        row = (await s.execute(text(
-            f"SELECT source, metadata FROM events WHERE id = :i AND {NOT_HIDDEN_SQL}"
-        ), {"i": event_id})).first()
-    if row is None:
-        return None
-    source, meta = row[0], row[1] or {}
-    if isinstance(meta, str):
-        try:
-            meta = json.loads(meta)
-        except ValueError:
-            meta = {}
-
-    author = resolve_author(source, meta)
-    if author is None:
-        return None
-    if author is OWNER:
-        return await find_entity_by_alias("telegram", f"user:{OWNER_TG_ID}")
-    return await find_entity_by_alias(*author)
-
-
-@dataclass
-class RelExtractOutcome:
-    """Итог одного прогона — чтобы нулевой выход был виден в логе, а не в DEBUG."""
-
-    llm_failed: bool = False
-    returned: int = 0
-    unresolved: int = 0
-    rejected: Counter[str] = field(default_factory=Counter)
-    inserted: int = 0
-
-
-def _parse_relationships(raw: str) -> list[dict] | None:
-    try:
-        data = json.loads(raw)
-    except (json.JSONDecodeError, TypeError):
-        return None
-    rels = data.get("relationships") if isinstance(data, dict) else None
-    if not isinstance(rels, list):
-        return None
-    return [r for r in rels[:3] if isinstance(r, dict)]
+log = logging.getLogger(__name__)
 
 
 async def extract_and_store(event_id: int, body: str) -> RelExtractOutcome:
@@ -202,7 +81,7 @@ async def extract_and_store(event_id: int, body: str) -> RelExtractOutcome:
         log.warning("rel_extract event=%s: LLM не ответила: %s", event_id, e)
         return out
 
-    rels = _parse_relationships(raw)
+    rels = parse_relationships(raw)
     if rels is None:
         out.llm_failed = True
         # Сам ответ в лог не пишем — в нём факты из личной переписки.
@@ -311,4 +190,3 @@ async def extract_and_store(event_id: int, body: str) -> RelExtractOutcome:
              event_id, out.returned, out.unresolved, sum(out.rejected.values()),
              dict(out.rejected), out.inserted)
     return out
-
