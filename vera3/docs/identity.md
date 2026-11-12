@@ -578,6 +578,10 @@ Timur; остаётся `tim`) и дубль `bergabung`; регулярка м
 единственным источником ролей; пара собирается при чтении (`connections`,
 `connection_model`, `connection_data`). Хранится только кэш взаимодействий —
 `pair_stats` (ниже): он нужен ради скорости и целиком пересчитывается.
+`connection_model` разложен: пороги и списки ролей — `connection_rules`, типы
+`Claim`/`Role`/`Connection` и `is_corroborated` — `connection_types`; в самом
+`connection_model` — сила общения, `build_connection`, `role_payload`, и он
+реэкспортирует всё перечисленное.
 
 **Что считается взаимодействием пары** (`pair_stats_sql`, только люди):
 

@@ -12,141 +12,65 @@
 правки не показываются; «также» требует тех же двух записей; противоречивая
 иерархия оставляет сторону с большей поддержкой.
 
-Пороги подобраны по прод-замеру 04.10.2026 (число дней, когда пара «в контакте»):
-владелец и коллеги с общим рабочим доменом — медиана 10 дней, p25 2, p75 24, p90
-47; владелец и остальные собеседники — медиана 2, p75 4, p90 16; пары вне
-владельца — p90 5–9. Отсюда: 4 дня — верхняя четверть обычных собеседников,
-10 — рубеж «постоянный контакт».
+Пороги и их прод-замер — `connection_rules`, типы `Claim`/`Role`/`Connection` —
+`connection_types`; здесь сила общения, сборка связи и выдача роли. Все имена
+реэкспортируются отсюда.
 """
 from __future__ import annotations
 
 import math
 from collections.abc import Iterable
-from dataclasses import dataclass, replace
+from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
+from vera_shared.graph.connection_rules import (
+    ALSO_MIN_WEIGHT,
+    ALSO_RATIO,
+    CLAIM_SUPPORT,
+    CONTACT_MIN_DAYS,
+    DAYS_SCALE,
+    ESTABLISHED_INTERACTION,
+    GROUP_DAY_EQUIV,
+    GROUP_DAYS_CAP,
+    HIERARCHY,
+    INFER_MAX,
+    INFER_MIN_DAYS_CHAT,
+    INFER_MIN_DAYS_IDENT,
+    INFERRED_PREDICATE,
+    MANUAL_WEIGHT,
+    MIN_REPEAT_SUPPORT,
+    NEEDS_REPEAT,
+    NEUTRAL_MAX_WEIGHT,
+    NEUTRAL_PREDICATE,
+    ROLE_PRIORITY,
+    SPECIFIC_OVER,
+    WORK_ROLES,
+)
+from vera_shared.graph.connection_types import (
+    Claim,
+    Connection,
+    Role,
+    RoleKey,
+    is_corroborated,
+)
 from vera_shared.graph.pair_stats import PairStats, ordered
 from vera_shared.graph.rel_canon import SYMMETRIC, canonical_edge
 
-#: Вклад одной записи уверенности 1.0 в вес роли; две записи — 1-(1-0.5)².
-CLAIM_SUPPORT = 0.5
-#: Роль, заданную руками (MCP, дашборд: у связи нет события-источника), — максимум.
-MANUAL_WEIGHT = 1.0
-#: Масштаб насыщения взаимодействия: interaction = 1-exp(-дней/8) — 4 дня 0.39,
-#: 8 дней 0.63, 10 дней 0.71, 30 дней 0.98.
-DAYS_SCALE = 8.0
-#: Общая небольшая группа — слабая улика: полдня контакта за группу, не больше четырёх.
-GROUP_DAY_EQUIV = 0.5
-GROUP_DAYS_CAP = 4
-#: Со взаимодействия выше этого пара «устоявшаяся» (≈8 дней контакта): её роли судит
-#: модель связи, а не одна фраза. Попадает ~18% личных контактов владельца.
-ESTABLISHED_INTERACTION = 0.6
-#: Верхняя граница выведенной роли «работает с»: выведенное слабее записанного вручную.
-INFER_MAX = 0.8
-#: Сколько рабочих дней нужно для вывода: с общим доменом / Slack хватает 3, по одним
-#: рабочим чатам — 6 (в чате легко оказаться рядом без совместной работы).
-INFER_MIN_DAYS_IDENT = 3
-INFER_MIN_DAYS_CHAT = 6
-#: Вторая роль показывается как «также упоминалось», если её вес не ниже порога и не
-#: ниже доли от главной; остальные скрыты (данные остаются).
-ALSO_MIN_WEIGHT = 0.35
-ALSO_RATIO = 0.6
-INFERRED_PREDICATE = "coworker_of"
-#: Роли, которым рабочее общение — прямая улика. Иерархии тут нет: рабочий контекст
-#: доказывает «работает с», а не «кто начальник» («принял приглашение» → вес 0.95
-#: у босса из одного сообщения, прод-QA 04.10).
-WORK_ROLES = frozenset({"coworker_of", "works_at"})
-#: Личные и коммерческие роли: одна фраза — слишком шаткое основание (прод-замер
-#: 04.10: «супруга» и «поставщики» из одного упоминания перебивали 400 дней общих чатов).
-NEEDS_REPEAT = frozenset({"spouse_of", "parent_of", "client_of", "vendor_of", "boss_of"})
-MIN_REPEAT_SUPPORT = 2
-#: Пара с общением, но без показываемой роли, не пропадает: «общение без ясной роли».
-NEUTRAL_PREDICATE = "contact"
-NEUTRAL_MAX_WEIGHT = 0.3
-#: Сколько дней контакта достаточно, чтобы пара без записанных ролей показывалась как
-#: «общение без ясной роли»: рубеж «постоянный контакт» — p90 обычных собеседников
-#: владельца (16) и медиана его коллег (10); ≥10 дней у ~15% личных контактов, то есть
-#: список короткий, но 108 дней и 615 личных сообщений уже не теряются.
-CONTACT_MIN_DAYS = 10
-#: Более конкретная роль, показываемая главной, поглощает менее конкретные: начальник
-#: подразумевает «работает с», родитель и супруг — «дружит с». Поглощённая роль не
-#: идёт в «также», её подтверждения прибавляются к показанным.
-SPECIFIC_OVER = {"boss_of": frozenset({"coworker_of"}), "parent_of": frozenset({"friend_of"}),
-                 "spouse_of": frozenset({"friend_of"})}
-#: Иерархии, где обе стороны одновременно — противоречие.
-HIERARCHY = frozenset({"boss_of", "parent_of"})
-#: При равном весе главной становится роль, стоящая раньше: она точнее.
-ROLE_PRIORITY = ("spouse_of", "parent_of", "boss_of", "co_founder_of", "client_of",
-                 "vendor_of", "friend_of", "coworker_of", "works_at", "lives_in")
-
-RoleKey = tuple[str, int | None]
-
-
-@dataclass(frozen=True)
-class Claim:
-    """Одна запись `relationships` как улика роли."""
-    subject_id: int
-    predicate: str
-    object_id: int
-    confidence: float
-    manual: bool = False
-    fact: str | None = None
-    seen_at: datetime | None = None
-    rel_id: int | None = None
-    event_id: int | None = None   # событие-источник: независимость улик считается по нему
-
-
-@dataclass(frozen=True)
-class Role:
-    predicate: str
-    subject_id: int | None      # кто «над»; у симметричных ролей None
-    weight: float
-    support: int                # сколько записей подтверждают (0 — роль выведена)
-    manual: bool
-    inferred: bool
-    confidence: float
-    fact: str | None
-    rel_ids: tuple[int, ...] = ()
-    seen_at: datetime | None = None
-
-
-@dataclass(frozen=True)
-class Connection:
-    a: int
-    b: int
-    roles: tuple[Role, ...]     # показываемые, по убыванию веса
-    hidden_roles: int           # сколько ролей скрыто правилами показа
-    interaction: float
-    stats: PairStats
-    shared_work: bool
-
-    @property
-    def main(self) -> Role:
-        return self.roles[0]
-
-    @property
-    def weight(self) -> float:
-        return self.main.weight
-
-    @property
-    def also(self) -> tuple[Role, ...]:
-        floor = max(ALSO_MIN_WEIGHT, ALSO_RATIO * self.weight)
-        no_contact = self.stats.active_days == 0
-        return tuple(r for r in self.roles[1:] if r.weight >= floor and _corroborated(r)
-                     and not (no_contact and r.predicate in HIERARCHY))
-
-    @property
-    def hidden(self) -> int:
-        return self.hidden_roles + len(self.roles) - 1 - len(self.also)
-
-
-def _corroborated(role: Role) -> bool:
-    return role.manual or role.inferred or role.support >= MIN_REPEAT_SUPPORT
+__all__ = [
+    "ALSO_MIN_WEIGHT", "ALSO_RATIO", "CLAIM_SUPPORT", "CONTACT_MIN_DAYS", "DAYS_SCALE",
+    "ESTABLISHED_INTERACTION", "GROUP_DAYS_CAP", "GROUP_DAY_EQUIV", "HIERARCHY",
+    "INFERRED_PREDICATE", "INFER_MAX", "INFER_MIN_DAYS_CHAT", "INFER_MIN_DAYS_IDENT",
+    "MANUAL_WEIGHT", "MIN_REPEAT_SUPPORT", "NEEDS_REPEAT", "NEUTRAL_MAX_WEIGHT",
+    "NEUTRAL_PREDICATE", "ROLE_PRIORITY", "SPECIFIC_OVER", "WORK_ROLES", "Claim",
+    "Connection", "Role", "RoleKey", "build_connection", "could_infer_work",
+    "inferred_work_weight", "interaction_strength", "is_established",
+    "is_regular_contact", "role_payload", "work_strength",
+]
 
 
 def _qualifies(role: Role) -> bool:
-    return role.predicate not in NEEDS_REPEAT or _corroborated(role)
+    return role.predicate not in NEEDS_REPEAT or is_corroborated(role)
 
 
 def interaction_strength(stats: PairStats) -> float:
