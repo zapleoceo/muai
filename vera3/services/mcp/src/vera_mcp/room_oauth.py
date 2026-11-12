@@ -4,16 +4,19 @@ No OAuth route or token is enabled until ROOM_OAUTH_ENABLED=1. The dashboard
 handles human consent; this MCP service never receives its owner-cookie key.
 Opaque bearer values are hashed in Postgres. DCR client metadata uses a
 dedicated ROOM_OAUTH_KEY.
+
+Config and DCR limits live in `room_oauth_config`, grant primitives in
+`room_oauth_grant`, the dashboard consent steps in `room_oauth_consent`;
+every public name is re-exported here.
 """
 from __future__ import annotations
 
-import hashlib
 import json
 import logging
 import os
 import secrets
 import uuid
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, datetime
 from urllib.parse import urlencode, urlparse
 
 from mcp.server.auth.provider import (
@@ -27,115 +30,48 @@ from mcp.server.auth.provider import (
     RegistrationError,
     TokenError,
 )
-from mcp.server.auth.settings import (
-    AuthSettings,
-    ClientRegistrationOptions,
-    RevocationOptions,
-)
-from pydantic import AnyHttpUrl
 from sqlalchemy import delete
 from vera_shared.crypto import decrypt, encrypt
 from vera_shared.db.engine import get_session
 
-from vera_mcp.auth import load_room_tokens, load_tokens, match_token
+from vera_mcp.auth import load_room_tokens, match_token
 from vera_mcp.oauth_models import RoomOAuthClient, RoomOAuthGrant
+from vera_mcp.room_oauth_config import (
+    ACCESS_SECONDS,
+    CODE_SECONDS,
+    INTERNAL_AGENTS,
+    MAX_CLIENT_METADATA_BYTES,
+    MAX_CLIENT_NAME,
+    MAX_REDIRECT_URI_LEN,
+    MAX_REDIRECT_URIS,
+    PENDING_SECONDS,
+    PUBLIC_ORIGIN,
+    REFRESH_SECONDS,
+    RESOURCE,
+    SCOPES,
+    allowed_actors,
+    allowed_redirect_hosts,
+    check_client_size,
+    configured_agents,
+    enabled,
+    settings,
+    validate_config,
+)
+from vera_mcp.room_oauth_consent import RoomOAuthConsentMixin
+from vera_mcp.room_oauth_grant import expiry_after, grant_alive, grant_hash
 
-PUBLIC_ORIGIN = "https://dima.veranda.my"
-RESOURCE = f"{PUBLIC_ORIGIN}/mcp"
+__all__ = [
+    "ACCESS_SECONDS", "CODE_SECONDS", "INTERNAL_AGENTS", "MAX_CLIENT_METADATA_BYTES",
+    "MAX_CLIENT_NAME", "MAX_REDIRECT_URIS", "MAX_REDIRECT_URI_LEN", "PENDING_SECONDS",
+    "PUBLIC_ORIGIN", "REFRESH_SECONDS", "RESOURCE", "SCOPES", "RoomOAuthProvider",
+    "allowed_actors", "allowed_redirect_hosts", "configured_agents", "enabled",
+    "settings", "validate_config",
+]
+
 log = logging.getLogger(__name__)
-SCOPES = ["room:read", "room:write"]
-ACCESS_SECONDS = 3600
-REFRESH_SECONDS = 30 * 86400
-CODE_SECONDS = 300
-PENDING_SECONDS = 600
-INTERNAL_AGENTS = ("vera", "watchdog")
 
 
-def enabled() -> bool:
-    return os.environ.get("ROOM_OAUTH_ENABLED") == "1"
-
-
-def allowed_actors() -> frozenset[str]:
-    # New identities require a separately approved config change.
-    return frozenset(filter(None, (x.strip() for x in
-                     os.environ.get("ROOM_OAUTH_ACTORS", "dot").split(","))))
-
-
-def configured_agents(include_internal: bool = True) -> frozenset[str]:
-    """Имена сконфигурированных агентов; внутренние авторы vera и watchdog — по флагу."""
-    names = set(load_room_tokens().values()) | set(load_tokens().values())
-    names |= set(allowed_actors())
-    return frozenset(names | set(INTERNAL_AGENTS) if include_internal else names)
-
-
-def allowed_redirect_hosts() -> frozenset[str]:
-    return frozenset(filter(None, (x.strip().lower() for x in
-                     os.environ.get("ROOM_OAUTH_REDIRECT_HOSTS", "chatgpt.com").split(","))))
-
-
-def validate_config() -> None:
-    if not enabled():
-        return
-    if len(os.environ.get("ROOM_OAUTH_KEY", "")) < 32:
-        raise ValueError("room OAuth requires a dedicated ROOM_OAUTH_KEY (32+ chars)")
-    if not allowed_actors():
-        raise ValueError("room OAuth requires at least one approved actor")
-    if not allowed_redirect_hosts():
-        raise ValueError("room OAuth requires an approved redirect host")
-    # Автор в комнате — имя токена. OAuth-actor с именем статического агента писал
-    # бы как он, и история, курсоры и аренды перестали бы их различать.
-    static = set(load_room_tokens().values()) | set(load_tokens().values())
-    if clash := sorted(allowed_actors() & static):
-        raise ValueError(f"ROOM_OAUTH_ACTORS {', '.join(clash)} already used by a static token")
-
-
-def settings() -> AuthSettings:
-    return AuthSettings(
-        issuer_url=AnyHttpUrl(PUBLIC_ORIGIN),
-        resource_server_url=AnyHttpUrl(RESOURCE),
-        validate_token_resource=True,
-        required_scopes=SCOPES,
-        client_registration_options=ClientRegistrationOptions(
-            enabled=True, valid_scopes=SCOPES, default_scopes=SCOPES),
-        revocation_options=RevocationOptions(enabled=True),
-    )
-
-
-def _digest(value: str) -> str:
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()
-
-
-def _future(seconds: int) -> datetime:
-    return datetime.now(UTC) + timedelta(seconds=seconds)
-
-
-def _alive(row: RoomOAuthGrant | None) -> bool:
-    if row is None:
-        return False
-    dt = row.expires_at
-    if dt.tzinfo is None:  # SQLite in unit tests
-        dt = dt.replace(tzinfo=UTC)
-    return dt > datetime.now(UTC)
-
-
-# /register анонимный: без потолков один IP мог бы наполнять общий Postgres
-# многокилобайтными клиентами (ревью безопасности 08.10.2026, F3).
-MAX_CLIENT_NAME = 200
-MAX_REDIRECT_URIS = 5
-MAX_REDIRECT_URI_LEN = 500
-MAX_CLIENT_METADATA_BYTES = 4096
-
-
-def _check_client_size(client_info: OAuthClientInformationFull) -> None:
-    uris = client_info.redirect_uris or []
-    if (len(client_info.client_name or "") > MAX_CLIENT_NAME
-            or len(uris) > MAX_REDIRECT_URIS
-            or any(len(str(uri)) > MAX_REDIRECT_URI_LEN for uri in uris)
-            or len(client_info.model_dump_json().encode()) > MAX_CLIENT_METADATA_BYTES):
-        raise RegistrationError("invalid_client_metadata", "Client metadata is too large")
-
-
-class RoomOAuthProvider:
+class RoomOAuthProvider(RoomOAuthConsentMixin):
     async def get_client(self, client_id: str) -> OAuthClientInformationFull | None:
         async with get_session() as db:
             row = await db.get(RoomOAuthClient, client_id)
@@ -147,7 +83,7 @@ class RoomOAuthProvider:
     async def register_client(self, client_info: OAuthClientInformationFull) -> None:
         if not client_info.client_id or not client_info.client_secret:
             raise RegistrationError("invalid_client_metadata", "Confidential client required")
-        _check_client_size(client_info)
+        check_client_size(client_info)
         if not client_info.redirect_uris or any(
                 (parsed := urlparse(str(uri))).scheme != "https"
                 or parsed.hostname not in allowed_redirect_hosts()
@@ -171,16 +107,16 @@ class RoomOAuthProvider:
             await db.execute(delete(RoomOAuthGrant).where(
                 RoomOAuthGrant.expires_at < datetime.now(UTC)))
             db.add(RoomOAuthGrant(
-                token_hash=_digest(ticket), kind="pending", client_id=client.client_id,
-                data_json=json.dumps(data), expires_at=_future(PENDING_SECONDS),
+                token_hash=grant_hash(ticket), kind="pending", client_id=client.client_id,
+                data_json=json.dumps(data), expires_at=expiry_after(PENDING_SECONDS),
             ))
         return f"{PUBLIC_ORIGIN}/room/oauth/consent?{urlencode({'ticket': ticket})}"
 
     async def load_authorization_code(self, client: OAuthClientInformationFull,
                                       authorization_code: str) -> AuthorizationCode | None:
         async with get_session() as db:
-            row = await db.get(RoomOAuthGrant, _digest(authorization_code))
-            if not _alive(row) or row.kind != "code" or row.client_id != client.client_id:
+            row = await db.get(RoomOAuthGrant, grant_hash(authorization_code))
+            if not grant_alive(row) or row.kind != "code" or row.client_id != client.client_id:
                 return None
             return AuthorizationCode.model_validate({"code": authorization_code,
                                                       **json.loads(row.data_json)})
@@ -188,9 +124,9 @@ class RoomOAuthProvider:
     async def exchange_authorization_code(self, client: OAuthClientInformationFull,
                                           authorization_code: AuthorizationCode) -> OAuthToken:
         async with get_session() as db:
-            row = await db.get(RoomOAuthGrant, _digest(authorization_code.code),
+            row = await db.get(RoomOAuthGrant, grant_hash(authorization_code.code),
                                with_for_update=True)
-            if not _alive(row) or row.kind != "code" or row.client_id != client.client_id:
+            if not grant_alive(row) or row.kind != "code" or row.client_id != client.client_id:
                 raise TokenError("invalid_grant")
             await db.delete(row)
             await db.flush()
@@ -200,8 +136,8 @@ class RoomOAuthProvider:
     async def load_refresh_token(self, client: OAuthClientInformationFull,
                                  refresh_token: str) -> RefreshToken | None:
         async with get_session() as db:
-            row = await db.get(RoomOAuthGrant, _digest(refresh_token))
-            if not _alive(row) or row.kind != "refresh" or row.client_id != client.client_id:
+            row = await db.get(RoomOAuthGrant, grant_hash(refresh_token))
+            if not grant_alive(row) or row.kind != "refresh" or row.client_id != client.client_id:
                 return None
             return RefreshToken(token=refresh_token, client_id=row.client_id,
                                 scopes=json.loads(row.data_json)["scopes"],
@@ -212,9 +148,9 @@ class RoomOAuthProvider:
                                      refresh_token: RefreshToken,
                                      scopes: list[str]) -> OAuthToken:
         async with get_session() as db:
-            row = await db.get(RoomOAuthGrant, _digest(refresh_token.token),
+            row = await db.get(RoomOAuthGrant, grant_hash(refresh_token.token),
                                with_for_update=True)
-            if not _alive(row) or row.kind != "refresh" or row.client_id != client.client_id:
+            if not grant_alive(row) or row.kind != "refresh" or row.client_id != client.client_id:
                 raise TokenError("invalid_grant")
             original = json.loads(row.data_json)["scopes"]
             requested = scopes or original
@@ -233,8 +169,8 @@ class RoomOAuthProvider:
             return AccessToken(token=token, client_id="legacy-room", scopes=SCOPES,
                                resource=RESOURCE, subject=legacy_actor)
         async with get_session() as db:
-            row = await db.get(RoomOAuthGrant, _digest(token))
-            if not _alive(row) or row.kind != "access" or row.actor not in allowed_actors():
+            row = await db.get(RoomOAuthGrant, grant_hash(token))
+            if not grant_alive(row) or row.kind != "access" or row.actor not in allowed_actors():
                 return None
             return AccessToken(token=token, client_id=row.client_id,
                                scopes=json.loads(row.data_json)["scopes"],
@@ -243,7 +179,7 @@ class RoomOAuthProvider:
 
     async def revoke_token(self, token: AccessToken | RefreshToken) -> None:
         async with get_session() as db:
-            row = await db.get(RoomOAuthGrant, _digest(token.token))
+            row = await db.get(RoomOAuthGrant, grant_hash(token.token))
             if row and row.family_id:
                 await db.execute(delete(RoomOAuthGrant).where(
                     RoomOAuthGrant.family_id == row.family_id))
@@ -260,59 +196,11 @@ class RoomOAuthProvider:
         family = uuid.uuid4().hex
         for token, kind, ttl in ((access, "access", ACCESS_SECONDS),
                                  (refresh, "refresh", REFRESH_SECONDS)):
-            db.add(RoomOAuthGrant(token_hash=_digest(token), kind=kind,
+            db.add(RoomOAuthGrant(token_hash=grant_hash(token), kind=kind,
                                   client_id=client_id, actor=actor,
                                   data_json=json.dumps({"scopes": scopes}),
-                                  expires_at=_future(ttl), family_id=family))
+                                  expires_at=expiry_after(ttl), family_id=family))
         log.info("room OAuth grant issued: client=%r actor=%r scopes=%s",
                  client_id, actor, " ".join(scopes))
         return OAuthToken(access_token=access, expires_in=ACCESS_SECONDS,
                           refresh_token=refresh, scope=" ".join(scopes))
-
-    async def pending_details(self, ticket: str) -> dict | None:
-        """Internal dashboard call only; returns display metadata, never secrets."""
-        async with get_session() as db:
-            row = await db.get(RoomOAuthGrant, _digest(ticket)) if ticket else None
-            if not _alive(row) or row.kind != "pending":
-                return None
-            client = await db.get(RoomOAuthClient, row.client_id)
-            if client is None:
-                return None
-            info = OAuthClientInformationFull.model_validate_json(
-                decrypt(client.encrypted_info, secret=os.environ["ROOM_OAUTH_KEY"]))
-            params = AuthorizationParams.model_validate_json(row.data_json)
-            return {"client_id": row.client_id, "client_name": info.client_name,
-                    "redirect_uri": str(params.redirect_uri),
-                    "scopes": params.scopes or SCOPES,
-                    "actors": sorted(allowed_actors())}
-
-    async def approve_pending(self, ticket: str, actor: str) -> str | None:
-        """Internal dashboard call only; consumes a ticket once and returns redirect."""
-        if actor not in allowed_actors():
-            return None
-        async with get_session() as db:
-            row = await db.get(RoomOAuthGrant, _digest(ticket), with_for_update=True)
-            if not _alive(row) or row.kind != "pending":
-                return None
-            params = AuthorizationParams.model_validate_json(row.data_json)
-            code = secrets.token_urlsafe(32)
-            code_data = {
-                "scopes": params.scopes or SCOPES,
-                "expires_at": _future(CODE_SECONDS).timestamp(),
-                "client_id": row.client_id,
-                "code_challenge": params.code_challenge,
-                "redirect_uri": str(params.redirect_uri),
-                "redirect_uri_provided_explicitly": params.redirect_uri_provided_explicitly,
-                "resource": params.resource, "subject": actor,
-            }
-            db.add(RoomOAuthGrant(token_hash=_digest(code), kind="code",
-                                  client_id=row.client_id, actor=actor,
-                                  data_json=json.dumps(code_data),
-                                  expires_at=_future(CODE_SECONDS)))
-            await db.delete(row)
-            log.info("room OAuth consent approved: client=%r actor=%r", row.client_id, actor)
-        query = {"code": code}
-        if params.state:
-            query["state"] = params.state
-        sep = "&" if params.redirect_uri.query else "?"
-        return f"{params.redirect_uri}{sep}{urlencode(query)}"
