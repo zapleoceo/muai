@@ -22,7 +22,7 @@ from vera_shared.office.message_files import message_files
 from vera_shared.office.runtime_snapshot import PREFIX, validate_runtime_publication
 from vera_shared.room import messages, task_queue
 
-from vera_mcp import room_push
+from vera_mcp import room_push, room_wake
 from vera_mcp.auth import client_of
 from vera_mcp.room_common import (  # noqa: F401
     DEFAULT_LEASE_S,
@@ -88,6 +88,7 @@ async def room_post(
     view = message_view(msg)
     if not deduped:
         room_push.schedule_push(view)
+        await room_wake.bump()
     return {"ok": True, "deduped": deduped, "message": view}
 
 

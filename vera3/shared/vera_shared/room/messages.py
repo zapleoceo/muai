@@ -20,6 +20,7 @@ from vera_shared.voice_help.attest_state import attestation_for
 
 MESSAGE_STATUSES = ("info", "request", "ack", "question", "in_progress", "done", "blocked")
 DEFAULT_CONSUMER = "default"
+NOTIFY_CHANNEL = "room_messages"
 
 
 class MessageConflict(ValueError):
@@ -39,6 +40,12 @@ async def _lock_room(s: AsyncSession, room: str) -> None:
                         {"k": f"room_messages:{room}"})
 
 
+async def _notify(s: AsyncSession, room: str) -> None:
+    """Postgres доставит NOTIFY только при commit: откат записи сигнала не даёт."""
+    if s.bind.dialect.name == "postgresql":
+        await s.execute(text("SELECT pg_notify(:ch, :room)"), {"ch": NOTIFY_CHANNEL, "room": room})
+
+
 async def add_message(s: AsyncSession, *, room: str, message_id: str, from_agent: str,
                       body: str, to_agent: str | None = None, task_id: str | None = None,
                       in_reply_to: str | None = None, status: str = "info") -> RoomMessageRow:
@@ -51,6 +58,7 @@ async def add_message(s: AsyncSession, *, room: str, message_id: str, from_agent
                          status=status)
     s.add(row)
     await s.flush()
+    await _notify(s, room)
     return row
 
 
@@ -95,6 +103,7 @@ async def post_message(*, room: str, message_id: str, from_agent: str, body: str
             await s.refresh(row)
             if validate_row is not None:
                 validate_row(row)
+            await _notify(s, room)
             return message_dict(row), False
     except IntegrityError:
         prior = await _existing(room, message_id)

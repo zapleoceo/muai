@@ -75,6 +75,7 @@ retain the widened CHECK and all audit events.
 |---|---|
 | `room_post` | Сообщение в комнату; `to=None` — всем. `to` — адресация, а не приватность. `message_id` задаёт клиент: повтор с тем же содержимым не создаёт дубль (`deduped=true`), с другим содержимым или чужим автором — `MessageConflict`. `session` — метка runtime отправителя (ноутбук/облако) для аудита; имя другого сконфигурированного агента (`ROOM_TOKENS`/`MCP_TOKENS`/`ROOM_OAUTH_ACTORS`, плюс `vera`, `watchdog`) отвергается с `ValueError`, как и в `claim`/`next`/`handoff_accept`; префикс `dispatcher:` зарезервирован за `vera`, см. [этап 0](room-stage0.md). Статусы: info, request, ack, question, in_progress, done, blocked |
 | `room_inbox` | Старые вызовы возвращают полный текст. `max_body_chars` включает компактный ответ с `truncated`; `next_cursor` доступен только при чтении без фильтров и усечения. `session` явно задаёт сессию для межсессионной доставки; `consumer` хранит курсор. `since_id` и `after_id` взаимоисключаются. См. [этап 0](room-stage0.md). |
+| `room_inbox_wait` | Как `room_inbox`, но ждёт до `timeout_s` (≤ 85 с), пока не появится непрочитанное; `timed_out=true` — ничего не пришло. Курсор не двигает. См. «Ожидание без туннеля». |
 | `room_ack` | Подтвердить обработку до `up_to_id` включительно. Курсор только растёт и не уходит дальше последнего сообщения комнаты |
 | `room_history` | По умолчанию полный прежний ответ. `compact=true` ограничивает текст 500 символами и скрывает runtime-снимки, если явно не указано `exclude_system=false`; фильтры `before_id`, `after_id`, `to`, `kind`, `task_id`. |
 | `room_message_get` | Полный текст одного сообщения по числовому id в разрешённой комнате, с прежней маскировкой секретов. |
@@ -253,6 +254,48 @@ MCP-инструменты поверх журнала шага 1 (код — `v
 `tests/unit/test_room_queue.py` (список, ожидание, `room_task_next`),
 `tests/integration/test_room_pg.py` (два одновременных захвата открытой задачи — побеждает
 один, одновременный `next_task`, `SKIP LOCKED`, CHECK и вид `waiting`).
+
+## Ожидание без туннеля (`room_inbox_wait`, режим `poll`)
+
+Основной способ разбудить агента: он сам держит исходящий длинный запрос к Вере, и
+сервер отвечает, как только для него есть непрочитанное. Публичный адрес, туннель, whsec
+и `ROOM_PUSH_TARGETS` не нужны. Нужен только токен агента в `ROOM_TOKENS`.
+
+- Инструмент `room_inbox_wait` (`vera_mcp/room_inbox_wait.py`, `WAIT_TOOLS`) — тот же
+  `room_inbox` (по умолчанию `exclude_system=true`), но ждёт до `timeout_s` (не больше
+  `MAX_WAIT_S` = 85 с: Cloudflare обрывает ответ без данных на 100 с). Есть непрочитанное —
+  ответ сразу, `timed_out=false`; нет — `messages=[]`, `timed_out=true`. Точка отсчёта —
+  курсор агента (двигает `room_ack`) или явный `after_id`; сервер отдаёт только `id` больше
+  неё, поэтому повторный запрос дублей не даёт. Курсор инструмент не двигает.
+- Сигнал (`vera_mcp/room_wake.py`: `version`, `bump`, `wait_since`): запись сообщения
+  (`messages.post_message` и `messages.add_message`) шлёт `pg_notify` на канал
+  `NOTIFY_CHANNEL` = `room_messages` в той же транзакции. Postgres доставляет его только
+  при commit, откат сигнала не даёт. MCP слушает канал отдельным соединением asyncpg
+  (LISTEN), так сообщения из дашборда и бота тоже будят ожидающих. Свой `room_post`
+  вызывает `bump()` напрямую. Версия снимается до чтения входящих, поэтому сообщение,
+  пришедшее между чтением и ожиданием, не теряется. Если LISTEN-соединение умерло или
+  не поднялось (`WARNING`), ожидание всё равно перечитывает БД раз в `RECHECK_S` = 15 с.
+  Миграций нет: NOTIFY не требует триггера.
+- Каждое ожидание держит одно соединение до 85 с. Лимит nginx — 64 соединения на токен
+  (см. [mcp-claude.md](./mcp-claude.md)).
+
+Клиент — `poll` в [`room_push_listener.py`](../scripts/room_push_listener.py)
+(логика в `room_poll.py`, MCP-вызов в `room_mcp_client.py`: `call_tool`, `parse_body`
+разбирает и JSON, и SSE):
+
+    ROOM_MCP_TOKEN=… python vera3/scripts/room_push_listener.py poll [--after N] [--timeout 3600] [--to claude]
+
+Конфиг — переменные окружения или файл `~/.vera/room.env` вне репозитория (`room_env.py`:
+`load_env`, `read_env_file`, `require`, `DEFAULT_ENV_FILE`); установка на ноутбук —
+[`scripts/ROOM_LISTENER.md`](../scripts/ROOM_LISTENER.md).
+
+Команда повторяет запросы по 80 с до общего срока и выходит, как только сервер отдал
+непрочитанное: печатает строки `#id from -> to [status]: текст` и `latest=N`, код 0.
+Таймаут без сообщений — код 3, отказ токена (401/403) — код 2 без повторов. Обрывы
+связи, таймауты, 429 и 5xx повторяются с паузой 1, 2, 5, 10, 30 с; после успешного
+ответа пауза сбрасывается. Сессия Claude Code запускает `poll` фоновой командой и
+просыпается на её выходе. После обработки — `room_ack` (или следующий `poll --after N`),
+иначе следующий `poll` сразу вернёт те же сообщения.
 
 ## Push-доставка сообщений (`ROOM_PUSH_TARGETS`)
 

@@ -56,3 +56,6 @@ vera3/coverage-diffcover.xml
 
 # PII: names, handles and emails of real people (itstep-report skill), local only
 .claude/skills/itstep-report/people.json
+
+# локальный конфиг room-слушателя (токен комнаты)
+room.env

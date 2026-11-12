@@ -158,7 +158,8 @@ async def test_room_token_sees_only_room_tools(room_client):
                      "room_task_answer_ack", "room_task_questions", "room_task_handoff",
                      "room_task_handoff_accept", "room_task_handoff_decline",
                      "room_task_attest", "room_task_attested_complete",
-                     "room_task_cancel", "room_task_inventory", "room_task_image"}
+                     "room_task_cancel", "room_task_inventory", "room_task_image",
+                     "room_inbox_wait"}
 
 
 @pytest.mark.asyncio
