@@ -737,7 +737,7 @@ watchdog.py`): кандидаты — задачи `in_progress`/`blocked` с д
   запросом или второе подтверждение того же вопроса — `conflict`; устаревшая ревизия — `conflict`.
 - **Результат только владельцу.** При обоих refs диспетчер (`bot_telegram/dispatcher.py`,
   `_attempt`) блокирует задачу, если `result_recipient` отсутствует либо не `owner`/`voice`, а office intake
-  (`office/intake.py`, `_item`) не отдаёт `result` (`result_withheld`). Оба пути дополнительно
+  (`office/intake_list.py`, `_item`) не отдаёт `result` (`result_withheld`). Оба пути дополнительно
   читают неизменяемое событие `delegated_attestation`: удаление refs не снимает ограничение.
 - **Откат на проде** — `ROOM_ATTEST_ENABLED=0`; вид события, CHECK и события остаются как аудит.
   Тест повторного применения миграции сохраняет audit events и расширенный CHECK.

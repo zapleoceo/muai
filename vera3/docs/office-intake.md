@@ -120,6 +120,13 @@ size, duration, w, h, url, url_expires_at), `causation_id`. Значение `nu
 `clean_limit`, `parse_since`, курсор — `encode_cursor`/`decode_cursor`, хеш ответа — `text_hash`;
 ошибки проверки — `InvalidInput`.
 
+Код сервиса (`vera_shared/office/`): `intake.py` — фасад, реэкспортирует всё ниже
+(вызывающие пишут `intake.create_task`, `intake.list_tasks` и т.д.);
+`intake_create.py` — `create_task`, `complete_image_task`; `intake_answer.py` — `answer`,
+`mark_delivered`; `intake_list.py` — `list_tasks`; `intake_common.py` — ошибки
+`IntakeNotFound`/`IntakeConflict`/`IntakeBusy`, `office_room`, `auto_pickup` и `own_task`
+(«задача своя», чужая неотличима от несуществующей). SQL — в `office/repository.py`.
+
 ## Медиа
 
 Хранятся только метаданные вложений и необязательная короткоживущая подписанная ссылка с сайта.
