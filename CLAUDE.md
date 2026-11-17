@@ -4,6 +4,12 @@
 what is live. Detailed docs: [`vera3/docs/`](vera3/docs/). This file is a
 stub kept for legacy tooling that expects a top-level `CLAUDE.md`.
 
+**Office closure rule (binding):** every verified task closure requires a separate
+short Telegram report to the owner, with verified start/ready times and elapsed
+interval. Preserve the delivery receipt or an explicit delivery blocker; respect
+quiet hours and never replay an uncertain send. Follow the existing
+[coordination protocol](vera3/docs/coordination-protocol.md#проверенный-результат-и-подтверждённая-отправка).
+
 ## Quick facts
 
 - Live URL: https://dima.veranda.my
