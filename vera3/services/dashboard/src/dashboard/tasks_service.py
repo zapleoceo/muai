@@ -123,8 +123,12 @@ async def load_detail(room: str, task_id: str, now: datetime | None = None,
     return TaskItem(row, amap[(row.room, row.task_id)]), events, qs
 
 
-async def submit_answer(room: str, task_id: str, qid: int, text: str) -> None:
-    await questions.answer(room=room, task_id=task_id, qid=qid, text=text)
+async def submit_answer(room: str, task_id: str, qid: int, text: str,
+                        *, require_open: bool = False) -> None:
+    if require_open:
+        await questions.answer(room=room, task_id=task_id, qid=qid, text=text, require_open=True)
+    else:
+        await questions.answer(room=room, task_id=task_id, qid=qid, text=text)
 
 
 async def owner_pause(room: str, task_id: str, reason: str, *, paused: bool) -> None:

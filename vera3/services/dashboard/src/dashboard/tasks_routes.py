@@ -58,11 +58,15 @@ async def task_fragment(request: Request, room: str, task_id: str):
 
 @router.post("/tasks/{room}/{task_id}/answer", response_class=HTMLResponse)
 async def task_answer(request: Request, room: str, task_id: str,
-                      qid: int = Form(..., ge=1, le=2**31 - 1), text: str = Form(...)):  # noqa: B008
+                      qid: int = Form(..., ge=1, le=2**31 - 1), text: str = Form(...),  # noqa: B008
+                      require_open: bool = Form(False)):  # noqa: B008
     if (denied := owner_post_gate(request)) is not None:
         return denied
     try:
-        await submit_answer(room, task_id, qid, text)
+        if require_open is True:
+            await submit_answer(room, task_id, qid, text, require_open=True)
+        else:
+            await submit_answer(room, task_id, qid, text)
     except QuestionNotFound as e:
         return _problem(str(e), 404)
     except QuestionState as e:

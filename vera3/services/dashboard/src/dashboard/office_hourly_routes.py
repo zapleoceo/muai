@@ -1,10 +1,11 @@
 """Owner-only live hourly report within the Vera dashboard."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import APIRouter, Request, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from dashboard.csrf import owner_post_gate
+from dashboard.csrf import owner_gate, owner_post_gate
+from dashboard.office_card_details import safe_text
 from dashboard.office_hourly_service import load_recent_task_events, load_report
 from dashboard.office_hourly_view import modal_body, report_body
 from dashboard.office_owner_cancel import apply_pending_cancellations
@@ -42,3 +43,30 @@ async def office_apply_cancellations(request: Request):
         return denied
     await apply_pending_cancellations()
     return RedirectResponse("/office/hourly", status_code=303)
+
+@router.get("/office/hourly/mobile", response_model=None)
+async def office_mobile(request: Request) -> Response:
+    """Minimal native-widget projection; same owner gate and Office scope."""
+    if (denied := owner_gate(request)) is not None:
+        denied.headers["Cache-Control"] = "private, no-store"
+        return denied
+    report = await load_report(include_closed=False)
+    tasks = []
+    for card in report.cards:
+        question = card.question
+        tasks.append({
+            "room": card.row.room,
+            "id": card.row.task_id,
+            "title": safe_text(card.row.title or card.row.task_id, 300),
+            "status": card.status,
+            "next_action": safe_text(card.row.next_action, 2000),
+            "question": {
+                "id": question.qid,
+                "text": safe_text(question.question, 16000),
+            } if question is not None and question.status == "open" else None,
+        })
+    tasks.sort(key=lambda task: task["question"] is None)
+    return JSONResponse(
+        {"schema": 1, "as_of": report.as_of.isoformat(), "tasks": tasks},
+        headers={"Cache-Control": "private, no-store", "Vary": "Cookie"},
+    )
