@@ -266,3 +266,13 @@ dashboard `search_routes` и `entities_routes`, `_short` в `broker_client`)
 больше не трогает сессию и ведёт на главную: раньше выход по GET позволял чужому сайту
 разлогинить владельца картинкой или ссылкой (`logout`, `logout_link` в `auth_routes.py`).
 В меню рядом с "Настройки" появилась ссылка "Подтверждения" на `/approvals`.
+
+
+## Conversational password values
+
+`redact_passwords` runs before generic presentation patterns. It masks values
+placed before an explicit password declaration (including Russian suffix
+phrases), quoted passphrases, and password values containing punctuation.
+The shared `redact_view` boundary applies this to recent events, recall previews,
+model evidence and generated answers. Source events and credentials are unchanged.
+Tests use synthetic values only; ordinary statements about passwords remain readable.

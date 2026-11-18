@@ -24,7 +24,7 @@ UUID = "f47ac10b-58cc-4372-a567-0e02b2c3d479"
 SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 TX = "https://my.sepay.vn/transactions/details/85261396"
 LEAKY = (f"SIN-4905 Код: {UUID} tx 4930118822771 {TX} sha {SHA256}\n"
-         f"token {GH} {AWS}\npassword: CANARY-pw-1\n"
+         f"token {GH} {AWS}\npassword: CANARY-pw-1\nCANARYp9! вот такой пароль введи\n"
          "https://x.test/cb?token=CANARYtok123456&page=2\n"
          "ftp://user:CANARYpw@h.test/p\nhttps://s3.x.test/f?id=7&X-Amz-Signature=CANARYsig99aa")
 INTACT = (UUID, SHA256, "4930118822771", TX, "page=2")
