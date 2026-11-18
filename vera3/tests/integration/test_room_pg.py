@@ -295,3 +295,26 @@ async def test_owner_pause_and_claim_are_serialized_by_the_row_lock(pg_db):
         tasks.claim(room="main", task_id="PZ", agent="gem", lease_seconds=60),
         return_exceptions=True)
     assert isinstance(again[0], TaskBusy)
+
+
+async def test_native_answer_guard_serializes_concurrent_answers(pg_db):
+    from vera_shared.room import questions
+    from vera_shared.room.tasks import claim
+
+    task = await claim(room="main", task_id="NATIVE-ANSWER", agent="claude", lease_seconds=60)
+    question = await questions.ask(room="main", task_id="NATIVE-ANSWER", agent="claude",
+                                   fencing_token=task["fencing_token"], question="Proceed?")
+    qid = question["qid"]
+    async with pg_db() as session:
+        await questions.answer(room="main", task_id="NATIVE-ANSWER", qid=qid,
+                               text="first", s=session, require_open=True)
+        second = asyncio.create_task(questions.answer(
+            room="main", task_id="NATIVE-ANSWER", qid=qid, text="second", require_open=True))
+        await asyncio.sleep(BLOCKED_S)
+        assert not second.done(), "second answer must wait for the locked question row"
+    with pytest.raises(questions.QuestionState, match="no longer open"):
+        await asyncio.wait_for(second, timeout=5)
+    async with pg_db() as session:
+        count = (await session.execute(text(
+            "SELECT COUNT(*) FROM room_task_answers WHERE qid = :qid"), {"qid": qid})).scalar_one()
+    assert count == 1

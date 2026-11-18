@@ -82,7 +82,7 @@ async def ask(*, room: str, task_id: str, agent: str, fencing_token: int, questi
 
 
 async def answer(*, room: str, task_id: str, qid: int, text: str, by: str = OWNER,
-                 s: AsyncSession | None = None) -> tuple[dict[str, Any], bool]:
+                 s: AsyncSession | None = None, require_open: bool = False) -> tuple[dict[str, Any], bool]:
     """(вопрос, changed). Дословный повтор последнего ответа — не запись. Статус задачи не меняется.
 
     С `s` все записи идут в сессии вызывающего и не фиксируются здесь: фиксирует вызывающий.
@@ -91,14 +91,16 @@ async def answer(*, room: str, task_id: str, qid: int, text: str, by: str = OWNE
     if not text or len(text) > MAX_ANSWER_CHARS:
         raise ValueError(f"answer must be 1..{MAX_ANSWER_CHARS} characters")
     if s is not None:
-        return await _answer_in(s, room, task_id, qid, text, by)
+        return await _answer_in(s, room, task_id, qid, text, by, require_open=require_open)
     async with get_session() as own:
-        return await _answer_in(own, room, task_id, qid, text, by)
+        return await _answer_in(own, room, task_id, qid, text, by, require_open=require_open)
 
 
 async def _answer_in(s: AsyncSession, room: str, task_id: str, qid: int, text: str, by: str,
-                     ) -> tuple[dict[str, Any], bool]:
+                     *, require_open: bool = False) -> tuple[dict[str, Any], bool]:
     q = await _question(s, room, task_id, qid)
+    if require_open and q.status != "open":
+        raise QuestionState(f"question {qid} is no longer open")
     if q.status not in ("open", "answered"):
         raise QuestionState(f"question {qid} is {q.status}; answers are closed")
     task = await s.get(RoomTaskRow, (room, task_id))
