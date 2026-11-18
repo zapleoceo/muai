@@ -11,6 +11,8 @@ import re
 from collections.abc import Iterable, Mapping
 from typing import Any
 
+from vera_shared.redact_passwords import redact_passwords
+
 MASK = "[скрыто]"
 
 _B = r"(?<![A-Za-z0-9_-])"
@@ -103,7 +105,7 @@ def _mask_code(m: re.Match[str]) -> str:
 def redact_view(text: str) -> str:
     if not text:
         return text
-    out = _PEM.sub(MASK, text)
+    out = _PEM.sub(MASK, redact_passwords(text, MASK))
     out = _KEYS.sub(MASK, out)
     out = _TG.sub(MASK, out)
     for rx in (_AUTH, _BEARER, _ENV, _ENV_TOKEN, _LABEL, _LABEL_GAP, _PARAM, _KEY_PARAM):
