@@ -235,13 +235,14 @@ def test_monitor_unchanged_archive_no_alert_and_reports_retained(tmp_path: Path)
     assert sent == ""
 
 
-def test_monitor_new_file_is_counted(tmp_path: Path) -> None:
+def test_monitor_new_file_is_counted_without_volume_alert(tmp_path: Path) -> None:
     env = _env(tmp_path)
     root = tmp_path / "root"
     _verified(tmp_path, env, _archive(root))
     _file(root, "vera/daily/2026-10-25/secrets.tar.gz", b"12345")
     out, sent = _monitor(tmp_path, env)
-    assert "bytes=5 " in out and "Backups on disk" in sent
+    assert "bytes=5 " in out
+    assert sent == ""
 
 
 @pytest.mark.parametrize("how", ["grow", "touch"])
@@ -257,7 +258,9 @@ def test_monitor_modified_archive_file_is_counted(tmp_path: Path, how: str) -> N
     else:
         _age(victim, "2026-10-22 09:00")  # тот же размер, другой mtime
     out, sent = _monitor(tmp_path, env)
-    assert "changed_files=1" in out and "Backups on disk" in sent
+    assert "changed_files=1" in out
+    assert "Retained file changed" in sent and HELD_FILES[0] in sent
+    assert "Backups on disk" not in sent
     assert f"bytes={size + (5 if how == 'grow' else 0)} " in out
 
 
@@ -280,14 +283,15 @@ def test_monitor_missing_archive_file_alerts(tmp_path: Path) -> None:
     assert "missing_files=1" in out and "missing on disk" in sent
 
 
-def test_monitor_without_manifest_old_behaviour_only_when_not_required(tmp_path: Path) -> None:
+def test_monitor_without_optional_manifest_counts_without_volume_alert(tmp_path: Path) -> None:
     env = _env(tmp_path, RETAINED_REQUIRED="0")
     root = tmp_path / "root"
     _archive(root)
     out, sent = _monitor(tmp_path, env)
     assert "manifest=none" in out and "retained_bytes=0 " in out
     total = sum((root / rel).stat().st_size for rel in HELD_FILES)
-    assert f"bytes={total} " in out and "Backups on disk" in sent
+    assert f"bytes={total} " in out
+    assert sent == ""
 
 
 def test_monitor_missing_manifest_in_protected_mode_is_error(tmp_path: Path) -> None:
