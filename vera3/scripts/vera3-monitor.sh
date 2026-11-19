@@ -237,7 +237,7 @@ fi
 
 # ─── check_backup_pending: неподтверждённые бэкапы на диске ──────────────────
 # vera-backup-prune.sh удаляет дамп только по явному подтверждению NAS; пока его
-# нет, дампы копятся до ротации. Алерт — когда их объём выше порога.
+# нет, дампы копятся до ротации. Объём остаётся диагностикой, без Telegram-алерта.
 # Удерживаемый архив (RETAINED.manifest, см. vera-retained-manifest.sh) — ожидаемый
 # объём: файл из манифеста с тем же размером и mtime в порог не входит, но в лог
 # идёт отдельным retained_bytes. Новые файлы и изменившиеся файлы манифеста
@@ -294,12 +294,13 @@ check_backup_pending() {
     fi
     pending_gb=$(( pending_bytes / 1073741824 ))
     echo "$(date -u +%Y-%m-%dT%H:%M:%SZ) backup_pending bytes=${pending_bytes} threshold_gb=${BACKUP_PENDING_ALERT_GB} retained_bytes=${retained_bytes} changed_files=${changed} unverified_files=${unverified} missing_files=${missing} manifest=${mstate} cache=${cstate}"
+    # The legacy key mixed volume-only noise with manifest failures. Retire it
+    # silently; use a separate key so only verified manifest recovery is sent.
+    recover "backup_pending" "Legacy combined backup alert retired." quiet
     if [ "$mstate" = error ]; then
-        alert "backup_pending" "Backup manifest <b>unreadable/invalid</b> (${RETAINED_MANIFEST}: ${err}). Pending volume UNKNOWN, retained archive not verified; all files on disk: ${pending_gb} GB in ${BACKUP_ROOT}."
-    elif [ "$pending_bytes" -gt $(( BACKUP_PENDING_ALERT_GB * 1073741824 )) ]; then
-        alert "backup_pending" "Backups on disk: <b>${pending_gb} GB</b> in ${BACKUP_ROOT} (threshold ${BACKUP_PENDING_ALERT_GB} GB; retained archive excluded: $(( retained_bytes / 1048576 )) MB; changed archive files: ${changed}). Prune removes only NAS-confirmed files."
-    else
-        recover "backup_pending" "Backups on disk ${pending_gb} GB, below threshold."
+        alert "backup_manifest" "Backup manifest <b>unreadable/invalid</b> (${RETAINED_MANIFEST}: ${err}). Pending volume UNKNOWN, retained archive not verified; all files on disk: ${pending_gb} GB in ${BACKUP_ROOT}."
+    elif [ "$mstate" = ok ]; then
+        recover "backup_manifest" "Backup manifest is readable and valid again."
     fi
     if [ "$mstate" = ok ] && [ "$missing" -gt 0 ]; then
         alert "backup_retained_missing" "Retained backup archive: <b>${missing}</b> file(s) listed in ${RETAINED_MANIFEST} are missing on disk: ${missing_list}" "$RETAINED_ALERT_THROTTLE_MIN"
