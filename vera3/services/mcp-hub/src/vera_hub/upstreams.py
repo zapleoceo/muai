@@ -91,7 +91,7 @@ def _build(up: Upstream, http: httpx.AsyncClient) -> Client:
         headers[up.auth_header] = secret
     elif up.auth_kind == "url":
         url = secret
-    return HttpUpstream(http, url, headers)
+    return HttpUpstream(http, url, headers, internal=urlsplit(url).hostname in internal_hosts())
 
 
 class Registry:
@@ -99,13 +99,17 @@ class Registry:
                  http: httpx.AsyncClient | None = None) -> None:
         self._loader = loader
         self._http = http or httpx.AsyncClient(
-            timeout=httpx.Timeout(120.0, connect=5.0), follow_redirects=True,
+            # Редиректы не идут: httpx снимает на чужом хосте только Authorization, а свой
+            # заголовок с секретом и тело вызова ушли бы туда, куда укажет апстрим (и SSRF).
+            # pool=3: пул, забитый зависшими апстримами, не держит вызовы к здоровым.
+            timeout=httpx.Timeout(120.0, connect=5.0, pool=3.0), follow_redirects=False,
             limits=httpx.Limits(max_connections=64, max_keepalive_connections=16))
         self._cache: list[Upstream] = []
         self._loaded_at = 0.0
         self._load_lock = asyncio.Lock()
         self._clients: dict[int, tuple[Upstream, Client]] = {}
         self._gates: dict[int, tuple[int, asyncio.Semaphore]] = {}
+        self._build_locks: dict[int, asyncio.Lock] = {}
 
     async def upstreams(self, fresh: bool = False) -> list[Upstream]:
         async with self._load_lock:
@@ -119,17 +123,21 @@ class Registry:
                      if u.project == project and u.slug == slug), None)
 
     async def _client(self, up: Upstream) -> Client:
-        cached = self._clients.get(up.id)
-        if cached and cached[0] == up:
-            return cached[1]
-        if cached:
-            await cached[1].close()
-        try:
-            client = _build(up, self._http)
-        except (InvalidToken, HubKeyMissing, ValueError) as exc:
-            raise UpstreamError("down", "upstream secret cannot be decrypted") from exc
-        self._clients[up.id] = (up, client)
-        return client
+        # замок на апстрим: два вызова после правки настроек не строят два клиента
+        # (лишний stdio-процесс остался бы без хозяина)
+        async with self._build_locks.setdefault(up.id, asyncio.Lock()):
+            cached = self._clients.get(up.id)
+            if cached and cached[0] == up:
+                return cached[1]
+            if cached:
+                await cached[1].close()
+                del self._clients[up.id]
+            try:
+                client = _build(up, self._http)
+            except (InvalidToken, HubKeyMissing, ValueError) as exc:
+                raise UpstreamError("down", "upstream secret cannot be decrypted") from exc
+            self._clients[up.id] = (up, client)
+            return client
 
     def _gate(self, up: Upstream) -> asyncio.Semaphore:
         size, sem = self._gates.get(up.id, (0, None))
@@ -149,8 +157,7 @@ class Registry:
             raise UpstreamError("busy", "upstream is at its concurrency limit") from None
         try:
             client = await self._client(up)
-            extra = ({AGENT_HEADER: agent} if agent and up.transport == "http"
-                     and urlsplit(up.url).hostname in internal_hosts() else None)
+            extra = {AGENT_HEADER: agent} if agent else None
             return await asyncio.wait_for(client.request(method, params, extra),
                                           timeout_s or up.timeout_s)
         except TimeoutError:

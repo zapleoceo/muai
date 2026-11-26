@@ -49,6 +49,8 @@ class HubRpc:
 
     async def handle(self, agent: AgentCtx, msg: Any) -> dict[str, Any] | None:
         """Ответ на запрос или None для уведомления."""
+        if isinstance(msg, dict) and "method" not in msg and ("result" in msg or "error" in msg):
+            return None  # ответ клиента на запрос сервера: у хаба таких нет, по спеке — 202
         if not isinstance(msg, dict) or msg.get("jsonrpc") != "2.0" \
                 or not isinstance(msg.get("method"), str):
             return error(msg.get("id") if isinstance(msg, dict) else None,

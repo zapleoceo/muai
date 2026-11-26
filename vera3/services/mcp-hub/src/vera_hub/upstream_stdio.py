@@ -10,11 +10,14 @@ import asyncio
 import contextlib
 import itertools
 import json
+import logging
 import os
 from typing import Any
 
 from vera_hub.errors import UpstreamError
-from vera_hub.upstream_http import CLIENT_INFO, PROTOCOL_VERSION
+from vera_hub.upstream_http import CLIENT_INFO, PROTOCOL_VERSION, is_reply
+
+log = logging.getLogger(__name__)
 
 MAX_LINE = 8 * 1024 * 1024
 # базовое окружение: без env хаба (там HUB_SECRET_KEY и DATABASE_URL)
@@ -65,16 +68,32 @@ class StdioUpstream:
                     msg = json.loads(line)
                 except ValueError:
                     continue
-                fut = self._pending.pop(msg.get("id"), None) if isinstance(msg, dict) else None
-                if fut is not None and not fut.done():
-                    fut.set_result(msg)
+                await self._dispatch(msg)
         except (ValueError, asyncio.LimitOverrunError):
-            pass  # строка длиннее MAX_LINE: процесс считаем сломанным ниже
+            log.warning("hub: stdio upstream sent a line over %d bytes; restarting it", MAX_LINE)
         finally:
+            # читателя больше нет: процесс непригоден, следующий вызов поднимет новый
+            self._ready = False
+            if proc.returncode is None:
+                proc.kill()
             for fut in self._pending.values():
                 if not fut.done():
                     fut.set_exception(UpstreamError("down", "stdio process exited"))
             self._pending.clear()
+
+    async def _dispatch(self, msg: Any) -> None:
+        if not isinstance(msg, dict):
+            return
+        rid = msg.get("id")
+        if msg.get("method") == "ping" and isinstance(rid, (int, str)):
+            with contextlib.suppress(UpstreamError):
+                await self._write({"jsonrpc": "2.0", "id": rid, "result": {}})
+            return
+        if not isinstance(rid, int) or not is_reply(msg, rid):
+            return
+        fut = self._pending.pop(rid, None)
+        if fut is not None and not fut.done():
+            fut.set_result(msg)
 
     async def _write(self, payload: dict[str, Any]) -> None:
         if not self._alive() or self._proc is None or self._proc.stdin is None:

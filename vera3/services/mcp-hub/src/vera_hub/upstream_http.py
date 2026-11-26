@@ -23,6 +23,12 @@ MAX_BODY = 8 * 1024 * 1024
 _ids = itertools.count(1)
 
 
+def is_reply(msg: Any, rid: int) -> bool:
+    """Ответ на наш запрос, а не встречный запрос сервера с тем же id (ping и т.п.)."""
+    return (isinstance(msg, dict) and "method" not in msg and msg.get("id") == rid
+            and ("result" in msg or "error" in msg))
+
+
 def _message_from_sse(text: str, rid: int) -> dict[str, Any] | None:
     for event in text.replace("\r\n", "\n").split("\n\n"):
         data = "\n".join(line[5:].lstrip() for line in event.split("\n") if line.startswith("data:"))
@@ -32,7 +38,7 @@ def _message_from_sse(text: str, rid: int) -> dict[str, Any] | None:
             msg = json.loads(data)
         except ValueError:
             continue
-        if isinstance(msg, dict) and msg.get("id") == rid:
+        if is_reply(msg, rid):
             return msg
     return None
 
@@ -45,16 +51,20 @@ class _Reply:
 
 
 class HttpUpstream:
-    def __init__(self, client: httpx.AsyncClient, url: str, headers: dict[str, str]) -> None:
+    def __init__(self, client: httpx.AsyncClient, url: str, headers: dict[str, str],
+                 internal: bool = False) -> None:
         self._client, self._url, self._headers = client, url, headers
+        # имя агента уходит только внутренним апстримам (vera3-mcp), не чужим сервисам
+        self._internal = internal
         self._session: str | None = None
         self._version = PROTOCOL_VERSION
         self._ready = False
         self._init_lock = asyncio.Lock()
 
     def _request_headers(self, extra: dict[str, str] | None = None) -> dict[str, str]:
+        own = (extra or {}) if self._internal else {}
         headers = {"Accept": "application/json, text/event-stream",
-                   "Content-Type": "application/json", **(extra or {}), **self._headers}
+                   "Content-Type": "application/json", **own, **self._headers}
         if self._ready:
             headers["MCP-Protocol-Version"] = self._version
         if self._session:
@@ -72,6 +82,8 @@ class HttpUpstream:
                     if len(body) > MAX_BODY:
                         raise UpstreamError("protocol", "upstream response too large")
                 return _Reply(resp.status_code, resp.headers, bytes(body))
+        except httpx.PoolTimeout as exc:
+            raise UpstreamError("busy", "hub connection pool is exhausted") from exc
         except httpx.TimeoutException as exc:
             raise UpstreamError("timeout", "upstream timed out") from exc
         except httpx.HTTPError as exc:
@@ -84,6 +96,8 @@ class HttpUpstream:
                                 extra)
         if resp.status == 404 and self._session:
             raise _SessionExpired
+        if 300 <= resp.status < 400:
+            raise UpstreamError("down", f"upstream redirected (HTTP {resp.status}): set the final URL")
         if resp.status in (401, 403):
             raise UpstreamError("down", f"upstream refused credentials ({resp.status})")
         if resp.status >= 400:
