@@ -60,7 +60,8 @@ class AgentAuth:
             row = await self._lookup(token)
             agent = AgentCtx(row.id, row.name, tuple(row.allow or ())) if row else None
             self._remember(key, now, agent)
-        if agent and now - self._touched.get(agent.id, 0.0) > TOUCH_EVERY_S:
+        last = self._touched.get(agent.id) if agent else None
+        if agent and (last is None or now - last > TOUCH_EVERY_S):
             self._touched[agent.id] = now
             await self._touch(agent.id)
         return agent

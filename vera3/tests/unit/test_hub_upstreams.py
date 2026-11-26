@@ -157,7 +157,7 @@ async def test_catalog_paginates_and_keeps_stale_tools_on_failure():
     catalog = Catalog(reg)
     assert [t["name"] for t in await catalog.refresh(up)] == ["a", "b"]
     fake.fail = True
-    catalog._tools[up.id] = (up, 0.0, catalog._tools[up.id][2])
+    catalog._tools[up.id] = (up, float("-inf"), catalog._tools[up.id][2])
     names = [t["name"] for t in await catalog.tools_for(["sniffer"])]
     assert names == ["sniffer__catalog__a", "sniffer__catalog__b"]
 

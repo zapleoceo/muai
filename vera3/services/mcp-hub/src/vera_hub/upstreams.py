@@ -105,7 +105,8 @@ class Registry:
             timeout=httpx.Timeout(120.0, connect=5.0, pool=3.0), follow_redirects=False,
             limits=httpx.Limits(max_connections=64, max_keepalive_connections=16))
         self._cache: list[Upstream] = []
-        self._loaded_at = 0.0
+        # -inf, а не 0: monotonic() — это аптайм, и на свежем хосте он меньше TTL
+        self._loaded_at = float("-inf")
         self._load_lock = asyncio.Lock()
         self._clients: dict[int, tuple[Upstream, Client]] = {}
         self._gates: dict[int, tuple[int, asyncio.Semaphore]] = {}
