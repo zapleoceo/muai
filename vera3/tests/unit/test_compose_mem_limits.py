@@ -26,6 +26,8 @@ IMPORT_FLOOR_MB = {
     "dashboard": 75,
     "gateway": 68,
     "mcp": 82,
+    # без mcp SDK: starlette + httpx + sqlalchemy/asyncpg (замер импорта vera_hub.app)
+    "mcp-hub": 70,
     "brain-search": 66,
     "ingestor-slack": 59,
     "ingestor-gmail": 59,

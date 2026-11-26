@@ -44,6 +44,7 @@
 |---|---|
 | `vera3-postgres` | All state. pgvector 0.8.2: embeddings as `halfvec(1024)` (migration 030) as the only vector column (the legacy JSONB column was dropped by migrations 038/039); ANN via HNSW over binary quantization, rerank by halfvec (see `brain.md`). Long events (>4000 chars) also get chunk vectors in `event_chunk_embeddings` (migration 032, same index shape); search takes the best of event and chunk similarity per event. |
 | `vera3-gateway` | `POST /event/<source>` — single ingest endpoint with X-Internal-Secret |
+| `vera3-mcp-hub` | MCP hub on 127.0.0.1:8008, public as `https://dima.veranda.my/hub/mcp`: one endpoint for agents, upstream MCP servers grouped by project, per-agent tokens and grants, admin at dashboard `/hub` (`mcp-hub.md`) |
 | `vera3-mcp` | MCP server on 127.0.0.1:8007, public as `https://dima.veranda.my/mcp` (`mcp-claude.md`); also the agent room (`agent-room.md`) and office intake `/office/v1` (`office-intake.md`) |
 | `vera3-brain-triage-N` | Scalable workers: `deploy.replicas: ${BRAIN_TRIAGE_REPLICAS:-2}` in compose. SELECT FOR UPDATE SKIP LOCKED → atomic claim. |
 | `vera3-brain-search` | FastAPI `/search` — ReAct agent loop, calls AIbroker. |

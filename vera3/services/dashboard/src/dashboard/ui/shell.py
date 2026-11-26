@@ -56,7 +56,7 @@ def nav(active: str) -> str:
     on = ' class="on"' if key == "settings" else ""
     menu = (f'<li><details class="menu"><summary{on} title="Настройки и выход" aria-label="Меню">{_GEAR}</summary>'
             '<div class="menu-pop"><a class="only-mobile" href="/journal">Журнал правок</a>'
-            '<a href="/approvals">Подтверждения</a><a href="/settings">Настройки</a>'
+            '<a href="/approvals">Подтверждения</a><a href="/hub">MCP-хаб</a><a href="/settings">Настройки</a>'
             '<form method="post" action="/api/logout"><button type="submit" class="out">Выйти</button>'
             '</form></div></details></li>')
     right = link("journal", "/journal", "Журнал").replace("<li>", '<li class="nav-journal">', 1) + menu

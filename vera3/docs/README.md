@@ -22,6 +22,8 @@ in the commit message (for cosmetic refactors only).
 | [security.md](./security.md) | OAuth permanence, owner gate, encryption at rest |
 | [conventions.md](./conventions.md) | File layout, async, types, comments |
 | [links.md](./links.md) | Связи событий с людьми (`event_entities`): автор, получатель, участники созвона, упомянутые; прозвища в области; круг разговора; фильтры поиска и MCP |
+| [mcp-hub.md](./mcp-hub.md) | MCP-хаб: один вход `/hub/mcp` для агентов, апстримы по проектам, токен и права на агента, зашифрованные секреты, журнал вызовов, админка `/hub` |
+| [mcp-inventory-2026-11-27.md](./mcp-inventory-2026-11-27.md) | Инвентаризация MCP-соединений владельца на 27.11.2026 (исходные данные хаба) |
 | [agent-room.md](./agent-room.md) | Комната агентов: Claude, Codex и другие переписываются и делят задачи (аренда + fencing) через MCP без доступа к памяти |
 
 ## How to update
