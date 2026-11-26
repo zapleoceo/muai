@@ -151,6 +151,35 @@ services:
     restart: unless-stopped
     logging: *default-logging
 
+  # ─── MCP-хаб (docs/mcp-hub.md) ──────────────────────────────────────────
+  # Один MCP-вход для агентов: https://dima.veranda.my/hub/mcp. Апстримы, агенты и
+  # права — в БД (админка /hub дашборда). Отдельный контейнер, а не мир внутри mcp:
+  # зависший апстрим или stdio-процесс не задевает комнату и личную память.
+  mcp-hub:
+    build:
+      context: ..
+      dockerfile: services/mcp-hub/Dockerfile
+    container_name: vera3-mcp-hub
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+asyncpg://vera:${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set}@postgres:5432/vera
+      # ключ шифрования секретов апстримов: только у mcp-hub и dashboard
+      HUB_SECRET_KEY: ${HUB_SECRET_KEY:-}
+      HUB_INTERNAL_HOSTS: mcp
+      HUB_HEALTH_INTERVAL_S: "60"
+      DB_POOL_SIZE: "2"
+      LOG_LEVEL: INFO
+    ports:
+      - "127.0.0.1:8008:8000"
+    # starlette + httpx + пул на 2 соединения, без mcp SDK
+    mem_limit: 192m
+    stop_signal: SIGTERM
+    stop_grace_period: 30s
+    restart: unless-stopped
+    logging: *default-logging
+
   # ─── Brain: Triage Workers (scalable) ──────────────────────────────────
   # SELECT FOR UPDATE SKIP LOCKED исключает race condition между воркерами.
   # deploy.replicas — чтобы обычный `docker compose up -d` поднимал все реплики,
@@ -471,6 +500,8 @@ services:
       BROKER_PROJECT_KEY: ${BROKER_PROJECT_KEY:-}
       # кнопка «подтянуть участников групп» → tools-сервер юзербота
       TELEGRAM_TOOLS_URL: http://ingestor-telegram:8000
+      # админка MCP-хаба шифрует секреты апстримов при сохранении (docs/mcp-hub.md)
+      HUB_SECRET_KEY: ${HUB_SECRET_KEY:-}
     ports:
       - "127.0.0.1:8003:8000"
     # htmx-рендер + кэш статистики

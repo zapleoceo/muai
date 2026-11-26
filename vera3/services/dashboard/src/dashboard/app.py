@@ -22,6 +22,7 @@ from dashboard.events_routes import router as events_router
 from dashboard.gmail_oauth import router as gmail_oauth_router
 from dashboard.graph_routes import router as graph_router
 from dashboard.home_routes import router as home_router
+from dashboard.hub_routes import router as hub_router
 from dashboard.instagram_login import router as instagram_login_router
 from dashboard.journal_routes import router as journal_router
 from dashboard.merge_routes import router as merge_router
@@ -61,7 +62,7 @@ for router in (
     telegram_login_router, slack_connect_router, source_actions_router,
     assets_router, connection_router, journal_router, merge_router,
     room_oauth_router, tasks_router, tasks_owner_router, office_hourly_router,
-    approvals_router,
+    approvals_router, hub_router,
 ):
     app.include_router(router)
 

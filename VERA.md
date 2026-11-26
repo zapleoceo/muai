@@ -47,10 +47,10 @@ indirection is what keeps it a future one-file change.
 
 ### Containers
 
-`vera3/infra/docker-compose.yml` defines 14 services (compose project
+`vera3/infra/docker-compose.yml` defines 15 services (compose project
 `vera3`). Started by a plain `docker compose up -d` (and by the deploy):
 
-`vera3-postgres`, `vera3-gateway`, `vera3-mcp`, `vera3-brain-triage-N`
+`vera3-postgres`, `vera3-gateway`, `vera3-mcp`, `vera3-mcp-hub` (MCP-хаб, [mcp-hub.md](vera3/docs/mcp-hub.md)), `vera3-brain-triage-N`
 (`deploy.replicas: ${BRAIN_TRIAGE_REPLICAS:-2}` - the count on the server
 comes from `infra/.env`), `vera3-brain-search`, `vera3-bot-telegram`,
 `vera3-ingestor-gmail`, `vera3-ingestor-telegram`, `vera3-ingestor-slack`,
@@ -61,7 +61,7 @@ by the monitor: `vera3-ingestor-instagram` (off by owner decision
 2026-08-28) and `vera3-ingestor-trello` (no keys).
 
 Host ports (loopback only): gateway `8001`, brain-search `8002`,
-dashboard `8003`, mcp `8007`, postgres `5433`.
+dashboard `8003`, mcp `8007`, mcp-hub `8008`, postgres `5433`.
 
 The same host also runs unrelated stacks — `aibroker-*` and `stepan2-*`.
 Scope every compose command to `/var/www/vera3/infra` so they are never
@@ -81,6 +81,7 @@ vera3/
 │   ├── brain-triage/     # LLM classify workers (FOR UPDATE SKIP LOCKED)
 │   ├── brain-search/     # ReAct agent + embedding search
 │   ├── mcp/              # MCP server (/mcp) + agent room + office intake
+│   ├── mcp-hub/          # MCP hub (/hub/mcp): one endpoint, upstreams by project
 │   ├── ingestor-{gmail,telegram,slack,trello,instagram}/
 │   ├── bot-telegram/     # aiogram, owner-only
 │   ├── dashboard/        # HTMX UI

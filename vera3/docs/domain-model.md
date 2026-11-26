@@ -235,6 +235,13 @@ merging. It matches a person's messages by the numeric tg_id in
 - Style per relationship: `listener_entity_id` → payload with formality,
   avg length, sample messages
 
+## MCP hub (migration 064)
+
+`hub_upstreams` (upstream MCP servers by project; `secret_enc` is Fernet with
+`HUB_SECRET_KEY`, a CHECK refuses plaintext), `hub_agents` (per-agent token
+sha256 + grants), `hub_calls` (call metadata only, no arguments or results).
+See [mcp-hub.md](./mcp-hub.md).
+
 ## Migrations
 
 `vera3/infra/migrations/*.sql` — raw SQL. Apply with

@@ -19,6 +19,11 @@ admin path checks against it:
 | Instagram sessionid | `instagram_sessions.session_json_enc` | Fernet |
 | Service-to-service | `INTERNAL_SECRET` env on every container | none (intra-host) |
 
+MCP-hub upstream secrets (`hub_upstreams.secret_enc`) use the same Fernet
+format but a **separate key**, `HUB_SECRET_KEY`, passed only to `mcp-hub` and
+`dashboard`; the admin form is write-only and agents never see upstream
+secrets — see [mcp-hub.md](./mcp-hub.md#секреты).
+
 `TOKEN_SECRET` itself lives in `.env` (mode 600). If it leaks, ALL of the
 above need rotation.
 

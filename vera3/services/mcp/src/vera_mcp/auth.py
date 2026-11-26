@@ -34,6 +34,8 @@ from vera_shared.token_lists import (
     split_token_entries,
 )
 
+from vera_mcp.hub_delegate import delegated_client
+
 log = logging.getLogger(__name__)
 
 DEFAULT_CLIENT = "default"
@@ -218,8 +220,11 @@ class BearerAuthMiddleware:
             return
         # Совпадение с обоими наборами отсекает validate_room_tokens при старте;
         # если env сменили на лету — побеждает узкий мир комнаты, не личная память.
+        headers = scope.get("headers", [])
         if room_client is not None:
-            scope[CLIENT_SCOPE_KEY], scope[REALM_SCOPE_KEY] = room_client, ROOM_REALM
+            scope[CLIENT_SCOPE_KEY] = delegated_client(room_client, headers)
+            scope[REALM_SCOPE_KEY] = ROOM_REALM
         else:
-            scope[CLIENT_SCOPE_KEY], scope[REALM_SCOPE_KEY] = client, VERA_REALM
+            scope[CLIENT_SCOPE_KEY] = delegated_client(client or DEFAULT_CLIENT, headers)
+            scope[REALM_SCOPE_KEY] = VERA_REALM
         await self.app(scope, receive, send)
